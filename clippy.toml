@@ -1,0 +1,65 @@
+# Cyberdemon Clippy configuration. Lint *levels* live in Cargo.toml under
+# [lints.clippy]; this file holds thresholds and per-lint knobs. Do not loosen.
+
+msrv = "1.85"
+
+# Complexity budgets (all well below Clippy defaults).
+cognitive-complexity-threshold = 10
+too-many-arguments-threshold = 4
+too-many-lines-threshold = 60
+type-complexity-threshold = 150
+excessive-nesting-threshold = 3
+max-fn-params-bools = 1
+max-struct-bools = 2
+trivial-copy-size-limit = 16
+pass-by-value-size-limit = 64
+large-error-threshold = 96
+enum-variant-size-threshold = 128
+array-size-threshold = 4096
+stack-size-threshold = 131072
+vec-box-size-threshold = 4096
+max-trait-bounds = 3
+max-include-file-size = 65536
+single-char-binding-names-threshold = 3
+too-large-for-stack = 128
+unnecessary-box-size = 64
+literal-representation-threshold = 16384
+min-ident-chars-threshold = 2
+avoid-breaking-exported-api = false
+warn-on-all-wildcard-imports = true
+check-private-items = false
+semicolon-outside-block-ignore-multiline = false
+
+# Documentation: identifiers that must not be flagged by doc_markdown.
+doc-valid-idents = [
+    "Doom", "DOOM", "WAD", "IWAD", "PWAD", "MCP", "PNG", "BSP", "REJECT",
+    "BLOCKMAP", "SEGS", "SSECTORS", "LINEDEFS", "SIDEDEFS", "THINGS",
+    "VERTEXES", "SECTORS", "NODES", "PLAYPAL", "COLORMAP", "ENDOOM",
+    "DeHackEd", "ZDoom", "GZDoom", "UDMF", "JSON", "JSON-RPC", "OpenAPI",
+    "..",
+]
+
+# Tests may panic, unwrap, index and print; production code may not.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+allow-mixed-uninlined-format-args = false
+
+# Names that are never acceptable in production code.
+disallowed-names = ["foo", "baz", "quux", "tmp", "temp", "stuff", "thing"]
+
+# stdout is the MCP protocol channel; stray prints corrupt it.
+disallowed-macros = [
+    { path = "std::println", reason = "stdout carries the MCP stdio protocol" },
+    { path = "std::print", reason = "stdout carries the MCP stdio protocol" },
+]
+disallowed-methods = [
+    { path = "std::process::exit", reason = "return from main so destructors run and stdio flushes" },
+    { path = "std::io::stdout", reason = "stdout carries the MCP stdio protocol" },
+]
+
+# Transitive duplicates we cannot fix from here (rmcp pulls syn 3, darling pulls syn 2).
+allowed-duplicate-crates = ["syn"]

@@ -12,6 +12,11 @@ src/
   lib.rs          Library root; module declarations, re-exports, crate aliases.
   server.rs       MCP server: identity, per-connection state and the composed tool router.
   error.rs        CyberError: the domain error enum every tool reports through.
+  fixed.rs        Float-free math core: 16.16 `Fixed`, `FRACBITS`/`FRACUNIT`,
+                  `isqrt`, `mul_div_round`. Use this instead of f32/f64.
+  fixed/          Math internals (no MCP concerns): `fixed/angle.rs` 32-bit
+                  binary angles (BAM) with `atan2`, `hypot`, `rotate_point`,
+                  `fixed/trig.rs` the integer CORDIC engine.
   gfx.rs          Graphics core module root: dimensions limits and shared helpers.
   gfx/            Internal image building blocks (no MCP concerns):
                   `gfx/image.rs` RGBA/indexed images and resize/flip,

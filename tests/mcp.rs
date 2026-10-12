@@ -7,6 +7,7 @@
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
+use axum as _;
 use crc32fast as _;
 use fastrand as _;
 use image as _;

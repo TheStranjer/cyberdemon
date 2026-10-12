@@ -23,10 +23,12 @@ src/
                   `gfx/codec.rs` PNG/JPEG/GIF/BMP decode and PNG encode,
                   `gfx/grab.rs` the `grAb` PNG chunk, `gfx/palette.rs`
                   PLAYPAL/hex palettes, `gfx/quantize.rs` quantization.
-  assets.rs       LRU asset store for generated files (`assets/store.rs`).
+  assets.rs       LRU asset store for generated files (`assets/store.rs`) and
+                  the lazy localhost asset HTTP server (`assets/server.rs`).
   session.rs      The per-connection editing session (placeholder for now).
   state.rs        AppState: session and asset store behind mutexes; with_session
-                  and with_assets are the only access.
+                  and with_assets are the only access; publish, asset_base_url
+                  and asset_id_from_url bridge tools and asset URLs.
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.

@@ -3,6 +3,7 @@
 use anyhow::Result;
 
 // Linked for the library, not used by the binary itself.
+use axum as _;
 use crc32fast as _;
 use fastrand as _;
 use image as _;

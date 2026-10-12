@@ -52,6 +52,32 @@ meaningful change.
 - **Unknown tools fail at the protocol layer** with the JSON-RPC error
   `INVALID_PARAMS`, not as a tool error. Do not retry; list the tools.
 
+## Files and URLs
+
+Large binary results (images, sounds, raw lumps) do not come through the
+stdio channel. Tools return a `url` instead — a file served from the
+server's own localhost HTTP origin, e.g.
+`http://localhost:25369/assets/3f9a0c1b2d4e5f60/MAP01.png`. The port is
+chosen when the first file is published (per session, random in
+`3000..=60000`) and is visible in every returned `url`; fetch them with
+any HTTP client. Responses carry `Cache-Control: no-store`.
+
+You can upload a local file the same way and pass the returned URL
+anywhere a tool accepts a `source`:
+
+```sh
+curl -T my-drawing.png http://localhost:25369/upload/my-drawing.png
+# -> 201 {"url": "...", "id": "...", "filename": "...", "size": n}
+```
+
+`PUT` and `POST` both work; the media type is the request's
+`Content-Type`, or the uploaded filename's extension when absent.
+
+Only the most recent N assets are kept (default 50, set with the
+`CYBERDEMON_ASSET_CAPACITY` environment variable). Fetching an asset
+refreshes it, but an evicted one comes back `404`; regenerate it rather
+than retrying the old URL.
+
 ## Tools
 
 | Tool      | Reference                    |

@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.104"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 crc32fast = "1.5.2"
 fastrand = "2.5.0"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
@@ -16,7 +17,7 @@ schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "io-std"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "io-std", "io-util", "net", "time"] }
 
 [dev-dependencies]
 rmcp = { version = "3.5.1", features = ["client", "transport-child-process"] }

@@ -7,7 +7,6 @@ extern crate alloc;
 // `schemars` gains its first direct user when tool parameter structs arrive.
 use anyhow as _;
 use schemars as _;
-use tokio as _;
 
 // Dev-dependency, only linked into the `cfg(test)` builds of this crate.
 #[cfg(test)]

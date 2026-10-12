@@ -9,14 +9,22 @@ Cargo.toml        Package manifest. Lint levels live here, under [lints.*].
 clippy.toml       Clippy thresholds and knobs.
 src/
   main.rs         Stdio entry point only. stdout is the MCP protocol channel; never print to it.
-  lib.rs          Library root; re-exports the server.
-  server.rs       MCP server: identity, instructions, tool router.
-  (planned)       wad/ for WAD parsing and writing; tools/ for MCP tool definitions
-                  that call into wad/. Keep MCP concerns out of wad/.
-tests/            Integration tests. mcp_stdio.rs drives the server with a real rmcp client,
-                  in-memory and via the real binary.
+  lib.rs          Library root; module declarations, re-exports, crate aliases.
+  server.rs       MCP server: identity, per-connection state and the composed tool router.
+  error.rs        CyberError: the domain error enum every tool reports through.
+  session.rs      The per-connection editing session (placeholder for now).
+  state.rs        AppState: the session behind a mutex; with_session is the only access.
+  tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
+  tools/          One module per tool group, each with its own #[tool_router];
+                  Cyberdemon::router() in server.rs merges them.
+  (planned)       wad/ for WAD parsing and writing. Keep MCP concerns out of wad/.
+tests/
+  mcp.rs          Single integration test crate root.
+  mcp/            support.rs: rmcp client harness plus a probe server speaking
+                    the structured-result contract; server.rs: end-to-end tests.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).
+skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.
 ```
 
 ## Rules
@@ -27,3 +35,15 @@ skill/            LLM-facing documentation for using the MCP server (see below).
 4. **Run `scripts/ci.sh` before finishing.** It must exit 0.
 5. **Never write to stdout** from the server process (no `println!`, no `io::stdout`). Clippy enforces this. Diagnostics go to stderr.
 6. **Keep README.md up to date and terse.** All the important details need to be in README.md, but it should exceed 100 lines under any circumstances.
+
+## Clippy traps
+
+The repo's deny list goes well beyond `pedantic`. Accepted fixes (tests are exempt from unwrap/expect/panic/indexing/print, but not from arithmetic rules):
+
+- No bare `+ - * / % <<` on integers or custom types → `checked_*` (treat `None` as an error), `saturating_*`, `wrapping_*`. No float arithmetic at all.
+- No `as` casts → `try_from`/`from`. Byte order is explicit: only `to_le_bytes`/`from_le_bytes`.
+- No `v[i]`/`v[a..b]` in production code → `.get()`, `.split_at_checked()`, `.chunks_exact()`, iterators.
+- No `unwrap`/`expect`/`panic!`/`todo!`/`unreachable!` in production; never print (stdout is the MCP channel).
+- Doc comments on every item, including private fields and functions.
+- Budgets: functions ≤ 60 lines, ≤ 4 parameters, cognitive complexity ≤ 10, nesting ≤ 3.
+- Modules are `src/a.rs` + `src/a/b.rs`, never `mod.rs`. Prefer `core::`/`alloc::` paths where they exist; `.to_owned()` on `&str`; no shadowing; suffixed literals (`0_u32`); no `_ =>` on enums; `else if` chains end with `else`.

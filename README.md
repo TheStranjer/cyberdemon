@@ -6,7 +6,9 @@ WADs are binary archives of lumps (maps, textures, sprites, sounds, palettes, de
 
 It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a subprocess.
 
-> Status: scaffolding. The server starts, identifies itself, and exposes a single `version` tool. WAD tooling is next.
+> Status: foundation. The server starts per-connection with shared session
+> state, exposes a single `version` tool, and defines the structured JSON
+> result/error contract every WAD tool will use. WAD tooling comes next.
 
 ## Build and run
 

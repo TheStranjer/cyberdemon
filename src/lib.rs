@@ -1,9 +1,22 @@
 //! Cyberdemon: an MCP server for reading and editing Doom WADs.
 
-// Used by the binary and integration tests, not by the library itself.
+// `alloc` paths satisfy `std_instead_of_alloc` for shared pointers.
+extern crate alloc;
+
+// Linked for the binary and the integration tests, not used by the library.
+// `schemars` gains its first direct user when tool parameter structs arrive.
 use anyhow as _;
+use schemars as _;
 use tokio as _;
 
+// Dev-dependency, only linked into the `cfg(test)` builds of this crate.
+#[cfg(test)]
+use tempfile as _;
+
+pub mod error;
 pub mod server;
+pub mod session;
+pub mod state;
+pub mod tools;
 
 pub use server::Cyberdemon;

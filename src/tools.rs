@@ -5,6 +5,7 @@
 //! this library) can build results with them; the tool group modules
 //! themselves stay crate-private.
 
+pub(crate) mod assets;
 pub(crate) mod meta;
 
 use rmcp::model::{CallToolResult, ErrorData};

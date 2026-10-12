@@ -37,11 +37,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_exactly_the_version_tool() {
+    async fn lists_the_meta_and_assets_tools() {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
-        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["version"], "tool names");
+        let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["get_asset_server_info", "set_asset_capacity", "version"],
+            "sorted tool names"
+        );
     }
 
     #[tokio::test]

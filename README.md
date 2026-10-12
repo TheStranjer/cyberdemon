@@ -9,14 +9,15 @@ The work splits in two: the server is the **reflex** — deterministic tools per
 It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a subprocess.
 
 > Status: foundation. The server starts per-connection with shared session
-> state, exposes a single `version` tool, and defines the structured JSON
-> result/error contract every WAD tool will use. Generated files are served
-> to clients as `http://localhost:<port>` URLs by a lazily started asset
-> server (LRU store + uploads via `/upload/<name>`), so big binaries never
-> cross the stdio channel. An internal graphics core (`src/gfx*`: images,
-> PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure integer
-> image ops) and a float-free math core (`src/fixed*`: 16.16 fixed point,
-> BAM angles, CORDIC trig, `isqrt`) back the upcoming WAD tools.
+> state, exposes a `version` tool plus an `assets` group
+> (`get_asset_server_info`, `set_asset_capacity`), and defines the structured
+> JSON result/error contract every WAD tool will use. Generated files are
+> served to clients as `http://localhost:<port>` URLs by a lazily started
+> asset server (LRU store + uploads via `/upload/<name>`), so big binaries
+> never cross the stdio channel. An internal graphics core (`src/gfx*`:
+> images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure
+> integer image ops) and a float-free math core (`src/fixed*`: 16.16 fixed
+> point, BAM angles, CORDIC trig, `isqrt`) back the upcoming WAD tools.
 
 ## Build and run
 

@@ -35,10 +35,12 @@ impl Cyberdemon {
     /// The composed tool router: every tool group of the server, merged.
     ///
     /// Each ticket adds its tools as another `#[tool_router]` impl block in
-    /// `src/tools/` and appends `+ Self::xyz_router()` here.
+    /// `src/tools/` and merges its router here.
     #[inline]
     fn router() -> ToolRouter<Self> {
-        Self::meta_router()
+        let mut router = Self::meta_router();
+        router.merge(Self::assets_router());
+        router
     }
 
     /// The shared state of this connection, for tool implementations.

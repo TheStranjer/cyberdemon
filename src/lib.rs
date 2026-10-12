@@ -13,6 +13,7 @@ use tokio as _;
 #[cfg(test)]
 use tempfile as _;
 
+pub mod assets;
 pub mod error;
 pub mod server;
 pub mod session;

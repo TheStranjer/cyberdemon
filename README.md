@@ -23,6 +23,10 @@ Register it with an MCP client, e.g. Claude Code:
 claude mcp add cyberdemon -- /path/to/cyberdemon/target/release/cyberdemon
 ```
 
+## Configuration
+
+- `CYBERDEMON_ASSET_CAPACITY` — entries kept in the in-memory LRU asset store before the oldest are discarded (default 50, max 10000); missing or invalid values use the default.
+
 ## Development
 
 ```sh

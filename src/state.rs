@@ -6,6 +6,7 @@
 use alloc::sync::Arc;
 use std::sync::Mutex;
 
+use crate::assets::fetch::{self, Fetched};
 use crate::assets::server::{AssetRef, ServerInfo, asset_url, start_asset_server};
 use crate::assets::store::{AssetStore, MAX_ASSET_BYTES};
 use crate::error::CyberError;
@@ -139,6 +140,30 @@ impl AppState {
             mime: asset.mime,
             size: asset.data.len(),
         })
+    }
+
+    /// Turn a client-supplied `source` string into bytes.
+    ///
+    /// The one entry point every import tool uses. Accepted forms: an
+    /// absolute local path (`/...`), a percent-decoded `file://` URI, an
+    /// `http://` or `https://` `URL` (a `GET` with a 60-second timeout,
+    /// following at most 5 redirects) and this server's own asset `URL`s,
+    /// which are copied straight out of the store without an `HTTP` round
+    /// trip. Relative paths are rejected; the size cap is
+    /// [`MAX_ASSET_BYTES`]. [`fetch`] holds the full rules.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] for blank, relative or malformed
+    /// sources and for directories; [`CyberError::NotFound`] for missing
+    /// files and evicted assets; [`CyberError::Io`] for other filesystem
+    /// failures; [`CyberError::Fetch`] for non-2xx `HTTP` statuses
+    /// (`HTTP <status> for <url>`), connection and stream failures;
+    /// [`CyberError::Unsupported`] for other URI schemes;
+    /// [`CyberError::LimitExceeded`] over the cap.
+    #[inline]
+    pub async fn fetch_source(&self, source: &str) -> Result<Fetched, CyberError> {
+        fetch::fetch_source_limited(self, source, MAX_ASSET_BYTES).await
     }
 
     /// The asset id behind `url`, if it names an asset of this server.

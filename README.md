@@ -18,6 +18,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure
 > integer image ops) and a float-free math core (`src/fixed*`: 16.16 fixed
 > point, BAM angles, CORDIC trig, `isqrt`) back the upcoming WAD tools.
+> `AppState::fetch_source` turns client `source` strings (absolute paths,
+> `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
+> for import tools, and `src/wad/` (lump names first) has begun the WAD
+> data layer.
 
 ## Build and run
 

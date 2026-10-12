@@ -11,6 +11,7 @@ use axum as _;
 use crc32fast as _;
 use fastrand as _;
 use image as _;
+use reqwest as _;
 use tempfile as _;
 use thiserror as _;
 

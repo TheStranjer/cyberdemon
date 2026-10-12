@@ -64,4 +64,7 @@ disallowed-methods = [
 # Transitive duplicates we cannot fix from here (rmcp pulls syn 3, darling pulls syn 2).
 # png 0.18 (via image's "png" feature) uses miniz_oxide 0.8 directly and again through
 # flate2 1.1 which pins 0.9.
-allowed-duplicate-crates = ["syn", "miniz_oxide"]
+# reqwest pins base64 0.22 while hyper-util (axum, and reqwest itself) takes 0.23.
+# ring (via reqwest's rustls) pins getrandom 0.2 while rmcp's uuid and tempfile take 0.4.
+# ring wants windows-sys 0.52 while tokio's mio and rustix take 0.61.
+allowed-duplicate-crates = ["syn", "miniz_oxide", "base64", "getrandom", "windows-sys"]

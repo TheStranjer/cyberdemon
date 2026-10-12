@@ -4,6 +4,8 @@ An [MCP](https://modelcontextprotocol.io) server that lets an LLM read, understa
 
 WADs are binary archives of lumps (maps, textures, sprites, sounds, palettes, demos). Cyberdemon exposes them to an LLM as structured tools, so a model can inspect a WAD, reason about its contents, and make precise edits without hand-parsing bytes.
 
+The work splits in two: the server is the **reflex** — deterministic tools performing formulaic operations on explicit inputs — and the calling model is the **judgment**, guided by the [skill guides](skill/guides/README.md): interpreting requests and images, choosing shapes, scale and theme.
+
 It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a subprocess.
 
 > Status: foundation. The server starts per-connection with shared session

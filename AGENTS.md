@@ -22,7 +22,12 @@ src/
                   `gfx/image.rs` RGBA/indexed images and resize/flip,
                   `gfx/codec.rs` PNG/JPEG/GIF/BMP decode and PNG encode,
                   `gfx/grab.rs` the `grAb` PNG chunk, `gfx/palette.rs`
-                  PLAYPAL/hex palettes, `gfx/quantize.rs` quantization.
+                  PLAYPAL/hex palettes, `gfx/quantize.rs` quantization,
+                  `gfx/ops.rs` the image-op framework (`ImageOp`, `apply_ops`,
+                  reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
+                  crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
+                  bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
+                  adjust, `gfx/ops/alpha.rs` colour key and trim.
   assets.rs       LRU asset store for generated files (`assets/store.rs`) and
                   the lazy localhost asset HTTP server (`assets/server.rs`).
   session.rs      The per-connection editing session (placeholder for now).

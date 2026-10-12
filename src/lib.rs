@@ -15,6 +15,7 @@ use tempfile as _;
 
 pub mod assets;
 pub mod error;
+pub mod fixed;
 pub mod gfx;
 pub mod server;
 pub mod session;

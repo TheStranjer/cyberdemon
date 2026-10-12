@@ -12,7 +12,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > state, exposes a single `version` tool, and defines the structured JSON
 > result/error contract every WAD tool will use. An internal graphics core
 > (`src/gfx*`: images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes,
-> quantization) backs the upcoming WAD graphics tools.
+> quantization) and a float-free math core (`src/fixed*`: 16.16 fixed point,
+> BAM angles, CORDIC trig, `isqrt`) back the upcoming WAD tools.
 
 ## Build and run
 

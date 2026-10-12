@@ -7,6 +7,20 @@ description: Use the Cyberdemon MCP server to inspect and edit Doom WAD files. U
 
 Cyberdemon is an MCP server over stdio for working with Doom WADs. Tools appear in your client prefixed with the server name (e.g. `mcp__cyberdemon__version`).
 
+## Who decides what
+
+The server is the reflex; you are the judgment. Every tool is a deterministic
+function of the parameters you pass: it does formulaic work exactly — builds
+the shape at the size you said, compiles the plan you wrote, measures the
+image you attached — and never guesses what you meant. Interpreting requests
+and drawings, choosing shapes, scale, themes and balance, deciding what "make
+it scarier" means, and checking renders against intent are your job.
+
+The [guides index](guides/README.md) collects what you need for that side.
+Start with `guides/design-rules.md` for the dimensions and gameplay facts to
+design against, and run the loop in `guides/verification.md` after every
+meaningful change.
+
 ## Conventions
 
 - **Successful results are structured JSON.** Read the result's structured

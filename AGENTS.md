@@ -23,10 +23,13 @@ src/
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking
-                    the structured-result contract; server.rs: end-to-end tests.
+                    the structured-result contract; server.rs: end-to-end tests;
+                    docs.rs: skill/ and README.md layout checks.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).
 skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.
+skill/guides/     Judgment guides for the calling model, indexed by
+                  skill/guides/README.md.
 ```
 
 ## Rules
@@ -37,6 +40,17 @@ skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.
 4. **Run `scripts/ci.sh` before finishing.** It must exit 0.
 5. **Never write to stdout** from the server process (no `println!`, no `io::stdout`). Clippy enforces this. Diagnostics go to stderr.
 6. **Keep README.md up to date and terse.** All the important details need to be in README.md, but it should exceed 100 lines under any circumstances.
+
+## Tool design rules
+
+The server is the reflex, the calling model is the judgment: tools carry out formulaic operations on explicit inputs ("make this shape with these dimensions", "compile this plan", "split this line") and never exercise taste.
+
+1. **Deterministic.** A tool's behaviour is a function of its parameters and the session state. Never infer intent from names or free text, and never use randomness except where a `seed` parameter is exposed.
+2. **Taste is a parameter.** Every choice that needs judgment gets an explicit parameter with a documented, conservative default (e.g. wall thickness 16, door width 64, step height 16). How to choose the value is explained in a `skill/guides/*.md` page, not in code.
+3. **Results are measurable.** Report what was done in numbers the model can check (indices created, sizes, counts, warnings) and, where geometry changed, how to look at it (`render_topdown`, `render_view`).
+4. **Errors are instructions.** Every error says what to do next: a short hint naming the tool or parameter that fixes it.
+5. **Image tools only measure.** Tools that analyse images (e.g. sketch tracing) return regions, coordinates, colours; they never decide what something *is*.
+6. **High-level first.** Prefer one tool that does a complete formulaic job (a working door, a whole room) over requiring many low-level calls, but keep the low-level tools for fine control.
 
 ## Clippy traps
 

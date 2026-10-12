@@ -6,6 +6,7 @@
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
+use fastrand as _;
 use tempfile as _;
 use thiserror as _;
 

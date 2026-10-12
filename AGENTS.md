@@ -12,8 +12,10 @@ src/
   lib.rs          Library root; module declarations, re-exports, crate aliases.
   server.rs       MCP server: identity, per-connection state and the composed tool router.
   error.rs        CyberError: the domain error enum every tool reports through.
+  assets.rs       LRU asset store for generated files (`assets/store.rs`).
   session.rs      The per-connection editing session (placeholder for now).
-  state.rs        AppState: the session behind a mutex; with_session is the only access.
+  state.rs        AppState: session and asset store behind mutexes; with_session
+                  and with_assets are the only access.
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.

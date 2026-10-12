@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.104"
+fastrand = "2.5.0"
 rmcp = { version = "3.5.1", features = ["server", "transport-io"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }

@@ -92,6 +92,7 @@ name = "cyberdemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fastrand",
  "rmcp",
  "schemars",
  "serde",

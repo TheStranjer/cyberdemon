@@ -2,6 +2,8 @@
 //! server that speaks the structured-result contract (`ok`/`fail`) so those
 //! helpers are exercised end to end, not just compiled.
 
+use core::time::Duration;
+
 use cyberdemon::Cyberdemon;
 use cyberdemon::error::CyberError;
 use cyberdemon::tools::{fail, ok};
@@ -14,6 +16,8 @@ use rmcp::{tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::TcpStream;
 
 /// Buffer size for the in-memory pipes: 1 MiB, generous enough that no
 /// message in these tests can block the writer.
@@ -171,4 +175,65 @@ fn string_field(content: &Value, key: &str) -> String {
         panic!("structured content {content} has no string field {key:?}");
     };
     text.to_owned()
+}
+
+/// How long a raw-HTTP test request waits for the full reply.
+const HTTP_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Issue a raw `HTTP` `PUT` of `body` to `path` on the origin `base_url`
+/// (e.g. `http://localhost:41234`) and return the reply's `(status, body)`.
+///
+/// The asset server is exercised without pulling in an `HTTP` client crate:
+/// one `Connection: close` request on a fresh socket, whose end-of-stream is
+/// the end of the reply.
+///
+/// # Panics
+///
+/// Panics if `base_url` is not a `http://localhost:<port>` origin, the
+/// socket fails, or no complete reply arrives within [`HTTP_REPLY_TIMEOUT`].
+#[inline]
+pub async fn http_put(base_url: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
+    let port_text = base_url
+        .strip_prefix("http://localhost:")
+        .expect("a http://localhost:<port> origin");
+    let port: u16 = port_text.parse().expect("a numeric port");
+    let request = format!(
+        "PUT {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len(),
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect to the asset server");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write the request head");
+    stream
+        .write_all(body)
+        .await
+        .expect("write the request body");
+    let mut raw = Vec::new();
+    tokio::time::timeout(HTTP_REPLY_TIMEOUT, stream.read_to_end(&mut raw))
+        .await
+        .expect("the reply arrives within the timeout")
+        .expect("read the whole reply");
+    split_reply(&raw)
+}
+
+/// Split a raw `HTTP` reply into its status code and body bytes.
+fn split_reply(raw: &[u8]) -> (u16, Vec<u8>) {
+    let head_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("the header terminator");
+    let body_start = head_end.checked_add(4).expect("head offset fits");
+    let head = core::str::from_utf8(&raw[..head_end]).expect("ascii header lines");
+    let status_line = head.lines().next().expect("a status line");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .expect("a status code")
+        .parse()
+        .expect("a numeric status code");
+    (status, raw[body_start..].to_vec())
 }

@@ -1,9 +1,9 @@
 //! End-to-end tests: a real rmcp client talking to the server.
 //!
-//! The harness helpers live in `support`, the server tests in `server`, and
-//! the documentation-layout checks in `docs`; every helper is exercised by a
-//! test in `server`, and the real result/error contract is checked end to end
-//! through a small probe server.
+//! The harness helpers live in `support`, the server tests in `server`, the
+//! asset-group tests in `assets`, and the documentation-layout checks in
+//! `docs`; every helper is exercised by a test in `server`, and the real
+//! result/error contract is checked end to end through a small probe server.
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
@@ -18,6 +18,9 @@ use thiserror as _;
 // `support` must be a public module of pub items: private+`pub` trips
 // `unreachable_pub`, while `pub(crate)` in any test-crate module trips
 // `redundant_pub_crate`; the plain `pub` combination is the lint-clean one.
+#[cfg(test)]
+#[path = "mcp/assets.rs"]
+mod assets;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;

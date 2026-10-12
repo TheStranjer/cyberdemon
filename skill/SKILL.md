@@ -72,17 +72,21 @@ curl -T my-drawing.png http://localhost:25369/upload/my-drawing.png
 
 `PUT` and `POST` both work; the media type is the request's
 `Content-Type`, or the uploaded filename's extension when absent.
+Before any file exists, `get_asset_server_info` reports the origin and
+the upload URL template.
 
 Only the most recent N assets are kept (default 50, set with the
-`CYBERDEMON_ASSET_CAPACITY` environment variable). Fetching an asset
-refreshes it, but an evicted one comes back `404`; regenerate it rather
-than retrying the old URL.
+`CYBERDEMON_ASSET_CAPACITY` environment variable or at runtime with
+`set_asset_capacity`). Fetching an asset refreshes it, but an evicted one
+comes back `404`; regenerate it rather than retrying the old URL.
 
 ## Tools
 
-| Tool      | Reference                    |
-|-----------|------------------------------|
-| `version` | `reference/meta.md`          |
+| Tool                    | Reference             |
+|-------------------------|-----------------------|
+| `version`               | `reference/meta.md`   |
+| `get_asset_server_info` | `reference/assets.md` |
+| `set_asset_capacity`    | `reference/assets.md` |
 
 WAD reading and editing tools are not implemented yet. When they are, add one
 reference file per tool group under `reference/` and index each tool here.

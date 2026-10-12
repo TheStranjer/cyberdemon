@@ -7,7 +7,9 @@
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
+use crc32fast as _;
 use fastrand as _;
+use image as _;
 use tempfile as _;
 use thiserror as _;
 

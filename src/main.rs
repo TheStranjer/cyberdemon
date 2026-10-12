@@ -3,7 +3,9 @@
 use anyhow::Result;
 
 // Linked for the library, not used by the binary itself.
+use crc32fast as _;
 use fastrand as _;
+use image as _;
 use schemars as _;
 use serde as _;
 use serde_json as _;

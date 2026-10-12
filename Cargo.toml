@@ -8,7 +8,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.104"
+crc32fast = "1.5.2"
 fastrand = "2.5.0"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 rmcp = { version = "3.5.1", features = ["server", "transport-io"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }

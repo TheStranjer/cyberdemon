@@ -1,36 +1,25 @@
-//! End-to-end tests: a real rmcp client talking to the server, both over an
-//! in-memory pipe and over the real binary's stdin/stdout.
+//! Server behavior as seen by a real MCP client: identity, tool listing,
+//! the `version` tool, protocol errors, and the real binary over stdio.
 
 #[cfg(test)]
 mod tests {
     use core::time::Duration;
     use std::process::Stdio;
 
-    use anyhow::Result;
-    use cyberdemon::Cyberdemon;
-    use rmcp::{
-        RoleClient, ServiceExt as _,
-        model::{CallToolRequestParams, ErrorCode},
-        service::{RunningService, ServiceError},
-        transport::TokioChildProcess,
-    };
+    use rmcp::ServiceExt as _;
+    use rmcp::model::{CallToolRequestParams, ErrorCode};
+    use rmcp::service::ServiceError;
+    use rmcp::transport::TokioChildProcess;
+    use serde_json::{Value, json};
     use tokio::process::Command;
+
+    use crate::support::{call, call_err, connect, connect_probe};
 
     const EXPECTED_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
-    async fn connect() -> Result<RunningService<RoleClient, ()>> {
-        let (server_io, client_io) = tokio::io::duplex(4096);
-        tokio::spawn(async move {
-            let server = Cyberdemon.serve(server_io).await?;
-            server.waiting().await?;
-            anyhow::Ok(())
-        });
-        Ok(().serve(client_io).await?)
-    }
-
     #[tokio::test]
     async fn initialize_reports_identity_and_tools_capability() {
-        let client = connect().await.expect("connect");
+        let client = connect().await;
         let info = client.peer_info().expect("server info after initialize");
         let server_info = info.server_info.as_ref().expect("server implementation");
         assert_eq!(server_info.name, "cyberdemon", "server name");
@@ -49,7 +38,7 @@ mod tests {
 
     #[tokio::test]
     async fn lists_exactly_the_version_tool() {
-        let client = connect().await.expect("connect");
+        let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert_eq!(names, ["version"], "tool names");
@@ -57,7 +46,7 @@ mod tests {
 
     #[tokio::test]
     async fn version_reports_name_and_version() {
-        let client = connect().await.expect("connect");
+        let client = connect().await;
         let result = client
             .call_tool(CallToolRequestParams::new("version"))
             .await
@@ -73,7 +62,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_tool_is_a_protocol_error() {
-        let client = connect().await.expect("connect");
+        let client = connect().await;
         let err = client
             .call_tool(CallToolRequestParams::new("no_such_tool"))
             .await
@@ -108,5 +97,20 @@ mod tests {
             .map(|t| t.text.as_str());
         assert_eq!(text, Some(EXPECTED_VERSION), "version text over stdio");
         client.close().await.expect("close");
+    }
+
+    #[tokio::test]
+    async fn call_returns_structured_success_content() {
+        let client = connect_probe().await;
+        let value = call(&client, "echo", json!({ "message": "E1M1" })).await;
+        assert_eq!(value, json!({ "echo": "E1M1" }), "echo structured content");
+    }
+
+    #[tokio::test]
+    async fn call_err_returns_the_documented_error_pair() {
+        let client = connect_probe().await;
+        let (code, message) = call_err(&client, "missing", Value::Null).await;
+        assert_eq!(code, "not_found", "error code field");
+        assert_eq!(message, "probe lump does not exist", "message field");
     }
 }

@@ -1,17 +1,62 @@
 //! MCP server definition: identity, capabilities and the tool router.
 
-use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use alloc::sync::Arc;
+
+use rmcp::ServerHandler;
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::tool_handler;
+
+use crate::state::AppState;
 
 /// The Cyberdemon MCP server.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Cyberdemon;
+///
+/// One instance is created per client connection; it owns the shared
+/// [`AppState`] (behind an [`Arc`]) and the composed [`ToolRouter`], and
+/// clones cheaply.
+#[derive(Clone)]
+pub struct Cyberdemon {
+    /// State shared by every tool call on this connection.
+    state: Arc<AppState>,
+    /// All tools served by this connection.
+    tool_router: ToolRouter<Self>,
+}
 
-#[tool_router]
 impl Cyberdemon {
-    /// Reports the server's name and version.
-    #[tool(description = "Returns the Cyberdemon server name and version.")]
-    fn version() -> String {
-        concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")).to_owned()
+    /// Creates a server with a fresh session and the full tool router.
+    #[must_use]
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(AppState::default()),
+            tool_router: Self::router(),
+        }
+    }
+
+    /// The composed tool router: every tool group of the server, merged.
+    ///
+    /// Each ticket adds its tools as another `#[tool_router]` impl block in
+    /// `src/tools/` and appends `+ Self::xyz_router()` here.
+    #[inline]
+    fn router() -> ToolRouter<Self> {
+        Self::meta_router()
+    }
+
+    /// The shared state of this connection, for tool implementations.
+    ///
+    /// Public (rather than crate-visible) so the accessor survives until the
+    /// first tools call it: an unused `pub(crate)` item is a `dead_code`
+    /// error in this repo.
+    #[must_use]
+    #[inline]
+    pub fn state(&self) -> &AppState {
+        &self.state
+    }
+}
+
+impl Default for Cyberdemon {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -20,6 +65,7 @@ impl Cyberdemon {
     reason = "rmcp's #[tool_handler] expands to async trait methods without awaits"
 )]
 #[tool_handler(
+    router = self.tool_router,
     name = "cyberdemon",
     instructions = "Cyberdemon reads and edits Doom WAD files."
 )]

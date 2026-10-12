@@ -12,6 +12,12 @@ src/
   lib.rs          Library root; module declarations, re-exports, crate aliases.
   server.rs       MCP server: identity, per-connection state and the composed tool router.
   error.rs        CyberError: the domain error enum every tool reports through.
+  gfx.rs          Graphics core module root: dimensions limits and shared helpers.
+  gfx/            Internal image building blocks (no MCP concerns):
+                  `gfx/image.rs` RGBA/indexed images and resize/flip,
+                  `gfx/codec.rs` PNG/JPEG/GIF/BMP decode and PNG encode,
+                  `gfx/grab.rs` the `grAb` PNG chunk, `gfx/palette.rs`
+                  PLAYPAL/hex palettes, `gfx/quantize.rs` quantization.
   assets.rs       LRU asset store for generated files (`assets/store.rs`).
   session.rs      The per-connection editing session (placeholder for now).
   state.rs        AppState: session and asset store behind mutexes; with_session

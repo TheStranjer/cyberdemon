@@ -10,7 +10,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 
 > Status: foundation. The server starts per-connection with shared session
 > state, exposes a single `version` tool, and defines the structured JSON
-> result/error contract every WAD tool will use. WAD tooling comes next.
+> result/error contract every WAD tool will use. An internal graphics core
+> (`src/gfx*`: images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes,
+> quantization) backs the upcoming WAD graphics tools.
 
 ## Build and run
 

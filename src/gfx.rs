@@ -2,14 +2,15 @@
 //!
 //! Pure data processing on owned buffers: [`image`] types with validated
 //! constructors, [`codec`] decode/encode for `PNG`, `JPEG`, `GIF` and `BMP`,
-//! the private [`grab`] `grAb` `PNG` chunk, [`palette`] handling and
-//! [`quantize`] colour mapping. Nothing here knows about MCP, lumps or the
-//! filesystem; later tickets (`PATCH`, `FLAT`, sprite and texture tools)
-//! compose these pieces.
+//! the private [`grab`] `grAb` `PNG` chunk, [`palette`] handling,
+//! [`quantize`] colour mapping and the [`ops`] image-operation framework.
+//! Nothing here knows about MCP, lumps or the filesystem; later tickets
+//! (`PATCH`, `FLAT`, sprite and texture tools) compose these pieces.
 
 pub mod codec;
 pub mod grab;
 pub mod image;
+pub mod ops;
 pub mod palette;
 pub mod quantize;
 

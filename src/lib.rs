@@ -4,9 +4,8 @@
 extern crate alloc;
 
 // Linked for the binary and the integration tests, not used by the library.
-// `schemars` gains its first direct user when tool parameter structs arrive.
+// (`schemars`, `serde` and `serde_json` are used directly since `gfx::ops`.)
 use anyhow as _;
-use schemars as _;
 
 // Dev-dependency, only linked into the `cfg(test)` builds of this crate.
 #[cfg(test)]

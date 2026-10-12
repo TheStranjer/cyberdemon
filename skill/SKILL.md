@@ -75,6 +75,21 @@ curl -T my-drawing.png http://localhost:25369/upload/my-drawing.png
 Before any file exists, `get_asset_server_info` reports the origin and
 the upload URL template.
 
+Tools that take input files accept a `source` string in exactly these
+forms, capped at 256 MiB (the same limit as the asset store):
+
+- an absolute local path: `/path/to/image.png`;
+- a `file:///path/to/image.png` URI (percent-decoded);
+- an `http://` or `https://` URL — fetched with a 60-second timeout and
+  at most 5 redirects, its `Content-Type` becomes the result's media
+  type;
+- a URL from this server's own asset origin (as returned by `publish`
+  or `PUT /upload`) — read straight from the store, no HTTP round trip.
+
+Relative paths are rejected with `invalid_argument`; any other URI
+scheme with `unsupported`; missing files, evicted assets, non-2xx
+responses and oversize sources each report their own error code.
+
 Only the most recent N assets are kept (default 50, set with the
 `CYBERDEMON_ASSET_CAPACITY` environment variable or at runtime with
 `set_asset_capacity`). Fetching an asset refreshes it, but an evicted one

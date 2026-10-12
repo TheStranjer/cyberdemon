@@ -28,16 +28,20 @@ src/
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
                   bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
                   adjust, `gfx/ops/alpha.rs` colour key and trim.
-  assets.rs       LRU asset store for generated files (`assets/store.rs`) and
-                  the lazy localhost asset HTTP server (`assets/server.rs`).
+  assets.rs       LRU asset store for generated files (`assets/store.rs`),
+                  the lazy localhost asset HTTP server (`assets/server.rs`)
+                  and the one client->bytes input reader for import tools
+                  (`assets/fetch.rs`: `Fetched`, `derive_lump_name`).
   session.rs      The per-connection editing session (placeholder for now).
   state.rs        AppState: session and asset store behind mutexes; with_session
-                  and with_assets are the only access; publish, asset_base_url
-                  and asset_id_from_url bridge tools and asset URLs.
+                  and with_assets are the only access; publish, fetch_source,
+                  asset_base_url and asset_id_from_url bridge tools and asset URLs.
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
-  (planned)       wad/ for WAD parsing and writing. Keep MCP concerns out of wad/.
+  wad.rs          WAD parsing and writing (no MCP concerns): `wad/name.rs`
+                  8-character lump names (`LumpName::parse`) and the rest of
+                  the binary reader, still to come.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

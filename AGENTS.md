@@ -43,6 +43,13 @@ src/
                   the type-0 SMF writer (`MidiWriter`, big-endian chunks,
                   variable-length quantities in both directions),
                   `music/mus2mid.rs` Doom MUS music lump ("D_*") to MIDI bytes.
+  defs.rs         Definitions core module root: the game definitions registry
+                  entry point and the embedded-table re-exports.
+  defs/           Definition building blocks (no MCP concerns):
+                  `defs/table.rs` the TSV parser producing `ThingDef` rows,
+                  `defs/registry.rs` the `include_str!`-embedded tables
+                  parsed once behind `LazyLock` and the per-game selection
+                  (`definitions_for`).
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools
@@ -73,6 +80,11 @@ src/
                   the pure lump-directory analysis pass: `Namespace`s,
                   `MapBlock`s and `LumpKind` type hints, and `wad/game.rs`
                   the pure game signature detection (`detect_game`).
+data/
+  defs/           TSV definition tables embedded in the binary (each file
+                  under the 64 KiB `large_include_file` budget), parsed by
+                  `src/defs/table.rs`. `doom_things.tsv` is the DOOM/DOOM II
+                  thing table.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

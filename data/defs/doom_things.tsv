@@ -1,0 +1,124 @@
+type	name	sprite	frame	radius	category	flags	game
+1	Player 1 Start	PLAY	A	16	Player Starts	-	doom
+2	Player 2 Start	PLAY	B	16	Player Starts	-	doom
+3	Player 3 Start	PLAY	C	16	Player Starts	-	doom
+4	Player 4 Start	PLAY	D	16	Player Starts	-	doom
+11	Deathmatch Start	PLAY	F	16	Player Starts	-	doom
+14	Teleport Destination	TFOG	B	20	Teleports	-	doom
+3004	Former Human	POSS	A	20	Monsters	-	doom
+9	Former Human Sergeant	SPOS	A	20	Monsters	-	doom
+3001	Imp	TROO	A	20	Monsters	-	doom
+3002	Demon	SARG	A	30	Monsters	-	doom
+58	Spectre	SARG	B	30	Monsters	-	doom
+3006	Lost Soul	SKUL	A	16	Monsters	-	doom
+3005	Cacodemon	HEAD	A	32	Monsters	-	doom
+3003	Baron Of Hell	BOSS	A	24	Monsters	-	doom
+16	CyberDemon	CYBR	A	40	Monsters	-	doom
+7	Spider Mastermind	SPID	A	128	Monsters	-	doom
+2011	Stimpack	STIM	A	12	Health And Armour	-	doom
+2012	Medikit	MEDI	A	12	Health And Armour	-	doom
+2014	Health Potion	BON1	A	10	Health And Armour	-	doom
+2015	Armour Helmet	BON2	A	10	Health And Armour	-	doom
+2018	Green Armour	ARM1	A	14	Health And Armour	-	doom
+2019	Blue Armour	ARM2	A	20	Health And Armour	-	doom
+2005	Chainsaw	CSAW	A	20	Weapons	-	doom
+2001	Shotgun	SHOT	A	20	Weapons	-	doom
+2002	Chaingun	MGUN	A	20	Weapons	-	doom
+2003	Rocket Launcher	LAUN	A	20	Weapons	-	doom
+2004	Plasma Gun	PLAS	A	20	Weapons	-	doom
+2006	BFG9000	BFUG	A	20	Weapons	-	doom
+2007	Ammo Clip	CLIP	A	10	Ammunition	-	doom
+2048	Box Of Ammo	AMMO	A	16	Ammunition	-	doom
+2008	Shotgun Shells	SHEL	A	10	Ammunition	-	doom
+2049	Box Of Shells	SBOX	A	16	Ammunition	-	doom
+2010	Rocket	ROCK	A	10	Ammunition	-	doom
+2046	Box Of Rockets	BROK	A	16	Ammunition	-	doom
+2047	Energy Cell	CELL	A	10	Ammunition	-	doom
+17	Energy Pack	CELP	A	16	Ammunition	-	doom
+8	Backpack	BPAK	A	16	Ammunition	-	doom
+2024	Partial Invisibility Sphere	PINS	B	16	Powerups	-	doom
+2013	Soul Sphere	SOUL	A	16	Powerups	-	doom
+2022	Invulnerability Sphere	PINV	A	16	Powerups	-	doom
+2025	Radiation Shielding Suit	SUIT	A	16	Powerups	-	doom
+2023	Berserk Pack	PSTR	A	16	Powerups	-	doom
+2045	Lite-Amp Goggles	PVIS	A	16	Powerups	-	doom
+2026	Computer Area Map	PMAP	A	16	Powerups	-	doom
+13	Red Keycard	RKEY	A	12	Keys	-	doom
+38	Red Skull Key	RSKU	A	14	Keys	-	doom
+5	Blue Keycard	BKEY	A	12	Keys	-	doom
+40	Blue Skull Key	BSKU	A	14	Keys	-	doom
+6	Yellow Keycard	YKEY	A	12	Keys	-	doom
+39	Yellow Skull Key	YSKU	A	14	Keys	-	doom
+15	Dead Player	PLAY	N	16	Gore/Dead Things	-	doom
+18	Dead Former Human	POSS	L	16	Gore/Dead Things	-	doom
+19	Dead Former Human Sargeant	SPOS	L	16	Gore/Dead Things	-	doom
+20	Dead Imp	TROO	M	16	Gore/Dead Things	-	doom
+21	Dead Demon	SARG	N	16	Gore/Dead Things	-	doom
+23	Dead Lost Soul	SKUL	K	16	Gore/Dead Things	-	doom
+22	Dead Cacodemon	HEAD	L	16	Gore/Dead Things	-	doom
+25	Impaled Body	POL6	A	16	Gore/Hanging & Impaled Bodies	-	doom
+26	Impaled Body (Twitching)	POL6	B	16	Gore/Hanging & Impaled Bodies	-	doom
+63	Hanging Swaying Body	GOR1	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+49	Hanging Swaying Body (Blocking)	GOR1	B	16	Gore/Hanging & Impaled Bodies	hanging	doom
+61	Hanging One-legged Body	GOR3	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+51	Hanging One-legged Body (Blocking)	GOR3	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+62	Hanging Leg	GOR5	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+53	Hanging Leg (Blocking)	GOR5	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+59	Hanging Body Arms Out	GOR2	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+50	Hanging Body Arms Out (Blocking)	GOR2	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+60	Hanging Legs	GOR4	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+52	Hanging Legs (Blocking)	GOR4	A	16	Gore/Hanging & Impaled Bodies	hanging	doom
+24	Pool of Blood	POL5	A	16	Gore/Blood & Stuff	-	doom
+10	Guts and Bones	PLAY	W	16	Gore/Blood & Stuff	-	doom
+12	Guts And Bones 2	PLAY	W	16	Gore/Blood & Stuff	-	doom
+27	Skull on Pole	POL4	A	16	Gore/Blood & Stuff	-	doom
+28	Heads on Pole	POL2	A	16	Gore/Blood & Stuff	-	doom
+42	Flaming Skulls	FSKU	A	16	Gore/Blood & Stuff	-	doom
+29	Pile of Skulls	POL3	A	16	Gore/Blood & Stuff	-	doom
+34	Candle	CAND	A	16	Lighting	-	doom
+35	Candelabra	CBRA	A	16	Lighting	-	doom
+2028	Yellow Lamp	COLU	A	16	Lighting	-	doom
+57	Short Red Torch	SMRT	A	16	Lighting	-	doom
+46	Tall Red Torch	TRED	A	16	Lighting	-	doom
+55	Short Blue Torch	SMBT	A	16	Lighting	-	doom
+44	Tall Blue Torch	TBLU	A	16	Lighting	-	doom
+56	Short Green Torch	SMGT	A	16	Lighting	-	doom
+45	Tall Green Torch	TGRN	A	16	Lighting	-	doom
+48	Tech Column	ELEC	A	16	Decorations/Tech	-	doom
+2035	Barrel	BAR1	A	16	Decorations/Tech	-	doom
+33	Short Red Pillar	COL4	A	16	Decorations/Hell	-	doom
+32	Tall Red Pillar	COL3	A	16	Decorations/Hell	-	doom
+31	Short Green Pillar	COL2	A	16	Decorations/Hell	-	doom
+30	Tall Green Pillar	COL1	A	16	Decorations/Hell	-	doom
+37	Red Pillar + Skull	COL6	A	16	Decorations/Hell	-	doom
+36	Pillar + Pumping Heart	COL5	A	16	Decorations/Hell	-	doom
+41	Evil Eye	CEYE	A	16	Decorations/Hell	-	doom
+54	Large Brown Tree	TRE2	A	32	Decorations/Plants	-	doom
+43	Short Grey Tree	TRE1	A	16	Decorations/Plants	-	doom
+47	Tree Stump	SMIT	A	16	Decorations/Plants	-	doom
+65	Chaingunner	CPOS	A	20	Monsters	-	doom2
+69	Hell Knight	BOS2	A	24	Monsters	-	doom2
+68	Arachnotron	BSPI	A	64	Monsters	-	doom2
+71	Pain Elemental	PAIN	A	32	Monsters	-	doom2
+66	Revenant	SKEL	B	20	Monsters	-	doom2
+67	Mancubus	FATT	C	48	Monsters	-	doom2
+64	Arch-Vile	VILE	B	20	Monsters	-	doom2
+88	Boss Brain	BBRN	A	20	Monsters	-	doom2
+89	Boss Shooter	BOSF	C	20	Monsters	-	doom2
+87	Boss Spawn Spot	BOSF	B	20	Monsters	-	doom2
+72	Hanging Keen	KEEN	A	16	Monsters	hanging	doom2
+84	Wolfenstein 3D SS	SSWV	A	20	Monsters	-	doom2
+82	Super Shotgun	SGN2	A	20	Weapons	-	doom2
+83	Megasphere	MEGA	A	16	Powerups	-	doom2
+73	Hanging Body, Guts Removed	HDB1	A	16	Gore/Hanging & Impaled Bodies	hanging	doom2
+74	Hanging Body, Guts & Brain Removed	HDB2	A	16	Gore/Hanging & Impaled Bodies	hanging	doom2
+75	Hanging Torso, Looking Down	HDB3	A	16	Gore/Hanging & Impaled Bodies	hanging	doom2
+76	Hanging Torso, Open Skull	HDB4	A	16	Gore/Hanging & Impaled Bodies	hanging	doom2
+77	Hanging Torso, Looking Up	HDB5	A	16	Gore/Hanging & Impaled Bodies	hanging	doom2
+78	Hanging Torso, Brain Removed	HDB6	A	16	Gore/Hanging & Impaled Bodies	hanging	doom2
+79	Pool Of Blood 2	POB1	A	16	Gore/Blood & Stuff	-	doom2
+80	Pool Of Blood 3	POB2	A	16	Gore/Blood & Stuff	-	doom2
+81	Pool Of Brains	BRS1	A	16	Gore/Blood & Stuff	-	doom2
+85	Tall Techno Lamp	TLMP	A	16	Lighting	-	doom2
+86	Short Techno Lamp	TLP2	A	16	Lighting	-	doom2
+70	Burning Barrel	FCAN	A	16	Lighting	-	doom2

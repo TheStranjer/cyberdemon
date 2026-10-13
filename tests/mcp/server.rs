@@ -37,7 +37,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_the_meta_assets_defs_and_session_tools() {
+    async fn lists_the_meta_assets_defs_lumps_and_session_tools() {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -49,11 +49,13 @@ mod tests {
                 "get_session_info",
                 "get_thing_types",
                 "get_wad_info",
+                "list_lumps",
                 "merge_wad",
                 "new_wad",
                 "open_iwad",
                 "open_wad",
                 "save_wad",
+                "search_lumps",
                 "set_asset_capacity",
                 "version",
             ],

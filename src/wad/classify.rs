@@ -199,6 +199,91 @@ pub enum LumpKind {
     Unknown,
 }
 
+impl LumpKind {
+    /// Every kind, in documentation order.
+    pub const ALL: [Self; 30] = [
+        Self::Marker,
+        Self::MapMarker,
+        Self::MapData,
+        Self::Palette,
+        Self::Colormap,
+        Self::Pnames,
+        Self::TextureDefs,
+        Self::Endoom,
+        Self::Demo,
+        Self::Dehacked,
+        Self::Decorate,
+        Self::Zscript,
+        Self::Mapinfo,
+        Self::Png,
+        Self::Jpeg,
+        Self::Gif,
+        Self::Mus,
+        Self::Midi,
+        Self::Wav,
+        Self::Ogg,
+        Self::Flac,
+        Self::Mp3,
+        Self::DoomSound,
+        Self::PcSpeaker,
+        Self::Flat,
+        Self::Sprite,
+        Self::Patch,
+        Self::Text,
+        Self::Empty,
+        Self::Unknown,
+    ];
+
+    /// The snake-case name of this kind, exactly what `Serialize` writes.
+    #[must_use]
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Marker => "marker",
+            Self::MapMarker => "map_marker",
+            Self::MapData => "map_data",
+            Self::Palette => "palette",
+            Self::Colormap => "colormap",
+            Self::Pnames => "pnames",
+            Self::TextureDefs => "texture_defs",
+            Self::Endoom => "endoom",
+            Self::Demo => "demo",
+            Self::Dehacked => "dehacked",
+            Self::Decorate => "decorate",
+            Self::Zscript => "zscript",
+            Self::Mapinfo => "mapinfo",
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+            Self::Gif => "gif",
+            Self::Mus => "mus",
+            Self::Midi => "midi",
+            Self::Wav => "wav",
+            Self::Ogg => "ogg",
+            Self::Flac => "flac",
+            Self::Mp3 => "mp3",
+            Self::DoomSound => "doom_sound",
+            Self::PcSpeaker => "pc_speaker",
+            Self::Flat => "flat",
+            Self::Sprite => "sprite",
+            Self::Patch => "patch",
+            Self::Text => "text",
+            Self::Empty => "empty",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Parses a kind from its snake-case name, case-insensitively; `None`
+    /// for anything else.
+    #[must_use]
+    #[inline]
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.as_str().eq_ignore_ascii_case(text))
+    }
+}
+
 /// One directory entry with its namespace, map and type hint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct LumpInfo {
@@ -842,6 +927,25 @@ mod tests {
             json!("colormaps"),
             "snake-case wire name"
         );
+    }
+
+    #[test]
+    fn lump_kind_names_mirror_serialization_and_parse() {
+        assert_eq!(LumpKind::ALL.len(), 30, "the documented kind count");
+        for kind in LumpKind::ALL {
+            let serialized = serde_json::to_value(kind).expect("kinds serialize");
+            let text = serialized
+                .as_str()
+                .expect("kinds serialize as snake-case strings");
+            assert_eq!(kind.as_str(), text, "as_str mirrors Serialize for {kind:?}");
+            assert_eq!(LumpKind::parse(text), Some(kind), "exact parse of {text}");
+            assert_eq!(
+                LumpKind::parse(&text.to_ascii_uppercase()),
+                Some(kind),
+                "case-insensitive parse of {text}"
+            );
+        }
+        assert_eq!(LumpKind::parse("nope"), None, "unknown kind name");
     }
 
     #[test]

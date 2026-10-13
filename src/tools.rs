@@ -7,6 +7,7 @@
 
 pub(crate) mod assets;
 pub(crate) mod defs;
+pub(crate) mod lumps;
 pub(crate) mod meta;
 pub(crate) mod session;
 

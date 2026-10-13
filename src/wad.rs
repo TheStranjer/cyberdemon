@@ -9,13 +9,15 @@
 //! and write real files. [`classify::analyze`] walks a directory and reports
 //! every lump's namespace, map membership and type hint, and
 //! [`game::detect_game`] names the game a directory of lump names
-//! identifies. Nothing in this module knows about MCP or sessions; it is
-//! pure data.
+//! identifies. [`map`] holds the typed, format-neutral map model and its
+//! binary `Doom` codec. Nothing in this module knows about MCP or sessions;
+//! it is pure data.
 
 pub mod archive;
 pub mod bytes;
 pub mod classify;
 pub mod game;
+pub mod map;
 pub mod name;
 
 pub use archive::{Lump, Wad, WadKind};

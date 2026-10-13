@@ -33,7 +33,7 @@ mod tests {
             "echoed path"
         );
         assert_eq!(report["kind"], json!("IWAD"), "header magic");
-        assert_eq!(report["lumps"].as_u64(), Some(12), "fixture lump count");
+        assert_eq!(report["lumps"].as_u64(), Some(17), "fixture lump count");
         assert_eq!(report["maps"].as_u64(), Some(1), "MAP01 only");
         assert_eq!(report["game"], json!("doom2"), "MAP01 identifies DOOM II");
     }
@@ -92,7 +92,7 @@ mod tests {
             "echoed path"
         );
         assert_eq!(report["kind"], json!("PWAD"), "header magic");
-        assert_eq!(report["lumps"].as_u64(), Some(10), "fixture lump count");
+        assert_eq!(report["lumps"].as_u64(), Some(15), "fixture lump count");
         assert_eq!(report["maps"].as_u64(), Some(1), "MAP02 only");
         assert_eq!(report["dirty"], json!(false), "a fresh open is saved state");
         assert_eq!(
@@ -128,7 +128,7 @@ mod tests {
         )
         .await;
         assert_eq!(forced["dirty"], json!(false), "the new archive is clean");
-        assert_eq!(forced["lumps"].as_u64(), Some(10), "and it is the fixture");
+        assert_eq!(forced["lumps"].as_u64(), Some(15), "and it is the fixture");
     }
 
     #[tokio::test]
@@ -172,11 +172,11 @@ mod tests {
             Some(1),
             "the resource sits above the IWAD"
         );
-        assert_eq!(report["lumps"].as_u64(), Some(10), "the layered archive");
+        assert_eq!(report["lumps"].as_u64(), Some(15), "the layered archive");
         let info = call(&client, "get_wad_info", Value::Null).await;
         assert_eq!(
             info["total_lumps"].as_u64(),
-            Some(19),
+            Some(29),
             "FLOOR1 replaced, not doubled"
         );
         assert_eq!(
@@ -320,7 +320,7 @@ mod tests {
         );
         assert_eq!(
             session["iwad"]["lumps"].as_u64(),
-            Some(12),
+            Some(17),
             "the fixture's directory"
         );
         let layers = session["layers"].as_array().expect("a layer list");
@@ -332,7 +332,7 @@ mod tests {
             json!(extra.display().to_string()),
             "its file"
         );
-        assert_eq!(layers[1]["lumps"].as_u64(), Some(10), "its directory size");
+        assert_eq!(layers[1]["lumps"].as_u64(), Some(15), "its directory size");
         assert_eq!(
             session["working"]["path"],
             json!(base.display().to_string()),
@@ -367,7 +367,7 @@ mod tests {
         );
         assert_eq!(
             info["total_lumps"].as_u64(),
-            Some(19),
+            Some(29),
             "the merged directory"
         );
         assert_eq!(

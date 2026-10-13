@@ -75,8 +75,8 @@ src/
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
-  wad.rs          WAD format core module root: lump names, byte access and
-                  the in-memory archive.
+  wad.rs          WAD format core module root: lump names, byte access, the
+                  in-memory archive and the map module tree.
   wad/            Format building blocks (no MCP concerns): `wad/name.rs` the
                   eight-byte uppercase `LumpName` with glob matching,
                   `wad/bytes.rs` bounds-checked little-endian `Reader` and
@@ -86,6 +86,13 @@ src/
                   the pure lump-directory analysis pass: `Namespace`s,
                   `MapBlock`s and `LumpKind` type hints, and `wad/game.rs`
                   the pure game signature detection (`detect_game`).
+  wad/map.rs      Map layer root: the `read_map`/`write_map` format
+                  dispatcher and the model re-exports.
+  wad/map/        Map data (no MCP concerns): `map/model.rs` the
+                  format-neutral `Map` model (`Thing`, `Vertex`,
+                  `Linedef`, `Sidedef`, `Sector`, `extra` side-bags),
+                  `map/doom.rs` the binary Doom map reader/writer
+                  (`read_doom_map`/`write_doom_map`).
 data/
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by

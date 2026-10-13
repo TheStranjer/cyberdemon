@@ -16,7 +16,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries
 > never cross the stdio channel. An internal graphics core (`src/gfx*`:
 > images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure
-> integer image ops), a float-free math core (`src/fixed*`: 16.16 fixed
+> integer image ops), an internal audio core (`src/audio*`: interleaved
+> `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, integer mono downmix
+> and resampling), a float-free math core (`src/fixed*`: 16.16 fixed
 > point, BAM angles, CORDIC trig, `isqrt`) and a pure WAD format core
 > (`src/wad*`: eight-byte lump names, bounds-checked little-endian
 > reader/writer) back the upcoming WAD tools. `AppState::fetch_source`

@@ -28,6 +28,14 @@ src/
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
                   bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
                   adjust, `gfx/ops/alpha.rs` colour key and trim.
+  audio.rs        Audio core module root: sample-rate limits and the shared
+                  unsigned-8-bit conversions.
+  audio/          Audio building blocks (no MCP concerns): `audio/pcm.rs`
+                  interleaved i16 `Pcm` with mono downmix, integer linear
+                  resampling and 8-bit conversion, `audio/dmx.rs` Doom
+                  "DS*" DMX sound lump decode/encode, `audio/wav.rs`
+                  RIFF/WAV decode (8/16/24/32-bit and extensible PCM) and
+                  canonical 8/16-bit encode.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools

@@ -11,8 +11,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > Status: foundation plus the first WAD tools. The server starts per-connection with shared session
 > state, exposes a `version` tool, an `assets` group
 > (`get_asset_server_info`, `set_asset_capacity`) and a `session` group
-> (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `get_session_info`,
-> `get_wad_info`), and defines the structured
+> (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
+> `get_session_info`, `get_wad_info`), and defines the structured
 > JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries

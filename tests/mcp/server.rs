@@ -52,6 +52,7 @@ mod tests {
                 "new_wad",
                 "open_iwad",
                 "open_wad",
+                "save_wad",
                 "set_asset_capacity",
                 "version",
             ],

@@ -16,7 +16,7 @@ use crate::session::merge::{MergeCounts, merge_counts, merge_into};
 use crate::session::{Layer, LayerRole, MergedLump, Session, Source};
 use crate::state::AppState;
 use crate::tools::{fail, ok};
-use crate::wad::archive::Wad;
+use crate::wad::archive::{Wad, write_file_atomic};
 use crate::wad::classify::{Analysis, LumpKind, MapFormat, analyze};
 use crate::wad::game::{Game, detect_game};
 use crate::wad::{Lump, LumpName, WadKind};
@@ -96,6 +96,85 @@ fn parse_mode(text: Option<&str>) -> Result<MergeMode, CyberError> {
     Err(CyberError::InvalidArgument(format!(
         "unknown merge mode {raw:?}: use \"layer\" to stack the file read-only or \"working\" \
          to merge its lumps into the working archive"
+    )))
+}
+
+/// Arguments for [`Cyberdemon::save_wad`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SaveWadParams {
+    /// Absolute filesystem path to write. Defaults to the working archive's
+    /// path (set by `open_wad` or a previous `save_wad`); without either the
+    /// call fails with `invalid_argument`.
+    #[serde(default)]
+    path: Option<String>,
+    /// `"pwad"` (the default) writes the working archive and marks it saved;
+    /// `"full"` exports the entire merged view as one standalone WAD without
+    /// touching the working path or the dirty flag.
+    #[serde(default)]
+    mode: Option<String>,
+    /// Header magic to write, `"PWAD"` or `"IWAD"`. Defaults to the working
+    /// archive's kind for mode `pwad`; for `full`, `IWAD` when an IWAD layer
+    /// is loaded, else `PWAD`.
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// How [`Cyberdemon::save_wad`] decides what to write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum SaveMode {
+    /// Write the working archive and record it as saved.
+    Pwad,
+    /// Export the merged view; the session keeps its working path and dirty
+    /// state untouched.
+    Full,
+}
+
+/// The mode names the `save_wad` `mode` parameter accepts, `None` for the
+/// default. Anything else is refused with a hint naming both forms.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for any text other than `pwad` or
+/// `full`, in any case.
+fn parse_save_mode(text: Option<&str>) -> Result<SaveMode, CyberError> {
+    let Some(raw) = text else {
+        return Ok(SaveMode::Pwad);
+    };
+    let lowered = raw.to_ascii_lowercase();
+    if lowered == "pwad" {
+        return Ok(SaveMode::Pwad);
+    }
+    if lowered == "full" {
+        return Ok(SaveMode::Full);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "unknown save mode {raw:?}: use \"pwad\" to save the working archive or \"full\" to \
+         export the merged view as one standalone WAD"
+    )))
+}
+
+/// The header magic the `save_wad` `kind` parameter selects, `None` for the
+/// mode's default.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for any text other than `pwad` or
+/// `iwad`, in any case.
+fn parse_kind(text: Option<&str>) -> Result<Option<WadKind>, CyberError> {
+    let Some(raw) = text else {
+        return Ok(None);
+    };
+    let lowered = raw.to_ascii_lowercase();
+    if lowered == "pwad" {
+        return Ok(Some(WadKind::Pwad));
+    }
+    if lowered == "iwad" {
+        return Ok(Some(WadKind::Iwad));
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "unknown kind {raw:?}: use \"PWAD\" for a patch archive or \"IWAD\" for a full game \
+         archive, or leave the parameter out for the default magic"
     )))
 }
 
@@ -189,6 +268,24 @@ enum MergeReport {
         /// (a whole new map block counts as one).
         added: usize,
     },
+}
+
+/// Structured result of [`Cyberdemon::save_wad`].
+#[derive(Serialize)]
+struct SaveReport {
+    /// The file that was written.
+    path: String,
+    /// Which mode ran.
+    mode: SaveMode,
+    /// The header magic written into the file.
+    kind: WadKind,
+    /// Directory entries in the file.
+    lumps: usize,
+    /// Bytes in the file.
+    bytes: usize,
+    /// Whether the working archive still holds unsaved changes (`false`
+    /// after a `pwad` save, unchanged after a `full` export).
+    dirty: bool,
 }
 
 /// One read-only layer, as `get_session_info` lists the stack.
@@ -478,6 +575,131 @@ fn merge_wad_report(
     }
 }
 
+/// The file `save_wad` will write: the `path` argument when given (it must
+/// be absolute), else the working archive's remembered path.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a relative `path`, and for no `path`
+/// on a session that never opened or saved to a file.
+fn resolve_target(session: &Session, text: Option<&str>) -> Result<PathBuf, CyberError> {
+    let Some(raw) = text else {
+        return session
+            .working_path()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                CyberError::InvalidArgument(
+                    "no path: pass path, the working archive was never opened from or saved to \
+                     a file"
+                        .to_owned(),
+                )
+            });
+    };
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err(CyberError::InvalidArgument(format!(
+            "path {raw:?} is not absolute; pass the full filesystem path to save to"
+        )));
+    }
+    Ok(path.to_path_buf())
+}
+
+/// The canonical form of `path` when a file stands there, for same-file
+/// comparisons; `None` when it is absent or cannot be resolved.
+fn canonical_existing(path: &Path) -> Option<PathBuf> {
+    if !path.try_exists().is_ok_and(|exists| exists) {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+/// The layer's role as text, for the overwrite refusal.
+const fn role_label(role: LayerRole) -> &'static str {
+    match role {
+        LayerRole::Iwad => "IWAD",
+        LayerRole::Resource => "resource",
+    }
+}
+
+/// Refuse to overwrite the file one of the session's read-only layers reads
+/// from, compared by canonical path whenever the target exists.
+///
+/// # Errors
+///
+/// [`CyberError::Conflict`] naming the layer and the escape hatch when
+/// `target` is a loaded layer's file.
+fn ensure_not_layer_file(session: &Session, target: &Path) -> Result<(), CyberError> {
+    let Some(resolved) = canonical_existing(target) else {
+        return Ok(());
+    };
+    for layer in session.layers() {
+        let same_file = canonical_existing(&layer.path).is_some_and(|file| file == resolved);
+        if same_file {
+            return Err(CyberError::Conflict(format!(
+                "{} is the session's {} layer at {}; pass a different path",
+                target.display(),
+                role_label(layer.role),
+                layer.path.display(),
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The archive `save_wad` mode `pwad` writes: the working archive, its magic
+/// overridden when `kind` says so.
+fn working_copy(session: &Session, kind: Option<WadKind>) -> Wad {
+    let mut wad = session.working().clone();
+    if let Some(wanted) = kind {
+        wad.kind = wanted;
+    }
+    wad
+}
+
+/// The archive `save_wad` mode `full` writes: the whole merged view as one
+/// standalone `Wad`, `IWAD`-magic by default while a base layer is loaded.
+fn merged_export(session: &Session, kind: Option<WadKind>) -> Wad {
+    let view = session.merged();
+    let default = session.iwad().map_or(WadKind::Pwad, |_| WadKind::Iwad);
+    Wad {
+        kind: kind.unwrap_or(default),
+        lumps: view.into_iter().map(|entry| entry.lump).collect(),
+    }
+}
+
+/// `save_wad`'s work: resolve path, mode and kind, write the file and, in
+/// mode `pwad`, record it as the working archive's saved state.
+fn save_wad_report(
+    state: &AppState,
+    text: Option<&str>,
+    mode: Option<&str>,
+    kind: Option<&str>,
+) -> Result<SaveReport, CyberError> {
+    let wanted_mode = parse_save_mode(mode)?;
+    let wanted_kind = parse_kind(kind)?;
+    state.with_session(|session| {
+        let target = resolve_target(session, text)?;
+        ensure_not_layer_file(session, &target)?;
+        let wad = match wanted_mode {
+            SaveMode::Pwad => working_copy(session, wanted_kind),
+            SaveMode::Full => merged_export(session, wanted_kind),
+        };
+        let bytes = wad.to_bytes()?;
+        write_file_atomic(&target, &bytes)?;
+        if wanted_mode == SaveMode::Pwad {
+            session.mark_saved(target.clone());
+        }
+        Ok(SaveReport {
+            path: path_text(&target),
+            mode: wanted_mode,
+            kind: wad.kind,
+            lumps: wad.len(),
+            bytes: bytes.len(),
+            dirty: session.is_dirty(),
+        })
+    })
+}
+
 /// One layer of the stack as `get_session_info` shows it.
 fn layer_info(index: usize, layer: &Layer) -> LayerInfo {
     LayerInfo {
@@ -634,6 +856,22 @@ impl Cyberdemon {
             self.state(),
             &args.path,
             args.mode.as_deref(),
+        ))
+    }
+
+    /// Writes the working archive or the whole merged view to a file.
+    #[tool(
+        description = "Saves the session to a file. mode \"pwad\" (the default) writes the working archive and marks it saved (the working path becomes the file written); mode \"full\" exports the entire merged view (IWAD layer, resource layers and working archive under the override rules) as one standalone WAD without changing the working path or the dirty flag. path is absolute and defaults to the working archive's own path; kind (\"PWAD\"|\"IWAD\") overrides the header magic. Refuses with conflict to overwrite a loaded layer's file. Returns {path, mode, kind, lumps, bytes, dirty}."
+    )]
+    fn save_wad(
+        &self,
+        Parameters(args): Parameters<SaveWadParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(save_wad_report(
+            self.state(),
+            args.path.as_deref(),
+            args.mode.as_deref(),
+            args.kind.as_deref(),
         ))
     }
 

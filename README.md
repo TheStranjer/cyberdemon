@@ -14,8 +14,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > (`get_thing_types`), a `lumps` group (`list_lumps`, `search_lumps`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
-> `get_session_info`, `get_wad_info`), and defines the structured
-> JSON result/error contract every WAD tool uses. Generated files are
+> `get_session_info`, `get_wad_info`) and a `render` group
+> (`set_render_resolution`, `set_render_options`, `get_render_settings`),
+> and defines the structured JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries
 > never cross the stdio channel. An internal graphics core (`src/gfx*`:
@@ -35,7 +36,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, and a labelled undo/redo history with dirty-state tracking) and a
 > definitions registry (`src/defs*`: TSV game tables embedded in the binary,
-> parsed once, selected per game) back
+> parsed once, selected per game) and render defaults (`src/render*`: the
+> validated session-level resolution, lighting, field of view, gamma and
+> style every render tool starts from, plus the integer gamma curve) back
 > the first WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes

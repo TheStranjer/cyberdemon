@@ -9,6 +9,7 @@ pub(crate) mod assets;
 pub(crate) mod defs;
 pub(crate) mod lumps;
 pub(crate) mod meta;
+pub(crate) mod render;
 pub(crate) mod session;
 
 use rmcp::model::{CallToolResult, ErrorData};

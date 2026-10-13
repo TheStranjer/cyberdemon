@@ -112,13 +112,19 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `save_wad`              | `reference/session.md`  |
 | `get_session_info`      | `reference/session.md`  |
 | `get_wad_info`          | `reference/session.md`  |
+| `set_render_resolution` | `reference/render.md`   |
+| `set_render_options`    | `reference/render.md`   |
+| `get_render_settings`   | `reference/render.md`   |
 
 ## Typical workflow
 
 `open_iwad` the game archive → `open_wad` your project WAD or `new_wad`
 for a fresh one → edit the working archive → `save_wad`. `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
-merged view an engine would see.
+merged view an engine would see. `set_render_resolution` and
+`set_render_options` tune the picture for the whole connection (they are not
+part of a WAD and survive every archive change); `get_render_settings` reads
+them back.
 
 More WAD reading and editing tools are not implemented yet. When they are,
 add one reference file per tool group under `reference/` and index each

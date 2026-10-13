@@ -3,8 +3,9 @@
 //! The harness helpers live in `support`, the WAD builders in `fixtures`,
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! session-group tests in `session`, the `save_wad` tests in `save`, the
-//! defs-group tests in `defs`, the `lumps`-group tests in `lumps`, and the
-//! documentation-layout checks in `docs`; every helper is exercised by a
+//! defs-group tests in `defs`, the `lumps`-group tests in `lumps`, the
+//! render-group tests in `render`, and the documentation-layout checks in
+//! `docs`; every helper is exercised by a
 //! test in `server`, and the real result/error contract is checked end to
 //! end through a small probe server.
 
@@ -37,6 +38,9 @@ pub mod fixtures;
 #[cfg(test)]
 #[path = "mcp/lumps.rs"]
 mod lumps;
+#[cfg(test)]
+#[path = "mcp/render.rs"]
+mod render;
 #[cfg(test)]
 #[path = "mcp/save.rs"]
 mod save;

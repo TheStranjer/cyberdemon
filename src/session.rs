@@ -24,6 +24,10 @@
 //! [`history`] so [`Session::undo`] and [`Session::redo`] can walk back and
 //! forth; [`Session::is_dirty`] compares the working archive's revision with
 //! the one it was last saved at.
+//!
+//! Alongside the archives a session carries the client's [`RenderSettings`],
+//! the defaults the render tools start from. They are session state rather
+//! than archive state: no edit, undo or replaced archive changes them.
 
 pub mod history;
 pub mod merge;
@@ -33,6 +37,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::render::RenderSettings;
 use crate::session::history::History;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, Namespace};
@@ -160,6 +165,8 @@ pub struct Session {
     history: History,
     /// The map tools should default to, when the client has picked one.
     active_map: Option<LumpName>,
+    /// Session-level render defaults, never part of the undo history.
+    render: RenderSettings,
 }
 
 impl Session {
@@ -223,6 +230,30 @@ impl Session {
     #[inline]
     pub const fn set_active_map(&mut self, map: Option<LumpName>) {
         self.active_map = map;
+    }
+
+    /// The session-level render defaults the rendering tools start from.
+    #[must_use]
+    #[inline]
+    pub const fn render_settings(&self) -> &RenderSettings {
+        &self.render
+    }
+
+    /// The session-level render defaults, mutably: the render tools validate
+    /// every change through [`RenderSettings`]'s setters before assigning it.
+    #[inline]
+    pub const fn render_settings_mut(&mut self) -> &mut RenderSettings {
+        &mut self.render
+    }
+
+    /// Replaces the render defaults (see [`RenderSettings`]).
+    ///
+    /// Settings are session state, not archive state: neither this nor
+    /// [`Session::replace_working`] nor [`Session::undo`] touches the history
+    /// of edits.
+    #[inline]
+    pub fn set_render_settings(&mut self, settings: RenderSettings) {
+        self.render = settings;
     }
 
     /// Adopts a new working archive, forgetting the edit history.
@@ -411,6 +442,7 @@ mod tests {
 
     use super::{Layer, LayerRole, MergedLump, Scope, Session, Source};
     use crate::error::CyberError;
+    use crate::render::{Lighting, RenderSettings};
     use crate::session::history::HISTORY_LIMIT;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
@@ -1004,6 +1036,54 @@ mod tests {
         assert_eq!(session.active_map(), Some(name("MAP01")));
         session.set_active_map(None);
         assert_eq!(session.active_map(), None, "cleared again");
+    }
+
+    #[test]
+    fn a_fresh_session_starts_on_the_default_render_settings() {
+        let session = Session::default();
+        assert_eq!(
+            session.render_settings(),
+            &RenderSettings::default(),
+            "the render tools' defaults are the documented ones"
+        );
+        assert_eq!(session.render_settings().width, 640, "the default width");
+    }
+
+    #[test]
+    fn render_settings_survive_an_undo_and_a_replaced_archive() {
+        let mut session = loaded();
+        let mut settings = session.render_settings().clone();
+        settings
+            .set_resolution(1_280, 800)
+            .expect("a supported resolution");
+        settings.set_gamma(3).expect("a supported level");
+        session.set_render_settings(settings.clone());
+        session
+            .edit("add MARK", append_marker)
+            .expect("an edit to undo");
+        session.undo().expect("undo it");
+        session.replace_working(pwad(vec![lump("PLAYPAL")]), None);
+        assert_eq!(
+            session.render_settings(),
+            &settings,
+            "settings are session state: no edit, undo or new archive touches them"
+        );
+    }
+
+    #[test]
+    fn render_settings_mut_changes_the_stored_settings() {
+        let mut session = Session::default();
+        let mut expected = session.render_settings().clone();
+        expected.lighting = Lighting::Fullbright;
+        session
+            .render_settings_mut()
+            .set_lighting("fullbright")
+            .expect("a supported model");
+        assert_eq!(
+            session.render_settings(),
+            &expected,
+            "the mutable accessor reaches the stored value"
+        );
     }
 
     #[test]

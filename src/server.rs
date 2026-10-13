@@ -40,6 +40,7 @@ impl Cyberdemon {
     fn router() -> ToolRouter<Self> {
         let mut router = Self::meta_router();
         router.merge(Self::assets_router());
+        router.merge(Self::session_router());
         router
     }
 

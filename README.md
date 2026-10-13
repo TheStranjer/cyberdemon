@@ -16,7 +16,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries
 > never cross the stdio channel. An internal graphics core (`src/gfx*`:
 > images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure
-> integer image ops), an internal audio core (`src/audio*`: interleaved
+> integer image ops, Doom patch (incl. tall) and flat codecs), an internal
+> audio core (`src/audio*`: interleaved
 > `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, integer mono downmix
 > and resampling), an internal music core (`src/music*`: Doom `MUS` to
 > type-0 `MIDI` conversion and back, an `SMF` writer and a track-merging

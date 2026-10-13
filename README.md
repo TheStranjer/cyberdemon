@@ -14,9 +14,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > to clients as `http://localhost:<port>` URLs by a lazily started asset
 > server (LRU store + uploads via `/upload/<name>`), so big binaries never
 > cross the stdio channel. An internal graphics core (`src/gfx*`: images,
-> PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization) and a float-free
+> PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization), a float-free
 > math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
-> `isqrt`) back the upcoming WAD tools.
+> `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
+> bounds-checked little-endian reader/writer) back the upcoming WAD tools.
 
 ## Build and run
 

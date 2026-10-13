@@ -20,5 +20,6 @@ pub mod server;
 pub mod session;
 pub mod state;
 pub mod tools;
+pub mod wad;
 
 pub use server::Cyberdemon;

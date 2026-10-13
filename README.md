@@ -22,7 +22,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > type-0 `MIDI` conversion, a small big-endian `SMF` writer), a float-free
 > math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
-> bounds-checked little-endian reader/writer) back the upcoming WAD tools.
+> bounds-checked little-endian reader/writer, and an in-memory `Wad` archive
+> with parsing, serialization, name lookup and atomic file I/O) back the
+> upcoming WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
 > for import tools.

@@ -16,6 +16,7 @@ pub mod audio;
 pub mod error;
 pub mod fixed;
 pub mod gfx;
+pub mod music;
 pub mod server;
 pub mod session;
 pub mod state;

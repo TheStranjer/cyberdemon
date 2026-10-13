@@ -12,6 +12,7 @@ use anyhow as _;
 use tempfile as _;
 
 pub mod assets;
+pub mod audio;
 pub mod error;
 pub mod fixed;
 pub mod gfx;

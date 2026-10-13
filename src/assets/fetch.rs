@@ -755,7 +755,7 @@ mod tests {
             ("", None),
         ];
         for (filename, expected) in cases {
-            let derived = derive_lump_name(filename).map(|name| name.as_str().to_owned());
+            let derived = derive_lump_name(filename).map(|name| name.to_string());
             assert_eq!(
                 derived,
                 expected.map(str::to_owned),

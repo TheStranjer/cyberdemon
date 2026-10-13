@@ -39,9 +39,11 @@ src/
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
-  wad.rs          WAD parsing and writing (no MCP concerns): `wad/name.rs`
-                  8-character lump names (`LumpName::parse`) and the rest of
-                  the binary reader, still to come.
+  wad.rs          WAD format core module root: lump names and byte access.
+  wad/            Format building blocks (no MCP concerns): `wad/name.rs` the
+                  eight-byte uppercase `LumpName` with glob matching,
+                  `wad/bytes.rs` bounds-checked little-endian `Reader` and
+                  `Writer` plus the checked usize/u32 casts.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

@@ -44,12 +44,15 @@ src/
                   variable-length quantities in both directions),
                   `music/mus2mid.rs` Doom MUS music lump ("D_*") to MIDI bytes.
   defs.rs         Definitions core module root: the game definitions registry
-                  entry point and the embedded-table re-exports.
+                  entry point, the Boom generalized/sector bit decoders and
+                  the embedded-table re-exports.
   defs/           Definition building blocks (no MCP concerns):
-                  `defs/table.rs` the TSV parser producing `ThingDef` rows,
+                  `defs/table.rs` the TSV parser producing `ThingDef`,
+                  `SpecialDef` and `SectorTypeDef` rows,
                   `defs/registry.rs` the `include_str!`-embedded tables
                   parsed once behind `LazyLock` and the per-game selection
-                  (`definitions_for`).
+                  (`definitions_for`), `defs/boom.rs` the generalized
+                  linedef and Boom sector-special bit unpackers.
   render.rs       Rendering core module root: the integer gamma curve
                   (`gamma_table`) and the settings re-exports.
   render/         Rendering building blocks (no MCP concerns):
@@ -97,7 +100,8 @@ data/
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by
                   `src/defs/table.rs`. `doom_things.tsv` is the DOOM/DOOM II
-                  thing table.
+                  thing table, `doom_specials.tsv` and `doom_sectors.tsv` the
+                  linedef special and sector type tables.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

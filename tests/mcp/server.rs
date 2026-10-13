@@ -46,7 +46,9 @@ mod tests {
             names,
             [
                 "get_asset_server_info",
+                "get_linedef_specials",
                 "get_render_settings",
+                "get_sector_specials",
                 "get_session_info",
                 "get_thing_types",
                 "get_wad_info",

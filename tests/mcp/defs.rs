@@ -1,5 +1,6 @@
 //! The `defs` tool group as seen by a real MCP client: the embedded game
-//! definition tables, the session-detected default game, and the filters.
+//! definition tables, the session-detected default game, the filters, and
+//! the Boom generalized and sector decodings.
 
 #[cfg(test)]
 mod tests {
@@ -7,6 +8,18 @@ mod tests {
 
     use crate::fixtures::iwad;
     use crate::support::{call, call_err, connect};
+
+    /// A generalized floor value: `0x6000 | WR | fast | up | lowest
+    /// neighbour ceiling` (bits `1 | (2 << 3) | (1 << 6) | (3 << 7)`),
+    /// combined without bare operators.
+    fn generalized_floor() -> u64 {
+        0x6000_u64
+            .checked_add(1)
+            .and_then(|v| v.checked_add(2_u64.checked_shl(3).expect("shift fits")))
+            .and_then(|v| v.checked_add(1_u64.checked_shl(6).expect("shift fits")))
+            .and_then(|v| v.checked_add(3_u64.checked_shl(7).expect("shift fits")))
+            .expect("the fixture value fits")
+    }
 
     /// The type numbers of a report's `things` array.
     fn types(report: &Value) -> Vec<u64> {
@@ -205,5 +218,280 @@ mod tests {
         )
         .await;
         assert_eq!(report["count"].as_u64(), Some(0), "the Imp is no weapon");
+    }
+
+    /// The special numbers of a report's `specials` array.
+    fn specials_of(report: &Value) -> Vec<u64> {
+        report["specials"]
+            .as_array()
+            .expect("specials is an array")
+            .iter()
+            .map(|entry| {
+                entry["special"]
+                    .as_u64()
+                    .expect("every entry has a special number")
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn specials_list_the_doom_ii_set_by_default() {
+        let client = connect().await;
+        let report = call(&client, "get_linedef_specials", json!({})).await;
+        assert_eq!(report["game"], json!("doom2"), "default game");
+        assert_eq!(report["count"].as_u64(), Some(139), "the whole DOOM II set");
+        assert_eq!(specials_of(&report).len(), 139, "count mirrors the list");
+        let numbers = specials_of(&report);
+        let mut sorted = numbers.clone();
+        sorted.sort_unstable();
+        assert_eq!(numbers, sorted, "rows arrive sorted by special");
+        assert!(numbers.contains(&117), "DR Door Fast is a DOOM II special");
+        assert_eq!(
+            report["generalized"],
+            json!(null),
+            "a listing decodes nothing"
+        );
+        assert_eq!(report["warnings"], json!([]), "DOOM II has its own tables");
+    }
+
+    #[tokio::test]
+    async fn doom_specials_exclude_the_doom_ii_additions() {
+        let client = connect().await;
+        let report = call(&client, "get_linedef_specials", json!({ "game": "doom" })).await;
+        assert_eq!(report["count"].as_u64(), Some(100), "the DOOM-only set");
+        assert!(
+            !specials_of(&report).contains(&117),
+            "special 117 is DOOM II only"
+        );
+        assert!(
+            specials_of(&report).contains(&1),
+            "DR Door is a DOOM special"
+        );
+    }
+
+    #[tokio::test]
+    async fn specials_filter_by_category_search_and_number() {
+        let client = connect().await;
+        let local = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "doom", "category": "doors/local" }),
+        )
+        .await;
+        assert_eq!(local["count"].as_u64(), Some(8), "the DOOM local doors");
+        let crusher = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "doom", "search": "crusher" }),
+        )
+        .await;
+        assert_eq!(crusher["count"].as_u64(), Some(7), "the DOOM crushers");
+        let one = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "doom", "special": 1_i64 }),
+        )
+        .await;
+        assert_eq!(
+            one["specials"],
+            json!([{
+                "special": 1_i64,
+                "name": "DR Door",
+                "category": "Doors/Local",
+                "target": "sector_back",
+                "args": [],
+            }]),
+            "the exact number gives the full row"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_plain_special_is_an_empty_list_not_an_error() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "doom", "special": 999_i64 }),
+        )
+        .await;
+        assert_eq!(report["count"].as_u64(), Some(0), "nothing matches");
+        assert_eq!(report["specials"], json!([]), "an empty list");
+        assert_eq!(
+            report["generalized"],
+            json!(null),
+            "0x3E7 is not generalized"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_generalized_number_decodes_without_table_rows() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "doom2", "special": generalized_floor() }),
+        )
+        .await;
+        assert_eq!(report["count"].as_u64(), Some(0), "no table rows");
+        assert_eq!(
+            report["specials"],
+            json!([]),
+            "the generalized answer replaces them"
+        );
+        let decoded = report["generalized"].clone();
+        assert_eq!(decoded["kind"], json!("Floor"), "kind");
+        assert_eq!(decoded["trigger"], json!("WR"), "trigger bits 0-2");
+        assert_eq!(decoded["speed"], json!("fast"), "speed bits 3-4");
+        assert_eq!(decoded["fields"]["direction"], json!("up"), "bit 6");
+        assert_eq!(
+            decoded["fields"]["target"],
+            json!("lowest neighbour ceiling"),
+            "target bits 7-9"
+        );
+        assert_eq!(
+            decoded["summary"],
+            json!("WR Floor up to lowest neighbour ceiling, fast"),
+            "summary text"
+        );
+    }
+
+    #[tokio::test]
+    async fn generalized_numbers_stay_table_rows_on_other_games() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "heretic", "special": generalized_floor() }),
+        )
+        .await;
+        assert_eq!(
+            report["generalized"],
+            json!(null),
+            "no Boom decoding for heretic"
+        );
+        assert_eq!(
+            report["count"].as_u64(),
+            Some(0),
+            "and no heretic table yet"
+        );
+        assert_eq!(
+            report["warnings"]
+                .as_array()
+                .expect("warnings is an array")
+                .len(),
+            1,
+            "the missing-table warning still shows"
+        );
+    }
+
+    #[tokio::test]
+    async fn specials_refuse_an_unknown_game() {
+        let client = connect().await;
+        let (code, message) =
+            call_err(&client, "get_linedef_specials", json!({ "game": "strife" })).await;
+        assert_eq!(code, "invalid_argument", "unknown game code");
+        assert!(
+            message.contains("\"doom2\""),
+            "the message lists games: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sector_types_list_the_full_doom_table() {
+        let client = connect().await;
+        let report = call(&client, "get_sector_specials", json!({ "game": "doom" })).await;
+        assert_eq!(report["game"], json!("doom"), "echoed game");
+        assert_eq!(report["count"].as_u64(), Some(16), "the shipped rows");
+        assert_eq!(report["special"], json!(null), "no value echoed");
+        assert_eq!(report["decoded"], json!(null), "nothing decoded");
+        let rows = report["sector_types"]
+            .as_array()
+            .expect("sector_types is an array");
+        assert!(
+            rows.iter()
+                .any(|row| row["type"] == json!(16_i64) && row["name"] == json!("20% Damage")),
+            "type 16 is in the table: {rows:?}"
+        );
+        assert_eq!(report["warnings"], json!([]), "DOOM has its own table");
+    }
+
+    #[tokio::test]
+    async fn a_sector_value_decodes_with_table_and_flags() {
+        let client = connect().await;
+        // base 9, damage bits 2 (10%), secret bit (9 | (2 << 5) | (1 << 7)).
+        let report = call(
+            &client,
+            "get_sector_specials",
+            json!({ "special": 201_i64 }),
+        )
+        .await;
+        assert_eq!(report["game"], json!("doom2"), "the session default");
+        assert_eq!(report["special"], json!(201_i64), "the number is echoed");
+        assert_eq!(report["count"].as_u64(), Some(16), "the table still ships");
+        assert_eq!(
+            report["decoded"],
+            json!({
+                "base": 9_i64,
+                "base_name": "Secret",
+                "damage": "10%",
+                "flags": ["secret"],
+            }),
+            "the Boom decoding"
+        );
+    }
+
+    #[tokio::test]
+    async fn sector_decoding_covers_friction_and_push() {
+        let client = connect().await;
+        // base 16 with friction (bit 8) and push (bit 9): 16 | (1 << 8) | (1 << 9).
+        let report = call(
+            &client,
+            "get_sector_specials",
+            json!({ "special": 784_i64 }),
+        )
+        .await;
+        assert_eq!(
+            report["decoded"],
+            json!({
+                "base": 16_i64,
+                "base_name": "20% Damage",
+                "damage": "none",
+                "flags": ["friction", "push"],
+            }),
+            "friction and push flags decode"
+        );
+    }
+
+    #[tokio::test]
+    async fn sector_values_are_not_decoded_for_other_games() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_sector_specials",
+            json!({ "game": "hexen", "special": 16_i64 }),
+        )
+        .await;
+        assert_eq!(report["decoded"], json!(null), "no Boom bits for hexen");
+        assert_eq!(report["count"].as_u64(), Some(0), "no hexen table yet");
+        assert_eq!(
+            report["warnings"]
+                .as_array()
+                .expect("warnings is an array")
+                .len(),
+            1,
+            "the missing-table warning still shows"
+        );
+    }
+
+    #[tokio::test]
+    async fn sectors_refuse_an_unknown_game() {
+        let client = connect().await;
+        let (code, message) =
+            call_err(&client, "get_sector_specials", json!({ "game": "zdaemon" })).await;
+        assert_eq!(code, "invalid_argument", "unknown game code");
+        assert!(
+            message.contains("game out"),
+            "the message says how to fix it: {message}"
+        );
     }
 }

@@ -35,7 +35,7 @@ impl Default for AppState {
     #[inline]
     fn default() -> Self {
         Self {
-            session: Mutex::new(Session),
+            session: Mutex::new(Session::default()),
             assets: Arc::new(Mutex::new(AssetStore::from_env())),
             asset_server: Mutex::new(None),
         }
@@ -232,12 +232,23 @@ mod tests {
     #[test]
     fn with_session_runs_the_closure_on_the_default_session() {
         let state = AppState::default();
-        let shown = state
-            .with_session(|session: &mut Session| Ok(format!("{session:?}")))
+        let report = state
+            .with_session(|session: &mut Session| {
+                Ok((
+                    session.iwad().is_none(),
+                    session.working().is_empty(),
+                    session.is_dirty(),
+                    format!("{session:?}"),
+                ))
+            })
             .expect("a fresh lock is never poisoned");
-        assert_eq!(
-            shown, "Session",
-            "a fresh connection gets a default session"
+        assert!(report.0, "a fresh connection has no IWAD loaded");
+        assert!(report.1, "and an empty working archive");
+        assert!(!report.2, "with nothing to save");
+        assert!(
+            report.3.starts_with("Session {"),
+            "the session still shows up as itself in debug output: {}",
+            report.3
         );
     }
 

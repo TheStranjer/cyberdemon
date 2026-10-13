@@ -2,10 +2,10 @@
 //!
 //! The harness helpers live in `support`, the WAD builders in `fixtures`,
 //! the server tests in `server`, the asset-group tests in `assets`, the
-//! session-group tests in `session`, the `save_wad` tests in `save`, and the
-//! documentation-layout checks in `docs`; every helper is exercised by a
-//! test in `server`, and the real result/error contract is checked end to
-//! end through a small probe server.
+//! session-group tests in `session`, the `save_wad` tests in `save`, the
+//! defs-group tests in `defs`, and the documentation-layout checks in
+//! `docs`; every helper is exercised by a test in `server`, and the real
+//! result/error contract is checked end to end through a small probe server.
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
@@ -24,6 +24,9 @@ use thiserror as _;
 #[cfg(test)]
 #[path = "mcp/assets.rs"]
 mod assets;
+#[cfg(test)]
+#[path = "mcp/defs.rs"]
+mod defs;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;

@@ -18,7 +18,7 @@ use crate::state::AppState;
 use crate::tools::{fail, ok};
 use crate::wad::archive::{Wad, write_file_atomic};
 use crate::wad::classify::{Analysis, LumpKind, MapFormat, analyze};
-use crate::wad::game::{Game, detect_game};
+use crate::wad::game::Game;
 use crate::wad::{Lump, LumpName, WadKind};
 
 /// The placeholder the `pwads` list shows for an unsaved working archive.
@@ -383,24 +383,6 @@ fn path_text(path: &Path) -> String {
     path.display().to_string()
 }
 
-/// The lump names of an archive, for game detection.
-fn wad_names(wad: &Wad) -> Vec<LumpName> {
-    wad.lumps.iter().map(|lump| lump.name).collect()
-}
-
-/// The game the session identifies: from the `IWAD` layer's names when one
-/// is loaded, else from the merged view's names.
-fn session_game(session: &Session) -> Game {
-    session.iwad().map_or_else(
-        || {
-            let view = session.merged();
-            let names: Vec<LumpName> = view.iter().map(|entry| entry.lump.name).collect();
-            detect_game(&names)
-        },
-        |layer| detect_game(&wad_names(&layer.wad)),
-    )
-}
-
 /// Validate an absolute path argument and read the archive it names.
 ///
 /// # Errors
@@ -476,7 +458,7 @@ fn open_iwad_report(state: &AppState, text: &str) -> Result<IwadReport, CyberErr
             kind: summary.kind,
             lumps: summary.lumps,
             maps: summary.maps,
-            game: session_game(session),
+            game: session.game(),
         })
     })
 }
@@ -497,7 +479,7 @@ fn open_wad_report(
             kind: summary.kind,
             lumps: summary.lumps,
             maps: summary.maps,
-            game: session_game(session),
+            game: session.game(),
             dirty: session.is_dirty(),
         })
     })
@@ -732,7 +714,7 @@ fn describe_session(session: &Session) -> SessionInfo {
             dirty: session.is_dirty(),
         },
         active_map: session.active_map(),
-        game: session_game(session),
+        game: session.game(),
         undo: chronological(session.undo_labels()),
         redo: chronological(session.redo_labels()),
     }
@@ -791,7 +773,7 @@ fn describe_wad(session: &Session) -> WadInfo {
     let lumps: Vec<Lump> = view.iter().map(|entry| entry.lump.clone()).collect();
     let analysis = analyze(&lumps);
     WadInfo {
-        game: session_game(session),
+        game: session.game(),
         iwad: session.iwad().map(|layer| path_text(&layer.path)),
         pwads: merged_pwads(session),
         total_lumps: view.len(),

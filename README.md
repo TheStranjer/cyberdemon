@@ -10,7 +10,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 
 > Status: foundation plus the first WAD tools. The server starts per-connection with shared session
 > state, exposes a `version` tool, an `assets` group
-> (`get_asset_server_info`, `set_asset_capacity`) and a `session` group
+> (`get_asset_server_info`, `set_asset_capacity`), a `defs` group
+> (`get_thing_types`) and a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
 > `get_session_info`, `get_wad_info`), and defines the structured
 > JSON result/error contract every WAD tool uses. Generated files are
@@ -31,7 +32,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > classifier reporting namespaces, map blocks and type hints) and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
-> rules, and a labelled undo/redo history with dirty-state tracking) back
+> rules, and a labelled undo/redo history with dirty-state tracking) and a
+> definitions registry (`src/defs*`: TSV game tables embedded in the binary,
+> parsed once, selected per game) back
 > the first WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes

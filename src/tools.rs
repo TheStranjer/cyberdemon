@@ -6,6 +6,7 @@
 //! themselves stay crate-private.
 
 pub(crate) mod assets;
+pub(crate) mod defs;
 pub(crate) mod meta;
 pub(crate) mod session;
 

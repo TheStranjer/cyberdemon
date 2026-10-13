@@ -36,6 +36,7 @@ use crate::error::CyberError;
 use crate::session::history::History;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, Namespace};
+use crate::wad::game::{Game, detect_game};
 use crate::wad::name::LumpName;
 
 /// What a read-only archive in the layer stack is to.
@@ -321,6 +322,25 @@ impl Session {
         merge::merge_all(&layers, &self.working)
     }
 
+    /// The game the session's archives identify: from the `IWAD` layer's
+    /// lump names when one is loaded, else from the merged view's names
+    /// (see [`crate::wad::game::detect_game`]).
+    #[must_use]
+    #[inline]
+    pub fn game(&self) -> Game {
+        self.iwad.as_ref().map_or_else(
+            || {
+                let view = self.merged();
+                let names: Vec<LumpName> = view.iter().map(|entry| entry.lump.name).collect();
+                detect_game(&names)
+            },
+            |layer| {
+                let names: Vec<LumpName> = layer.wad.lumps.iter().map(|lump| lump.name).collect();
+                detect_game(&names)
+            },
+        )
+    }
+
     /// The lumps of one scope, in directory order.
     ///
     /// [`Scope::Working`] tags every lump [`Source::Working`],
@@ -394,6 +414,7 @@ mod tests {
     use crate::session::history::HISTORY_LIMIT;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
+    use crate::wad::game::Game;
     use crate::wad::name::LumpName;
 
     /// A valid parsed name for test data.
@@ -1010,6 +1031,57 @@ mod tests {
                 "THINGS@L0",
             ],
             "the override landed where the base flat stood"
+        );
+    }
+
+    #[test]
+    fn game_of_a_fresh_session_is_unknown() {
+        assert_eq!(
+            Session::default().game(),
+            Game::Unknown,
+            "no archives, no game"
+        );
+    }
+
+    #[test]
+    fn game_reads_the_iwad_layer_first() {
+        let mut session = loaded();
+        session
+            .edit("add MAP01", |wad| {
+                wad.lumps.push(marker("MAP01"));
+                Ok(())
+            })
+            .expect("an edit");
+        assert_eq!(
+            session.game(),
+            Game::Doom2,
+            "the base layer's MAP01 identifies DOOM II"
+        );
+        session.set_iwad(layer(
+            LayerRole::Iwad,
+            "doom1",
+            vec![marker("E1M1"), lump("THINGS")],
+        ));
+        assert_eq!(
+            session.game(),
+            Game::Doom,
+            "the episode base wins even with a MAP01 in the working archive"
+        );
+    }
+
+    #[test]
+    fn game_falls_back_to_the_merged_view_without_an_iwad() {
+        let mut session = Session::default();
+        session
+            .edit("add MAP01", |wad| {
+                wad.lumps.push(marker("MAP01"));
+                Ok(())
+            })
+            .expect("an edit");
+        assert_eq!(
+            session.game(),
+            Game::Doom2,
+            "the working archive names the game"
         );
     }
 }

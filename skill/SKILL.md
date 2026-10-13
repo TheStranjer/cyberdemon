@@ -102,6 +102,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `version`               | `reference/meta.md`     |
 | `get_asset_server_info` | `reference/assets.md`   |
 | `set_asset_capacity`    | `reference/assets.md`   |
+| `get_thing_types`       | `reference/defs.md`     |
 | `open_iwad`             | `reference/session.md`  |
 | `open_wad`              | `reference/session.md`  |
 | `new_wad`               | `reference/session.md`  |

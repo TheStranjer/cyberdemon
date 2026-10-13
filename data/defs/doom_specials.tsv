@@ -1,0 +1,140 @@
+special	name	category	target	args	game
+1	DR Door	Doors/Local	sector_back	-	doom
+28	DR Door Red Key	Doors/Local	sector_back	-	doom
+26	DR Door Blue Key	Doors/Local	sector_back	-	doom
+27	DR Door Yellow Key	Doors/Local	sector_back	-	doom
+31	D1 Door Stay Open	Doors/Local	sector_back	-	doom
+33	D1 Door Red Key	Doors/Local	sector_back	-	doom
+32	D1 Door Blue Key	Doors/Local	sector_back	-	doom
+34	D1 Door Yellow Key	Doors/Local	sector_back	-	doom
+29	S1 Door	Doors/Remote	sector	-	doom
+63	SR Door	Doors/Remote	sector	-	doom
+4	W1 Door	Doors/Remote	sector	-	doom
+90	WR Door	Doors/Remote	sector	-	doom
+103	S1 Door Stay Open	Doors/Remote	sector	-	doom
+61	SR Door Stay Open	Doors/Remote	sector	-	doom
+2	W1 Door Stay Open	Doors/Remote	sector	-	doom
+86	WR Door Stay Open	Doors/Remote	sector	-	doom
+50	S1 Door Close	Doors/Remote	sector	-	doom
+42	SR Door Close	Doors/Remote	sector	-	doom
+3	W1 Door Close	Doors/Remote	sector	-	doom
+75	WR Door Close	Doors/Remote	sector	-	doom
+16	W1 Door Close + Open	Doors/Remote	sector	-	doom
+76	WR Door Close + Open	Doors/Remote	sector	-	doom
+46	GR Door Also Monsters	Doors/Remote	sector	-	doom
+40	W1 Ceil To Highest Ceil	Ceilings	sector	-	doom
+41	S1 Ceil To Floor	Ceilings	sector	-	doom
+43	SR Ceil To Floor	Ceilings	sector	-	doom
+44	W1 Ceil To 8 Above Floor	Ceilings	sector	-	doom
+72	WR Ceil To 8 Above Floor	Ceilings	sector	-	doom
+21	S1 Lift	Lifts	sector	-	doom
+62	SR Lift	Lifts	sector	-	doom
+10	W1 Lift Also Monsters	Lifts	sector	-	doom
+88	WR Lift Also Monsters	Lifts	sector	-	doom
+18	S1 Floor To Higher Adjacent Floor	Floors/Move Up	sector	-	doom
+69	SR Floor To Higher Adjacent Floor	Floors/Move Up	sector	-	doom
+5	W1 Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	doom
+91	WR Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	doom
+101	S1 Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	doom
+64	SR Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	doom
+24	G1 Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	doom
+55	S1 Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	doom
+65	SR Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	doom
+56	W1 Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	doom
+94	WR Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	doom
+58	W1 Floor Up 24	Floors/Move Up	sector	-	doom
+92	WR Floor Up 24	Floors/Move Up	sector	-	doom
+30	W1 Floor Up Shortest Lo Tex	Floors/Move Up	sector	-	doom
+96	WR Floor Up Shortest Lo Tex	Floors/Move Up	sector	-	doom
+20	S1 Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	doom
+68	SR Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	doom
+22	W1 Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	doom
+95	WR Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	doom
+47	G1 Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	doom
+15	S1 Floor Up 24 Change Tex	Floors/Move Up	sector	-	doom
+66	SR Floor Up 24 Change Tex	Floors/Move Up	sector	-	doom
+59	W1 Floor Up 24 Change Tex + Type	Floors/Move Up	sector	-	doom
+93	WR Floor Up 24 Change Tex + Type	Floors/Move Up	sector	-	doom
+14	S1 Floor Up 32 Change Tex	Floors/Move Up	sector	-	doom
+67	SR Floor Up 32 Change Tex	Floors/Move Up	sector	-	doom
+38	W1 Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	doom
+23	S1 Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	doom
+82	WR Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	doom
+60	SR Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	doom
+19	W1 Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	doom
+102	S1 Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	doom
+83	WR Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	doom
+45	SR Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	doom
+36	W1 Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	doom
+71	S1 Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	doom
+98	WR Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	doom
+70	SR Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	doom
+37	W1 Floor To LAF Change Tex + Type	Floors/Move Down	sector	-	doom
+84	WR Floor To LAF Change Tex + Type	Floors/Move Down	sector	-	doom
+9	S1 Floor Donut	Floors/Move Down	sector	-	doom
+7	S1 Build Stairs 8	Stair Builders	sector	-	doom
+8	W1 Build Stairs 8	Stair Builders	sector	-	doom
+53	W1 Start Moving Floor	Moving Floors	sector	-	doom
+87	WR Start Moving Floor	Moving Floors	sector	-	doom
+54	W1 Stop Moving Floor	Moving Floors	sector	-	doom
+89	WR Stop Moving Floor	Moving Floors	sector	-	doom
+49	S1 Start Crusher, Slow Damage	Crushers	sector	-	doom
+25	W1 Start Crusher, Slow Damage	Crushers	sector	-	doom
+73	WR Start Crusher, Slow Damage	Crushers	sector	-	doom
+6	W1 Start Crusher, Fast Damage	Crushers	sector	-	doom
+77	WR Start Crusher, Fast Damage	Crushers	sector	-	doom
+57	W1 Stop Crusher	Crushers	sector	-	doom
+74	WR Stop Crusher	Crushers	sector	-	doom
+11	S1 Exit (Normal)	Exits	-	-	doom
+52	W1 Exit (Normal)	Exits	-	-	doom
+51	S1 Exit (Secret)	Exits	-	-	doom
+97	WR Teleport	Teleports	sector	-	doom
+39	W1 Teleport	Teleports	sector	-	doom
+35	W1 Light To 35	Light Effects	sector	-	doom
+79	WR Light To 35	Light Effects	sector	-	doom
+13	W1 Light To 255	Light Effects	sector	-	doom
+81	WR Light To 255	Light Effects	sector	-	doom
+12	W1 Light To Highest Adjacent Level	Light Effects	sector	-	doom
+80	WR Light To Highest Adjacent Level	Light Effects	sector	-	doom
+104	W1 Light To Lowest Adjacent Level	Light Effects	sector	-	doom
+17	W1 Light Blink 1.0 Sec	Light Effects	sector	-	doom
+48	Scrolling Wall	Misc	-	-	doom
+117	DR Door Fast	Doors/Local	sector_back	-	doom2
+118	D1 Door Stay Open Fast	Doors/Local	sector_back	-	doom2
+111	S1 Door Fast	Doors/Remote	sector	-	doom2
+114	SR Door Fast	Doors/Remote	sector	-	doom2
+108	W1 Door Fast	Doors/Remote	sector	-	doom2
+105	WR Door Fast	Doors/Remote	sector	-	doom2
+112	S1 Door Stay Open Fast	Doors/Remote	sector	-	doom2
+115	SR Door Stay Open Fast	Doors/Remote	sector	-	doom2
+109	W1 Door Stay Open Fast	Doors/Remote	sector	-	doom2
+106	WR Door Stay Open Fast	Doors/Remote	sector	-	doom2
+113	S1 Door Close Fast	Doors/Remote	sector	-	doom2
+116	SR Door Close Fast	Doors/Remote	sector	-	doom2
+110	W1 Door Close Fast	Doors/Remote	sector	-	doom2
+107	WR Door Close Fast	Doors/Remote	sector	-	doom2
+135	S1 Door Red Key Fast	Doors/Remote	sector	-	doom2
+134	SR Door Red Key Fast	Doors/Remote	sector	-	doom2
+133	S1 Door Blue Key Fast	Doors/Remote	sector	-	doom2
+99	SR Door Blue Key Fast	Doors/Remote	sector	-	doom2
+137	S1 Door Yellow Key Fast	Doors/Remote	sector	-	doom2
+136	SR Door Yellow Key Fast	Doors/Remote	sector	-	doom2
+122	S1 Lift Fast	Lifts	sector	-	doom2
+123	SR Lift Fast	Lifts	sector	-	doom2
+121	W1 Lift Fast	Lifts	sector	-	doom2
+120	WR Lift Fast	Lifts	sector	-	doom2
+119	W1 Floor To Higher Adjacent Floor	Floors/Move Up	sector	-	doom2
+128	WR Floor To Higher Adjacent Floor	Floors/Move Up	sector	-	doom2
+131	S1 Floor To Higher Floor Fast	Floors/Move Up	sector	-	doom2
+132	SR Floor To Higher Floor Fast	Floors/Move Up	sector	-	doom2
+130	W1 Floor To Higher Floor Fast	Floors/Move Up	sector	-	doom2
+129	WR Floor To Higher Floor Fast	Floors/Move Up	sector	-	doom2
+140	S1 Floor Up 512	Floors/Move Up	sector	-	doom2
+127	S1 Build Stairs 16 + Crush	Stair Builders	sector	-	doom2
+100	W1 Build Stairs 16 + Crush	Stair Builders	sector	-	doom2
+141	W1 Start Crusher, Silent	Crushers	sector	-	doom2
+124	W1 Exit (Secret)	Exits	-	-	doom2
+126	WR Teleport Monsters Only	Teleports	sector	-	doom2
+125	W1 Teleport Monsters Only	Teleports	sector	-	doom2
+139	SR Light To 35	Light Effects	sector	-	doom2
+138	SR Light To 255	Light Effects	sector	-	doom2

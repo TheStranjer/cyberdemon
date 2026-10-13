@@ -107,6 +107,8 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `get_sector_specials`   | `reference/defs.md`     |
 | `list_lumps`            | `reference/lumps.md`    |
 | `search_lumps`          | `reference/lumps.md`    |
+| `get_lump`              | `reference/lumps.md`    |
+| `extract_lump`          | `reference/lumps.md`    |
 | `open_iwad`             | `reference/session.md`  |
 | `open_wad`              | `reference/session.md`  |
 | `new_wad`               | `reference/session.md`  |

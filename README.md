@@ -26,8 +26,11 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
 > bounds-checked little-endian reader/writer, an in-memory `Wad` archive
 > with parsing, serialization, name lookup and atomic file I/O, and a lump
-> classifier reporting namespaces, map blocks and type hints) back the
-> upcoming WAD tools.
+> classifier reporting namespaces, map blocks and type hints) and a session
+> model (`src/session*`: an IWAD plus resource layers under one editable
+> working archive, a merged view with vanilla last-archive-wins override
+> rules, and a labelled undo/redo history with dirty-state tracking) back
+> the upcoming WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
 > for import tools.

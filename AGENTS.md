@@ -47,7 +47,14 @@ src/
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools
                   (`assets/fetch.rs`: `Fetched`, `derive_lump_name`).
-  session.rs      The per-connection editing session (placeholder for now).
+  session.rs      The per-connection editing session: an optional IWAD layer and
+                  read-only resource layers under one editable working archive,
+                  the merged view, `Scope` reads and `Session::edit`.
+  session/        Session building blocks (no MCP concerns):
+                  `session/merge.rs` folds one archive over another with vanilla
+                  override rules (map blocks, namespaces, globals, last wins),
+                  `session/history.rs` is the labelled undo/redo stack and the
+                  revision bookkeeping behind dirty state.
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.

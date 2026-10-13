@@ -16,6 +16,7 @@ pub mod audio;
 pub mod defs;
 pub mod error;
 pub mod fixed;
+pub mod geom;
 pub mod gfx;
 pub mod music;
 pub mod render;

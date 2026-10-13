@@ -7,7 +7,7 @@ mod tests {
     use std::process::Stdio;
 
     use rmcp::ServiceExt as _;
-    use rmcp::model::{CallToolRequestParams, ErrorCode};
+    use rmcp::model::{CallToolRequestParams, ErrorCode, Tool};
     use rmcp::service::ServiceError;
     use rmcp::transport::TokioChildProcess;
     use serde_json::{Value, json};
@@ -36,6 +36,40 @@ mod tests {
         );
     }
 
+    /// The listed tool named `wanted`.
+    fn tool_named<'tools>(tools: &'tools [Tool], wanted: &str) -> &'tools Tool {
+        tools
+            .iter()
+            .find(|tool| tool.name == wanted)
+            .unwrap_or_else(|| panic!("{wanted} is listed"))
+    }
+
+    /// One tool's input schema as a JSON value.
+    fn schema_of(tool: &Tool) -> Value {
+        serde_json::to_value(&tool.input_schema).expect("a serializable schema")
+    }
+
+    /// Requires a schema to flatten every one of `fields` into its
+    /// properties object.
+    fn assert_flattens(schema: &Value, fields: &[&str]) {
+        let properties = schema.get("properties").expect("a properties object");
+        let missing: Vec<&str> = fields
+            .iter()
+            .filter(|field| properties.get(**field).is_none())
+            .copied()
+            .collect();
+        assert!(missing.is_empty(), "the schema lacks {missing:?}: {schema}");
+    }
+
+    /// Requires a schema to keep `field` in its required list.
+    fn assert_required(schema: &Value, field: &str) {
+        let holds = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|fields| fields.iter().any(|named| named == field));
+        assert!(holds, "{field:?} stays required: {schema}");
+    }
+
     #[tokio::test]
     async fn lists_the_meta_assets_defs_lumps_render_and_session_tools() {
         let client = connect().await;
@@ -45,8 +79,10 @@ mod tests {
         assert_eq!(
             names,
             [
+                "extract_lump",
                 "get_asset_server_info",
                 "get_linedef_specials",
+                "get_lump",
                 "get_render_settings",
                 "get_sector_specials",
                 "get_session_info",
@@ -66,6 +102,35 @@ mod tests {
             ],
             "sorted tool names"
         );
+        let get_lump = schema_of(tool_named(&tools, "get_lump"));
+        assert_flattens(
+            &get_lump,
+            &[
+                "name",
+                "scope",
+                "namespace",
+                "occurrence",
+                "format",
+                "start",
+                "length",
+                "max_chars",
+            ],
+        );
+        assert_required(&get_lump, "name");
+        let extract_lump = schema_of(tool_named(&tools, "extract_lump"));
+        assert_flattens(
+            &extract_lump,
+            &[
+                "name",
+                "scope",
+                "namespace",
+                "occurrence",
+                "path",
+                "overwrite",
+            ],
+        );
+        assert_required(&extract_lump, "name");
+        assert_required(&extract_lump, "path");
     }
 
     #[tokio::test]

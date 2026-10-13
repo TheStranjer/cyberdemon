@@ -220,6 +220,34 @@ pub async fn http_put(base_url: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>)
     split_reply(&raw)
 }
 
+/// Issue a raw `HTTP` `GET` to `path` on the origin `base_url` (as
+/// [`http_put`]) and return the reply's `(status, body)`.
+///
+/// # Panics
+///
+/// Same conditions as [`http_put`].
+#[inline]
+pub async fn http_get(base_url: &str, path: &str) -> (u16, Vec<u8>) {
+    let port_text = base_url
+        .strip_prefix("http://localhost:")
+        .expect("a http://localhost:<port> origin");
+    let port: u16 = port_text.parse().expect("a numeric port");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect to the asset server");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write the request head");
+    let mut raw = Vec::new();
+    tokio::time::timeout(HTTP_REPLY_TIMEOUT, stream.read_to_end(&mut raw))
+        .await
+        .expect("the reply arrives within the timeout")
+        .expect("read the whole reply");
+    split_reply(&raw)
+}
+
 /// Split a raw `HTTP` reply into its status code and body bytes.
 fn split_reply(raw: &[u8]) -> (u16, Vec<u8>) {
     let head_end = raw

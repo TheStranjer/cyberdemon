@@ -12,7 +12,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > state, exposes a `version` tool, an `assets` group
 > (`get_asset_server_info`, `set_asset_capacity`), a `defs` group
 > (`get_thing_types`, `get_linedef_specials`, `get_sector_specials`), a
-> `lumps` group (`list_lumps`, `search_lumps`),
+> `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
 > `get_session_info`, `get_wad_info`) and a `render` group

@@ -190,6 +190,31 @@ fn write_wad(dir: &Path, file: &str, wad: &Wad) -> PathBuf {
     path
 }
 
+/// The directory of the `iwad` fixtures: palettes, one two-room `MAP01`
+/// block, one flat region with `FLOOR1` (and a second, byte-3 copy when
+/// `duplicate_flat` is set) and an `ENDOOM`.
+fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
+    let mut lumps = vec![lump("PLAYPAL", playpal()), lump("COLORMAP", colormap())];
+    lumps.extend(map_block("MAP01"));
+    lumps.push(marker("F_START"));
+    lumps.push(lump("FLOOR1", vec![1_u8; FLAT_BYTES]));
+    if duplicate_flat {
+        lumps.push(lump("FLOOR1", vec![3_u8; FLAT_BYTES]));
+    }
+    lumps.push(marker("F_END"));
+    lumps.push(lump("ENDOOM", vec![b' '; ENDOOM_BYTES]));
+    lumps
+}
+
+/// Write `lumps` as a `Wad` of the given `file` in `dir`.
+fn write_iwad(dir: &Path, file: &str, lumps: Vec<Lump>) -> PathBuf {
+    let wad = Wad {
+        kind: WadKind::Iwad,
+        lumps,
+    };
+    write_wad(dir, file, &wad)
+}
+
 /// A minimal `DOOM II` style `IWAD`: palettes, one two-room `MAP01` block,
 /// one flat region with `FLOOR1` and an `ENDOOM`.
 ///
@@ -199,17 +224,19 @@ fn write_wad(dir: &Path, file: &str, wad: &Wad) -> PathBuf {
 #[must_use]
 #[inline]
 pub fn iwad(dir: &Path) -> PathBuf {
-    let mut lumps = vec![lump("PLAYPAL", playpal()), lump("COLORMAP", colormap())];
-    lumps.extend(map_block("MAP01"));
-    lumps.push(marker("F_START"));
-    lumps.push(lump("FLOOR1", vec![1_u8; FLAT_BYTES]));
-    lumps.push(marker("F_END"));
-    lumps.push(lump("ENDOOM", vec![b' '; ENDOOM_BYTES]));
-    let wad = Wad {
-        kind: WadKind::Iwad,
-        lumps,
-    };
-    write_wad(dir, "iwad-doom2.wad", &wad)
+    write_iwad(dir, "iwad-doom2.wad", iwad_lumps(false))
+}
+
+/// The same `IWAD` with a second `FLOOR1` (filled with byte 3) after the
+/// first in the flats region, for the occurrence-selection tests.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn iwad_duplicated(dir: &Path) -> PathBuf {
+    write_iwad(dir, "iwad-floors.wad", iwad_lumps(true))
 }
 
 /// A `PWAD` overriding `FLOOR1`, adding a `DEHACKED` global and a two-room

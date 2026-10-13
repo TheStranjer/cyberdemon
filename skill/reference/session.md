@@ -82,6 +82,34 @@ currently is.
   accepted forms) or a relative path; `not_found` / `io_error` /
   `format_error` as for `open_iwad`.
 
+## `save_wad`
+
+- Purpose: persist work. `mode: "pwad"` (the default) is the normal save —
+  it writes the **working archive** to a file and marks it saved;
+  `mode: "full"` is an **export** — it writes the entire merged view (IWAD
+  layer, resource layers, working archive, folded under the override rules)
+  as one standalone WAD and changes nothing about the session.
+- Arguments:
+  - `path` (string, absolute) — where to write. Defaults to the working
+    archive's path (set by `open_wad` or a previous `save_wad`); with no
+    path given and none known the call fails `invalid_argument`.
+  - `mode` (string, `"pwad"` (the default) or `"full"`).
+  - `kind` (string, `"PWAD"` or `"IWAD"`) — header magic override. Default:
+    the working archive's kind for `pwad`; for `full`, `IWAD` when an IWAD
+    layer is loaded, else `PWAD`. A save never changes the session's own
+    archive kind.
+- After a `pwad` save the working path becomes `path` and `dirty` is
+  `false`; a `full` export leaves the working path and the dirty flag
+  exactly as they were.
+- Returns: `{"path", "mode", "kind", "lumps": n, "bytes": n, "dirty": bool}`
+  — `lumps` and `bytes` describe the file written, `dirty` is the session's
+  state afterwards.
+- Errors: `invalid_argument` (relative path, no path to fall back on, bad
+  `mode` or `kind`), `not_found` (parent directory missing), `conflict`
+  (the target is the file of a loaded IWAD or resource layer, compared by
+  canonical path), `io_error` (the write failed), `limit_exceeded` (the
+  archive does not fit the WAD format).
+
 ## `get_session_info`
 
 - Purpose: a complete picture of the session — what is loaded, which

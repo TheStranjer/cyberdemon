@@ -106,6 +106,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `open_wad`              | `reference/session.md`  |
 | `new_wad`               | `reference/session.md`  |
 | `merge_wad`             | `reference/session.md`  |
+| `save_wad`              | `reference/session.md`  |
 | `get_session_info`      | `reference/session.md`  |
 | `get_wad_info`          | `reference/session.md`  |
 

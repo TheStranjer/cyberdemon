@@ -17,6 +17,18 @@ src/
   fixed/          Math internals (no MCP concerns): `fixed/angle.rs` 32-bit
                   binary angles (BAM) with `atan2`, `hypot`, `rotate_point`,
                   `fixed/trig.rs` the integer CORDIC engine.
+  geom.rs         Planar arrangement engine root: `Pt`, layers, pieces and
+                  `arrange`, turning layered polygons plus external
+                  segments into non-crossing, side-labelled segments.
+                  All drawing goes through `geom::arrange`.
+  geom/           Arrangement internals (no MCP concerns):
+                  `geom/label.rs` `Label`, the `Labeler` trait and the
+                  topmost-layer `LayerLabeler` (even-odd in i128),
+                  `geom/segment.rs` integer segment math: orientations,
+                  rounded crossings, T-junction and overlap cut finding,
+                  the bounding-box sweep and the point-merge union-find,
+                  `geom/arrange.rs` the pipeline: polygon validation,
+                  splitting, dedupe, side labelling and collinear merge.
   gfx.rs          Graphics core module root: dimensions limits and shared helpers.
   gfx/            Internal image building blocks (no MCP concerns):
                   `gfx/image.rs` RGBA/indexed images and resize/flip,

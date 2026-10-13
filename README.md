@@ -39,8 +39,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > definitions registry (`src/defs*`: TSV game tables embedded in the binary,
 > parsed once, selected per game) and render defaults (`src/render*`: the
 > validated session-level resolution, lighting, field of view, gamma and
-> style every render tool starts from, plus the integer gamma curve) back
-> the first WAD tools.
+> style every render tool starts from, plus the integer gamma curve) and a
+> pure planar geometry engine (`src/geom*`: layered polygons and external
+> segments arranged into non-crossing, side-labelled integer pieces; all
+> drawing goes through `geom::arrange`) back the first WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
 > for import tools.

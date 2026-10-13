@@ -55,11 +55,11 @@ const MIDI_PROGRAM_CHANGE: u8 = 0xC0_u8;
 const MIDI_PITCH_BEND: u8 = 0xE0_u8;
 
 /// Number of `MUS` channels.
-const CHANNEL_COUNT: usize = 16;
+pub(crate) const CHANNEL_COUNT: usize = 16;
 /// The `MUS` channel that carries percussion.
-const MUS_PERCUSSION_CHANNEL: u8 = 15_u8;
+pub(crate) const MUS_PERCUSSION_CHANNEL: u8 = 15_u8;
 /// The `MIDI` channel percussion plays on.
-const MIDI_PERCUSSION_CHANNEL: u8 = 9_u8;
+pub(crate) const MIDI_PERCUSSION_CHANNEL: u8 = 9_u8;
 /// The `MIDI` channels handed to non-percussion `MUS` channels, in order of
 /// first use; 9 is reserved for percussion, so the pool skips it.
 const MIDI_CHANNEL_POOL: [u8; 15] = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
@@ -69,9 +69,9 @@ const MIDI_CHANNEL_LAST: u8 = 15_u8;
 /// Highest value a `MIDI` data byte carries; larger `MUS` values clamp.
 const MAX_MIDI_VALUE: u8 = 0x7F_u8;
 /// Value of the `MUS` system events, which carry none of their own.
-const ZERO_VALUE: u8 = 0_u8;
+pub(crate) const ZERO_VALUE: u8 = 0_u8;
 /// Velocity a channel plays at until a note gives it one.
-const DEFAULT_VOLUME: u8 = 127_u8;
+pub(crate) const DEFAULT_VOLUME: u8 = 127_u8;
 /// The `MUS` controller number that means "change program".
 const PROGRAM_CONTROLLER: u8 = 0_u8;
 /// Bits a `MUS` pitch value is shifted up to become a 14-bit bend.
@@ -83,7 +83,7 @@ const SEVEN_BITS: u32 = 0x7F_u32;
 
 /// The event type held in bits 4..6 of a descriptor byte.
 #[derive(Debug, Clone, Copy)]
-enum EventKind {
+pub(crate) enum EventKind {
     /// 0: stop a note.
     Release,
     /// 1: start a note, with an optional volume byte.
@@ -104,7 +104,7 @@ enum EventKind {
 
 impl EventKind {
     /// Decodes the three type bits of a descriptor byte.
-    const fn from_bits(bits: u8) -> Self {
+    pub(crate) const fn from_bits(bits: u8) -> Self {
         match bits {
             0_u8 => Self::Release,
             1_u8 => Self::Note,
@@ -119,7 +119,7 @@ impl EventKind {
 }
 
 /// The `MIDI` controller a `MUS` system event selects, by `MUS` number.
-const fn system_control(number: u8) -> Option<u8> {
+pub(crate) const fn system_control(number: u8) -> Option<u8> {
     match number {
         10_u8 => Some(120_u8),
         11_u8 => Some(123_u8),
@@ -133,7 +133,7 @@ const fn system_control(number: u8) -> Option<u8> {
 /// The `MIDI` controller a `MUS` controller event selects, or `None` for a
 /// number with no counterpart. Number 0 is a program change, not a
 /// controller, and is handled by the caller.
-const fn midi_control(number: u8) -> Option<u8> {
+pub(crate) const fn midi_control(number: u8) -> Option<u8> {
     match number {
         1_u8 => Some(0_u8),
         2_u8 => Some(1_u8),

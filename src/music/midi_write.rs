@@ -47,6 +47,8 @@ const VLQ_DIGIT: u8 = 0x7F_u8;
 const VLQ_MORE: u8 = 0x80_u8;
 /// Most bytes a `VLQ` occupies, which caps it at 28 bits.
 const VLQ_MAX_BYTES: usize = 4;
+/// The largest value a `VLQ` carries: the 28 bits its four digits hold.
+pub const MAX_VLQ_VALUE: u32 = 0x0FFF_FFFF_u32;
 /// The low eight bits of a wider value.
 const LOW_BYTE: u32 = 0xFF_u32;
 /// Shifts that pick the three bytes of a 24-bit big-endian value, top first.
@@ -66,14 +68,14 @@ fn digit_at(value: u32, shift: u32) -> u8 {
 
 /// Appends `value` as a big-endian `u16` by reversing its little-endian
 /// bytes.
-fn put_be_u16(out: &mut Vec<u8>, value: u16) {
+pub(crate) fn put_be_u16(out: &mut Vec<u8>, value: u16) {
     let mut word = value.to_le_bytes();
     word.reverse();
     out.extend_from_slice(&word);
 }
 
 /// Appends `value` as a big-endian `u32`.
-fn put_be_u32(out: &mut Vec<u8>, value: u32) {
+pub(crate) fn put_be_u32(out: &mut Vec<u8>, value: u32) {
     let mut word = value.to_le_bytes();
     word.reverse();
     out.extend_from_slice(&word);

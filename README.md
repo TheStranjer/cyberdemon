@@ -19,7 +19,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > integer image ops), an internal audio core (`src/audio*`: interleaved
 > `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, integer mono downmix
 > and resampling), an internal music core (`src/music*`: Doom `MUS` to
-> type-0 `MIDI` conversion, a small big-endian `SMF` writer), a float-free
+> type-0 `MIDI` conversion and back, an `SMF` writer and a track-merging
+> `SMF` parser), a float-free
 > math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
 > bounds-checked little-endian reader/writer, and an in-memory `Wad` archive

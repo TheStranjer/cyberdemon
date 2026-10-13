@@ -5,11 +5,13 @@
 mod tests {
     use std::path::Path;
 
+    use cyberdemon::wad::map::read_map;
+    use cyberdemon::wad::{Wad, analyze};
     use rmcp::RoleClient;
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, pwad};
+    use crate::fixtures::{iwad, pwad, two_room_map};
     use crate::support::{call, call_err, connect};
 
     /// A connected client for one test.
@@ -23,6 +25,10 @@ mod tests {
     const COLORMAP_BYTES: u64 = 8_704;
     /// Bytes in a `WAD` header.
     const HEADER_BYTES: u64 = 12;
+    /// Bytes of member data in one fixture two-room map block: two things
+    /// (20), seven linedefs (98), eight sidedefs (240), six vertices (24)
+    /// and two sectors (52); the generated node lumps are empty.
+    const MAP_BYTES: u64 = 434;
 
     /// Load the `IWAD` fixture as the base layer and stack the `PWAD`
     /// fixture as resource layer 1.
@@ -65,20 +71,36 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn the_fixture_map_block_round_trips_through_the_map_model() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let base = iwad(dir.path());
+        let wad = Wad::read_file(&base).expect("the fixture is a valid WAD");
+        let analysis = analyze(&wad.lumps);
+        let block = analysis.maps.first().expect("the IWAD holds MAP01");
+        let map = read_map(&wad.lumps, block).expect("the fixture block decodes");
+        assert_eq!(map, two_room_map(), "the fixture is the two-room map");
+        assert_eq!(
+            map.bounds(),
+            Some((0_i32, 0_i32, 512_i32, 256_i32)),
+            "the hall spans 512 by 256"
+        );
+    }
+
     #[tokio::test]
     async fn list_lumps_merges_layers_and_reports_save_layout_offsets() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
         let report = call(&client, "list_lumps", json!({ "limit": 100_u64 })).await;
         assert_eq!(report["scope"], json!("merged"), "the default scope");
-        assert_eq!(report["total"].as_u64(), Some(19), "iwad 12 + 7 additions");
+        assert_eq!(report["total"].as_u64(), Some(29), "iwad 17 + 12 additions");
         assert_eq!(report["offset"].as_u64(), Some(0), "echoed offset");
-        assert_eq!(report["count"].as_u64(), Some(19), "one page");
+        assert_eq!(report["count"].as_u64(), Some(29), "one page");
         let floor = row_named(&report, "FLOOR1");
         assert_eq!(
             floor["index"].as_u64(),
-            Some(9),
-            "in place in the flats region"
+            Some(14),
+            "in place in the flats region, after the full MAP01 block"
         );
         assert_eq!(floor["size"].as_u64(), Some(FLAT_BYTES), "the PWAD's copy");
         assert_eq!(floor["kind"], json!("flat"), "classified in its region");
@@ -131,16 +153,17 @@ mod tests {
         .await;
         let report = call(&client, "list_lumps", json!({ "scope": "layer:0" })).await;
         assert_eq!(report["scope"], json!({ "layer": 0_u64 }), "echoed scope");
-        assert_eq!(report["total"].as_u64(), Some(12), "the IWAD fixture alone");
+        assert_eq!(report["total"].as_u64(), Some(17), "the IWAD fixture alone");
         assert_eq!(
             row_named(&report, "FLOOR1")["offset"].as_u64(),
             Some(
                 HEADER_BYTES
                     .checked_add(PLAYPAL_BYTES)
                     .and_then(|sum| sum.checked_add(COLORMAP_BYTES))
+                    .and_then(|sum| sum.checked_add(MAP_BYTES))
                     .expect("small sums")
             ),
-            "header + PLAYPAL + COLORMAP (the map lumps are empty markers)",
+            "header + PLAYPAL + COLORMAP + the MAP01 block's member data",
         );
         assert_eq!(
             row_named(&report, "FLOOR1")["source"],
@@ -162,12 +185,13 @@ mod tests {
         .await;
         let report = call(&client, "list_lumps", json!({ "scope": "working" })).await;
         assert_eq!(report["scope"], json!("working"), "echoed scope");
-        assert_eq!(report["total"].as_u64(), Some(10), "the PWAD fixture alone");
+        assert_eq!(report["total"].as_u64(), Some(15), "the PWAD fixture alone");
         assert_eq!(
             names(&report),
             vec![
                 "FF_START", "FLOOR1", "FF_END", "DEHACKED", "MAP02", "THINGS", "LINEDEFS",
-                "SIDEDEFS", "VERTEXES", "SECTORS",
+                "SIDEDEFS", "VERTEXES", "SEGS", "SSECTORS", "NODES", "SECTORS", "REJECT",
+                "BLOCKMAP",
             ],
             "the working archive keeps its own markers and order",
         );
@@ -236,7 +260,8 @@ mod tests {
         assert_eq!(
             names(&map),
             vec![
-                "MAP01", "THINGS", "LINEDEFS", "SIDEDEFS", "VERTEXES", "SECTORS"
+                "MAP01", "THINGS", "LINEDEFS", "SIDEDEFS", "VERTEXES", "SEGS", "SSECTORS", "NODES",
+                "SECTORS", "REJECT", "BLOCKMAP",
             ],
             "the MAP01 block only",
         );
@@ -255,14 +280,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
         let all = call(&client, "list_lumps", json!({ "limit": 100_u64 })).await;
-        assert_eq!(all["total"].as_u64(), Some(19), "everything");
+        assert_eq!(all["total"].as_u64(), Some(29), "everything");
         let page = call(
             &client,
             "list_lumps",
             json!({ "offset": 5_u64, "limit": 4_u64 }),
         )
         .await;
-        assert_eq!(page["total"].as_u64(), Some(19), "total counts all matches");
+        assert_eq!(page["total"].as_u64(), Some(29), "total counts all matches");
         assert_eq!(page["offset"].as_u64(), Some(5), "echoed offset");
         assert_eq!(page["count"].as_u64(), Some(4), "one page");
         assert_eq!(
@@ -284,7 +309,7 @@ mod tests {
         assert_eq!(past["count"].as_u64(), Some(0), "nothing past the end");
         assert_eq!(
             past["total"].as_u64(),
-            Some(19),
+            Some(29),
             "total still reports the matches"
         );
     }
@@ -499,6 +524,7 @@ mod tests {
                 HEADER_BYTES
                     .checked_add(PLAYPAL_BYTES)
                     .and_then(|sum| sum.checked_add(COLORMAP_BYTES))
+                    .and_then(|sum| sum.checked_add(MAP_BYTES))
                     .expect("small sums")
             ),
             "the IWAD's own save layout",

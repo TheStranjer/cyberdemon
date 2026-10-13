@@ -57,7 +57,7 @@ mod tests {
         let report = call(&client, "save_wad", path_arg(&out)).await;
         assert_eq!(report["mode"], json!("pwad"), "pwad mode by default");
         assert_eq!(report["kind"], json!("PWAD"), "the working magic");
-        assert_eq!(report["lumps"].as_u64(), Some(10), "the folded fixture");
+        assert_eq!(report["lumps"].as_u64(), Some(15), "the folded fixture");
         assert_eq!(report["path"], path_arg(&out)["path"], "echoed target");
         assert_eq!(report["dirty"], json!(false), "the save cleared dirty");
         let bytes = report["bytes"].as_u64().expect("a byte count");
@@ -95,7 +95,7 @@ mod tests {
             "and considers itself saved"
         );
         let reopened = call(&client, "open_wad", path_arg(&out)).await;
-        assert_eq!(reopened["lumps"].as_u64(), Some(10), "it re-opens");
+        assert_eq!(reopened["lumps"].as_u64(), Some(15), "it re-opens");
         assert_eq!(names(&out), names(&extra), "with the same lump names");
     }
 
@@ -148,7 +148,7 @@ mod tests {
         );
         assert_eq!(
             report["lumps"].as_u64(),
-            Some(19),
+            Some(29),
             "IWAD plus the PWAD's contributions, FLOOR1 replaced in place"
         );
         assert_eq!(report["dirty"], json!(true), "an export is not a save");

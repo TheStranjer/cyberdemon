@@ -37,14 +37,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_the_meta_and_assets_tools() {
+    async fn lists_the_meta_assets_and_session_tools() {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         names.sort_unstable();
         assert_eq!(
             names,
-            ["get_asset_server_info", "set_asset_capacity", "version"],
+            [
+                "get_asset_server_info",
+                "get_session_info",
+                "get_wad_info",
+                "merge_wad",
+                "new_wad",
+                "open_iwad",
+                "open_wad",
+                "set_asset_capacity",
+                "version",
+            ],
             "sorted tool names"
         );
     }

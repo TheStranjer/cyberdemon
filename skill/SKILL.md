@@ -97,11 +97,25 @@ comes back `404`; regenerate it rather than retrying the old URL.
 
 ## Tools
 
-| Tool                    | Reference             |
-|-------------------------|-----------------------|
-| `version`               | `reference/meta.md`   |
-| `get_asset_server_info` | `reference/assets.md` |
-| `set_asset_capacity`    | `reference/assets.md` |
+| Tool                    | Reference               |
+|-------------------------|-------------------------|
+| `version`               | `reference/meta.md`     |
+| `get_asset_server_info` | `reference/assets.md`   |
+| `set_asset_capacity`    | `reference/assets.md`   |
+| `open_iwad`             | `reference/session.md`  |
+| `open_wad`              | `reference/session.md`  |
+| `new_wad`               | `reference/session.md`  |
+| `merge_wad`             | `reference/session.md`  |
+| `get_session_info`      | `reference/session.md`  |
+| `get_wad_info`          | `reference/session.md`  |
 
-WAD reading and editing tools are not implemented yet. When they are, add one
-reference file per tool group under `reference/` and index each tool here.
+## Typical workflow
+
+`open_iwad` the game archive → `open_wad` your project WAD or `new_wad`
+for a fresh one → edit the working archive → `save_wad`. `get_session_info`
+shows what is loaded and where undo stands; `get_wad_info` summarizes the
+merged view an engine would see.
+
+More WAD reading and editing tools are not implemented yet. When they are,
+add one reference file per tool group under `reference/` and index each
+tool here.

@@ -52,7 +52,8 @@ src/
                   the merged view, `Scope` reads and `Session::edit`.
   session/        Session building blocks (no MCP concerns):
                   `session/merge.rs` folds one archive over another with vanilla
-                  override rules (map blocks, namespaces, globals, last wins),
+                  override rules (map blocks, namespaces, globals, last wins;
+                  `merge_into` and `merge_counts` are the whole-archive forms),
                   `session/history.rs` is the labelled undo/redo stack and the
                   revision bookkeeping behind dirty state.
   state.rs        AppState: session and asset store behind mutexes; with_session
@@ -70,11 +71,14 @@ src/
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization, lookup and atomic I/O, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
-                  `MapBlock`s and `LumpKind` type hints.
+                  `MapBlock`s and `LumpKind` type hints, and `wad/game.rs`
+                  the pure game signature detection (`detect_game`).
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking
-                    the structured-result contract; server.rs: end-to-end tests;
+                    the structured-result contract; fixtures.rs: WAD builders
+                    writing archives with the library; server.rs: end-to-end
+                    tests; assets.rs and session.rs: tool-group tests;
                     docs.rs: skill/ and README.md layout checks.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).

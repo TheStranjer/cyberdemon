@@ -7,6 +7,7 @@
 
 pub(crate) mod assets;
 pub(crate) mod meta;
+pub(crate) mod session;
 
 use rmcp::model::{CallToolResult, ErrorData};
 use serde::Serialize;

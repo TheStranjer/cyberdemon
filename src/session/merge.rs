@@ -503,9 +503,92 @@ pub fn merge_all(layers: &[&Wad], working: &Wad) -> Vec<MergedLump> {
     merge(view, working, Source::Working)
 }
 
+/// Folds `overlay` into `base`, returning the result as a plain archive.
+///
+/// The same rules [`merge`] applies to the merged view, but both sides are
+/// `Wad`s and the answer is one too. The header `kind` is the base's; the
+/// overlay only contributes lumps. This is what merging a file into the
+/// working archive does.
+#[must_use]
+#[inline]
+pub fn merge_into(base: &Wad, overlay: &Wad) -> Wad {
+    let directory = tag(base, Source::Working);
+    let merged = merge(directory, overlay, Source::Layer(0));
+    Wad {
+        kind: base.kind,
+        lumps: merged.into_iter().map(|entry| entry.lump).collect(),
+    }
+}
+
+/// What folding one archive over another changes, counted per override unit:
+/// a map block counts as one unit no matter how many lumps it carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MergeCounts {
+    /// Base units the overlay replaced in place.
+    pub replaced: usize,
+    /// Units the overlay brought that the base did not have.
+    pub added: usize,
+}
+
+impl MergeCounts {
+    /// Records one override (`replaced`) or arrival (`added`).
+    #[inline]
+    const fn bump(&mut self, overrode: bool) {
+        if overrode {
+            self.replaced = self.replaced.saturating_add(1);
+        } else {
+            self.added = self.added.saturating_add(1);
+        }
+    }
+}
+
+/// Predicts what [`merge_into`] will report, without building the archive:
+/// each overlay map block, namespace lump and global lump either overrides
+/// the base unit of its name and area or arrives new.
+#[must_use]
+#[inline]
+pub fn merge_counts(base: &Wad, overlay: &Wad) -> MergeCounts {
+    let base_analysis = analyze(&base.lumps);
+    let overlay_analysis = analyze(&overlay.lumps);
+    let mut counts = MergeCounts {
+        replaced: 0,
+        added: 0,
+    };
+    for block in &overlay_analysis.maps {
+        let overrode = base_analysis
+            .maps
+            .iter()
+            .any(|base_block| base_block.name == block.name);
+        counts.bump(overrode);
+    }
+    for info in &overlay_analysis.lumps {
+        if info.map.is_some() || info.kind == LumpKind::Marker {
+            continue;
+        }
+        let overrode = base_analysis
+            .lumps
+            .iter()
+            .any(|base_info| overrides(base_info, info));
+        counts.bump(overrode);
+    }
+    counts
+}
+
+/// Whether the base entry `base` is the one the overlay lump `incoming`
+/// replaces: same name, not a marker, in the same area.
+fn overrides(base: &LumpInfo, incoming: &LumpInfo) -> bool {
+    base.name == incoming.name
+        && base.kind != LumpKind::Marker
+        && base.map.is_none()
+        && in_area(base, incoming.namespace)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Base, NAME_LEN, analyze_directory, marker_lump, merge, merge_all, tag};
+    use super::{
+        Base, NAME_LEN, analyze_directory, marker_lump, merge, merge_all, merge_counts, merge_into,
+        tag,
+    };
     use crate::session::{MergedLump, Source};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
@@ -524,6 +607,21 @@ mod tests {
     /// A lump named `text` whose payload is `text`, so copies are tellable.
     fn lump(text: &str) -> Lump {
         Lump::new(name(text), text.as_bytes().to_vec())
+    }
+
+    /// A lump named `text` carrying `payload`, so overrides are tellable.
+    fn payload_lump(text: &str, payload: &str) -> Lump {
+        Lump::new(name(text), payload.as_bytes().to_vec())
+    }
+
+    /// The payload a named lump in `directory` carries, by name.
+    fn payload_of(directory: &Wad, text: &str) -> String {
+        let lump = directory
+            .lumps
+            .iter()
+            .find(|lump| lump.name == name(text))
+            .expect("the lump is there");
+        String::from_utf8(lump.data.to_vec()).expect("test payloads are text")
     }
 
     /// A `PWAD` holding `lumps`.
@@ -975,6 +1073,134 @@ mod tests {
             long.lump.name.as_bytes().len(),
             NAME_LEN,
             "a name past the directory width is cut to eight bytes"
+        );
+    }
+
+    #[test]
+    fn merge_into_an_empty_base_takes_the_overlay_whole() {
+        let overlay = pwad(vec![
+            lump("PLAYPAL"),
+            marker("F_START"),
+            lump("FLOOR_1"),
+            marker("F_END"),
+        ]);
+        let merged = merge_into(&Wad::default(), &overlay);
+        assert_eq!(merged.kind, WadKind::Pwad, "the base's kind persists");
+        assert_eq!(
+            merged
+                .lumps
+                .iter()
+                .map(|lump| lump.name.to_string())
+                .collect::<Vec<String>>(),
+            vec!["PLAYPAL", "F_START", "FLOOR_1", "F_END"],
+            "an empty base has nothing to override"
+        );
+    }
+
+    #[test]
+    fn merge_into_applies_the_view_rules_under_the_base_kind() {
+        let mut base = pwad(vec![
+            lump("PLAYPAL"),
+            marker("MAP01"),
+            lump("THINGS"),
+            marker("F_START"),
+            lump("FLOOR_1"),
+            marker("F_END"),
+        ]);
+        base.kind = WadKind::Iwad;
+        let overlay = pwad(vec![
+            payload_lump("PLAYPAL", "new palette"),
+            marker("F_START"),
+            payload_lump("FLOOR_1", "new flat"),
+            marker("F_END"),
+            marker("MAP01"),
+            payload_lump("THINGS", "new things"),
+        ]);
+        let merged = merge_into(&base, &overlay);
+        assert_eq!(merged.kind, WadKind::Iwad, "the base kind wins");
+        assert_eq!(
+            merged
+                .lumps
+                .iter()
+                .map(|lump| lump.name.to_string())
+                .collect::<Vec<String>>(),
+            vec!["PLAYPAL", "MAP01", "THINGS", "F_START", "FLOOR_1", "F_END"],
+            "every override landed where the base entry stood"
+        );
+        assert_eq!(
+            payload_of(&merged, "PLAYPAL"),
+            "new palette",
+            "global override"
+        );
+        assert_eq!(
+            payload_of(&merged, "THINGS"),
+            "new things",
+            "map block override"
+        );
+        assert_eq!(
+            payload_of(&merged, "FLOOR_1"),
+            "new flat",
+            "region override"
+        );
+    }
+
+    #[test]
+    fn merge_counts_sees_overrides_and_arrivals() {
+        let base = pwad(vec![
+            marker("MAP01"),
+            lump("THINGS"),
+            marker("F_START"),
+            lump("FLOOR_1"),
+            marker("F_END"),
+        ]);
+        let overlay = pwad(vec![
+            lump("DEHACKED"),
+            marker("MAP01"),
+            lump("THINGS"),
+            marker("MAP02"),
+            lump("THINGS"),
+            marker("FF_START"),
+            lump("FLOOR_1"),
+            lump("F_SKY1"),
+            marker("FF_END"),
+        ]);
+        let counts = merge_counts(&base, &overlay);
+        assert_eq!(counts.replaced, 2, "MAP01 as a block and the flat FLOOR_1");
+        assert_eq!(
+            counts.added, 3,
+            "the DEHACKED global, map MAP02 and flat F_SKY1"
+        );
+    }
+
+    #[test]
+    fn merge_counts_keeps_regions_and_globals_apart() {
+        let base = pwad(vec![lump("FLOOR_1"), lump("GAMEINFO")]);
+        let overlay = pwad(vec![
+            marker("F_START"),
+            lump("FLOOR_1"),
+            marker("F_END"),
+            lump("FLOOR_2"),
+        ]);
+        let counts = merge_counts(&base, &overlay);
+        assert_eq!(
+            counts.replaced, 0,
+            "the region lump does not override the global"
+        );
+        assert_eq!(
+            counts.added, 2,
+            "the flat arrives as a new region and FLOOR_2 rides along with it"
+        );
+    }
+
+    #[test]
+    fn merge_counts_of_a_marker_only_overlay_is_empty() {
+        let base = pwad(vec![lump("PLAYPAL")]);
+        let overlay = pwad(vec![marker("F_START"), marker("F_END")]);
+        let counts = merge_counts(&base, &overlay);
+        assert_eq!(
+            (counts.replaced, counts.added),
+            (0, 0),
+            "markers alone are not units"
         );
     }
 }

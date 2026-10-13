@@ -1,7 +1,8 @@
 //! End-to-end tests: a real rmcp client talking to the server.
 //!
-//! The harness helpers live in `support`, the server tests in `server`, the
-//! asset-group tests in `assets`, and the documentation-layout checks in
+//! The harness helpers live in `support`, the WAD builders in `fixtures`,
+//! the server tests in `server`, the asset-group tests in `assets`, the
+//! session-group tests in `session`, and the documentation-layout checks in
 //! `docs`; every helper is exercised by a test in `server`, and the real
 //! result/error contract is checked end to end through a small probe server.
 
@@ -26,8 +27,14 @@ mod assets;
 #[path = "mcp/docs.rs"]
 mod docs;
 #[cfg(test)]
+#[path = "mcp/fixtures.rs"]
+pub mod fixtures;
+#[cfg(test)]
 #[path = "mcp/server.rs"]
 mod server;
+#[cfg(test)]
+#[path = "mcp/session.rs"]
+mod session;
 #[cfg(test)]
 #[path = "mcp/support.rs"]
 pub mod support;

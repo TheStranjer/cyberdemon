@@ -7,15 +7,20 @@
 //! every format parser composes. [`archive::Wad`] ties both into a whole
 //! archive: [`Wad::parse`], [`Wad::to_bytes`] and [`Wad::read_file`] read
 //! and write real files. [`classify::analyze`] walks a directory and reports
-//! every lump's namespace, map membership and type hint. Nothing in this
-//! module knows about MCP or sessions; it is pure data.
+//! every lump's namespace, map membership and type hint, and
+//! [`game::detect_game`] names the game a directory of lump names
+//! identifies. Nothing in this module knows about MCP or sessions; it is
+//! pure data.
 
 pub mod archive;
 pub mod bytes;
 pub mod classify;
+pub mod game;
 pub mod name;
 
 pub use archive::{Lump, Wad, WadKind};
 pub use classify::{
     Analysis, LumpInfo, LumpKind, MapBlock, MapFormat, Namespace, analyze, is_doom_patch,
 };
+pub use game::{Game, detect_game};
+pub use name::LumpName;

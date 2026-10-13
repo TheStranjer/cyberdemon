@@ -50,6 +50,12 @@ src/
                   `defs/registry.rs` the `include_str!`-embedded tables
                   parsed once behind `LazyLock` and the per-game selection
                   (`definitions_for`).
+  render.rs       Rendering core module root: the integer gamma curve
+                  (`gamma_table`) and the settings re-exports.
+  render/         Rendering building blocks (no MCP concerns):
+                  `render/settings.rs` the session-level `RenderSettings`
+                  (resolution, lighting, markers, sky, FOV, gamma, top-down
+                  style, background), their ranges and validating setters.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools

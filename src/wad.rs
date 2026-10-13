@@ -1,10 +1,16 @@
-//! WAD format building blocks: lump names and little-endian byte access.
+//! WAD format building blocks: lump names, little-endian byte access and
+//! the in-memory archive.
 //!
 //! [`name::LumpName`] is the eight-character, case-insensitive identity a
 //! WAD directory entry carries; [`bytes::Reader`], [`bytes::Writer`] and the
 //! free helpers there are the bounds-checked little-endian cursor and sink
-//! every format parser composes. Nothing in this module knows about MCP,
-//! sessions or the filesystem; it is pure data.
+//! every format parser composes. [`archive::Wad`] ties both into a whole
+//! archive: [`Wad::parse`], [`Wad::to_bytes`] and [`Wad::read_file`] read
+//! and write real files. Nothing in this module knows about MCP or
+//! sessions; it is pure data.
 
+pub mod archive;
 pub mod bytes;
 pub mod name;
+
+pub use archive::{Lump, Wad, WadKind};

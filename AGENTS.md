@@ -36,6 +36,11 @@ src/
                   "DS*" DMX sound lump decode/encode, `audio/wav.rs`
                   RIFF/WAV decode (8/16/24/32-bit and extensible PCM) and
                   canonical 8/16-bit encode.
+  music.rs        Music core module root: re-exports the converter and writer.
+  music/          Music building blocks (no MCP concerns): `music/midi_write.rs`
+                  the type-0 SMF writer (`MidiWriter`, big-endian chunks,
+                  variable-length quantities in both directions),
+                  `music/mus2mid.rs` Doom MUS music lump ("D_*") to MIDI bytes.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools

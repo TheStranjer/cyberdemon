@@ -115,6 +115,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `replace_lump`          | `reference/lumps.md`    |
 | `remove_lump`           | `reference/lumps.md`    |
 | `rename_lump`           | `reference/lumps.md`    |
+| `reorder_lumps`         | `reference/lumps.md`    |
 | `import_sound`          | `reference/audio.md`    |
 | `preview_sound`         | `reference/audio.md`    |
 | `import_music`          | `reference/music.md`    |
@@ -139,7 +140,7 @@ for a fresh one → edit the working archive → `save_wad`. `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Editing a lump the `IWAD` or a resource
 layer owns creates an override in the working archive instead of failing
-(`replace_lump` reports it); such a lump cannot be deleted or renamed
+(`replace_lump` reports it); such a lump cannot be deleted, renamed or moved
 (`reference/lumps.md`). `set_render_resolution` and
 `set_render_options` tune the picture for the whole connection (they are not
 part of a WAD and survive every archive change); `get_render_settings` reads

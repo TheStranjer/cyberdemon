@@ -1,12 +1,16 @@
-//! Placement of a new lump in the working archive's directory, shared by
-//! the lump-editing tools.
+//! Placement of lumps in the working archive's directory, shared by the
+//! lump-editing tools.
 //!
 //! [`PlacementParams`] is the wire form (the four optional fields flattened
 //! into each tool's arguments); [`parse_placement`] validates it into a
-//! [`Placement`]; [`insert`] performs the directory mutation on a
-//! `&mut Wad` and reports the final index. [`inspect`] answers what the
-//! whole directory says about the lump once it sits there: its region and
-//! whether it duplicates a same-name twin in the same region.
+//! [`Placement`]; [`insert`] performs the directory mutation of one new lump
+//! on a `&mut Wad` and reports the final index, [`insert_run`] doing the same
+//! for a whole contiguous run (the single-lump case is a run of one, so both
+//! share the anchoring and marker logic). [`Fallback`] tailors the refusal
+//! messages to the caller: the inserting tools may still append, a move has
+//! to have a destination. [`inspect`] answers what the whole directory says
+//! about the lump once it sits there: its region and whether it duplicates a
+//! same-name twin in the same region.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -51,6 +55,46 @@ pub(super) struct Placement {
     pub(super) after: Option<LumpName>,
     /// Insert at the end of this namespace region.
     pub(super) namespace: Option<Namespace>,
+}
+
+impl Placement {
+    /// Whether the caller gave no placement field at all: what that means is
+    /// up to the tool, the inserting tools append and `reorder_lumps` refuses.
+    pub(super) const fn is_empty(&self) -> bool {
+        self.index.is_none()
+            && self.before.is_none()
+            && self.after.is_none()
+            && self.namespace.is_none()
+    }
+}
+
+/// How a placement refusal may point at the caller's way out: the inserting
+/// tools fall back to appending when no field is given, while a move needs a
+/// destination and can only name another placement field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Fallback {
+    /// No placement field means append at the end.
+    Append,
+    /// A destination is required: omitting the fields is no way out.
+    Required,
+}
+
+impl Fallback {
+    /// The tail of an out-of-range `index` message.
+    const fn index_hint(self) -> &'static str {
+        match self {
+            Self::Append => ", or omit placement to append",
+            Self::Required => ", or anchor the run on a lump with before/after",
+        }
+    }
+
+    /// The tail of a missing `before`/`after` anchor message.
+    const fn anchor_hint(self) -> &'static str {
+        match self {
+            Self::Append => ", or omit before/after to append",
+            Self::Required => ", or pass a name the run leaves in place",
+        }
+    }
 }
 
 /// Validate the placement arguments: at most one field, parsed names.
@@ -101,74 +145,103 @@ pub(super) fn insert(
     placement: &Placement,
     lump: Lump,
 ) -> Result<usize, CyberError> {
+    insert_run(wad, placement, vec![lump], Fallback::Append)
+}
+
+/// Insert the contiguous `run` into `wad` where `placement` says and report
+/// the index its first lump lands at.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for an `index` past the directory's end,
+/// [`CyberError::NotFound`] when `before`/`after` name a lump `wad` does not
+/// hold, [`CyberError::LimitExceeded`] if the address space cannot take one
+/// more entry.
+pub(super) fn insert_run(
+    wad: &mut Wad,
+    placement: &Placement,
+    run: Vec<Lump>,
+    fallback: Fallback,
+) -> Result<usize, CyberError> {
     if let Some(index) = placement.index {
-        return insert_at(wad, index, lump);
+        return insert_at(wad, index, run, fallback);
     }
     if let Some(anchor) = placement.before {
-        return insert_at(wad, last_named(wad, anchor)?, lump);
+        let at = last_named(wad, anchor, fallback)?;
+        return insert_at(wad, at, run, fallback);
     }
     if let Some(anchor) = placement.after {
-        let at = last_named(wad, anchor)?
+        let at = last_named(wad, anchor, fallback)?
             .checked_add(1)
             .ok_or_else(address_space_lost)?;
-        return insert_at(wad, at, lump);
+        return insert_at(wad, at, run, fallback);
     }
     if let Some(namespace) = placement.namespace {
-        return insert_in_namespace(wad, namespace, lump);
+        return insert_in_namespace(wad, namespace, run, fallback);
     }
     let at = wad.len();
-    wad.lumps.push(lump);
+    wad.lumps.extend(run);
     Ok(at)
 }
 
-/// Insert at `at`, refusing a position past the directory's end.
-fn insert_at(wad: &mut Wad, at: usize, lump: Lump) -> Result<usize, CyberError> {
+/// Insert the whole `run` at `at`, refusing a position past the directory's
+/// end; `fallback` tailors the refusal to the calling tool.
+fn insert_at(
+    wad: &mut Wad,
+    at: usize,
+    run: Vec<Lump>,
+    fallback: Fallback,
+) -> Result<usize, CyberError> {
     let len = wad.len();
     if at > len {
         return Err(CyberError::InvalidArgument(format!(
             "index {at} is past the end of the {len}-lump working archive: pass an index \
-             between 0 and {len}, or omit placement to append"
+             between 0 and {len}{}",
+            fallback.index_hint()
         )));
     }
-    wad.lumps.insert(at, lump);
+    wad.lumps.splice(at..at, run);
     Ok(at)
 }
 
-/// The index of the last lump named `name`.
+/// The index of the last lump named `name`; `fallback` tailors the refusal to
+/// the calling tool.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] with a `list_lumps` hint when `wad` holds no
 /// such lump.
-fn last_named(wad: &Wad, name: LumpName) -> Result<usize, CyberError> {
+fn last_named(wad: &Wad, name: LumpName, fallback: Fallback) -> Result<usize, CyberError> {
     wad.find_last(name).ok_or_else(|| {
         CyberError::NotFound(format!(
             "no lump named {name} in the working archive: list_lumps scope=working shows what \
-             is there, or omit before/after to append"
+             is there{}",
+            fallback.anchor_hint()
         ))
     })
 }
 
-/// Put `lump` just before `namespace`'s end marker; an unclosed region is
-/// extended and closed, and a missing region is created with its canonical
-/// markers around the new lump.
+/// Put the whole `run` just before `namespace`'s end marker; an unclosed
+/// region is extended and closed, and a missing region is created with its
+/// canonical markers around the run.
 fn insert_in_namespace(
     wad: &mut Wad,
     namespace: Namespace,
-    lump: Lump,
+    run: Vec<Lump>,
+    fallback: Fallback,
 ) -> Result<usize, CyberError> {
     if let Some(at) = last_end_marker(wad, namespace) {
-        return insert_at(wad, at, lump);
+        return insert_at(wad, at, run, fallback);
     }
     if region_is_open(wad, namespace) {
         let at = wad.len();
-        wad.lumps.push(lump);
+        wad.lumps.extend(run);
         wad.lumps.push(marker(namespace.end_marker())?);
         return Ok(at);
     }
     wad.lumps.push(marker(namespace.start_marker())?);
     let at = wad.len();
-    wad.lumps.push(lump);
+    wad.lumps.extend(run);
     wad.lumps.push(marker(namespace.end_marker())?);
     Ok(at)
 }
@@ -231,7 +304,7 @@ fn address_space_lost() -> CyberError {
 mod tests {
     use crate::error::CyberError;
     use crate::tools::lumps::place::{
-        At, Placement, PlacementParams, insert, inspect, parse_placement,
+        At, Fallback, Placement, PlacementParams, insert, insert_run, inspect, parse_placement,
     };
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
@@ -504,6 +577,125 @@ mod tests {
             region.to_string().contains("sprites"),
             "the hint lists the regions: {region}"
         );
+    }
+
+    /// A [`PlacementParams`] with only `namespace` set.
+    fn in_region(region: &str) -> PlacementParams {
+        PlacementParams {
+            namespace: Some(region.to_owned()),
+            ..PlacementParams::default()
+        }
+    }
+
+    /// A run of one-byte lumps named `texts`, in order.
+    fn run_of(texts: &[&str]) -> Vec<Lump> {
+        texts.iter().map(|text| lump(text)).collect()
+    }
+
+    #[test]
+    fn an_empty_placement_reports_no_field_and_a_single_one_is_not_empty() {
+        assert!(
+            Placement::default().is_empty(),
+            "no field means nothing set"
+        );
+        let by_index = parse_placement(&at(1)).expect("one field");
+        assert!(!by_index.is_empty(), "index is a placement");
+        let by_region = parse_placement(&in_region("flats")).expect("one field");
+        assert!(!by_region.is_empty(), "namespace is a placement");
+    }
+
+    #[test]
+    fn a_run_lands_where_an_index_puts_it_and_keeps_its_order() {
+        let mut wad = wad_with(vec![lump("ONE"), lump("TWO"), lump("THREE")]);
+        let at_index = parse_placement(&at(1)).expect("index placement");
+        let first = insert_run(
+            &mut wad,
+            &at_index,
+            run_of(&["MOV_A", "MOV_B"]),
+            Fallback::Append,
+        )
+        .expect("middle insert");
+        assert_eq!(first, 1, "the run's first lump reports the index");
+        assert_eq!(
+            names(&wad),
+            vec!["ONE", "MOV_A", "MOV_B", "TWO", "THREE"],
+            "the run kept its order as a block"
+        );
+        let tail = insert_run(
+            &mut wad,
+            &Placement::default(),
+            run_of(&["MOV_C", "MOV_D"]),
+            Fallback::Append,
+        )
+        .expect("an empty placement appends");
+        assert_eq!(tail, 5, "the appended run starts past what stood");
+        assert_eq!(
+            names(&wad),
+            vec!["ONE", "MOV_A", "MOV_B", "TWO", "THREE", "MOV_C", "MOV_D"],
+            "a run of two appends as two"
+        );
+    }
+
+    #[test]
+    fn a_run_anchors_on_a_name_and_joins_a_region() {
+        let mut wad = wad_with(vec![
+            marker("F_START"),
+            lump("FLATA"),
+            marker("F_END"),
+            lump("EDGE"),
+        ]);
+        let after = parse_placement(&named(None, Some("EDGE"))).expect("after placement");
+        let moved = insert_run(
+            &mut wad,
+            &after,
+            run_of(&["MOV_A", "MOV_B"]),
+            Fallback::Append,
+        )
+        .expect("anchored after EDGE");
+        assert_eq!(moved, 4, "just after the anchor");
+        let region = parse_placement(&in_region("flats")).expect("region placement");
+        let joined = insert_run(
+            &mut wad,
+            &region,
+            run_of(&["FLATB", "FLATC"]),
+            Fallback::Append,
+        )
+        .expect("the region takes the run");
+        assert_eq!(
+            joined, 2,
+            "just before F_END, which the anchor insert left in place"
+        );
+        assert_eq!(
+            names(&wad),
+            vec![
+                "F_START", "FLATA", "FLATB", "FLATC", "F_END", "EDGE", "MOV_A", "MOV_B"
+            ],
+            "both placements kept the run together"
+        );
+    }
+
+    #[test]
+    fn a_required_fallback_names_another_field_instead_of_appending() {
+        let mut wad = wad_with(vec![lump("ONE")]);
+        let past = parse_placement(&at(2)).expect("index placement");
+        let error = insert_run(&mut wad, &past, run_of(&["NEW"]), Fallback::Required)
+            .expect_err("only one lump");
+        assert!(
+            error.to_string().contains("before/after"),
+            "the hint names another field: {error}"
+        );
+        assert!(
+            !error.to_string().contains("omit placement"),
+            "a move is never told to append: {error}"
+        );
+        let anchor = parse_placement(&named(Some("NOPE"), None)).expect("anchor placement");
+        let missing = insert_run(&mut wad, &anchor, run_of(&["NEW"]), Fallback::Required)
+            .expect_err("no anchor");
+        assert!(
+            missing.to_string().contains("leaves in place"),
+            "the hint names the run's own rule: {missing}"
+        );
+        assert_eq!(names(&wad), vec!["ONE"], "the refusals changed nothing");
     }
 
     #[test]

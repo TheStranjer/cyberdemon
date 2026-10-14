@@ -2,15 +2,18 @@
 //! [`Cyberdemon::search_lumps`], built on the shared rows in
 //! [`crate::tools::lumps::rows`], the single-lump readers
 //! [`Cyberdemon::get_lump`] and [`Cyberdemon::extract_lump`], built on the
-//! shared selector in [`crate::tools::lumps::select`], and the editing
-//! tools [`Cyberdemon::add_lump`], [`Cyberdemon::import_asset`],
+//! shared selector in [`crate::tools::lumps::select`], and the editing tools
+//! [`Cyberdemon::add_lump`], [`Cyberdemon::import_asset`],
 //! [`Cyberdemon::import_file_as_lump`], [`Cyberdemon::replace_lump`],
-//! [`Cyberdemon::remove_lump`] and [`Cyberdemon::rename_lump`], built on the
-//! shared placement in [`crate::tools::lumps::place`] and the argument and
-//! mutation logic in [`crate::tools::lumps::edit`].
+//! [`Cyberdemon::remove_lump`], [`Cyberdemon::rename_lump`] and
+//! [`Cyberdemon::reorder_lumps`]: the inserting and rewriting tools share the
+//! placement in [`crate::tools::lumps::place`] and the argument and mutation
+//! logic in [`crate::tools::lumps::edit`], and the move of a whole run reuses
+//! both from [`crate::tools::lumps::reorder`].
 
 mod edit;
 mod place;
+mod reorder;
 pub(in crate::tools) mod rows;
 pub(in crate::tools) mod select;
 
@@ -31,6 +34,7 @@ use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::lumps::edit::{RemoveLumpParams, RenameLumpParams, ReplaceLumpParams};
 use crate::tools::lumps::place::{Placement, PlacementParams, parse_placement};
+use crate::tools::lumps::reorder::ReorderLumpsParams;
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::{fail, ok};
@@ -1472,6 +1476,20 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| edit::rename_lump(session, &args));
+        reported(report)
+    }
+
+    /// Moves a contiguous run of lumps within the working archive.
+    #[tool(
+        description = "Moves one contiguous run of lumps inside the working archive as a single undoable edit labelled \"reorder_lumps NAME\" (save_wad writes the result), where NAME is the run's first lump. What to move, exactly one of: name (1 to 8 printable ASCII characters, case-insensitive, resolved in the WORKING archive only; IWAD and layer lumps cannot be moved) with optional from_namespace (keep only matches inside that region) and occurrence (0-based index among those matches, default the last), or from_index (the directory position the run starts at); plus count (default 1) for a longer run - a whole map block is name \"MAP01\" with count 11. Where to put it, exactly one of the placement fields and never none: index, before or after (the last lump with that name) or namespace (just before that region's end marker, creating the region with its canonical markers when the working archive has none). The destination is resolved AFTER the run has been taken out: index counts positions in the directory without the moved lumps and before/after look up the target name among the remaining lumps; anchoring a run on one of its own lumps is invalid_argument. count 0, both or neither of name and from_index, occurrence or from_namespace beside from_index, two destination fields or no destination is invalid_argument; a run reaching past the end of the working archive is invalid_argument; a name or anchor the working archive lacks is not_found. Returns {moved: [names in directory order], from_index, to_index}, to_index being where the run's first lump now stands; verify with list_lumps scope=working."
+    )]
+    fn reorder_lumps(
+        &self,
+        Parameters(args): Parameters<ReorderLumpsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = self
+            .state()
+            .with_session(|session| reorder::reorder_lumps(session, &args));
         reported(report)
     }
 }

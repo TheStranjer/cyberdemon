@@ -19,6 +19,7 @@ pub mod classify;
 pub mod game;
 pub mod map;
 pub mod name;
+pub mod textures;
 
 pub use archive::{Lump, Wad, WadKind};
 pub use classify::{
@@ -26,3 +27,7 @@ pub use classify::{
 };
 pub use game::{Game, detect_game};
 pub use name::LumpName;
+pub use textures::{
+    PatchRef, TextureDef, TextureLayout, TextureLump, dropped_references, parse_pnames,
+    parse_texture_lump, remap_patches, write_pnames, write_texture_lump,
+};

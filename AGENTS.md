@@ -118,7 +118,8 @@ src/
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
   wad.rs          WAD format core module root: lump names, byte access, the
-                  in-memory archive and the map module tree.
+                  in-memory archive, the map module tree and the texture
+                  definition codecs.
   wad/            Format building blocks (no MCP concerns): `wad/name.rs` the
                   eight-byte uppercase `LumpName` with glob matching,
                   `wad/bytes.rs` bounds-checked little-endian `Reader` and
@@ -126,8 +127,12 @@ src/
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization, lookup and atomic I/O, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
-                  `MapBlock`s and `LumpKind` type hints, and `wad/game.rs`
-                  the pure game signature detection (`detect_game`).
+                  `MapBlock`s and `LumpKind` type hints, `wad/game.rs`
+                  the pure game signature detection (`detect_game`) and
+                  `wad/textures.rs` the `PNAMES` and `TEXTURE1`/`TEXTURE2`
+                  codecs: patch-name index, texture records with
+                  `Doom`/`Strife` layout detection and patch-reference
+                  renumbering.
   wad/map.rs      Map layer root: the `read_map`/`write_map` format
                   dispatcher and the model re-exports.
   wad/map/        Map data (no MCP concerns): `map/model.rs` the

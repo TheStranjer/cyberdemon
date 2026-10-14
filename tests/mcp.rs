@@ -5,9 +5,10 @@
 //! audio-group tests in `audio`, the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the music-group tests in `music`, the
-//! render-group tests in `render`, and the documentation-layout checks in
-//! `docs`; every helper is exercised by a test in `server`, and the real
-//! result/error contract is checked end to end through a small probe server.
+//! render-group tests in `render`, the textures-group tests in `textures`,
+//! and the documentation-layout checks in `docs`; every helper is exercised
+//! by a test in `server`, and the real result/error contract is checked end
+//! to end through a small probe server.
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
@@ -60,3 +61,6 @@ mod session;
 #[cfg(test)]
 #[path = "mcp/support.rs"]
 pub mod support;
+#[cfg(test)]
+#[path = "mcp/textures.rs"]
+mod textures;

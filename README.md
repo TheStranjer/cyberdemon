@@ -18,8 +18,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > (`import_sound`, `preview_sound`), a `music` group (`import_music`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
-> `get_session_info`, `get_wad_info`) and a `render` group
-> (`set_render_resolution`, `set_render_options`, `get_render_settings`),
+> `get_session_info`, `get_wad_info`), a `render` group
+> (`set_render_resolution`, `set_render_options`, `get_render_settings`)
+> and a `textures` group (`list_textures`, `list_pnames`, `edit_pnames`),
 > and defines the structured JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries
@@ -36,8 +37,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
 > bounds-checked little-endian reader/writer, an in-memory `Wad` archive
-> with parsing, serialization, name lookup and atomic file I/O, and a lump
-> classifier reporting namespaces, map blocks and type hints) and a session
+> with parsing, serialization, name lookup and atomic file I/O, a lump
+> classifier reporting namespaces, map blocks and type hints, and a
+> `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
+> detection and patch-reference renumbering) and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, and a labelled undo/redo history with dirty-state tracking) and a

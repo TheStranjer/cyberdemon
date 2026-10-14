@@ -3,7 +3,9 @@
 //!
 //! `ok` and `fail` are public so later tool groups (and callers embedding
 //! this library) can build results with them; the tool group modules
-//! themselves stay crate-private.
+//! themselves stay crate-private, except `textures`, whose session-level
+//! [`textures::TextureSet`] loader is public API texture editing will grow
+//! around.
 
 pub(crate) mod assets;
 pub(crate) mod audio;
@@ -13,6 +15,7 @@ pub(crate) mod meta;
 pub(crate) mod music;
 pub(crate) mod render;
 pub(crate) mod session;
+pub mod textures;
 
 use rmcp::model::{CallToolResult, ErrorData};
 use serde::Serialize;

@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_defs_lumps_music_palette_render_session_and_textures_tools()
+    async fn lists_the_meta_assets_audio_defs_lumps_music_palette_render_scripts_session_and_textures_tools()
      {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
@@ -90,9 +90,11 @@ mod tests {
             names,
             [
                 "add_lump",
+                "edit_dehacked",
                 "edit_pnames",
                 "extract_lump",
                 "get_asset_server_info",
+                "get_dehacked",
                 "get_linedef_specials",
                 "get_lump",
                 "get_palette",

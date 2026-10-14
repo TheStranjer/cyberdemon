@@ -8,12 +8,14 @@
 //! special bits that no table enumerates. [`custom`] overlays the built-in
 //! tables with the custom thing definitions of the loaded archives, read
 //! through the tolerant subset parsers [`dehacked`], [`decorate`],
-//! [`zscript`] and [`mapinfo`].
+//! [`zscript`] and [`mapinfo`]. [`dehacked_edit`] is the line-oriented
+//! DeHackEd/BEX reader and editor behind the scripts tools.
 
 pub mod boom;
 pub mod custom;
 pub mod decorate;
 pub mod dehacked;
+pub mod dehacked_edit;
 pub mod mapinfo;
 pub mod registry;
 pub mod table;

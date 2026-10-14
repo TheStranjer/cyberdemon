@@ -1,15 +1,15 @@
 //! The definitions registry: embedded game tables and how to select them.
 //!
 //! [`definitions_for`] answers one question for a [`Game`]: what can an
-//! editor offer for it? The DOOM / DOOM II and the Heretic thing,
+//! editor offer for it? The DOOM / DOOM II, the Heretic and the Hexen thing,
 //! linedef-special and sector-type tables are embedded in the binary with
 //! `include_str!` and parsed once on first use behind a `LazyLock`; Doom
 //! thing and special selection follows the `game` column, which names the
 //! first game that has each entry, while the Doom sector table covers both
-//! DOOM games. The Heretic tables carry only Heretic rows. Hexen tables
-//! arrive in a later ticket; that game reports empty lists with a warning,
-//! and `Strife` and [`Game::Unknown`] fall back to the DOOM II sets with a
-//! warning too.
+//! DOOM games. The Heretic and Hexen tables carry only their own rows; the
+//! Hexen specials name their script arguments (`arg1=Sector Tag;...`) in
+//! [`SpecialDef::args`]. `Strife` and [`Game::Unknown`] fall back to the
+//! DOOM II sets with a warning.
 
 use std::sync::LazyLock;
 
@@ -42,6 +42,18 @@ pub(crate) const HERETIC_SPECIALS_TSV: &str = include_str!("../../data/defs/here
 /// The Heretic sector-type table, compiled into the binary from
 /// `data/defs/heretic_sectors.tsv`.
 pub(crate) const HERETIC_SECTORS_TSV: &str = include_str!("../../data/defs/heretic_sectors.tsv");
+
+/// The Hexen thing table, compiled into the binary from
+/// `data/defs/hexen_things.tsv`.
+pub(crate) const HEXEN_THINGS_TSV: &str = include_str!("../../data/defs/hexen_things.tsv");
+
+/// The Hexen linedef-special table, compiled into the binary from
+/// `data/defs/hexen_specials.tsv`. Its rows name their script arguments.
+pub(crate) const HEXEN_SPECIALS_TSV: &str = include_str!("../../data/defs/hexen_specials.tsv");
+
+/// The Hexen sector-type table, compiled into the binary from
+/// `data/defs/hexen_sectors.tsv`.
+pub(crate) const HEXEN_SECTORS_TSV: &str = include_str!("../../data/defs/hexen_sectors.tsv");
 
 /// The `game` column value of entries DOOM already has.
 const DOOM_ROW: &str = "doom";
@@ -80,6 +92,21 @@ static HERETIC_SPECIALS: LazyLock<Result<Vec<SpecialDef>, String>> =
 static HERETIC_SECTORS: LazyLock<Result<Vec<SectorTypeDef>, String>> =
     LazyLock::new(|| parse_sector_table(HERETIC_SECTORS_TSV));
 
+/// The parsed [`HEXEN_THINGS_TSV`], with the same broken-data policy as
+/// [`DOOM_THINGS`].
+static HEXEN_THINGS: LazyLock<Result<Vec<ThingDef>, String>> =
+    LazyLock::new(|| parse_thing_table(HEXEN_THINGS_TSV));
+
+/// The parsed [`HEXEN_SPECIALS_TSV`], with the same broken-data policy as
+/// [`DOOM_THINGS`].
+static HEXEN_SPECIALS: LazyLock<Result<Vec<SpecialDef>, String>> =
+    LazyLock::new(|| parse_special_table(HEXEN_SPECIALS_TSV));
+
+/// The parsed [`HEXEN_SECTORS_TSV`], with the same broken-data policy as
+/// [`DOOM_THINGS`].
+static HEXEN_SECTORS: LazyLock<Result<Vec<SectorTypeDef>, String>> =
+    LazyLock::new(|| parse_sector_table(HEXEN_SECTORS_TSV));
+
 /// Everything the server knows about one game's editing definitions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Definitions {
@@ -93,7 +120,7 @@ pub struct Definitions {
     pub specials: Vec<SpecialDef>,
     /// The sector types the game offers, sorted by type number.
     pub sector_types: Vec<SectorTypeDef>,
-    /// Non-fatal notes: tables that are not available yet, fallbacks taken.
+    /// Non-fatal notes: fallback games taken.
     pub warnings: Vec<String>,
 }
 
@@ -124,10 +151,10 @@ impl Definitions {
 /// The editing definitions for `game`.
 ///
 /// `DOOM` gets the rows whose first game is DOOM; `DOOM II` adds the rows
-/// first seen in DOOM II and shares the sector table. Heretic gets its own
-/// three tables. Hexen reports empty lists and a `"not yet available"`
-/// warning; Strife and [`Game::Unknown`] get the DOOM II sets with a
-/// fallback warning.
+/// first seen in DOOM II and shares the sector table. Heretic and Hexen get
+/// their own three tables; Hexen specials carry their script argument names.
+/// Strife and [`Game::Unknown`] get the DOOM II sets with a fallback
+/// warning.
 ///
 /// # Errors
 ///
@@ -155,10 +182,10 @@ pub fn definitions_for(game: Game) -> Result<Definitions, CyberError> {
             Vec::new(),
         ),
         Game::Hexen => (
+            hexen_things()?,
+            hexen_specials()?,
+            hexen_sectors()?,
             Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            vec![not_yet_available(game)],
         ),
         Game::Strife | Game::Unknown => (
             doom_things(true)?,
@@ -256,6 +283,42 @@ fn heretic_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
     Ok(rows)
 }
 
+/// The embedded Hexen thing rows, sorted by type number. Every row of the
+/// Hexen table is Hexen's own, so nothing filters them out; the tests check
+/// that the table holds no Doom or Heretic rows.
+///
+/// # Errors
+///
+/// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
+fn hexen_things() -> Result<Vec<ThingDef>, CyberError> {
+    let mut rows: Vec<ThingDef> = embedded(&HEXEN_THINGS, "hexen thing table")?.to_vec();
+    rows.sort_by_key(|row| row.kind);
+    Ok(rows)
+}
+
+/// The embedded Hexen linedef-special rows, sorted by special number; each
+/// row keeps the argument names from its `args` column.
+///
+/// # Errors
+///
+/// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
+fn hexen_specials() -> Result<Vec<SpecialDef>, CyberError> {
+    let mut rows: Vec<SpecialDef> = embedded(&HEXEN_SPECIALS, "hexen special table")?.to_vec();
+    rows.sort_by_key(|row| row.number);
+    Ok(rows)
+}
+
+/// The embedded Hexen sector-type rows, sorted by type number.
+///
+/// # Errors
+///
+/// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
+fn hexen_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
+    let mut rows: Vec<SectorTypeDef> = embedded(&HEXEN_SECTORS, "hexen sector table")?.to_vec();
+    rows.sort_by_key(|row| row.number);
+    Ok(rows)
+}
+
 /// The parsed rows of an embedded table, or the internal error quoting its
 /// parse failure; `label` names the table in the message.
 ///
@@ -273,14 +336,6 @@ fn embedded<T>(
     })
 }
 
-/// The warning for a game whose own tables have not shipped yet.
-fn not_yet_available(game: Game) -> String {
-    format!(
-        "definition tables for {} are not yet available; they ship in a later release",
-        game_label(game)
-    )
-}
-
 /// The warning for a game served by the DOOM II fallback tables.
 fn doom2_fallback(game: Game) -> String {
     format!(
@@ -290,7 +345,7 @@ fn doom2_fallback(game: Game) -> String {
 }
 
 /// The lowercase game name used in warning text.
-const fn game_label(game: Game) -> &'static str {
+pub(crate) const fn game_label(game: Game) -> &'static str {
     match game {
         Game::Doom => "doom",
         Game::Doom2 => "doom2",
@@ -506,21 +561,86 @@ mod tests {
     }
 
     #[test]
-    fn hexen_is_empty_with_a_warning() {
-        let defs = definitions_for(Game::Hexen).expect("selection cannot fail here");
-        assert!(defs.things.is_empty(), "hexen has no table yet");
-        assert!(defs.specials.is_empty(), "hexen has no specials yet");
-        assert!(
-            defs.sector_types.is_empty(),
-            "hexen has no sector table yet"
+    fn hexen_ships_its_own_tables() {
+        let defs = definitions_for(Game::Hexen).expect("the embedded tables are valid");
+        assert_eq!(defs.game, Game::Hexen, "the game is echoed");
+        assert_eq!(defs.things.len(), 233, "the hexen thing rows");
+        assert_eq!(defs.specials.len(), 86, "the hexen special rows");
+        assert_eq!(defs.sector_types.len(), 46, "the hexen sector rows");
+        assert!(defs.warnings.is_empty(), "hexen has its own tables");
+        let kinds: Vec<u32> = defs.things.iter().map(|row| row.kind).collect();
+        assert!(is_ascending(&kinds), "thing types ascend");
+        let numbers: Vec<u32> = defs.specials.iter().map(|row| row.number).collect();
+        assert!(is_ascending(&numbers), "special numbers ascend");
+        let types: Vec<u32> = defs.sector_types.iter().map(|row| row.number).collect();
+        assert!(is_ascending(&types), "sector types ascend");
+    }
+
+    #[test]
+    fn hexen_lookups_name_the_hexen_rows() {
+        let defs = definitions_for(Game::Hexen).expect("the embedded tables are valid");
+        let ettin = defs.thing(10030).expect("type 10030 is the Ettin");
+        assert_eq!(ettin.name, "Ettin", "name");
+        assert_eq!(ettin.sprite, "ETTN", "sprite");
+        assert_eq!(ettin.frame, 'A', "frame");
+        assert_eq!(ettin.radius, 25, "radius");
+        assert_eq!(ettin.category, "Monsters", "category");
+        assert_eq!(ettin.game, "hexen", "game column");
+        let chandelier = defs.thing(17).expect("type 17 is the lit Chandelier");
+        assert!(chandelier.hanging, "the gore and chandelier rows hang");
+        let locked = defs.special(13).expect("special 13 is Door_LockedRaise");
+        assert_eq!(locked.name, "Door_LockedRaise", "name");
+        assert_eq!(locked.category, "Doors", "category");
+        assert_eq!(locked.target, "sector_or_back", "free-form target column");
+        let args: Vec<&str> = locked.args.iter().map(String::as_str).collect();
+        assert_eq!(
+            args,
+            vec!["Sector Tag", "Speed", "Delay", "Lock"],
+            "argument names in order, index 0 is arg1"
         );
-        assert_eq!(defs.warnings.len(), 1, "one warning for hexen");
+        let acs = defs.special(80).expect("special 80 is ACS_Execute");
+        assert_eq!(acs.args.len(), 5, "five script arguments");
+        let endgame = defs.special(75).expect("special 75 is Teleport_EndGame");
+        assert!(endgame.args.is_empty(), "a no-argument special stays empty");
+        assert_eq!(endgame.target, "-", "an exit acts on nothing");
+        let quake = defs.special(120).expect("special 120 is Radius_Quake");
+        assert_eq!(quake.target, "ex_5thing", "ex_5thing passes through");
+        let sky = defs.sector_type(200).expect("sector type 200 exists");
+        assert_eq!(sky.name, "Sky 2 (MAPINFO)", "name");
         assert!(
-            defs.warnings
-                .first()
-                .is_some_and(|w| w.contains("not yet available")),
-            "the warning says what is missing: {:?}",
-            defs.warnings
+            defs.sector_type(5).is_none(),
+            "Doom damage types are not rows"
+        );
+        assert!(defs.thing(3_001).is_none(), "no Doom monsters in here");
+    }
+
+    #[test]
+    fn hexen_tables_hold_no_doom_or_heretic_rows() {
+        let defs = definitions_for(Game::Hexen).expect("the embedded tables are valid");
+        assert!(
+            defs.things.iter().all(|row| row.game == "hexen"),
+            "no Doom or Heretic thing rows leaked in"
+        );
+        assert!(
+            defs.specials.iter().all(|row| row.game == "hexen"),
+            "no Doom or Heretic special rows leaked in"
+        );
+        assert!(!has_kind(&defs, 3_001), "the Imp is not a hexen thing");
+        assert!(
+            !defs.things.iter().any(|row| row.name == "Gargoyle"),
+            "the heretic Gargoyle is not in the hexen table"
+        );
+        let doom2 = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        assert!(
+            doom2.things.iter().all(|row| row.game != "hexen")
+                && doom2.specials.iter().all(|row| row.game != "hexen"),
+            "the Doom sets stay free of hexen rows"
+        );
+        let heretic = definitions_for(Game::Heretic).expect("the embedded tables are valid");
+        assert!(
+            heretic.things.iter().all(|row| row.game != "hexen")
+                && heretic.specials.iter().all(|row| row.game != "hexen"),
+            "the heretic sets stay free of hexen rows"
         );
     }
 

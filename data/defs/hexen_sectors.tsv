@@ -1,0 +1,47 @@
+type	name
+0	Normal
+1	Light Phased
+2	Light Sequence Start
+3	Light Sequence Special 1
+4	Light Sequence Special 2
+26	Stairs Special 1
+27	Stairs Special 2
+40	Wind East (5)
+41	Wind East (10)
+42	Wind East (25)
+43	Wind North (5)
+44	Wind North (10)
+45	Wind North (25)
+46	Wind South (5)
+47	Wind South (10)
+48	Wind South (25)
+49	Wind West (5)
+50	Wind West (10)
+51	Wind West (25)
+198	Lightning Special
+199	Lightning Flash Special
+200	Sky 2 (MAPINFO)
+201	Scroll North (5)
+202	Scroll North (10)
+203	Scroll North (25)
+204	Scroll East (5)
+205	Scroll East (10)
+206	Scroll East (25)
+207	Scroll South (5)
+208	Scroll South (10)
+209	Scroll South (25)
+210	Scroll West (5)
+211	Scroll West (10)
+212	Scroll West (25)
+213	Scroll NorthWest (5)
+214	Scroll NorthWest (10)
+215	Scroll NorthWest (25)
+216	Scroll NorthEast (5)
+217	Scroll NorthEast (10)
+218	Scroll NorthEast (25)
+219	Scroll SouthEast (5)
+220	Scroll SouthEast (10)
+221	Scroll SouthEast (25)
+222	Scroll SouthWest (5)
+223	Scroll SouthWest (10)
+224	Scroll SouthWest (25)

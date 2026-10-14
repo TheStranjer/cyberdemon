@@ -8,6 +8,7 @@ use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::defs::registry::game_label;
 use crate::defs::{
     Generalized, SectorDecoded, SectorFamily, SectorFlag, SectorTypeDef, SpecialDef, ThingDef,
     decode_generalized_linedef, decode_sector_special, definitions_for, is_generalized,
@@ -96,6 +97,14 @@ struct GetLinedefSpecialsParams {
     /// session identifies no game).
     #[serde(default)]
     game: Option<String>,
+    /// Which specials table to list: `"doom"` or `"hexen"`. For maps that
+    /// use the Hexen action format (binary Hexen maps, UDMF `zdoom`-
+    /// namespace maps) inside a DOOM-family session, `"hexen"` requests the
+    /// Hexen table with its five named script arguments. Defaults to the
+    /// resolved game's own table; `"doom"` on a game that is not DOOM-family
+    /// is refused.
+    #[serde(default)]
+    family: Option<String>,
     /// Keep only specials whose category starts with this text, matched
     /// case-insensitively (e.g. `"Doors"`, or `"Floors/"` for both floor
     /// directions).
@@ -121,9 +130,12 @@ struct SpecialEntry {
     name: String,
     /// The editor category path.
     category: String,
-    /// What it acts on: `"sector"`, `"sector_back"` or `"-"`.
+    /// What it acts on: a free-form table hint such as `"sector"`,
+    /// `"sector_back"`, `"sector_or_back"`, `"thing"`, `"line"`,
+    /// `"ex_5thing"`, `"no"` or `"-"`.
     target: String,
-    /// The argument names, empty for vanilla Doom specials.
+    /// The argument names in order (index 0 is `arg1`); empty for the
+    /// Doom-family tables and for Hexen specials that take no arguments.
     args: Vec<String>,
 }
 
@@ -318,6 +330,64 @@ fn resolve_game(state: &AppState, text: Option<&str>) -> Result<Game, CyberError
     parse_game(raw)
 }
 
+/// The specials table named by the `family` parameter, matched case-
+/// insensitively: `true` for the Hexen table, `false` for the DOOM-family
+/// one.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the accepted values and the
+/// by-game default.
+fn parse_family(text: &str) -> Result<bool, CyberError> {
+    let lowered = text.to_ascii_lowercase();
+    if lowered == "doom" {
+        return Ok(false);
+    }
+    if lowered == "hexen" {
+        return Ok(true);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "unknown family {text:?}: pass \"doom\" for the DOOM-family special table or \"hexen\" \
+         for the Hexen one, or leave family out to select the table by game"
+    )))
+}
+
+/// The game whose specials table [`Cyberdemon::get_linedef_specials`]
+/// should answer with: the resolved `game`, replaced by `Game::Hexen` when
+/// `family` asked for the Hexen table.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when `family = "doom"` is requested for
+/// a game that is not DOOM-family, since that game's specials are not the
+/// DOOM-family ones.
+fn specials_table_game(game: Game, family: Option<bool>) -> Result<Game, CyberError> {
+    if family == Some(true) {
+        return Ok(Game::Hexen);
+    }
+    if family == Some(false) && !is_doom_family(game) {
+        return Err(CyberError::InvalidArgument(format!(
+            "family \"doom\" needs a DOOM-family game, not {}: pass game=\"doom\" or \
+             game=\"doom2\", use family \"hexen\" for the Hexen table, or leave family out to \
+             select by game",
+            game_label(game)
+        )));
+    }
+    Ok(game)
+}
+
+/// The warning explaining a `family` override: present only when the Hexen
+/// table answers for a game that is not Hexen itself.
+fn family_note(game: Game, family: Option<bool>) -> Option<String> {
+    if family == Some(true) && game != Game::Hexen {
+        return Some(format!(
+            "family \"hexen\": showing the Hexen linedef special table for the {} game",
+            game_label(game)
+        ));
+    }
+    None
+}
+
 /// Whether `game` follows the DOOM-family (Boom-compatible) special and
 /// sector bit layouts: `DOOM`, `DOOM II`, `Strife` and unidentified
 /// sessions. Heretic and Hexen carry their own special sets and are never
@@ -406,20 +476,24 @@ fn thing_types_report(
 }
 
 /// `get_linedef_specials`' work: a generalized lookup when the number is
-/// in the generalized range on a DOOM-family game, otherwise the filtered
-/// table rows in ascending special order.
+/// in the generalized range on a DOOM-family table, otherwise the filtered
+/// table rows in ascending special order. The table follows the resolved
+/// game unless `family` overrides it.
 ///
 /// # Errors
 ///
-/// [`resolve_game`]'s errors and [`definitions_for`]'s
-/// [`CyberError::Internal`] for malformed embedded data.
+/// [`resolve_game`]'s, [`parse_family`]'s and [`specials_table_game`]'s
+/// errors, and [`definitions_for`]'s [`CyberError::Internal`] for malformed
+/// embedded data.
 fn linedef_specials_report(
     state: &AppState,
     args: &GetLinedefSpecialsParams,
 ) -> Result<LinedefSpecialsReport, CyberError> {
     let game = resolve_game(state, args.game.as_deref())?;
-    let defs = definitions_for(game)?;
-    let generalized = generalized_for(game, args.special);
+    let family = args.family.as_deref().map(parse_family).transpose()?;
+    let table_game = specials_table_game(game, family)?;
+    let defs = definitions_for(table_game)?;
+    let generalized = generalized_for(table_game, args.special);
     let specials: Vec<SpecialEntry> = if generalized.is_some() {
         Vec::new()
     } else {
@@ -432,12 +506,14 @@ fn linedef_specials_report(
             .collect()
     };
     let count = specials.len();
+    let mut warnings = defs.warnings;
+    warnings.extend(family_note(game, family));
     Ok(LinedefSpecialsReport {
         game,
         count,
         specials,
         generalized,
-        warnings: defs.warnings,
+        warnings,
     })
 }
 
@@ -479,7 +555,7 @@ fn sector_specials_report(
 impl Cyberdemon {
     /// Lists the thing types known for a game.
     #[tool(
-        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; doom, doom2 and heretic ship their own tables, so only the hexen table is not shipped yet and reports empty with a warning."
+        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; doom, doom2, heretic and hexen all ship their own tables, so warnings only ever explain a Strife or unidentified session falling back to the DOOM II rows."
     )]
     fn get_thing_types(
         &self,
@@ -493,7 +569,7 @@ impl Cyberdemon {
 
     /// Lists the linedef specials known for a game, decoding Boom generalized values.
     #[tool(
-        description = "Lists the game's special-table linedef actions (numbers, names, categories, target: \"sector\" for tagged sectors or \"sector_back\" for the sector behind the line, args) sorted by special, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Doors\"), search (case-insensitive name substring) and special (exact number). A special of 0x2F80..=0x7FFF on a DOOM-family game answers through the \"generalized\" field with Boom's decoded bit-packed action {kind, trigger, speed, fields, summary} and no table rows; the trigger prefixes are W=walk over, S=switch/use, G=gun shot, D=use on the line, 1=once, R=repeatable. Heretic ships its own plain-numbered specials and is not Boom-compatible: a heretic special never answers through \"generalized\". Returns {game, count, specials, generalized, warnings}; unknown numbers return an empty list, not an error."
+        description = "Lists the game's special-table linedef actions sorted by special, from the definition tables embedded in the server: number, name, category, target (a free-form hint what the action acts on: \"sector\", \"sector_back\", \"sector_or_back\", \"thing\", \"line\", \"ex_5thing\", \"no\", \"-\") and args (argument names in order, index 0 = arg1; empty for the Doom-family tables, the Hexen table names up to five script arguments). game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). family is \"doom\"|\"hexen\": pass family=\"hexen\" to list the Hexen specials for a map in the Hexen action format (binary Hexen maps, UDMF zdoom maps) while the session stays DOOM-family; family=\"doom\" insists on the DOOM-family table and is refused for games that are not DOOM-family. Default: by game. Optional filters: category (case-insensitive prefix, e.g. \"Doors\"), search (case-insensitive name substring) and special (exact number). A special of 0x2F80..=0x7FFF on a DOOM-family table answers through the \"generalized\" field with Boom's decoded bit-packed action {kind, trigger, speed, fields, summary} and no table rows; the trigger prefixes are W=walk over, S=switch/use, G=gun shot, D=use on the line, 1=once, R=repeatable. Heretic and Hexen ship their own plain-numbered specials and are not Boom-compatible: those tables never answer through \"generalized\". Returns {game, count, specials, generalized, warnings} plus a warning when family overrides the game's table; unknown numbers return an empty list, not an error."
     )]
     fn get_linedef_specials(
         &self,
@@ -507,7 +583,7 @@ impl Cyberdemon {
 
     /// Lists the sector types known for a game, decoding Boom sector values.
     #[tool(
-        description = "Lists the game's sector types (values, names) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). With special set on a DOOM-family game, also returns the Boom decoding of that sector value: decoded = {base, base_name, damage (\"none\"|\"5%\"|\"10%\"|\"20%\"), flags (some of \"secret\", \"friction\", \"push\")}; bits above 9 are ignored, unassigned bases name \"Unknown\". Heretic's sector types are plain table values from its own table and are not Boom-decoded, so decoded stays null there. Returns {game, count, special, decoded, sector_types, warnings}."
+        description = "Lists the game's sector types (values, names) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). With special set on a DOOM-family game, also returns the Boom decoding of that sector value: decoded = {base, base_name, damage (\"none\"|\"5%\"|\"10%\"|\"20%\"), flags (some of \"secret\", \"friction\", \"push\")}; bits above 9 are ignored, unassigned bases name \"Unknown\". Heretic's and Hexen's sector types are plain table values from their own tables and are not Boom-decoded, so decoded stays null there. Returns {game, count, special, decoded, sector_types, warnings}."
     )]
     fn get_sector_specials(
         &self,
@@ -522,7 +598,10 @@ impl Cyberdemon {
 
 #[cfg(test)]
 mod tests {
-    use super::{detected_game, is_doom_family, parse_game, sector_family};
+    use super::{
+        detected_game, family_note, is_doom_family, parse_family, parse_game, sector_family,
+        specials_table_game,
+    };
     use crate::defs::SectorFamily;
     use crate::state::AppState;
     use crate::wad::game::Game;
@@ -582,5 +661,94 @@ mod tests {
                 "{game:?} bits differ"
             );
         }
+    }
+
+    #[test]
+    fn parse_family_accepts_the_two_names_any_case() {
+        assert!(
+            parse_family("Hexen").expect("hexen is a family"),
+            "hexen names the Hexen table"
+        );
+        assert!(
+            !parse_family("doom").expect("doom is a family"),
+            "doom names the DOOM-family table"
+        );
+    }
+
+    #[test]
+    fn parse_family_refuses_anything_else_with_a_hint() {
+        let error = parse_family("zdoom").expect_err("zdoom is not a family name");
+        assert_eq!(error.code(), "invalid_argument", "unknown family code");
+        let message = error.to_string();
+        assert!(
+            message.contains("\"doom\"")
+                && message.contains("\"hexen\"")
+                && message.contains("leave family out"),
+            "the message names the values and the default: {message}"
+        );
+    }
+
+    #[test]
+    fn the_hexen_family_always_selects_the_hexen_table() {
+        for game in [
+            Game::Doom,
+            Game::Doom2,
+            Game::Heretic,
+            Game::Hexen,
+            Game::Strife,
+            Game::Unknown,
+        ] {
+            assert_eq!(
+                specials_table_game(game, Some(true)).expect("an explicit hexen request is served"),
+                Game::Hexen,
+                "family hexen serves the Hexen table for {game:?}"
+            );
+            assert_eq!(
+                specials_table_game(game, None).expect("the game alone always selects"),
+                game,
+                "without family the game's own table answers for {game:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn family_doom_is_refused_outside_the_doom_family() {
+        for game in [Game::Doom, Game::Doom2, Game::Strife, Game::Unknown] {
+            assert_eq!(
+                specials_table_game(game, Some(false)).expect("DOOM-family accepts family doom"),
+                game,
+                "family doom keeps the game's own table for {game:?}"
+            );
+        }
+        for game in [Game::Heretic, Game::Hexen] {
+            let error = specials_table_game(game, Some(false))
+                .expect_err("a non-DOOM-family game has no DOOM-family default");
+            assert_eq!(error.code(), "invalid_argument", "refusal code");
+            assert!(
+                error.to_string().contains("DOOM-family"),
+                "the message names the requirement: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_real_table_override_gets_a_note() {
+        assert_eq!(
+            family_note(Game::Doom2, Some(true)).expect("doom2 served from the Hexen table"),
+            "family \"hexen\": showing the Hexen linedef special table for the doom2 game",
+            "the note names the served table and the resolved game"
+        );
+        assert!(
+            family_note(Game::Hexen, Some(true)).is_none(),
+            "hexen needs no note"
+        );
+        assert!(
+            family_note(Game::Doom2, None).is_none(),
+            "no family, no note"
+        );
+        assert!(
+            family_note(Game::Doom2, Some(false)).is_none(),
+            "family doom is the DOOM-family default"
+        );
     }
 }

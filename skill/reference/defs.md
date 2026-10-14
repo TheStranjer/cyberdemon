@@ -7,14 +7,16 @@ need no archives loaded.
 
 ## What ships
 
-DOOM, DOOM II and Heretic ship today. The Doom side has 123 thing types
-and 100 + 39 linedef specials (SLADE-style categories) and the 16 named
-Doom sector types; each row's `game` names the first game that has it.
-Heretic has its own three tables: 84 thing types, 105 linedef specials and
-47 sector types, all plain values — Heretic is a Doom-engine game but not
-Boom-compatible, so its specials and sector types are never generalized or
-bit-decoded. Hexen tables are planned: that game currently answers with
-empty lists and a "not yet available" warning. Strife and an unidentified
+DOOM, DOOM II, Heretic and Hexen ship today. The Doom side has 123 thing
+types and 100 + 39 linedef specials (SLADE-style categories) and the 16
+named Doom sector types; each row's `game` names the first game that has
+it. Heretic has its own three tables: 84 thing types, 105 linedef specials
+and 47 sector types, all plain values — Heretic is a Doom-engine game but
+not Boom-compatible, so its specials and sector types are never generalized
+or bit-decoded. Hexen also has its own three tables: 233 thing types, 86
+linedef specials and 46 sector types; Hexen actions are plain numbers too
+(never generalized), and each special lists the names of its up to five
+script arguments in `args`, `arg1` first. Strife and an unidentified
 session fall back to the DOOM II rows, with a warning saying so.
 
 All three tools share the `game` argument: `"doom"`, `"doom2"`,
@@ -54,8 +56,8 @@ reports `internal`.
   ```
 
   `count` is the number of things after filtering and `things` is sorted
-  by `type` ascending. `warnings` explains an empty table or a fallback
-  game; it is empty for DOOM, DOOM II and Heretic.
+  by `type` ascending. `warnings` explains a fallback game; it is empty
+  for DOOM, DOOM II, Heretic and Hexen.
 - Typical use: looking up spawn numbers when writing `THINGS`, and
   translating a type number found in a map (`{ "type": 3001 }` gives the
   Imp; pair it with the map's game when the row matters).
@@ -69,16 +71,19 @@ reports `internal`.
   line itself, `M` = monster-activated; `1` = trigger once, `R` =
   repeatable. So `SR Floor...` fires when used from either side and
   re-arms.
-- Row fields: `target` is `"sector"` (acts on sectors tagged with the
-  line's tag), `"sector_back"` (acts on the sector behind the line, no
-  tag needed) or `"-"` (nothing tagged, e.g. exits); `args` is empty for
-  the Doom-family tables (it exists for the Hexen-style arg columns that
-  a later ticket adds).
-- Arguments (all optional): `game` (see above), `category`
-  (case-insensitive prefix, e.g. `"Doors"`, `"Floors/"`), `search`
-  (case-insensitive name substring), `special` (exact number; unknown
-  numbers return an empty list, not an error — unless the number is
-  generalized, below).
+- Row fields: `target` is a free-form hint naming what the action acts on:
+  `"sector"` (acts on sectors tagged with the line's tag), `"sector_back"`
+  (acts on the sector behind the line, no tag needed), `"sector_or_back"`,
+  `"thing"`, `"line"`, `"ex_5thing"`, `"no"` or `"-"` (nothing tagged,
+  e.g. exits); the text is passed through from the table unchanged. `args`
+  lists the argument names in order (index 0 is `arg1`); it is empty for
+  the Doom-family tables and fills in for Hexen specials, which take up to
+  five script arguments.
+- Arguments (all optional): `game` (see above), `family` (`"doom"` or
+  `"hexen"`, below), `category` (case-insensitive prefix, e.g. `"Doors"`,
+  `"Floors/"`), `search` (case-insensitive name substring), `special`
+  (exact number; unknown numbers return an empty list, not an error —
+  unless the number is generalized, below).
 - Returns:
 
   ```json
@@ -91,6 +96,23 @@ reports `internal`.
     ],
     "generalized": null,
     "warnings": []
+  }
+  ```
+
+- The `family` parameter picks the specials table explicitly, for maps that
+  use the Hexen action format (binary Hexen maps, UDMF `zdoom`-namespace
+  maps) while the session itself is DOOM-family: `family: "hexen"` answers
+  with the Hexen table and a warning naming the override; `family: "doom"`
+  insists on the DOOM-family table (it is the default there, and is refused
+  with `invalid_argument` for games that are not DOOM-family). Without
+  `family` the table follows the game. Under `family: "hexen"` numbers are
+  never generalized-decoded.
+
+  ```json
+  {
+    "special": 13, "name": "Door_LockedRaise", "category": "Doors",
+    "target": "sector_or_back",
+    "args": ["Sector Tag", "Speed", "Delay", "Lock"]
   }
   ```
 
@@ -168,6 +190,8 @@ Boom-compatible), or absent, `generalized` is null.
 - Heretic lists its own 47 plain types instead (`count` 47, `decoded`
   always null): damage, light and scroll/wind effects are separate values,
   e.g. `5` is `5% Lava Damage`, `20` is `Scroll East (5)` and `43` is
-  `Wind North (5)`.
+  `Wind North (5)`. Hexen lists 46 plain types the same way (`decoded`
+  always null): `200` is `Sky 2 (MAPINFO)`, `198` the lightning special,
+  and `201..=224` the scrolling and wind directions.
 - Typical use: reading a sector's `special` from a map and asking what it
   does (`{ "special": 201 }` → secret sector that drains 10% per touch).

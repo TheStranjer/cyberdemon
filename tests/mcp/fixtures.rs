@@ -267,6 +267,33 @@ pub fn iwad_heretic(dir: &Path) -> PathBuf {
     write_iwad(dir, "iwad-heretic.wad", heretic_lumps())
 }
 
+/// The lump directory of the Hexen `IWAD` fixture: palettes, the `TITLE`
+/// and `WINNOWR` signature lumps Hexen detection looks for, and one `MAP01`
+/// block.
+fn hexen_lumps() -> Vec<Lump> {
+    let mut lumps = vec![
+        lump("PLAYPAL", playpal()),
+        lump("COLORMAP", colormap()),
+        lump("TITLE", vec![b'H'; 64]),
+        lump("WINNOWR", vec![b'W'; 64]),
+    ];
+    lumps.extend(map_block("MAP01"));
+    lumps
+}
+
+/// A minimal `Hexen` style `IWAD`: the same palettes as the `DOOM II`
+/// fixture, one `MAP01` block, and the `TITLE` plus `WINNOWR` lumps that
+/// make a session detect Hexen.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn iwad_hexen(dir: &Path) -> PathBuf {
+    write_iwad(dir, "iwad-hexen.wad", hexen_lumps())
+}
+
 /// A `PWAD` overriding `FLOOR1`, adding a `DEHACKED` global and a two-room
 /// `MAP02` block.
 ///

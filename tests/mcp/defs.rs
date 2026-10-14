@@ -6,7 +6,7 @@
 mod tests {
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, iwad_heretic};
+    use crate::fixtures::{iwad, iwad_heretic, iwad_hexen};
     use crate::support::{call, call_err, connect};
 
     /// A generalized floor value: `0x6000 | WR | fast | up | lowest
@@ -227,20 +227,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hexen_still_reports_empty_with_a_not_yet_available_warning() {
+    async fn hexen_lists_its_own_thing_table() {
         let client = connect().await;
         let report = call(&client, "get_thing_types", json!({ "game": "hexen" })).await;
         assert_eq!(report["game"], json!("hexen"), "echoed game");
-        assert_eq!(report["count"].as_u64(), Some(0), "no hexen table yet");
-        assert_eq!(report["things"], json!([]), "and an empty list");
-        let warnings = report["warnings"].as_array().expect("warnings is an array");
-        assert_eq!(warnings.len(), 1, "one warning");
-        assert!(
-            warnings
-                .first()
-                .and_then(Value::as_str)
-                .is_some_and(|text| text.contains("not yet available")),
-            "the warning says what is missing: {warnings:?}"
+        assert_eq!(report["count"].as_u64(), Some(233), "the whole hexen set");
+        assert_eq!(types(&report).len(), 233, "count mirrors the list");
+        assert_eq!(report["warnings"], json!([]), "hexen has its own table");
+        let monsters = call(
+            &client,
+            "get_thing_types",
+            json!({ "game": "hexen", "category": "Monsters" }),
+        )
+        .await;
+        assert_eq!(monsters["count"].as_u64(), Some(18), "the hexen monsters");
+        let ettin = monsters["things"]
+            .as_array()
+            .expect("things is an array")
+            .iter()
+            .find(|entry| entry["type"] == json!(10030_i64))
+            .cloned()
+            .expect("the Ettin is listed");
+        assert_eq!(
+            ettin,
+            json!({
+                "type": 10030_i64,
+                "name": "Ettin",
+                "sprite": "ETTN",
+                "frame": "A",
+                "radius": 25_i64,
+                "category": "Monsters",
+                "hanging": false,
+            }),
+            "the hexen monster row reads as ticketed"
         );
     }
 
@@ -564,6 +583,211 @@ mod tests {
         );
     }
 
+    /// The row with this `special` number in a report, or panic.
+    fn special_row(report: &Value, number: i64) -> Value {
+        report["specials"]
+            .as_array()
+            .expect("specials is an array")
+            .iter()
+            .find(|entry| entry["special"] == json!(number))
+            .cloned()
+            .unwrap_or_else(|| panic!("special {number} is listed"))
+    }
+
+    #[tokio::test]
+    async fn hexen_specials_name_their_script_arguments() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "hexen", "special": 80_i64 }),
+        )
+        .await;
+        assert_eq!(report["game"], json!("hexen"), "echoed game");
+        assert_eq!(report["count"].as_u64(), Some(1), "one row");
+        assert_eq!(
+            report["specials"],
+            json!([{
+                "special": 80_i64,
+                "name": "ACS_Execute",
+                "category": "Scripting",
+                "target": "-",
+                "args": ["Script Number", "Map Levelnum", "First Arg", "Second Arg", "Third Arg"],
+            }]),
+            "five argument names in order, arg1 first"
+        );
+        assert_eq!(report["generalized"], json!(null), "hexen is not Boom");
+        assert_eq!(report["warnings"], json!([]), "hexen has its own tables");
+        let endgame = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "hexen", "special": 75_i64 }),
+        )
+        .await;
+        let row = special_row(&endgame, 75);
+        assert_eq!(
+            row["args"],
+            json!([]),
+            "Teleport_EndGame takes no arguments"
+        );
+        let quake = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "hexen", "special": 120_i64 }),
+        )
+        .await;
+        assert_eq!(
+            special_row(&quake, 120)["target"],
+            json!("ex_5thing"),
+            "the free-form target passes through"
+        );
+    }
+
+    #[tokio::test]
+    async fn family_hexen_requests_the_hexen_table_from_a_doom_session() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let base = iwad(dir.path());
+        let client = connect().await;
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "family": "hexen", "special": 13_i64 }),
+        )
+        .await;
+        assert_eq!(report["game"], json!("doom2"), "the session game is echoed");
+        assert_eq!(
+            special_row(&report, 13)["args"],
+            json!(["Sector Tag", "Speed", "Delay", "Lock"]),
+            "the Hexen table answers with its argument names"
+        );
+        let warnings = report["warnings"].as_array().expect("warnings is an array");
+        assert!(
+            warnings
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|text| text.contains("family \"hexen\"")),
+            "the override is explained: {warnings:?}"
+        );
+        let all = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "family": "Hexen" }),
+        )
+        .await;
+        assert_eq!(all["count"].as_u64(), Some(86), "the whole Hexen table");
+        let plain = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "family": "doom", "special": 1_i64 }),
+        )
+        .await;
+        assert_eq!(
+            plain["specials"],
+            json!([{
+                "special": 1_i64,
+                "name": "DR Door",
+                "category": "Doors/Local",
+                "target": "sector_back",
+                "args": [],
+            }]),
+            "family doom keeps the session's DOOM-family rows"
+        );
+        assert_eq!(plain["warnings"], json!([]), "no override note for doom");
+    }
+
+    #[tokio::test]
+    async fn generalized_numbers_are_not_decoded_under_the_hexen_family() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "family": "hexen", "special": generalized_floor() }),
+        )
+        .await;
+        assert_eq!(
+            report["generalized"],
+            json!(null),
+            "the Hexen table is not Boom-packed"
+        );
+        assert_eq!(report["count"].as_u64(), Some(0), "no such hexen row");
+    }
+
+    #[tokio::test]
+    async fn the_family_parameter_refuses_bad_names_and_contradictions() {
+        let client = connect().await;
+        let (code, message) = call_err(
+            &client,
+            "get_linedef_specials",
+            json!({ "family": "zdoom" }),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "unknown family code");
+        assert!(
+            message.contains("\"hexen\"") && message.contains("leave family out"),
+            "the message names the values and the default: {message}"
+        );
+        let (second_code, second_message) = call_err(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "heretic", "family": "doom" }),
+        )
+        .await;
+        assert_eq!(
+            second_code, "invalid_argument",
+            "family doom needs a DOOM-family game"
+        );
+        assert!(
+            second_message.contains("DOOM-family"),
+            "the message says what is required: {second_message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hexen_iwad_defaults_to_the_hexen_tables() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let base = iwad_hexen(dir.path());
+        let client = connect().await;
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        let things = call(&client, "get_thing_types", json!({})).await;
+        assert_eq!(
+            things["game"],
+            json!("hexen"),
+            "TITLE plus WINNOWR detect Hexen"
+        );
+        assert_eq!(things["count"].as_u64(), Some(233), "the hexen thing table");
+        assert_eq!(things["warnings"], json!([]), "no missing-table warning");
+        let specials = call(&client, "get_linedef_specials", json!({})).await;
+        assert_eq!(specials["game"], json!("hexen"), "specials follow too");
+        assert_eq!(
+            specials["count"].as_u64(),
+            Some(86),
+            "the hexen special table"
+        );
+        assert_eq!(
+            special_row(&specials, 11)["target"],
+            json!("sector_or_back"),
+            "Door_Open may act on either side"
+        );
+        let sectors = call(&client, "get_sector_specials", json!({})).await;
+        assert_eq!(
+            sectors["count"].as_u64(),
+            Some(46),
+            "the hexen sector table"
+        );
+        assert_eq!(sectors["warnings"], json!([]), "hexen has its own tables");
+    }
+
     #[tokio::test]
     async fn specials_refuse_an_unknown_game() {
         let client = connect().await;
@@ -693,14 +917,19 @@ mod tests {
         )
         .await;
         assert_eq!(report["decoded"], json!(null), "no Boom bits for hexen");
-        assert_eq!(report["count"].as_u64(), Some(0), "no hexen table yet");
+        assert_eq!(report["count"].as_u64(), Some(46), "the hexen sector table");
+        assert_eq!(report["warnings"], json!([]), "hexen ships its own tables");
+        let sky = report["sector_types"]
+            .as_array()
+            .expect("sector_types is an array")
+            .iter()
+            .find(|row| row["type"] == json!(200_i64))
+            .cloned()
+            .expect("type 200 is listed");
         assert_eq!(
-            report["warnings"]
-                .as_array()
-                .expect("warnings is an array")
-                .len(),
-            1,
-            "the missing-table warning still shows"
+            sky["name"],
+            json!("Sky 2 (MAPINFO)"),
+            "the hexen sky row reads as ticketed"
         );
     }
 

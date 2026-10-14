@@ -28,7 +28,12 @@
 //! Alongside the archives a session carries the client's [`RenderSettings`],
 //! the defaults the render tools start from. They are session state rather
 //! than archive state: no edit, undo or replaced archive changes them.
+//!
+//! Read-only content reaches the working archive through [`cow`]:
+//! [`Session::copy_map_to_working`] copies one whole map block out of the
+//! merged view so the map tools can edit a map the `IWAD` owns.
 
+pub mod cow;
 pub mod history;
 pub mod merge;
 
@@ -404,6 +409,30 @@ impl Session {
             .rev()
             .find(|pair| is_wanted(pair.0, pair.1, name, namespace))
             .map(|pair| pair.0.clone())
+    }
+
+    /// Copies the map block `map` from a read-only layer into the working
+    /// archive so it can be edited: the session's copy-on-write entry point.
+    ///
+    /// The whole block (header, member lumps and any `GL` node run, as the
+    /// merged view shows them) is appended to the working archive as one
+    /// undoable edit labelled `copy_map NAME`. Returns `false`, recording
+    /// nothing, when the working archive already holds that map: its own copy
+    /// is what the merged view shows anyway.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::NotFound`] when no loaded archive holds a block named
+    /// `map`; neither the working archive nor the history changes.
+    #[inline]
+    pub fn copy_map_to_working(&mut self, map: LumpName) -> Result<bool, CyberError> {
+        if cow::has_map_block(self.working(), map) {
+            return Ok(false);
+        }
+        let merged = self.merged();
+        self.edit(&format!("copy_map {map}"), |wad| {
+            cow::copy_map_block(wad, &merged, map)
+        })
     }
 }
 
@@ -1163,5 +1192,58 @@ mod tests {
             Game::Doom2,
             "the working archive names the game"
         );
+    }
+
+    #[test]
+    fn copy_map_to_working_brings_a_layer_map_into_the_working_archive() {
+        let mut session = loaded();
+        let copied = session
+            .copy_map_to_working(name("MAP01"))
+            .expect("the base holds MAP01");
+        assert!(copied, "the working archive had no copy yet");
+        assert_eq!(
+            tagged(
+                &session
+                    .lumps_in(Scope::Working)
+                    .expect("the working archive")
+            ),
+            vec!["MAP01@W", "THINGS@W"],
+            "the whole block was appended, in view order"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["copy_map MAP01"],
+            "the copy is one undoable edit"
+        );
+        assert!(session.is_dirty(), "and unsaved work");
+        assert!(
+            !session
+                .copy_map_to_working(name("MAP01"))
+                .expect("the working copy is already editable"),
+            "the second call copies nothing"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["copy_map MAP01"],
+            "and records no history for it"
+        );
+        assert_eq!(
+            session.undo().expect("undo the copy"),
+            "copy_map MAP01",
+            "the label comes back"
+        );
+        assert!(session.working().is_empty(), "the block went back");
+    }
+
+    #[test]
+    fn copy_map_to_working_reports_not_found_for_an_unknown_map() {
+        let mut session = loaded();
+        let error = session
+            .copy_map_to_working(name("MAP07"))
+            .expect_err("no archive holds MAP07");
+        assert_eq!(error.code(), "not_found", "unknown map code");
+        assert!(session.working().is_empty(), "nothing was copied");
+        assert!(session.undo_labels().is_empty(), "and nothing recorded");
+        assert!(!session.is_dirty(), "the session is still clean");
     }
 }

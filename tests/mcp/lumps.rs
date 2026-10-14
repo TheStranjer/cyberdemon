@@ -1,6 +1,9 @@
 //! The `lumps` tool group as seen by a real MCP client: directory listing
-//! with filters and paging, glob/content search over the merged view, and
-//! reading one lump through the shared selector.
+//! with filters and paging, glob/content search over the merged view, reading
+//! one lump through the shared selector, and the editing tools — `add_lump`,
+//! the import tools, `replace_lump`, `remove_lump` and `rename_lump` — whose
+//! every change lands in the working archive as one undoable edit, copying a
+//! read-only lump out of its layer when there is nothing else to write.
 
 #[cfg(test)]
 mod tests {
@@ -1467,5 +1470,900 @@ mod tests {
             vec!["import UPFLAT"],
             "the shared undo label"
         );
+    }
+
+    /// A session with the `IWAD` fixture as its only layer: the working
+    /// archive is empty, so every edit there is a copy-on-write.
+    async fn iwad_only(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad(dir);
+        call(&client, "open_iwad", path_arg(&base)).await;
+        client
+    }
+
+    /// A session with the duplicated-flat `IWAD`: two `FLOOR1` copies in the
+    /// flats region, for the selection tests.
+    async fn iwad_with_twins(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad_duplicated(dir);
+        call(&client, "open_iwad", path_arg(&base)).await;
+        client
+    }
+
+    /// Appends `text` (or nothing for a marker) as a new working lump.
+    async fn add(client: &Client, lump: &str, body: &str) {
+        call(client, "add_lump", json!({ "name": lump, "text": body })).await;
+    }
+
+    /// Appends two global `TWIN` copies, the second forced past the duplicate
+    /// rule, so occurrence selection has something to choose between.
+    async fn add_twins(client: &Client) {
+        add(client, "TWIN", "first").await;
+        call(
+            client,
+            "add_lump",
+            json!({ "name": "TWIN", "text": "second", "allow_duplicate": true }),
+        )
+        .await;
+    }
+
+    /// The merged view's `get_lump` hex window for `name`.
+    async fn merged_hex(client: &Client, name: &str, length: u64) -> String {
+        let read = call(
+            client,
+            "get_lump",
+            json!({ "name": name, "format": "hex", "length": length }),
+        )
+        .await;
+        read["hex"].as_str().expect("a hex body").to_owned()
+    }
+
+    /// The `{ "name": ..., "hex": ... }` arguments for `replace_lump`.
+    fn replace_hex(name: &str, digits: &str) -> Value {
+        json!({ "name": name, "hex": digits })
+    }
+
+    /// The bytes of the `IWAD` fixture's `FLOOR1`, read straight from disk.
+    fn iwad_flat_bytes(dir: &Path) -> Vec<u8> {
+        let wad = Wad::read_file(&iwad(dir)).expect("the fixture reads");
+        wad.lumps
+            .iter()
+            .find(|lump| lump.name.as_bytes() == b"FLOOR1")
+            .expect("the IWAD holds FLOOR1")
+            .data
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn replace_lump_writes_new_text_over_a_working_lump_in_place() {
+        let client = connect().await;
+        add(&client, "NOTE", "hello").await;
+        add(&client, "OTHER", "x").await;
+        let report = call(
+            &client,
+            "replace_lump",
+            json!({ "name": "note", "text": "hi there" }),
+        )
+        .await;
+        assert_eq!(
+            report,
+            json!({ "name": "NOTE", "index": 0_u64, "size": 8_u64, "created_override": false }),
+            "the documented result, written in place"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["NOTE", "OTHER"],
+            "the directory did not grow"
+        );
+        let read = call(
+            &client,
+            "get_lump",
+            json!({ "name": "NOTE", "scope": "working", "format": "text" }),
+        )
+        .await;
+        assert_eq!(read["text"], json!("hi there"), "the new bytes stand");
+        assert_eq!(read["index"].as_u64(), Some(0), "same position");
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["add_lump NOTE", "add_lump OTHER", "replace_lump NOTE"],
+            "the replace is its own undoable step"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_takes_its_payload_from_hex_or_a_fetched_source() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        add(&client, "NOTE", "hello").await;
+        let hexed = call(&client, "replace_lump", replace_hex("NOTE", "4D 55 53 1A")).await;
+        assert_eq!(hexed["size"], json!(4_u64), "four hex pairs");
+        assert_eq!(hexed["index"], json!(0_u64), "in place again");
+        assert_eq!(
+            merged_hex(&client, "NOTE", 4).await,
+            "4D 55 53 1A",
+            "the decoded bytes are what the view shows"
+        );
+        let payload = dir.path().join("note.txt");
+        fs::write(&payload, b"from a file").expect("write the source file");
+        let fetched = call(
+            &client,
+            "replace_lump",
+            json!({ "name": "NOTE", "source": payload.display().to_string() }),
+        )
+        .await;
+        assert_eq!(fetched["size"], json!(11_u64), "the file's bytes");
+        assert_eq!(
+            merged_hex(&client, "NOTE", 4).await,
+            hex_of(b"from"),
+            "the fetched bytes landed"
+        );
+    }
+
+    /// The space-separated uppercase hex of `data`.
+    fn hex_of(data: &[u8]) -> String {
+        data.iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[tokio::test]
+    async fn replace_lump_picks_a_working_copy_by_occurrence() {
+        let client = connect().await;
+        add_twins(&client).await;
+        let first = call(
+            &client,
+            "replace_lump",
+            json!({ "name": "TWIN", "text": "picked", "occurrence": 0_u64 }),
+        )
+        .await;
+        assert_eq!(first["index"], json!(0_u64), "the first copy");
+        assert_eq!(
+            first["created_override"],
+            json!(false),
+            "both copies are working lumps"
+        );
+        let read = call(
+            &client,
+            "get_lump",
+            json!({ "name": "TWIN", "scope": "working", "occurrence": 0_u64, "format": "text" }),
+        )
+        .await;
+        assert_eq!(read["text"], json!("picked"), "the first copy changed");
+        assert_eq!(
+            merged_hex(&client, "TWIN", 6).await,
+            hex_of(b"second"),
+            "the winning (last) copy kept its bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_refuses_an_occurrence_past_the_working_copies() {
+        let client = connect().await;
+        add_twins(&client).await;
+        let (code, message) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "TWIN", "text": "t", "occurrence": 9_u64 }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "no ninth working copy");
+        assert!(
+            message.contains("only 2 lumps named TWIN"),
+            "the message counts the working copies: {message}"
+        );
+        assert_eq!(
+            merged_hex(&client, "TWIN", 6).await,
+            hex_of(b"second"),
+            "the refused call wrote nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_needs_the_namespace_to_match_the_copy() {
+        let client = connect().await;
+        add_twins(&client).await;
+        let (code, message) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "TWIN", "text": "t", "namespace": "flats" }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "no TWIN sits in a flats region");
+        assert!(
+            message.contains("flats region"),
+            "the message names the region it looked in: {message}"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["TWIN", "TWIN"],
+            "no region was created for the refusal"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_overrides_an_iwad_flat_inside_its_region() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let report = call(&client, "replace_lump", replace_hex("FLOOR1", "01 02 03")).await;
+        assert_eq!(
+            report,
+            json!({ "name": "FLOOR1", "index": 1_u64, "size": 3_u64, "created_override": true }),
+            "the override was created between new markers"
+        );
+        let listing = call(&client, "list_lumps", json!({ "scope": "working" })).await;
+        assert_eq!(
+            names(&listing),
+            vec!["F_START", "FLOOR1", "F_END"],
+            "a flats region appeared in the working archive"
+        );
+        assert_eq!(
+            row_named(&listing, "FLOOR1")["namespace"],
+            json!("flats"),
+            "the override sits in the region it came from"
+        );
+        assert_eq!(merged_hex(&client, "FLOOR1", 3).await, "01 02 03");
+    }
+
+    #[tokio::test]
+    async fn an_override_leaves_the_iwad_layer_and_its_file_untouched() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        call(&client, "replace_lump", replace_hex("FLOOR1", "01 02 03")).await;
+        let layer = call(
+            &client,
+            "list_lumps",
+            json!({ "scope": "layer:0", "namespace": "flats" }),
+        )
+        .await;
+        assert_eq!(
+            row_named(&layer, "FLOOR1")["size"].as_u64(),
+            Some(FLAT_BYTES),
+            "the IWAD layer still holds its own flat"
+        );
+        assert_eq!(
+            iwad_flat_bytes(dir.path()).len(),
+            usize::try_from(FLAT_BYTES).expect("a small count"),
+            "and the file on disk is unchanged"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["replace_lump FLOOR1"],
+            "one undoable edit for the whole override"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_copies_the_whole_map_block_before_the_lump() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let report = call(&client, "replace_lump", replace_hex("THINGS", "AA BB")).await;
+        assert!(
+            report["created_override"]
+                .as_bool()
+                .expect("a created_override flag"),
+            "map data from a layer is copied first"
+        );
+        assert_eq!(report["index"].as_u64(), Some(1), "the copied THINGS");
+        assert_eq!(report["size"].as_u64(), Some(2), "the new payload");
+        assert_eq!(
+            working_names(&client).await,
+            vec![
+                "MAP01", "THINGS", "LINEDEFS", "SIDEDEFS", "VERTEXES", "SEGS", "SSECTORS", "NODES",
+                "SECTORS", "REJECT", "BLOCKMAP",
+            ],
+            "the entire MAP01 block arrived, header first"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_copied_block_wins_the_merged_view_and_needs_copying_once() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        call(&client, "replace_lump", replace_hex("THINGS", "AA BB")).await;
+        let merged = call(&client, "list_lumps", json!({ "map": "MAP01" })).await;
+        assert!(
+            merged["lumps"]
+                .as_array()
+                .expect("an array")
+                .iter()
+                .all(|row| row["source"] == json!("working")),
+            "the copied block is what an engine would see: {merged}"
+        );
+        let again = call(&client, "replace_lump", replace_hex("LINEDEFS", "CC")).await;
+        assert_eq!(
+            again["created_override"],
+            json!(false),
+            "the block is already in the working archive, so this is a plain overwrite"
+        );
+        assert_eq!(again["index"].as_u64(), Some(2), "the copied LINEDEFS");
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["replace_lump THINGS", "replace_lump LINEDEFS"],
+            "copy plus write is one step, then a plain overwrite"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_reports_a_lump_no_loaded_archive_holds() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let (code, message) = call_err(&client, "replace_lump", replace_hex("NOPE", "00")).await;
+        assert_eq!(code, "not_found", "no archive holds NOPE");
+        assert!(
+            message.contains("add_lump"),
+            "the message names the tool that creates one: {message}"
+        );
+        let (region_code, region_message) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "FLOOR1", "hex": "00", "namespace": "sprites" }),
+        )
+        .await;
+        assert_eq!(region_code, "not_found", "FLOOR1 is no sprite");
+        assert!(
+            region_message.contains("sprites region"),
+            "the message names the region: {region_message}"
+        );
+        assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn replace_lump_needs_exactly_one_payload_field() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let (none_code, none_message) =
+            call_err(&client, "replace_lump", json!({ "name": "PLAYPAL" })).await;
+        assert_eq!(none_code, "invalid_argument", "a replace needs a payload");
+        assert!(
+            none_message.contains("exactly one"),
+            "the message states the rule: {none_message}"
+        );
+        let (two_code, two_message) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "PLAYPAL", "text": "t", "hex": "00" }),
+        )
+        .await;
+        assert_eq!(two_code, "invalid_argument", "one payload field only");
+        assert!(
+            two_message.contains("exactly one"),
+            "the message states the rule: {two_message}"
+        );
+        assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn replace_lump_rejects_malformed_arguments_without_editing() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let (hex_code, hex_message) =
+            call_err(&client, "replace_lump", replace_hex("PLAYPAL", "4Z")).await;
+        assert_eq!(hex_code, "invalid_argument", "not a hex pair");
+        assert!(
+            hex_message.starts_with("hex "),
+            "the error names the hex field: {hex_message}"
+        );
+        let (name_code, _) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "TOO LONG FOR WAD", "text": "t" }),
+        )
+        .await;
+        assert_eq!(
+            name_code, "invalid_argument",
+            "the name is over eight bytes"
+        );
+        let (region_code, _) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "PLAYPAL", "namespace": "nope", "text": "t" }),
+        )
+        .await;
+        assert_eq!(region_code, "invalid_argument", "not a namespace");
+        assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn replace_lump_passes_a_missing_source_file_through_as_not_found() {
+        let client = connect().await;
+        add(&client, "NOTE", "keep").await;
+        let (code, message) = call_err(
+            &client,
+            "replace_lump",
+            json!({ "name": "NOTE", "source": "/definitely-not-here/cyberdemon.bin" }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "the fetch reports the missing file");
+        assert!(
+            message.contains("/definitely-not-here"),
+            "the message names the path: {message}"
+        );
+        let read = call(
+            &client,
+            "get_lump",
+            json!({ "name": "NOTE", "scope": "working", "format": "text" }),
+        )
+        .await;
+        assert_eq!(read["text"], json!("keep"), "the write never started");
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["add_lump NOTE"],
+            "and no history was recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_takes_the_selected_copy_and_reports_its_old_index() {
+        let client = connect().await;
+        seed_three(&client).await;
+        let report = call(&client, "remove_lump", json!({ "names": ["TWO"] })).await;
+        assert_eq!(
+            report,
+            json!({ "removed": [{ "name": "TWO", "index": 1_u64 }] }),
+            "the documented result shape"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["ONE", "THREE"],
+            "the named lump is gone"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec![
+                "add_lump ONE",
+                "add_lump TWO",
+                "add_lump THREE",
+                "remove_lump TWO"
+            ],
+            "the removal is the newest history entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_takes_several_names_in_one_edit() {
+        let client = connect().await;
+        seed_three(&client).await;
+        let report = call(&client, "remove_lump", json!({ "names": ["THREE", "ONE"] })).await;
+        assert_eq!(
+            report["removed"],
+            json!([
+                { "name": "ONE", "index": 0_u64 },
+                { "name": "THREE", "index": 2_u64 }
+            ]),
+            "reported in directory order with the pre-removal indices"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["TWO"],
+            "one edit, two gone"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec![
+                "add_lump ONE",
+                "add_lump TWO",
+                "add_lump THREE",
+                "remove_lump THREE, ONE"
+            ],
+            "the label lists every name in the order given"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_takes_the_last_copy_or_the_numbered_one() {
+        let client = connect().await;
+        add_twins(&client).await;
+        call(
+            &client,
+            "add_lump",
+            json!({ "name": "TWIN", "text": "third", "allow_duplicate": true }),
+        )
+        .await;
+        let last = call(&client, "remove_lump", json!({ "names": ["TWIN"] })).await;
+        assert_eq!(
+            last["removed"],
+            json!([{ "name": "TWIN", "index": 2_u64 }]),
+            "the default occurrence is the last copy"
+        );
+        let first = call(
+            &client,
+            "remove_lump",
+            json!({ "names": ["TWIN"], "occurrence": 0_u64 }),
+        )
+        .await;
+        assert_eq!(
+            first["removed"],
+            json!([{ "name": "TWIN", "index": 0_u64 }]),
+            "occurrence 0 is the first of what is left"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["TWIN"],
+            "one twin remains, the middle one"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_all_occurrences_clears_every_twin_at_once() {
+        let client = connect().await;
+        add_twins(&client).await;
+        let swept = call(
+            &client,
+            "remove_lump",
+            json!({ "names": ["TWIN"], "all_occurrences": true }),
+        )
+        .await;
+        assert_eq!(
+            swept["removed"],
+            json!([
+                { "name": "TWIN", "index": 0_u64 },
+                { "name": "TWIN", "index": 1_u64 }
+            ]),
+            "every copy went, each with the index it held"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            Vec::<String>::new(),
+            "the working archive is empty again"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["add_lump TWIN", "add_lump TWIN", "remove_lump TWIN"],
+            "one removal for both copies"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_aborts_the_whole_edit_when_any_name_is_missing() {
+        let client = connect().await;
+        add(&client, "MINE", "m").await;
+        let (code, message) = call_err(
+            &client,
+            "remove_lump",
+            json!({ "names": ["MINE", "GHOST"] }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "GHOST is not in the working archive");
+        assert!(
+            message.contains("read-only"),
+            "the message explains the layers: {message}"
+        );
+        assert!(
+            message.contains("replace_lump"),
+            "the message names the override tool: {message}"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["MINE"],
+            "MINE stayed: the edit rolled back"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["add_lump MINE"],
+            "and no history was recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_cannot_touch_an_iwad_lump() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let (code, message) =
+            call_err(&client, "remove_lump", json!({ "names": ["PLAYPAL"] })).await;
+        assert_eq!(code, "not_found", "an IWAD lump cannot be removed");
+        assert!(
+            message.contains("read-only"),
+            "the message explains the layers: {message}"
+        );
+        assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn remove_lump_rejects_an_empty_list_and_a_shared_occurrence() {
+        let client = connect().await;
+        seed_three(&client).await;
+        let (empty_code, empty_message) =
+            call_err(&client, "remove_lump", json!({ "names": [] })).await;
+        assert_eq!(empty_code, "invalid_argument", "at least one name");
+        assert!(
+            empty_message.contains("at least one"),
+            "the message states the rule: {empty_message}"
+        );
+        let (shared_code, shared_message) = call_err(
+            &client,
+            "remove_lump",
+            json!({ "names": ["ONE", "TWO"], "occurrence": 0_u64 }),
+        )
+        .await;
+        assert_eq!(shared_code, "invalid_argument", "occurrence needs one name");
+        assert!(
+            shared_message.contains("occurrence"),
+            "the message names the field: {shared_message}"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["ONE", "TWO", "THREE"],
+            "both refusals removed nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_rejects_bad_names_regions_and_occurrences() {
+        let client = connect().await;
+        seed_three(&client).await;
+        let (name_code, _) =
+            call_err(&client, "remove_lump", json!({ "names": ["TOO LONG"] })).await;
+        assert_eq!(name_code, "invalid_argument", "an unparsable name");
+        let (region_code, _) = call_err(
+            &client,
+            "remove_lump",
+            json!({ "names": ["ONE"], "namespace": "nope" }),
+        )
+        .await;
+        assert_eq!(region_code, "invalid_argument", "not a namespace");
+        let (past_code, past_message) = call_err(
+            &client,
+            "remove_lump",
+            json!({ "names": ["ONE"], "occurrence": 5_u64 }),
+        )
+        .await;
+        assert_eq!(past_code, "not_found", "no fifth copy of ONE");
+        assert!(
+            past_message.contains("0 to 0"),
+            "the message names the range: {past_message}"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["ONE", "TWO", "THREE"],
+            "every refusal removed nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_lump_honours_the_namespace_filter() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let extra = pwad(dir.path());
+        call(&client, "open_wad", path_arg(&extra)).await;
+        let report = call(
+            &client,
+            "remove_lump",
+            json!({ "names": ["FLOOR1"], "namespace": "flats" }),
+        )
+        .await;
+        assert_eq!(
+            report["removed"],
+            json!([{ "name": "FLOOR1", "index": 1_u64 }]),
+            "the region copy went"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec![
+                "FF_START", "FF_END", "DEHACKED", "MAP02", "THINGS", "LINEDEFS", "SIDEDEFS",
+                "VERTEXES", "SEGS", "SSECTORS", "NODES", "SECTORS", "REJECT", "BLOCKMAP",
+            ],
+            "the region's markers stayed"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_lump_moves_a_working_lump_and_keeps_its_bytes() {
+        let client = connect().await;
+        add(&client, "OLD", "payload").await;
+        let report = call(
+            &client,
+            "rename_lump",
+            json!({ "name": "old", "new_name": "new" }),
+        )
+        .await;
+        assert_eq!(
+            report,
+            json!({ "old_name": "OLD", "new_name": "NEW", "index": 0_u64 }),
+            "the documented result shape, both names uppercased"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["NEW"],
+            "renamed in place"
+        );
+        let read = call(
+            &client,
+            "get_lump",
+            json!({ "name": "NEW", "scope": "working", "format": "text" }),
+        )
+        .await;
+        assert_eq!(read["text"], json!("payload"), "the payload survived");
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["add_lump OLD", "rename_lump OLD -> NEW"],
+            "the label shows both names"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_lump_refuses_a_taken_name_unless_told_otherwise() {
+        let client = connect().await;
+        add(&client, "A", "1").await;
+        add(&client, "B", "2").await;
+        let (code, message) = call_err(
+            &client,
+            "rename_lump",
+            json!({ "name": "A", "new_name": "B" }),
+        )
+        .await;
+        assert_eq!(code, "already_exists", "B is taken in the same region");
+        assert!(
+            message.contains("allow_duplicate"),
+            "the message names the fix: {message}"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["A", "B"],
+            "the refusal renamed nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_lump_allows_a_twin_when_asked_and_labels_the_edit() {
+        let client = connect().await;
+        add(&client, "A", "1").await;
+        add(&client, "B", "2").await;
+        let forced = call(
+            &client,
+            "rename_lump",
+            json!({ "name": "A", "new_name": "B", "allow_duplicate": true }),
+        )
+        .await;
+        assert_eq!(forced["new_name"], json!("B"), "the twin was allowed");
+        assert_eq!(forced["index"], json!(0_u64), "still in place");
+        assert_eq!(
+            working_names(&client).await,
+            vec!["B", "B"],
+            "both copies now carry the name"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["add_lump A", "add_lump B", "rename_lump A -> B"],
+            "the accepted rename is the newest step"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_lump_rejects_a_bad_new_name_and_a_missing_lump() {
+        let client = connect().await;
+        add(&client, "MINE", "m").await;
+        let (long_code, long_message) = call_err(
+            &client,
+            "rename_lump",
+            json!({ "name": "MINE", "new_name": "TOO LONG FOR WAD" }),
+        )
+        .await;
+        assert_eq!(
+            long_code, "invalid_argument",
+            "the new name is over eight bytes"
+        );
+        assert!(
+            long_message.contains("limit is 8"),
+            "the message states the limit: {long_message}"
+        );
+        let (bad_code, _) = call_err(
+            &client,
+            "rename_lump",
+            json!({ "name": "GHOST", "new_name": "OK" }),
+        )
+        .await;
+        assert_eq!(
+            bad_code, "not_found",
+            "the working archive has no such lump"
+        );
+        let (region_code, _) = call_err(
+            &client,
+            "rename_lump",
+            json!({ "name": "MINE", "new_name": "OK", "namespace": "nope" }),
+        )
+        .await;
+        assert_eq!(region_code, "invalid_argument", "not a namespace");
+        assert_eq!(
+            working_names(&client).await,
+            vec!["MINE"],
+            "no refusal changed anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_lump_cannot_touch_an_iwad_lump() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        let (code, message) = call_err(
+            &client,
+            "rename_lump",
+            json!({ "name": "FLOOR1", "new_name": "FLOORX" }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "an IWAD lump cannot be renamed");
+        assert!(
+            message.contains("replace_lump"),
+            "the message names the override tool: {message}"
+        );
+        assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn rename_lump_reaches_the_copy_on_write_block_it_was_given() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_only(dir.path()).await;
+        call(&client, "replace_lump", replace_hex("THINGS", "AA")).await;
+        let report = call(
+            &client,
+            "rename_lump",
+            json!({ "name": "THINGS", "new_name": "STUFF" }),
+        )
+        .await;
+        assert_eq!(report["index"], json!(1_u64), "the copied member");
+        assert_eq!(
+            working_names(&client).await.get(1),
+            Some(&"STUFF".to_owned()),
+            "the working copy was renamed, the IWAD's was not"
+        );
+        let layer = call(
+            &client,
+            "list_lumps",
+            json!({ "scope": "layer:0", "map": "MAP01" }),
+        )
+        .await;
+        assert_eq!(
+            names(&layer).get(1),
+            Some(&"THINGS".to_owned()),
+            "the read-only block still spells THINGS"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["replace_lump THINGS", "rename_lump THINGS -> STUFF"],
+            "both edits are undoable steps"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_lump_overrides_the_winning_copy_of_two_layer_flats() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_with_twins(dir.path()).await;
+        let found = call(
+            &client,
+            "search_lumps",
+            json!({ "pattern": "FLOOR1", "namespace": "flats" }),
+        )
+        .await;
+        assert_eq!(
+            found["count"].as_u64(),
+            Some(2),
+            "the IWAD fixture holds two FLOOR1 copies"
+        );
+        let report = call(&client, "replace_lump", replace_hex("FLOOR1", "EE")).await;
+        assert!(
+            report["created_override"]
+                .as_bool()
+                .expect("a created_override flag"),
+            "the override was created"
+        );
+        let flats = call(&client, "list_lumps", json!({ "namespace": "flats" })).await;
+        let copies: Vec<&Value> = flats["lumps"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .filter(|row| row["name"] == json!("FLOOR1"))
+            .collect();
+        assert_eq!(copies.len(), 2, "the region still shows two copies");
+        assert_eq!(
+            copies.last().expect("the winning copy")["source"],
+            json!("working"),
+            "the override replaced the copy that wins, in place"
+        );
+        assert_eq!(
+            copies.first().expect("the losing copy")["size"].as_u64(),
+            Some(FLAT_BYTES),
+            "the losing IWAD copy is untouched in the view"
+        );
+        assert_eq!(merged_hex(&client, "FLOOR1", 1).await, "EE");
     }
 }

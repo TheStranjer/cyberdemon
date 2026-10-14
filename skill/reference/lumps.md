@@ -1,7 +1,10 @@
 # Lumps tools
 
-Directory browsing, single-lump reads, and the first editing tools over the
-session's archives. Edits go to the working archive only and are undoable.
+Directory browsing, single-lump reads, and the lump editing tools over the
+session's archives: `add_lump`, the import tools, `replace_lump`,
+`remove_lump` and `rename_lump`. Edits go to the working archive only and
+are undoable; content a read-only layer owns is edited by copy-on-write (see
+below).
 
 ## The row shape
 
@@ -109,12 +112,14 @@ is `not_found`.
 ## The lump selector
 
 `get_lump` and `extract_lump` pick one lump with the same four fields,
-which later lump tools reuse:
+which the editing tools reuse in a reduced form:
 
 - `name` (string, required) — the lump name, 1 to 8 printable ASCII
   characters, case-insensitive (uppercased). Anything else is
   `invalid_argument`.
-- `scope` (string, default `"merged"`) — as `list_lumps`.
+- `scope` (string, default `"merged"`) — as `list_lumps`. The editing tools
+  (`replace_lump`, `remove_lump`, `rename_lump`) take no `scope`: they
+  choose the archive themselves, as Copy-on-write below describes.
 - `namespace` (string, optional) — keep only matches inside that region
   (`flats`, `sprites`, ...). Without it, matches in any region and loose
   lumps all count.
@@ -125,6 +130,34 @@ which later lump tools reuse:
 
 No match is `not_found` (`"lump FOO not found in merged"`); an occurrence
 past the last match is `not_found` naming how many copies exist.
+
+## Copy-on-write
+
+The `IWAD` and the resource layers are **read-only**: no edit tool changes
+them, and `save_wad` writes the working archive (or the merged view) out of
+them, never over them. The editing tools therefore behave like this:
+
+- The lump is in the **working archive** → it is changed there, in place.
+- The lump is only in a layer (the `IWAD` or a resource `PWAD`) → the tool
+  **creates an override in the working archive** instead of failing:
+  - map data (`THINGS`, `LINEDEFS`, …): the whole map block is copied in
+    first — header, every member and the block's `GL` nodes, as the merged
+    view shows them, so overrides from higher layers come along as the
+    merged bytes — then the copy is written. This is one undoable edit.
+  - a namespace member (`FLOOR1` in `flats`, a sprite, …): the override is
+    inserted into that region of the working archive, whose markers are
+    created when it has none.
+  - anything else (a loose global like `PLAYPAL` or `DEHACKED`): appended.
+  `replace_lump` reports `"created_override": true` in these cases.
+- `remove_lump` and `rename_lump` have no override to create: a name the
+  working archive does not hold is `not_found`. An override can only shadow
+  what a layer holds, never take it out of the engine's view: the lump stays
+  in the `IWAD` and an empty `replace_lump` (`hex: ""`) just empties the
+  copy. Removing a map member that way breaks the map, so prefer replacing
+  its contents.
+
+Verify any of it with `list_lumps scope=working` (what changed) and
+`list_lumps scope=merged` (what an engine would see).
 
 ## `get_lump`
 
@@ -174,8 +207,9 @@ past the last match is `not_found` naming how many copies exist.
 
 ## Placement
 
-The editing tools all take the same four optional placement fields, and
-**at most one of them** (two is `invalid_argument`):
+The inserting tools (`add_lump` and the two import tools) take the same four
+optional placement fields, and **at most one of them** (two is
+`invalid_argument`):
 
 - `index` (number) — insert at this directory position of the working
   archive; valid range `0..=current length`, anything larger is
@@ -233,11 +267,72 @@ Verify placement results with `list_lumps scope=working`.
 - Errors: as `add_lump`, plus the `source` fetch errors (`not_found` for a
   missing file or evicted asset, `fetch_error`, `limit_exceeded`, ...).
 
+## `replace_lump`
+
+- Purpose: overwrite one lump's payload — the way to change anything a
+  read-only archive owns. Copy-on-write (above) decides *where* the bytes
+  land; you never have to copy a map or a region first.
+- Arguments: the selector fields `name`, `namespace`, `occurrence` (no
+  `scope`), plus **exactly one** payload field: `text` (UTF-8 written
+  as-is), `hex` (bytes as hex digits, spaces allowed) or `source` (absolute
+  path, `file://` URI, `http(s)://` URL or uploaded asset URL, fetched for
+  its bytes). None or several is `invalid_argument`; there is no empty form
+  — that is what `add_lump` is for.
+  `occurrence` indexes the **working archive's** matches (default the last);
+  when the name only a layer holds, the winning copy of the merged view is
+  the one overridden.
+- Returns: `{"name", "index", "size", "created_override"}` — `index` counts
+  positions in the working archive, `size` is the new payload length, and
+  `created_override` is `true` when the lump had to be brought in first
+  (whole map block copied, region insert, or append). The undo label is
+  `replace_lump NAME`, and a block copy plus its write is that one step.
+- Errors: `invalid_argument` (bad name, unknown `namespace`, bad hex, zero
+  or two payload fields), `not_found` (no loaded archive holds the name;
+  `occurrence` past the working matches; `source` fetch failures pass
+  through with their own codes).
+
+## `remove_lump`
+
+- Purpose: take lumps out of the **working archive** in one undoable step.
+- Arguments: `names` (array of strings, at least one), `namespace` (applies
+  to every name), `occurrence` (allowed only when `names` holds exactly one
+  name — with several it is `invalid_argument`), `all_occurrences` (bool,
+  default `false`: remove only the selected, by default last, copy of each
+  name).
+- All or nothing: if any name is missing from the working archive the call
+  is `not_found` and **nothing** is removed. Layer lumps cannot be removed
+  at all — the error says so and points at `replace_lump`.
+- Returns: `{"removed": [{"name", "index"}]}` in directory order, with the
+  indices the lumps held **before** the removal. The undo label is
+  `remove_lump A, B, ...`, listing the names in the order you gave them.
+- Errors: `invalid_argument` (empty `names`, an unparsable name, an unknown
+  `namespace`, `occurrence` beside several names), `not_found` (a name the
+  working archive lacks, or an `occurrence` past its matches).
+
+## `rename_lump`
+
+- Purpose: rename one lump of the **working archive**, keeping its position
+  and payload.
+- Arguments: `name`, `new_name` (both 1 to 8 printable ASCII characters,
+  uppercased), `namespace`, `occurrence` as in `replace_lump`, and
+  `allow_duplicate` (bool, default `false`).
+- Duplicate rule: another working lump already called `new_name` **in the
+  same region** (no region counts as its own) is `already_exists` unless
+  `allow_duplicate` is true. Nothing changes in that case.
+- Returns: `{"old_name", "new_name", "index"}`. The undo label is
+  `rename_lump OLD -> NEW`.
+- Errors: `invalid_argument` (either name unparsable, unknown `namespace`),
+  `not_found` (the working archive holds no match — a layer lump cannot be
+  renamed; override it with `replace_lump`, or `add_lump` the new name and
+  `remove_lump` the copy).
+
 ## Notes
 
 - The editing tools touch **only the working archive**; read-only layers
   never change, and every edit is undoable (`get_session_info` lists the
-  undo labels). Nothing is on disk until `save_wad`.
+  undo labels). Nothing is on disk until `save_wad`. Changing a lump a layer
+  holds means an override in the working archive — see Copy-on-write; you
+  cannot delete or rename a layer's lump.
 - Namespace regions come from marker pairs (`S_START`/`S_END` and friends),
   so region **markers themselves** carry the region's `namespace` and the
   kind `marker`; filters on `namespace` therefore include them.

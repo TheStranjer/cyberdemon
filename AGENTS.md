@@ -49,7 +49,10 @@ src/
                   resampling and 8-bit conversion, `audio/dmx.rs` Doom
                   "DS*" DMX sound lump decode/encode, `audio/wav.rs`
                   RIFF/WAV decode (8/16/24/32-bit and extensible PCM) and
-                  canonical 8/16-bit encode.
+                  canonical 8/16-bit encode, `audio/decode.rs` any-container
+                  import decode (`decode_any` over WAV/OGG/MP3/FLAC via
+                  symphonia with the in-house WAV reader first,
+                  `sniff_format` magic detection, 10-minute cap).
   bsp.rs          BSP node builder core: 16.16 `Point`, integer
                   `Partition`, `BuildOptions` and the `build_tree` entry
                   point. No lump writing, no tools.

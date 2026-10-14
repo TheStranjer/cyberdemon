@@ -2,10 +2,10 @@
 //!
 //! The harness helpers live in `support`, the WAD builders in `fixtures`,
 //! the server tests in `server`, the asset-group tests in `assets`, the
-//! session-group tests in `session`, the `save_wad` tests in `save`, the
-//! defs-group tests in `defs`, the `lumps`-group tests in `lumps`, the
-//! render-group tests in `render`, and the documentation-layout checks in
-//! `docs`; every helper is exercised by a
+//! audio-group tests in `audio`, the session-group tests in `session`, the
+//! `save_wad` tests in `save`, the defs-group tests in `defs`, the
+//! `lumps`-group tests in `lumps`, the render-group tests in `render`, and
+//! the documentation-layout checks in `docs`; every helper is exercised by a
 //! test in `server`, and the real result/error contract is checked end to
 //! end through a small probe server.
 
@@ -16,6 +16,7 @@ use crc32fast as _;
 use fastrand as _;
 use image as _;
 use reqwest as _;
+use symphonia as _;
 use tempfile as _;
 use thiserror as _;
 
@@ -26,6 +27,9 @@ use thiserror as _;
 #[cfg(test)]
 #[path = "mcp/assets.rs"]
 mod assets;
+#[cfg(test)]
+#[path = "mcp/audio.rs"]
+mod audio;
 #[cfg(test)]
 #[path = "mcp/defs.rs"]
 mod defs;

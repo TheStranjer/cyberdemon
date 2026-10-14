@@ -1,16 +1,19 @@
 //! Audio building blocks shared by every WAD sound tool.
 //!
 //! Pure data processing on owned buffers: [`pcm::Pcm`] is the in-memory
-//! sample container, [`dmx`] decodes and encodes `Doom` `DS*` sound lumps
-//! and [`wav`] reads and writes canonical `RIFF`/`WAVE` files. Nothing here
-//! knows about MCP, lumps or the filesystem; later sound tools compose
-//! these pieces. All arithmetic is integer-only, like the rest of the
-//! crate (see [`crate::fixed`]).
+//! sample container, [`dmx`] decodes and encodes `Doom` `DS*` sound lumps,
+//! [`wav`] reads and writes canonical `RIFF`/`WAVE` files and [`decode`]
+//! brings `WAV`, `OGG`, `MP3` and `FLAC` files of any layout into [`Pcm`]
+//! through `symphonia`. Nothing here knows about MCP, lumps or the
+//! filesystem; the sound tools compose these pieces. All arithmetic is
+//! integer-only, like the rest of the crate (see [`crate::fixed`]).
 
+pub mod decode;
 pub mod dmx;
 pub mod pcm;
 pub mod wav;
 
+pub use decode::{decode_any, sniff_format};
 pub use dmx::{decode_dmx, encode_dmx};
 pub use pcm::Pcm;
 pub use wav::{decode_wav, encode_wav};

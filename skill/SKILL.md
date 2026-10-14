@@ -112,6 +112,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `add_lump`              | `reference/lumps.md`    |
 | `import_asset`          | `reference/lumps.md`    |
 | `import_file_as_lump`   | `reference/lumps.md`    |
+| `import_sound`          | `reference/audio.md`    |
 | `open_iwad`             | `reference/session.md`  |
 | `open_wad`              | `reference/session.md`  |
 | `new_wad`               | `reference/session.md`  |

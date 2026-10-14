@@ -1,4 +1,8 @@
-//! Definitions tools: the game reference tables the server ships with.
+//! Definitions tools: the game reference tables the server ships with,
+//! overlaid with the custom thing definitions of the loaded archives
+//! ([`crate::tools::defs::collect`] collects the lump texts).
+
+mod collect;
 
 use alloc::collections::BTreeMap;
 
@@ -12,6 +16,7 @@ use crate::defs::registry::game_label;
 use crate::defs::{
     Generalized, SectorDecoded, SectorFamily, SectorFlag, SectorTypeDef, SpecialDef, ThingDef,
     decode_generalized_linedef, decode_sector_special, definitions_for, is_generalized,
+    session_definitions,
 };
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
@@ -40,6 +45,12 @@ struct GetThingTypesParams {
     /// list, not an error.
     #[serde(default)]
     r#type: Option<u32>,
+    /// Include the thing types the loaded archives define or move:
+    /// DEHACKED `Thing` blocks, DECORATE actors, `ZScript` classes and
+    /// MAPINFO `DoomEdNums` entries, read from the merged view. Defaults
+    /// to true; false answers from the built-in tables alone.
+    #[serde(default)]
+    include_custom: Option<bool>,
 }
 
 /// One thing type as the tool reports it.
@@ -59,6 +70,9 @@ struct ThingEntry {
     category: String,
     /// Whether the thing hangs from the ceiling.
     hanging: bool,
+    /// Where the row came from: `"builtin"`, `"dehacked"`, `"decorate"`
+    /// or `"zscript"`.
+    source: String,
 }
 
 impl ThingEntry {
@@ -72,6 +86,7 @@ impl ThingEntry {
             radius: def.radius,
             category: def.category.clone(),
             hanging: def.hanging,
+            source: def.source.clone(),
         }
     }
 }
@@ -85,7 +100,8 @@ struct ThingTypesReport {
     count: usize,
     /// The matching thing types, sorted by `type` ascending.
     things: Vec<ThingEntry>,
-    /// Non-fatal notes: tables not shipped yet, fallback games.
+    /// Non-fatal notes: tables not shipped yet, fallback games and what
+    /// the custom-definition parsers refused to read.
     warnings: Vec<String>,
 }
 
@@ -445,19 +461,29 @@ fn generalized_for(game: Game, special: Option<u32>) -> Option<GeneralizedEntry>
     decode_generalized_linedef(value).map(GeneralizedEntry::of)
 }
 
-/// `get_thing_types`' work: resolve the game, take its embedded table and
-/// keep the rows the filters select, in ascending type order.
+/// `get_thing_types`' work: resolve the game, take its definitions — the
+/// built-in tables overlaid with the session's custom sources unless
+/// `include_custom` is false — and keep the rows the filters select, in
+/// ascending type order.
 ///
 /// # Errors
 ///
-/// [`resolve_game`]'s errors and [`definitions_for`]'s
-/// [`CyberError::Internal`] for malformed embedded data.
+/// [`resolve_game`]'s errors, [`session_definitions`]'s collection error
+/// for the merged scope, and their [`CyberError::Internal`] for malformed
+/// embedded data.
 fn thing_types_report(
     state: &AppState,
     args: &GetThingTypesParams,
 ) -> Result<ThingTypesReport, CyberError> {
     let game = resolve_game(state, args.game.as_deref())?;
-    let defs = definitions_for(game)?;
+    let defs = if args.include_custom.unwrap_or(true) {
+        let (sources, notes) = state.with_session(|session| collect::custom_sources(session))?;
+        let mut overlaid = session_definitions(game, &sources)?;
+        overlaid.warnings.extend(notes);
+        overlaid
+    } else {
+        definitions_for(game)?
+    };
     let category = args.category.as_deref().map(str::to_ascii_lowercase);
     let search = args.search.as_deref().map(str::to_ascii_lowercase);
     let things: Vec<ThingEntry> = defs
@@ -555,7 +581,7 @@ fn sector_specials_report(
 impl Cyberdemon {
     /// Lists the thing types known for a game.
     #[tool(
-        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; doom, doom2, heretic and hexen all ship their own tables, so warnings only ever explain a Strife or unidentified session falling back to the DOOM II rows."
+        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags, and a source of \"builtin\"|\"dehacked\"|\"decorate\"|\"zscript\") sorted by type. Answers from the definition tables embedded in the server, overlaid by default with the session's custom definitions read from the merged view: DEHACKED Thing blocks (ID #, Width), DECORATE actors, `ZScript` classes and MAPINFO/ZMAPINFO DoomEdNums entries (precedence builtin < dehacked < decorate/zscript, custom rows carry \"Custom (DeHackEd/DECORATE/MAPINFO)\" categories). include_custom=false lists the built-in tables alone. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; warnings explain a fallback game and quote every custom-definition line the tolerant parsers refused to read (unknown DoomEdNums classes, bad DEHACKED values, unparseable DECORATE fragments). Custom sources are session state: load the archives first (open_iwad/merge_wad) for them to count."
     )]
     fn get_thing_types(
         &self,

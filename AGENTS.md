@@ -70,7 +70,8 @@ src/
                   variable-length quantities in both directions),
                   `music/mus2mid.rs` Doom MUS music lump ("D_*") to MIDI bytes.
   defs.rs         Definitions core module root: the game definitions registry
-                  entry point, the Boom generalized/sector bit decoders and
+                  entry point, the Boom generalized/sector bit decoders, the
+                  session-aware overlay entry (`session_definitions`) and
                   the embedded-table re-exports.
   defs/           Definition building blocks (no MCP concerns):
                   `defs/table.rs` the TSV parser producing `ThingDef`,
@@ -78,7 +79,14 @@ src/
                   `defs/registry.rs` the `include_str!`-embedded tables
                   parsed once behind `LazyLock` and the per-game selection
                   (`definitions_for`), `defs/boom.rs` the generalized
-                  linedef and Boom sector-special bit unpackers.
+                  linedef and Boom sector-special bit unpackers,
+                  `defs/custom.rs` the `CustomSources` text bundle and the
+                  built-in < DEHACKED < DECORATE/ZScript (+ MAPINFO)
+                  overlay, `defs/dehacked.rs` the `Thing <n>` block subset
+                  over the embedded `deh_mobj.tsv` map, `defs/decorate.rs`
+                  the tokenising DECORATE `actor` reader, `defs/zscript.rs`
+                  the `class` reader on the same scanner and
+                  `defs/mapinfo.rs` the `DoomEdNums` block reader.
   render.rs       Rendering core module root: the integer gamma curve
                   (`gamma_table`) and the settings re-exports.
   render/         Rendering building blocks (no MCP concerns):
@@ -133,6 +141,9 @@ data/
                   linedef special and sector type tables;
                   `heretic_things.tsv`, `heretic_specials.tsv` and
                   `heretic_sectors.tsv` are Heretic's own three.
+                  `deh_mobj.tsv` maps the 1-based Doom II DeHackEd mobj
+                  indices to their doomednums (`-1`: unplaceable), read by
+                  `src/defs/dehacked.rs`.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

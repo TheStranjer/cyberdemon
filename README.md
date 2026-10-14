@@ -41,7 +41,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, and a labelled undo/redo history with dirty-state tracking) and a
 > definitions registry (`src/defs*`: TSV game tables embedded in the binary,
-> parsed once, selected per game) and render defaults (`src/render*`: the
+> parsed once, selected per game, and overlaid with the session's custom
+> DEHACKED/DECORATE/ZScript/MAPINFO thing definitions) and render defaults (`src/render*`: the
 > validated session-level resolution, lighting, field of view, gamma and
 > style every render tool starts from, plus the integer gamma curve) and a
 > pure planar geometry engine (`src/geom*`: layered polygons and external

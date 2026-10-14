@@ -1,13 +1,21 @@
 //! The `defs` tool group as seen by a real MCP client: the embedded game
-//! definition tables, the session-detected default game, the filters, and
-//! the Boom generalized and sector decodings.
+//! definition tables, the session-detected default game, the filters, the
+//! Boom generalized and sector decodings, and the session custom definitions
+//! (DEHACKED, DECORATE, `ZScript` and MAPINFO).
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use rmcp::RoleClient;
+    use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, iwad_heretic, iwad_hexen};
+    use crate::fixtures::{iwad, iwad_heretic, iwad_hexen, pwad_custom_defs};
     use crate::support::{call, call_err, connect};
+
+    /// A connected MCP client.
+    type Client = RunningService<RoleClient, ()>;
 
     /// A generalized floor value: `0x6000 | WR | fast | up | lowest
     /// neighbour ceiling` (bits `1 | (2 << 3) | (1 << 6) | (3 << 7)`),
@@ -173,6 +181,7 @@ mod tests {
                 "radius": 20_i64,
                 "category": "Monsters",
                 "hanging": false,
+                "source": "builtin",
             }),
             "the heretic row reads as ticketed"
         );
@@ -258,6 +267,7 @@ mod tests {
                 "radius": 25_i64,
                 "category": "Monsters",
                 "hanging": false,
+                "source": "builtin",
             }),
             "the hexen monster row reads as ticketed"
         );
@@ -318,6 +328,7 @@ mod tests {
                 "radius": 20_i64,
                 "category": "Monsters",
                 "hanging": false,
+                "source": "builtin",
             }]),
             "the full entry"
         );
@@ -360,6 +371,176 @@ mod tests {
         )
         .await;
         assert_eq!(report["count"].as_u64(), Some(0), "the Imp is no weapon");
+    }
+
+    /// A session with the DOOM II fixture as base and the custom-definitions
+    /// PWAD stacked as a resource layer; returns the client.
+    async fn custom_defs_client(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad(dir);
+        let extra = pwad_custom_defs(dir);
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        call(
+            &client,
+            "merge_wad",
+            json!({ "path": extra.display().to_string() }),
+        )
+        .await;
+        client
+    }
+
+    /// The single row of a `type` lookup.
+    fn single_row(report: &Value) -> Value {
+        assert_eq!(report["count"].as_u64(), Some(1), "exactly one row");
+        report["things"].get(0).expect("one row").clone()
+    }
+
+    /// Whether `warnings` holds a text containing `needle`.
+    fn warns(warnings: &Value, needle: &str) -> bool {
+        warnings
+            .as_array()
+            .expect("warnings is an array")
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|text| text.contains(needle))
+    }
+
+    #[tokio::test]
+    async fn dehacked_moves_the_imp_and_decorate_actors_join_the_table() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = custom_defs_client(dir.path()).await;
+        let moved = call(&client, "get_thing_types", json!({ "type": 20_000_i64 })).await;
+        assert_eq!(
+            single_row(&moved),
+            json!({
+                "type": 20_000_i64,
+                "name": "Evil Imp",
+                "sprite": "TROO",
+                "frame": "A",
+                "radius": 10_i64,
+                "category": "Monsters",
+                "hanging": false,
+                "source": "dehacked",
+            }),
+            "the Imp moves with its header name and fixed Width"
+        );
+        let freed = call(&client, "get_thing_types", json!({ "type": 3_001_i64 })).await;
+        assert_eq!(freed["count"].as_u64(), Some(0), "3001 no longer spawns it");
+        let lamp = call(&client, "get_thing_types", json!({ "type": 20_010_i64 })).await;
+        let row = single_row(&lamp);
+        assert_eq!(row["name"], json!("PlasmaLamp"), "the decorate actor");
+        assert_eq!(row["sprite"], json!("PLSM"), "its spawn sprite");
+        assert_eq!(row["radius"], json!(24_i64), "its radius");
+        assert_eq!(row["category"], json!("Custom (DECORATE)"), "the category");
+        assert_eq!(row["source"], json!("decorate"), "the source");
+    }
+
+    #[tokio::test]
+    async fn decorate_inheritance_and_mapinfo_mapping_are_reported() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = custom_defs_client(dir.path()).await;
+        let derived = call(&client, "get_thing_types", json!({ "type": 20_011_i64 })).await;
+        let row = single_row(&derived);
+        assert_eq!(row["sprite"], json!("LAMP"), "inherited from LampBase");
+        assert_eq!(row["frame"], json!("B"), "and its frame letter");
+        assert_eq!(
+            row["radius"],
+            json!(16_i64),
+            "inherited radius, integer part"
+        );
+        assert_eq!(row["source"], json!("decorate"), "still a decorate thing");
+        let mapped = call(&client, "get_thing_types", json!({ "type": 20_012_i64 })).await;
+        let base = single_row(&mapped);
+        assert_eq!(
+            base["name"],
+            json!("LampBase"),
+            "DoomEdNums mapped the class"
+        );
+        assert_eq!(
+            base["category"],
+            json!("Custom (MAPINFO)"),
+            "placed by MAPINFO"
+        );
+        assert_eq!(base["source"], json!("decorate"), "defined by DECORATE");
+        let missing = call(&client, "get_thing_types", json!({ "type": 20_013_i64 })).await;
+        let stub = single_row(&missing);
+        assert_eq!(stub["name"], json!("NotAClass"), "name-only row");
+        assert_eq!(stub["sprite"], json!(""), "nothing else known");
+        assert!(
+            warns(&missing["warnings"], "unknown class"),
+            "the unknown class warns: {}",
+            missing["warnings"]
+        );
+    }
+
+    #[tokio::test]
+    async fn zscript_classes_come_in_through_includes_and_zmapinfo() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = custom_defs_client(dir.path()).await;
+        let torch = call(&client, "get_thing_types", json!({ "type": 12_345_i64 })).await;
+        assert_eq!(
+            single_row(&torch),
+            json!({
+                "type": 12_345_i64,
+                "name": "Torch",
+                "sprite": "TORC",
+                "frame": "D",
+                "radius": 10_i64,
+                "category": "Custom (MAPINFO)",
+                "hanging": false,
+                "source": "zscript",
+            }),
+            "the class was included and mapped"
+        );
+    }
+
+    #[tokio::test]
+    async fn include_custom_false_hides_every_custom_row() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = custom_defs_client(dir.path()).await;
+        let report = call(
+            &client,
+            "get_thing_types",
+            json!({ "include_custom": false }),
+        )
+        .await;
+        assert_eq!(report["count"].as_u64(), Some(123), "the plain DOOM II set");
+        assert_eq!(report["warnings"], json!([]), "no parser warnings either");
+        let kinds = types(&report);
+        assert!(kinds.contains(&3001), "the Imp keeps its built-in number");
+        assert!(!kinds.contains(&20_000), "no dehacked row");
+        assert!(!kinds.contains(&20_010), "no decorate row");
+        assert!(!kinds.contains(&12_345), "no zscript row");
+    }
+
+    #[tokio::test]
+    async fn custom_things_shift_the_filtered_counts() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = custom_defs_client(dir.path()).await;
+        let report = call(&client, "get_thing_types", json!({})).await;
+        assert_eq!(report["count"].as_u64(), Some(128), "123 - 1 + 6 rows");
+        let lamps = call(&client, "get_thing_types", json!({ "search": "lamp" })).await;
+        assert_eq!(
+            types(&lamps),
+            vec![85_u64, 86, 2028, 20_010, 20_011, 20_012],
+            "the candelabra share the substring; the custom lamps join them"
+        );
+        let custom = call(
+            &client,
+            "get_thing_types",
+            json!({ "category": "Custom (" }),
+        )
+        .await;
+        assert_eq!(
+            custom["count"].as_u64(),
+            Some(5),
+            "two lamps (DECORATE), the mapped base, NotAClass and the Torch (MAPINFO)"
+        );
     }
 
     /// The special numbers of a report's `specials` array.

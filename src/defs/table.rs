@@ -43,6 +43,9 @@ const TARGET_HINTS: &str =
 /// The text used for "no value" in the `target` and `args` columns.
 const COLUMN_NONE: &str = "-";
 
+/// The [`ThingDef::source`] label of rows that come from the embedded tables.
+const SOURCE_BUILTIN: &str = "builtin";
+
 /// The prefix of one `argN=Name` entry in the args column.
 const ARG_PREFIX: &str = "arg";
 
@@ -74,6 +77,10 @@ pub struct ThingDef {
     pub hanging: bool,
     /// The first game that has this thing (`"doom"`, `"doom2"`, ...).
     pub game: String,
+    /// Where this row came from: `"builtin"` for the embedded tables,
+    /// `"dehacked"`, `"decorate"` or `"zscript"` for session definitions
+    /// overlaid by [`crate::defs::custom`].
+    pub source: String,
 }
 
 /// One linedef special from a special table.
@@ -224,6 +231,7 @@ fn parse_thing_row(line: &str, number: usize) -> Result<ThingDef, String> {
         category: category.to_owned(),
         hanging: parse_flags(flags, number)?,
         game: game.to_owned(),
+        source: SOURCE_BUILTIN.to_owned(),
     })
 }
 
@@ -424,6 +432,7 @@ mod tests {
         assert_eq!(imp.category, "Monsters", "category");
         assert!(!imp.hanging, "the - flag means not hanging");
         assert_eq!(imp.game, "doom", "game column");
+        assert_eq!(imp.source, "builtin", "table rows are builtin");
         let hanging = rows.get(1).expect("the mini table has a second row");
         assert!(hanging.hanging, "the hanging flag parses to true");
         assert_eq!(hanging.kind, 63, "second row type number");

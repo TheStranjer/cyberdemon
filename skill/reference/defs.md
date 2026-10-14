@@ -2,8 +2,9 @@
 
 Reference tables that describe what the game formats mean: thing types,
 linedef specials and sector types, plus Boom's bit-packed generalized
-decodings. The tables are embedded in the server binary, so these tools
-need no archives loaded.
+decodings. The tables are embedded in the server binary, so nothing here
+needs archives loaded — except `get_thing_types`, which by default also
+reads the custom definitions of the session's merged view (below).
 
 ## What ships
 
@@ -30,7 +31,7 @@ reports `internal`.
 
 - Purpose: list the thing types an editor can offer for a game — type
   numbers, display names, sprite and default frame, blocking radius,
-  category path and the hanging flag.
+  category path, the hanging flag and where the row came from (`source`).
 - Arguments (all optional):
   - `game` — see above.
   - `category` — keep rows whose category starts with this text,
@@ -40,6 +41,9 @@ reports `internal`.
     case-insensitively.
   - `type` — keep exactly this type number. An unknown number returns an
     empty list, not an error.
+  - `include_custom` — default `true`: overlay the custom definitions of
+    the loaded archives (see "Custom definitions" below). `false` answers
+    from the built-in tables alone.
 - Returns:
 
   ```json
@@ -49,18 +53,61 @@ reports `internal`.
     "things": [
       {"type": 5, "name": "Blue Keycard", "sprite": "BKEY",
        "frame": "A", "radius": 12, "category": "Keys",
-       "hanging": false}
+       "hanging": false, "source": "builtin"}
     ],
     "warnings": []
   }
   ```
 
   `count` is the number of things after filtering and `things` is sorted
-  by `type` ascending. `warnings` explains a fallback game; it is empty
-  for DOOM, DOOM II, Heretic and Hexen.
+  by `type` ascending. `source` is `"builtin"`, `"dehacked"`,
+  `"decorate"` or `"zscript"`. `warnings` explains a fallback game and
+  quotes every custom-definition line the parsers refused to read; it is
+  empty for a DOOM, DOOM II, Heretic or Hexen session without custom
+  lumps.
 - Typical use: looking up spawn numbers when writing `THINGS`, and
   translating a type number found in a map (`{ "type": 3001 }` gives the
   Imp; pair it with the map's game when the row matters).
+
+## Custom definitions
+
+With `include_custom` left on, `get_thing_types` reads these lumps from
+the merged view (resource layers included) and overlays them on the
+built-in table, in this precedence: **built-in < DEHACKED < DECORATE /
+ZScript (+ MAPINFO)**. Load the archives first (`open_iwad`,
+`merge_wad`) for them to count; nothing is read from disk.
+
+- Every `DEHACKED` lump: `Thing <n>` blocks (1-based Doom II mobj index)
+  use `ID #` (new doomednum, `-1` removes the thing from the editor) and
+  `Width` (radius in 16.16 fixed units). The moved row keeps the
+  built-in name, sprite, frame and category unless the header names one,
+  and reports `source: "dehacked"`, category `Custom (DeHackEd)` when
+  there was no built-in row to copy.
+- Every `DECORATE` lump: `actor Name [: Parent] [replaces Other]
+  [doomednum] { ... }` — actors with a doomednum become things (category
+  `Custom (DECORATE)`, `source: "decorate"`); the sprite and frame come
+  from the first state line after `Spawn:` in the `States` block, the
+  radius from `Radius <n>`; missing values inherit from a parent that was
+  parsed earlier, else sprite stays empty and radius is 20.
+- Every `ZSCRIPT` lump: `class Name : Parent { Default { Radius <n>; }
+  States { Spawn: SPRT A ...; } }` — classes carry no doomednum of their
+  own and become things only through MAPINFO.
+- `#include "NAME"` lines inside DECORATE/ZSCRIPT pull the named lump
+  (merged view, last match) into the same stream; the chain is followed
+  at most 8 levels deep and each lump is read once.
+- Every `MAPINFO`/`ZMAPINFO` lump: `DoomEdNums { <number> = <ClassName>
+  ... }` maps numbers to the parsed DECORATE/ZScript classes (category
+  `Custom (MAPINFO)`, `source` naming the class's language). An entry
+  whose class was never parsed yields a name-only row and a warning.
+
+The parsers are deliberately subsets and always tolerant: unparseable
+text becomes a warning in `warnings`, never an error. Limits: DEHACKED
+reads only `ID #` and `Width` of `Thing` blocks (no `Bits`, `Health`,
+frames, weapons, players or text replacements); DECORATE/ZScript read
+only the class header, `Radius` and the first `Spawn:` state (states
+beyond that first frame, flags, inventory, sounds and every other
+property are ignored); MAPINFO reading is limited to `DoomEdNums`
+blocks.
 
 ## `get_linedef_specials`
 

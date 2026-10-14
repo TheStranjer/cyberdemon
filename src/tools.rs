@@ -10,6 +10,7 @@ pub(crate) mod audio;
 pub(crate) mod defs;
 pub(crate) mod lumps;
 pub(crate) mod meta;
+pub(crate) mod music;
 pub(crate) mod render;
 pub(crate) mod session;
 

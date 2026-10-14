@@ -15,7 +15,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`), an `audio` group
-> (`import_sound`),
+> (`import_sound`), a `music` group (`import_music`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
 > `get_session_info`, `get_wad_info`) and a `render` group
@@ -30,8 +30,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, `symphonia`-backed
 > `WAV`/`OGG`/`MP3`/`FLAC` import decoding, integer mono downmix
 > and resampling), an internal music core (`src/music*`: Doom `MUS` to
-> type-0 `MIDI` conversion and back, an `SMF` writer and a track-merging
-> `SMF` parser), a float-free
+> type-0 `MIDI` conversion and back, an `SMF` writer, a track-merging
+> `SMF` parser and magic-based container sniffing), a float-free
 > math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
 > bounds-checked little-endian reader/writer, an in-memory `Wad` archive

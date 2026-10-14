@@ -71,7 +71,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_defs_lumps_render_and_session_tools() {
+    async fn lists_the_meta_assets_audio_defs_lumps_music_render_and_session_tools() {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -91,6 +91,7 @@ mod tests {
                 "get_wad_info",
                 "import_asset",
                 "import_file_as_lump",
+                "import_music",
                 "import_sound",
                 "list_lumps",
                 "merge_wad",

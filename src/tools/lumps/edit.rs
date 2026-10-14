@@ -1,12 +1,15 @@
 //! The lump-editing tools' arguments and working-archive mutations:
 //! `replace_lump`, `remove_lump` and `rename_lump`.
 //!
-//! Every [`crate::tools::lumps`] router method hands its arguments to this
-//! module. The shared shape is: parse and validate everything, fetch any
-//! `source` *before* the session lock is taken, then run exactly one
+//! Every [`crate::tools::lumps`] router method but
+//! [`crate::tools::lumps::reorder`]'s hands its arguments to this module. The
+//! shared shape is: parse and validate everything, fetch any `source` *before*
+//! the session lock is taken, then run exactly one
 //! [`crate::session::Session::edit`] whose closure either finishes the whole
 //! change or reports an error that rolls it back. The undo label is the tool's
-//! name followed by the lump names it touched.
+//! name followed by the lump names it touched. The working-archive selector
+//! ([`EditSelector`], [`edit_selector`] and [`working_match`]) is shared with
+//! `reorder_lumps`.
 //!
 //! `replace_lump` is the copy-on-write tool. A lump the working archive holds
 //! is overwritten in place; one that only the `IWAD` or a resource layer holds
@@ -107,14 +110,14 @@ pub(super) struct RenameLumpParams {
 }
 
 /// The name, region and occurrence the lump-editing tools select on.
-#[derive(Debug)]
-struct EditSelector {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct EditSelector {
     /// The lump name to edit.
-    name: LumpName,
+    pub(super) name: LumpName,
     /// Only matches inside this region count; `None` is any region.
-    namespace: Option<Namespace>,
+    pub(super) namespace: Option<Namespace>,
     /// 0-based index among the working archive's matches; `None` is the last.
-    occurrence: Option<usize>,
+    pub(super) occurrence: Option<usize>,
 }
 
 impl EditSelector {
@@ -130,7 +133,7 @@ impl EditSelector {
 ///
 /// [`CyberError::InvalidArgument`] for a name that does not parse or a
 /// `namespace` that names no region.
-fn edit_selector(
+pub(super) fn edit_selector(
     name: &str,
     namespace: Option<&str>,
     occurrence: Option<usize>,
@@ -149,7 +152,7 @@ fn in_region(found: Option<Namespace>, wanted: Option<Namespace>) -> bool {
 }
 
 /// The region a message names a lump's location by, for error text.
-fn region_text(namespace: Option<Namespace>) -> String {
+pub(super) fn region_text(namespace: Option<Namespace>) -> String {
     namespace.map_or_else(
         || "the working archive".to_owned(),
         |wanted| format!("the {} region of the working archive", wanted.as_str()),
@@ -163,7 +166,10 @@ fn region_text(namespace: Option<Namespace>) -> String {
 ///
 /// [`build_rows`]' errors for the scope, and [`CyberError::NotFound`] when
 /// `occurrence` reaches past the matches.
-fn working_match(session: &Session, selector: &EditSelector) -> Result<Option<usize>, CyberError> {
+pub(super) fn working_match(
+    session: &Session,
+    selector: &EditSelector,
+) -> Result<Option<usize>, CyberError> {
     let matched: Vec<usize> = build_rows(session, Scope::Working)?
         .into_iter()
         .filter(|row| selector.accepts(row))

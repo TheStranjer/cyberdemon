@@ -2,9 +2,9 @@
 
 Directory browsing, single-lump reads, and the lump editing tools over the
 session's archives: `add_lump`, the import tools, `replace_lump`,
-`remove_lump` and `rename_lump`. Edits go to the working archive only and
-are undoable; content a read-only layer owns is edited by copy-on-write (see
-below).
+`remove_lump`, `rename_lump` and `reorder_lumps`. Edits go to the working
+archive only and are undoable; content a read-only layer owns is edited by
+copy-on-write (see below).
 
 ## The row shape
 
@@ -118,8 +118,9 @@ which the editing tools reuse in a reduced form:
   characters, case-insensitive (uppercased). Anything else is
   `invalid_argument`.
 - `scope` (string, default `"merged"`) — as `list_lumps`. The editing tools
-  (`replace_lump`, `remove_lump`, `rename_lump`) take no `scope`: they
-  choose the archive themselves, as Copy-on-write below describes.
+  (`replace_lump`, `remove_lump`, `rename_lump`, `reorder_lumps`) take no
+  `scope`: they choose the archive themselves, as Copy-on-write below
+  describes.
 - `namespace` (string, optional) — keep only matches inside that region
   (`flats`, `sprites`, ...). Without it, matches in any region and loose
   lumps all count.
@@ -130,6 +131,8 @@ which the editing tools reuse in a reduced form:
 
 No match is `not_found` (`"lump FOO not found in merged"`); an occurrence
 past the last match is `not_found` naming how many copies exist.
+`reorder_lumps` names its source `from_namespace` instead of `namespace`,
+because there `namespace` is the destination region.
 
 ## Copy-on-write
 
@@ -149,12 +152,12 @@ them, never over them. The editing tools therefore behave like this:
     created when it has none.
   - anything else (a loose global like `PLAYPAL` or `DEHACKED`): appended.
   `replace_lump` reports `"created_override": true` in these cases.
-- `remove_lump` and `rename_lump` have no override to create: a name the
-  working archive does not hold is `not_found`. An override can only shadow
-  what a layer holds, never take it out of the engine's view: the lump stays
-  in the `IWAD` and an empty `replace_lump` (`hex: ""`) just empties the
-  copy. Removing a map member that way breaks the map, so prefer replacing
-  its contents.
+- `remove_lump`, `rename_lump` and `reorder_lumps` have no override to
+  create: a name the working archive does not hold is `not_found`. An
+  override can only shadow what a layer holds, never take it out of the
+  engine's view: the lump stays in the `IWAD` and an empty `replace_lump`
+  (`hex: ""`) just empties the copy. Removing a map member that way breaks
+  the map, so prefer replacing its contents.
 
 Verify any of it with `list_lumps scope=working` (what changed) and
 `list_lumps scope=merged` (what an engine would see).
@@ -224,6 +227,11 @@ optional placement fields, and **at most one of them** (two is
   `P_START`/`P_END`, `C_START`/`C_END`, `A_START`/`A_END`,
   `V_START`/`V_END`, `HI_START`/`HI_END`, `TX_START`/`TX_END`).
 - none — append at the end.
+
+`reorder_lumps` takes these same fields for its destination, with two
+differences: it **requires** one of them (there is no append), and it
+resolves them **after** the moved run has been taken out of the directory —
+see `reorder_lumps` below.
 
 Verify placement results with `list_lumps scope=working`.
 
@@ -326,13 +334,61 @@ Verify placement results with `list_lumps scope=working`.
   renamed; override it with `replace_lump`, or `add_lump` the new name and
   `remove_lump` the copy).
 
+## `reorder_lumps`
+
+- Purpose: move a contiguous run of lumps within the **working archive**, in
+  one undoable step. Order is load-bearing in a WAD — namespaces, map blocks
+  and markers all depend on position — so this is how you re-place a lump,
+  slide a whole map block, or push a region's members back together.
+- What to move, **exactly one of**:
+  - `name` (string) — the first lump of the run, resolved in the working
+    archive only, with the usual `occurrence` refinement (default the last
+    match) and `from_namespace` (string) to keep only matches inside that
+    region. `from_namespace` is the source-side name of the selector's
+    `namespace`, because `namespace` here is the *destination* region.
+  - `from_index` (number) — the working archive's directory position the run
+    starts at.
+  - plus `count` (number, default 1): how many contiguous lumps travel
+    together. A whole map block is `name: "MAP01", count: 11` (header, its
+    members and any `GL` run); read the block's size off
+    `list_lumps map=MAP01` first.
+- Where to put it, **exactly one** of the placement fields, resolved
+  **after the run has been taken out of the directory**:
+  - `index` (number) — a position in the directory *without* the moved
+    lumps, so `0..=(length - count)`. Moving the lump at index 2 to `index:
+    4` of a five-lump archive sends it to the end, not one short of it.
+  - `before` / `after` (string) — beside the last lump with that name
+    **among the remaining lumps**. Naming a lump that is inside the run is
+    `invalid_argument`: a run cannot be placed beside itself.
+  - `namespace` (string) — just before that region's end marker as the
+    directory stands without the run; when the working archive has no such
+    region its canonical markers are created around the run.
+  - There is **no append default**: no destination field is
+    `invalid_argument`.
+- Returns: `{"moved": [names in directory order], "from_index": n,
+  "to_index": m}` — `to_index` is where the run's first lump now stands, and
+  `to_index + moved.len() - 1` where the last one does. The undo label is
+  `reorder_lumps NAME`, `NAME` the run's first lump: one step takes the whole
+  run back.
+- Errors: `invalid_argument` (both or neither of `name` and `from_index`,
+  `occurrence`/`from_namespace` beside `from_index`, `count` 0, a run
+  reaching past the end of the working archive, two destination fields, no
+  destination, `index` past the shortened directory, an anchor inside the
+  run, an unparsable name or region), `not_found` (`name` or the region
+  filter matches nothing in the working archive, `occurrence` past the
+  matches, a `before`/`after` anchor the remaining directory lacks). A
+  refusal changes nothing and leaves no history entry.
+- A lump the `IWAD` or a resource layer owns cannot be moved: the working
+  archive holds nothing to move, so the call is `not_found` — `add_lump` a
+  copy (or `replace_lump` to override) and move that.
+
 ## Notes
 
 - The editing tools touch **only the working archive**; read-only layers
   never change, and every edit is undoable (`get_session_info` lists the
   undo labels). Nothing is on disk until `save_wad`. Changing a lump a layer
   holds means an override in the working archive — see Copy-on-write; you
-  cannot delete or rename a layer's lump.
+  cannot delete, rename or move a layer's lump.
 - Namespace regions come from marker pairs (`S_START`/`S_END` and friends),
   so region **markers themselves** carry the region's `namespace` and the
   kind `marker`; filters on `namespace` therefore include them.

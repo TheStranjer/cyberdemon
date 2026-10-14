@@ -70,6 +70,15 @@ mod tests {
         assert!(holds, "{field:?} stays required: {schema}");
     }
 
+    /// Requires a schema to list no required field at all: the tool decides
+    /// which combination of its optional arguments is valid.
+    fn assert_nothing_required(schema: &Value) {
+        assert!(
+            schema.get("required").is_none(),
+            "every argument is optional and validated together: {schema}"
+        );
+    }
+
     #[tokio::test]
     async fn lists_the_meta_assets_audio_defs_lumps_music_render_session_and_textures_tools() {
         let client = connect().await;
@@ -104,6 +113,7 @@ mod tests {
                 "preview_sound",
                 "remove_lump",
                 "rename_lump",
+                "reorder_lumps",
                 "replace_lump",
                 "save_wad",
                 "search_lumps",
@@ -208,6 +218,28 @@ mod tests {
         );
         assert_required(&rename, "name");
         assert_required(&rename, "new_name");
+    }
+
+    #[tokio::test]
+    async fn reorder_lumps_flattens_its_run_and_placement_fields() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let reorder = schema_of(tool_named(&tools, "reorder_lumps"));
+        assert_flattens(
+            &reorder,
+            &[
+                "name",
+                "from_namespace",
+                "occurrence",
+                "from_index",
+                "count",
+                "index",
+                "before",
+                "after",
+                "namespace",
+            ],
+        );
+        assert_nothing_required(&reorder);
     }
 
     #[tokio::test]

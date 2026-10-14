@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
+use crate::session::history::HISTORY_LIMIT;
 use crate::session::merge::{MergeCounts, merge_counts, merge_into};
 use crate::session::{Layer, LayerRole, MergedLump, Session, Source};
 use crate::state::AppState;
@@ -50,6 +51,24 @@ struct NewWadParams {
     /// Replace the working archive even when it holds unsaved changes.
     #[serde(default)]
     discard_changes: bool,
+}
+
+/// Arguments for [`Cyberdemon::undo`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UndoParams {
+    /// Number of edits to step back over, `1..=100`; default `1`. When
+    /// fewer edits are on the undo stack, undo steps over what exists.
+    #[serde(default)]
+    steps: Option<usize>,
+}
+
+/// Arguments for [`Cyberdemon::redo`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RedoParams {
+    /// Number of undone edits to replay, `1..=100`; default `1`. When
+    /// fewer edits are on the redo stack, redo replays what exists.
+    #[serde(default)]
+    steps: Option<usize>,
 }
 
 /// Arguments for [`Cyberdemon::merge_wad`].
@@ -286,6 +305,38 @@ struct SaveReport {
     /// Whether the working archive still holds unsaved changes (`false`
     /// after a `pwad` save, unchanged after a `full` export).
     dirty: bool,
+}
+
+/// Structured result of [`Cyberdemon::undo`].
+#[derive(Debug, Serialize)]
+struct UndoReport {
+    /// Labels of the edits stepped back over, most recent first.
+    undone: Vec<String>,
+    /// Entries the undo stack still holds.
+    remaining_undo: usize,
+    /// Entries on the redo stack, how far `redo` can replay.
+    redo_available: usize,
+    /// Whether the working archive now differs from its last saved state.
+    dirty: bool,
+    /// Whether the active map was cleared because the merged view no
+    /// longer holds it.
+    active_map_cleared: bool,
+}
+
+/// Structured result of [`Cyberdemon::redo`].
+#[derive(Debug, Serialize)]
+struct RedoReport {
+    /// Labels of the edits replayed, in the order they were re-applied.
+    redone: Vec<String>,
+    /// Entries the redo stack still holds.
+    remaining_redo: usize,
+    /// Entries on the undo stack, how far `undo` can step back.
+    undo_available: usize,
+    /// Whether the working archive now differs from its last saved state.
+    dirty: bool,
+    /// Whether the active map was cleared because the merged view no
+    /// longer holds it.
+    active_map_cleared: bool,
 }
 
 /// One read-only layer, as `get_session_info` lists the stack.
@@ -783,6 +834,106 @@ fn describe_wad(session: &Session) -> WadInfo {
     }
 }
 
+/// The `steps` argument [`Cyberdemon::undo`] and [`Cyberdemon::redo`]
+/// accept: absent means `1`, and only counts up to [`HISTORY_LIMIT`] pass.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the accepted range for `0` or a
+/// count past the history limit.
+fn parse_steps(steps: Option<usize>) -> Result<usize, CyberError> {
+    let Some(count) = steps else {
+        return Ok(1_usize);
+    };
+    if count == 0 || count > HISTORY_LIMIT {
+        return Err(CyberError::InvalidArgument(format!(
+            "steps {count} is outside 1..={HISTORY_LIMIT}: pass the number of edits to step \
+             through, or leave steps out for 1"
+        )));
+    }
+    Ok(count)
+}
+
+/// One step of history: [`Session::undo`] or [`Session::redo`].
+type HistoryStep = fn(&mut Session) -> Result<String, CyberError>;
+
+/// Runs `step` (`Session::undo` or `Session::redo`) up to `count` times and
+/// collects the labels it reports, in the order the steps ran. Reaching the
+/// bottom of the stack is a normal stop; the refusal only becomes an error
+/// when not a single step landed, so the caller reports `not_found` exactly
+/// when there was nothing to undo/redo at all.
+///
+/// # Errors
+///
+/// Whatever `step` reports on its very first call; later refusals end the
+/// walk and the collected labels are returned.
+fn walk_history(
+    session: &mut Session,
+    count: usize,
+    step: HistoryStep,
+) -> Result<Vec<String>, CyberError> {
+    let mut labels: Vec<String> = Vec::new();
+    for _step in 0..count {
+        match step(session) {
+            Ok(label) => labels.push(label),
+            Err(error) if labels.is_empty() => return Err(error),
+            Err(_) => break,
+        }
+    }
+    Ok(labels)
+}
+
+/// Whether the merged view still declares a map block named `map`.
+fn merged_holds_map(session: &Session, map: LumpName) -> bool {
+    let view = session.merged();
+    let lumps: Vec<Lump> = view.iter().map(|entry| entry.lump.clone()).collect();
+    analyze(&lumps).maps.iter().any(|block| block.name == map)
+}
+
+/// Drops the active-map selection when the stepped-back working archive no
+/// longer leaves its map in the merged view. Layers cannot be undone, so a
+/// map a read-only layer provides always survives the check.
+///
+/// Reports whether the selection was cleared.
+fn clear_missing_active_map(session: &mut Session) -> bool {
+    let Some(map) = session.active_map() else {
+        return false;
+    };
+    if merged_holds_map(session, map) {
+        return false;
+    }
+    session.set_active_map(None);
+    true
+}
+
+/// `undo`'s work: step back over history, then report the stacks, the
+/// dirty state and whether the active map had to go.
+fn undo_run(session: &mut Session, steps: usize) -> Result<UndoReport, CyberError> {
+    let undone = walk_history(session, steps, Session::undo)?;
+    let active_map_cleared = clear_missing_active_map(session);
+    Ok(UndoReport {
+        undone,
+        remaining_undo: session.undo_labels().len(),
+        redo_available: session.redo_labels().len(),
+        dirty: session.is_dirty(),
+        active_map_cleared,
+    })
+}
+
+/// `redo`'s work: replay undone steps, then report the stacks, the dirty
+/// state and whether the active map had to go.
+fn redo_run(session: &mut Session, steps: usize) -> Result<RedoReport, CyberError> {
+    let redone = walk_history(session, steps, Session::redo)?;
+    let active_map_cleared = clear_missing_active_map(session);
+    Ok(RedoReport {
+        redone,
+        remaining_redo: session.redo_labels().len(),
+        undo_available: session.undo_labels().len(),
+        dirty: session.is_dirty(),
+        active_map_cleared,
+    })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -877,5 +1028,230 @@ impl Cyberdemon {
             .state()
             .with_session(|session| Ok(describe_wad(session)));
         reported(report)
+    }
+
+    /// Steps back over recent edits of the working archive.
+    #[tool(
+        description = "Undoes the most recent edits to the working archive: steps back over up to steps entries of the undo stack (default 1, 1..=100; the history keeps only the newest 100 edits and open_wad/new_wad clear it). Fewer edits than steps simply undoes what exists; an empty undo stack fails with not_found \"nothing to undo\". Only the working archive changes: layers, the active map and the render settings are not part of the history, and an active map whose block is gone from the merged view is cleared (active_map_cleared true). Returns {undone: [labels, most recent first], remaining_undo, redo_available, dirty, active_map_cleared}."
+    )]
+    fn undo(&self, Parameters(args): Parameters<UndoParams>) -> Result<CallToolResult, ErrorData> {
+        let outcome = parse_steps(args.steps).and_then(|steps| {
+            self.state()
+                .with_session(|session| undo_run(session, steps))
+        });
+        reported(outcome)
+    }
+
+    /// Replays recently undone edits onto the working archive.
+    #[tool(
+        description = "Re-applies edits that undo stepped back over: replays up to steps entries of the redo stack (default 1, 1..=100). Fewer entries than steps simply replays what exists; an empty redo stack fails with not_found \"nothing to redo\", and steps 0 or past 100 is invalid_argument. A new edit after an undo drops the redo branch. Mirrors undo in every other way: only the working archive changes and a vanished active map is cleared. Returns {redone: [labels, in the order replayed], remaining_redo, undo_available, dirty, active_map_cleared}."
+    )]
+    fn redo(&self, Parameters(args): Parameters<RedoParams>) -> Result<CallToolResult, ErrorData> {
+        let outcome = parse_steps(args.steps).and_then(|steps| {
+            self.state()
+                .with_session(|session| redo_run(session, steps))
+        });
+        reported(outcome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{clear_missing_active_map, merged_holds_map, parse_steps, redo_run, undo_run};
+    use crate::session::history::HISTORY_LIMIT;
+    use crate::session::{Layer, LayerRole, Session};
+    use crate::wad::archive::{Lump, Wad, WadKind};
+    use crate::wad::name::LumpName;
+
+    /// A parsed test name.
+    fn name(text: &str) -> LumpName {
+        LumpName::parse(text).expect("test names are valid")
+    }
+
+    /// An empty marker lump named `text`.
+    fn marker(text: &str) -> Lump {
+        Lump::marker(name(text))
+    }
+
+    /// A `PWAD` holding `lumps`.
+    fn pwad(lumps: Vec<Lump>) -> Wad {
+        Wad {
+            kind: WadKind::Pwad,
+            lumps,
+        }
+    }
+
+    /// Appends an empty marker named `text` as one `add_lump TEXT` edit.
+    fn add_marker(session: &mut Session, text: &str) {
+        let lump = marker(text);
+        session
+            .edit(&format!("add_lump {text}"), move |wad| {
+                wad.lumps.push(lump);
+                Ok(())
+            })
+            .expect("appends never fail");
+    }
+
+    /// Appends marker lumps named `texts`, each as its own edit.
+    fn add_markers(session: &mut Session, texts: &[&str]) {
+        for text in texts {
+            add_marker(session, text);
+        }
+    }
+
+    /// Appends a minimal `MAP01` block (header plus `THINGS`) as one edit.
+    fn build_map01(session: &mut Session) {
+        session
+            .edit("build MAP01", |wad| {
+                wad.lumps.push(marker("MAP01"));
+                wad.lumps.push(marker("THINGS"));
+                Ok(())
+            })
+            .expect("appends never fail");
+    }
+
+    #[test]
+    fn parse_steps_defaults_to_one_and_bounds_at_the_history_limit() {
+        assert_eq!(parse_steps(None).expect("absent"), 1, "absent means one");
+        assert_eq!(
+            parse_steps(Some(1)).expect("lowest"),
+            1,
+            "the lowest accepted count"
+        );
+        assert_eq!(
+            parse_steps(Some(HISTORY_LIMIT)).expect("highest"),
+            HISTORY_LIMIT,
+            "the highest accepted count"
+        );
+    }
+
+    #[test]
+    fn parse_steps_refuses_zero_and_counts_past_the_limit() {
+        let zero = parse_steps(Some(0)).expect_err("0 is refused");
+        assert_eq!(zero.code(), "invalid_argument", "steps 0 code");
+        let past = HISTORY_LIMIT
+            .checked_add(1)
+            .expect("a count past the limit");
+        let error = parse_steps(Some(past)).expect_err("past the limit is refused");
+        assert_eq!(error.code(), "invalid_argument", "steps > 100 code");
+        assert!(
+            error.to_string().contains("1..=100"),
+            "the message names the accepted range: {error}"
+        );
+    }
+
+    #[test]
+    fn undo_run_steps_back_over_the_stack_and_reports_it() {
+        let mut session = Session::default();
+        add_markers(&mut session, &["A", "B", "C"]);
+        session.mark_saved(PathBuf::from("out.wad"));
+        let report = undo_run(&mut session, 5).expect("three steps are available");
+        assert_eq!(
+            report.undone,
+            vec!["add_lump C", "add_lump B", "add_lump A"],
+            "newest first, and only three of the asked five ran"
+        );
+        assert_eq!(report.remaining_undo, 0, "the stack is empty now");
+        assert_eq!(report.redo_available, 3, "all three can be replayed");
+        assert!(report.dirty, "back to a revision before the saved one");
+        assert!(!report.active_map_cleared, "no map was ever selected");
+    }
+
+    #[test]
+    fn undo_run_on_an_empty_stack_reports_not_found() {
+        let mut session = Session::default();
+        let error = undo_run(&mut session, 1).expect_err("nothing was edited");
+        assert_eq!(error.code(), "not_found", "empty undo code");
+        assert_eq!(error.to_string(), "nothing to undo", "empty undo message");
+    }
+
+    #[test]
+    fn redo_run_replays_the_undone_steps_in_order() {
+        let mut session = Session::default();
+        add_markers(&mut session, &["A", "B", "C"]);
+        session.mark_saved(PathBuf::from("out.wad"));
+        undo_run(&mut session, 3).expect("undo all three");
+        let report = redo_run(&mut session, 2).expect("two steps are available");
+        assert_eq!(
+            report.redone,
+            vec!["add_lump A", "add_lump B"],
+            "the replay order, oldest undone first"
+        );
+        assert_eq!(report.remaining_redo, 1, "C still waits");
+        assert_eq!(report.undo_available, 2, "A and B can be undone again");
+        assert!(report.dirty, "not yet back at the saved revision");
+        assert_eq!(session.working().len(), 2, "A and B are in the archive");
+    }
+
+    #[test]
+    fn redo_run_on_an_empty_stack_reports_not_found() {
+        let mut session = Session::default();
+        let error = redo_run(&mut session, 1).expect_err("nothing was undone");
+        assert_eq!(error.code(), "not_found", "empty redo code");
+        assert_eq!(error.to_string(), "nothing to redo", "empty redo message");
+    }
+
+    #[test]
+    fn undo_run_clears_an_active_map_the_history_removed() {
+        let mut session = Session::default();
+        build_map01(&mut session);
+        session.set_active_map(Some(name("MAP01")));
+        let report = undo_run(&mut session, 1).expect("the build is one step back");
+        assert!(report.active_map_cleared, "the block left the merged view");
+        assert_eq!(session.active_map(), None, "and the selection was dropped");
+    }
+
+    #[test]
+    fn undo_run_keeps_an_active_map_a_layer_still_provides() {
+        let mut session = Session::default();
+        session.set_iwad(Layer::new(
+            PathBuf::from("doom.wad"),
+            LayerRole::Iwad,
+            pwad(vec![marker("MAP01"), marker("THINGS")]),
+        ));
+        session.set_active_map(Some(name("MAP01")));
+        add_markers(&mut session, &["NOTE"]);
+        let report = undo_run(&mut session, 1).expect("undo the note");
+        assert!(!report.active_map_cleared, "the layer still holds the map");
+        assert_eq!(
+            session.active_map(),
+            Some(name("MAP01")),
+            "the selection stands"
+        );
+    }
+
+    #[test]
+    fn merged_holds_map_reads_the_header_plus_members() {
+        let mut session = Session::default();
+        assert!(
+            !merged_holds_map(&session, name("MAP01")),
+            "nothing is loaded"
+        );
+        build_map01(&mut session);
+        assert!(
+            merged_holds_map(&session, name("MAP01")),
+            "the working block counts"
+        );
+        assert!(
+            !merged_holds_map(&session, name("MAP02")),
+            "only MAP01 is there"
+        );
+    }
+
+    #[test]
+    fn clear_missing_active_map_needs_a_selection_to_drop() {
+        let mut session = Session::default();
+        assert!(
+            !clear_missing_active_map(&mut session),
+            "no selection, nothing to clear"
+        );
+        session.set_active_map(Some(name("MAP07")));
+        assert!(
+            clear_missing_active_map(&mut session),
+            "MAP07 is nowhere in the view"
+        );
+        assert_eq!(session.active_map(), None, "and it is gone");
     }
 }

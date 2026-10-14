@@ -126,6 +126,8 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `new_wad`               | `reference/session.md`  |
 | `merge_wad`             | `reference/session.md`  |
 | `save_wad`              | `reference/session.md`  |
+| `undo`                  | `reference/session.md`  |
+| `redo`                  | `reference/session.md`  |
 | `get_session_info`      | `reference/session.md`  |
 | `get_wad_info`          | `reference/session.md`  |
 | `set_render_resolution` | `reference/render.md`   |

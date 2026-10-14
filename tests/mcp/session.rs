@@ -1,14 +1,20 @@
 //! The `session` tool group as seen by a real MCP client: loading archives,
-//! merging them, and what the two info tools report about the result.
+//! merging them, walking the edit history with `undo` and `redo`, and what
+//! the two info tools report about the result.
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
+    use rmcp::RoleClient;
+    use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
     use crate::fixtures::{iwad, not_a_wad, pwad};
     use crate::support::{call, call_err, connect};
+
+    /// A connected client for one test.
+    type Client = RunningService<RoleClient, ()>;
 
     /// The `{"path": ...}` argument object for `file`.
     fn path_arg(file: &Path) -> Value {
@@ -16,9 +22,32 @@ mod tests {
     }
 
     /// Load the `IWAD` fixture as the session's base layer.
-    async fn load_iwad(client: &rmcp::service::RunningService<rmcp::RoleClient, ()>, dir: &Path) {
+    async fn load_iwad(client: &Client, dir: &Path) {
         let base = iwad(dir);
         call(client, "open_iwad", path_arg(&base)).await;
+    }
+
+    /// The `add_lump` argument object for a name.
+    fn add_arg(name: &str) -> Value {
+        json!({ "name": name })
+    }
+
+    /// Make three edits: append the empty lumps `A`, `B` and `C`.
+    async fn letters(client: &Client) {
+        for name in ["A", "B", "C"] {
+            call(client, "add_lump", add_arg(name)).await;
+        }
+    }
+
+    /// The working archive's lump names, in directory order.
+    async fn working_names(client: &Client) -> Vec<String> {
+        let listing = call(client, "list_lumps", json!({ "scope": "working" })).await;
+        listing["lumps"]
+            .as_array()
+            .expect("lumps is an array")
+            .iter()
+            .map(|row| row["name"].as_str().expect("rows carry a name").to_owned())
+            .collect()
     }
 
     #[tokio::test]
@@ -384,5 +413,209 @@ mod tests {
             "one flat wins, the patches region rides along"
         );
         assert_eq!(info["warnings"], json!([]), "the fixtures are well formed");
+    }
+
+    #[tokio::test]
+    async fn undo_steps_back_one_edit_at_a_time() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        letters(&client).await;
+        let first = call(&client, "undo", json!({ "steps": 1_usize })).await;
+        assert_eq!(
+            first["undone"],
+            json!(["add_lump C"]),
+            "the newest label comes first"
+        );
+        assert_eq!(first["remaining_undo"].as_u64(), Some(2), "A and B left");
+        assert_eq!(first["redo_available"].as_u64(), Some(1), "one to replay");
+        assert_eq!(first["dirty"], json!(true), "the archive changed unsavedly");
+        assert_eq!(
+            first["active_map_cleared"],
+            json!(false),
+            "no map was selected"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["A", "B"],
+            "C is gone from the working archive"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_steps_over_what_exists_and_then_reports_not_found() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        letters(&client).await;
+        call(&client, "undo", json!({ "steps": 1_usize })).await;
+        let rest = call(&client, "undo", json!({ "steps": 5_usize })).await;
+        assert_eq!(
+            rest["undone"],
+            json!(["add_lump B", "add_lump A"]),
+            "only two were available and both were undone"
+        );
+        assert_eq!(
+            rest["remaining_undo"].as_u64(),
+            Some(0),
+            "the stack is empty"
+        );
+        assert_eq!(
+            rest["redo_available"].as_u64(),
+            Some(3),
+            "all three replayable"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            Vec::<String>::new(),
+            "back to empty"
+        );
+        let (code, message) = call_err(&client, "undo", json!({})).await;
+        assert_eq!(code, "not_found", "nothing left to undo");
+        assert_eq!(message, "nothing to undo", "the documented message");
+    }
+
+    #[tokio::test]
+    async fn redo_replays_the_undone_edits_in_order() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        letters(&client).await;
+        call(&client, "undo", json!({ "steps": 3_usize })).await;
+        let back = call(&client, "redo", json!({ "steps": 2_usize })).await;
+        assert_eq!(
+            back["redone"],
+            json!(["add_lump A", "add_lump B"]),
+            "A and B come back, in replay order"
+        );
+        assert_eq!(back["remaining_redo"].as_u64(), Some(1), "C still waits");
+        assert_eq!(back["undo_available"].as_u64(), Some(2), "two to step back");
+        assert_eq!(back["dirty"], json!(true), "an undone edit is unsaved");
+        assert_eq!(working_names(&client).await, vec!["A", "B"], "both are in");
+        let last = call(&client, "redo", json!({})).await;
+        assert_eq!(
+            last["redone"],
+            json!(["add_lump C"]),
+            "the default step replays the newest undone edit"
+        );
+        assert_eq!(last["remaining_redo"].as_u64(), Some(0), "nothing left");
+        assert_eq!(
+            working_names(&client).await,
+            vec!["A", "B", "C"],
+            "all three in"
+        );
+    }
+
+    #[tokio::test]
+    async fn redo_reports_not_found_and_out_of_range_steps_are_refused() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        letters(&client).await;
+        call(&client, "undo", json!({ "steps": 3_usize })).await;
+        call(&client, "redo", json!({ "steps": 3_usize })).await;
+        let (code, message) = call_err(&client, "redo", json!({})).await;
+        assert_eq!(code, "not_found", "nothing left to redo");
+        assert_eq!(message, "nothing to redo", "the documented message");
+        let (zero_code, zero_message) =
+            call_err(&client, "redo", json!({ "steps": 0_usize })).await;
+        assert_eq!(zero_code, "invalid_argument", "steps 0 is refused");
+        assert!(
+            zero_message.contains("1..=100"),
+            "the message names the accepted range: {zero_message}"
+        );
+        let (past_code, past_message) =
+            call_err(&client, "undo", json!({ "steps": 101_usize })).await;
+        assert_eq!(
+            past_code, "invalid_argument",
+            "steps past the limit is refused"
+        );
+        assert!(
+            past_message.contains("1..=100"),
+            "the message names the accepted range: {past_message}"
+        );
+        let info = call(&client, "get_session_info", Value::Null).await;
+        assert_eq!(
+            info["undo"],
+            json!(["add_lump A", "add_lump B", "add_lump C"]),
+            "the refusals changed nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_edit_after_an_undo_drops_the_redo_branch() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        letters(&client).await;
+        call(&client, "undo", json!({ "steps": 2_usize })).await;
+        call(&client, "add_lump", add_arg("D")).await;
+        let (code, message) = call_err(&client, "redo", json!({})).await;
+        assert_eq!(code, "not_found", "a new edit dropped the redo branch");
+        assert_eq!(message, "nothing to redo", "the documented message");
+        assert_eq!(
+            working_names(&client).await,
+            vec!["A", "D"],
+            "the new branch stands on the undone state"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_and_redo_track_the_dirty_flag_across_saves() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let saved = dir.path().join("work.wad");
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        call(&client, "add_lump", add_arg("A")).await;
+        let save = call(&client, "save_wad", path_arg(&saved)).await;
+        assert_eq!(save["dirty"], json!(false), "saving made the archive clean");
+        let undo_after_save = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undo_after_save["dirty"],
+            json!(true),
+            "undo after save_wad is unsaved again"
+        );
+        let redone = call(&client, "redo", json!({})).await;
+        assert_eq!(
+            redone["dirty"],
+            json!(false),
+            "redo reached the saved revision"
+        );
+        call(&client, "open_wad", path_arg(&saved)).await;
+        call(&client, "add_lump", add_arg("B")).await;
+        let info = call(&client, "get_session_info", Value::Null).await;
+        assert_eq!(info["working"]["dirty"], json!(true), "the edit dirtied it");
+        let undo_after_open = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undo_after_open["dirty"],
+            json!(false),
+            "undo back to the opened state is clean"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["A"],
+            "only the saved lump stands"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_wad_and_new_wad_clear_the_history() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let extra = pwad(dir.path());
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        call(&client, "add_lump", add_arg("A")).await;
+        call(
+            &client,
+            "open_wad",
+            json!({ "path": extra.display().to_string(), "discard_changes": true }),
+        )
+        .await;
+        let (code, message) = call_err(&client, "undo", json!({})).await;
+        assert_eq!(code, "not_found", "the open forgot the old archive's past");
+        assert_eq!(message, "nothing to undo", "empty undo message");
+        call(&client, "add_lump", add_arg("Z")).await;
+        call(&client, "new_wad", json!({ "discard_changes": true })).await;
+        let (fresh_code, fresh_message) = call_err(&client, "undo", json!({})).await;
+        assert_eq!(
+            fresh_code, "not_found",
+            "the fresh archive has no past either"
+        );
+        assert_eq!(fresh_message, "nothing to undo", "empty undo message");
     }
 }

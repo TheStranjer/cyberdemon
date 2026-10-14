@@ -22,8 +22,10 @@ appends, a flat/sprite/patch replaces the copy in its own region, any other
 lump replaces the last copy of its name — so within each area **the last
 match wins**. Reads that take a `scope` see one archive or the merged view;
 edits only ever touch the working archive, and each edit lands on a
-labelled undo stack. `get_session_info` reports where every archive
-currently is.
+labelled undo stack that keeps the newest **100** edits (older ones fall
+off); `open_wad` and `new_wad` replace the working archive and **clear the
+history** — undo never reaches back past them. `undo` and `redo` walk that
+stack; `get_session_info` reports where every archive currently is.
 
 ## `open_iwad`
 
@@ -54,7 +56,8 @@ currently is.
 ## `new_wad`
 
 - Purpose: start a fresh empty PWAD as the working archive, with no file
-  behind it yet (the next `save_wad` gives it one).
+  behind it yet (the next `save_wad` gives it one). The undo/redo history
+  is cleared with the previous archive.
 - Arguments: `discard_changes` (bool, default `false`), same guard as
   `open_wad`.
 - Returns: `{"kind": "PWAD", "lumps": 0}`.
@@ -109,6 +112,36 @@ currently is.
   (the target is the file of a loaded IWAD or resource layer, compared by
   canonical path), `io_error` (the write failed), `limit_exceeded` (the
   archive does not fit the WAD format).
+
+## `undo`
+
+- Purpose: step back over the most recent edits to the **working
+  archive**. Loaded layers, the active map and the render settings are not
+  part of the history and are never restored; the only extra effect is
+  that an active map whose block is gone from the merged view afterwards
+  is cleared (`"active_map_cleared": true`).
+- Arguments: `steps` (number, default `1`, range `1..=100` — the history
+  keeps at most 100 edits anyway). Fewer edits available than asked for:
+  the tool undoes what exists and reports how many it took.
+- Returns:
+  `{"undone": [labels, most recent first], "remaining_undo": n, "redo_available": n, "dirty": bool, "active_map_cleared": bool}`
+  — `dirty` is the working archive's state after the steps; undoing back
+  to the revision the archive was saved at makes it `false` again.
+- Errors: `invalid_argument` (`steps` is `0` or above `100`), `not_found`
+  with `"nothing to undo"` when the undo stack is empty.
+
+## `redo`
+
+- Purpose: re-apply edits that `undo` stepped back over. A new edit after
+  an undo drops the redo branch. Otherwise the mirror image of `undo`,
+  including the active-map check.
+- Arguments: `steps` (number, default `1`, range `1..=100`); fewer
+  entries available replays what exists.
+- Returns:
+  `{"redone": [labels, in the order replayed], "remaining_redo": n, "undo_available": n, "dirty": bool, "active_map_cleared": bool}`
+  — `redone` starts with the oldest undone edit, the first one replayed.
+- Errors: `invalid_argument` (`steps` out of range), `not_found` with
+  `"nothing to redo"` when the redo stack is empty.
 
 ## `get_session_info`
 

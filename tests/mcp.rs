@@ -5,6 +5,7 @@
 //! audio-group tests in `audio`, the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the music-group tests in `music`, the
+//! palette-group tests in `palette`, the
 //! render-group tests in `render`, the textures-group tests in `textures`,
 //! and the documentation-layout checks in `docs`; every helper is exercised
 //! by a test in `server`, and the real result/error contract is checked end
@@ -46,6 +47,9 @@ mod lumps;
 #[cfg(test)]
 #[path = "mcp/music.rs"]
 mod music;
+#[cfg(test)]
+#[path = "mcp/palette.rs"]
+mod palette;
 #[cfg(test)]
 #[path = "mcp/render.rs"]
 mod render;

@@ -19,8 +19,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
 > `get_session_info`, `get_wad_info`), a `render` group
-> (`set_render_resolution`, `set_render_options`, `get_render_settings`)
-> and a `textures` group (`list_textures`, `list_pnames`, `edit_pnames`),
+> (`set_render_resolution`, `set_render_options`, `get_render_settings`),
+> a `textures` group (`list_textures`, `list_pnames`, `edit_pnames`)
+> and a `palette` group (`get_palette`, `set_palette`),
 > and defines the structured JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries

@@ -6,6 +6,7 @@
 //! themselves stay crate-private.
 
 pub(crate) mod assets;
+pub(crate) mod audio;
 pub(crate) mod defs;
 pub(crate) mod lumps;
 pub(crate) mod meta;

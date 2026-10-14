@@ -11,6 +11,7 @@ use reqwest as _;
 use schemars as _;
 use serde as _;
 use serde_json as _;
+use symphonia as _;
 use thiserror as _;
 
 // Dev-dependency, only linked into the `cfg(test)` build of this binary.

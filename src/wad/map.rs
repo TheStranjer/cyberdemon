@@ -8,15 +8,22 @@
 //! dispatch on a block's [`MapFormat`]: `UDMF` shares this model and
 //! gains its codec in
 //! a follow-up ticket, so it currently reports [`CyberError::Unsupported`].
+//! [`remove`] is the pure deletion engine behind the element-removal
+//! tools: it reports dependents, expands a cascade and renumbers the
+//! references of what survives.
 
 pub mod doom;
 pub mod hexen;
 pub mod model;
+pub mod remove;
 
 mod common;
 
 pub use crate::wad::classify::MapFormat;
 pub use model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
+pub use remove::{
+    CascadeOptions, Dependents, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
+};
 
 use crate::error::CyberError;
 use crate::wad::archive::Lump;

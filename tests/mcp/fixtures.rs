@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use cyberdemon::wad::archive::write_file_atomic;
 use cyberdemon::wad::map::doom::write_doom_map;
 use cyberdemon::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
+use cyberdemon::wad::textures::{
+    PatchRef, TextureDef, TextureLayout, TextureLump, write_pnames, write_texture_lump,
+};
 use cyberdemon::wad::{Lump, LumpName, MapFormat, Wad, WadKind};
 
 /// Bytes in one flat this repo's fixtures use.
@@ -182,6 +185,92 @@ fn colormap() -> Vec<u8> {
     tables
 }
 
+/// A hand-built `Doom` patch: `width` by `height`, zero offsets, one full-
+/// height post per column filled with `fill`. Encoded here rather than
+/// through a graphics tool so the texture fixtures stand on their own.
+fn patch(width: usize, height: usize, fill: u8) -> Vec<u8> {
+    let column_len = height.checked_add(4_usize).expect("test column fits");
+    let directory_end = 16_usize
+        .checked_add(width.checked_mul(4).expect("test width fits"))
+        .expect("test directory fits");
+    let mut bytes = Vec::new();
+    for field in [width, height, 0_usize, 0_usize] {
+        let stored = i32::try_from(field).expect("test patch fields fit");
+        bytes.extend_from_slice(&stored.to_le_bytes());
+    }
+    for column in 0..width {
+        let step = column.checked_mul(column_len).expect("test offsets fit");
+        let offset = directory_end.checked_add(step).expect("test offsets fit");
+        bytes.extend_from_slice(
+            &i32::try_from(offset)
+                .expect("test offsets fit")
+                .to_le_bytes(),
+        );
+    }
+    let post_len = u8::try_from(height).expect("test patches are at most 255 tall");
+    for _column in 0..width {
+        bytes.push(0_u8);
+        bytes.push(post_len);
+        bytes.push(0_u8);
+        bytes.extend_from_slice(&vec![fill; height]);
+        bytes.push(0xFF_u8);
+    }
+    bytes
+}
+
+/// The `columns` by `rows` grid of `PNAMES` index `patch_index`, tiled with
+/// `step` origins `(x, y)`, in row-major record order.
+fn tile(patch_index: u16, columns: usize, rows: usize, step: (i16, i16)) -> Vec<PatchRef> {
+    let mut placements = Vec::new();
+    for row in 0..rows {
+        for column in 0..columns {
+            placements.push(PatchRef {
+                patch: patch_index,
+                x: i16::try_from(column)
+                    .expect("test grids fit")
+                    .checked_mul(step.0)
+                    .expect("test origins fit"),
+                y: i16::try_from(row)
+                    .expect("test grids fit")
+                    .checked_mul(step.1)
+                    .expect("test origins fit"),
+            });
+        }
+    }
+    placements
+}
+
+/// The fixture `PNAMES`: the two patch lumps, in index order.
+fn pnames() -> Vec<u8> {
+    write_pnames(&["WALLP1".to_owned(), "STEPP1".to_owned()])
+        .expect("fixture patch names are valid")
+}
+
+/// The fixture `TEXTURE1`: `WALL1` (64x128, `WALLP1` tiled) and `STEP1`
+/// (64x32, `STEPP1` tiled), the textures [`two_room_map`] dresses with.
+fn texture1() -> Vec<u8> {
+    let lump = TextureLump {
+        layout: TextureLayout::Doom,
+        textures: vec![
+            TextureDef {
+                name: "WALL1".to_owned(),
+                flags_raw: 0,
+                width: 64,
+                height: 128,
+                patches: tile(0, 4, 8, (16_i16, 16_i16)),
+            },
+            TextureDef {
+                name: "STEP1".to_owned(),
+                flags_raw: 0,
+                width: 64,
+                height: 32,
+                patches: tile(1, 4, 4, (16_i16, 8_i16)),
+            },
+        ],
+    };
+    write_texture_lump(&lump).expect("the fixture texture lump serializes")
+}
+
 /// Serialize `wad` into `file` inside `dir` and return the path.
 fn write_wad(dir: &Path, file: &str, wad: &Wad) -> PathBuf {
     let path = dir.join(file);
@@ -192,7 +281,9 @@ fn write_wad(dir: &Path, file: &str, wad: &Wad) -> PathBuf {
 
 /// The directory of the `iwad` fixtures: palettes, one two-room `MAP01`
 /// block, one flat region with `FLOOR1` (and a second, byte-3 copy when
-/// `duplicate_flat` is set) and an `ENDOOM`.
+/// `duplicate_flat` is set), an `ENDOOM`, and the texture fixtures: a
+/// patches region with `WALLP1` and `STEPP1` plus the `PNAMES` and
+/// `TEXTURE1` lumps describing `WALL1` and `STEP1`.
 fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
     let mut lumps = vec![lump("PLAYPAL", playpal()), lump("COLORMAP", colormap())];
     lumps.extend(map_block("MAP01"));
@@ -203,6 +294,12 @@ fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
     }
     lumps.push(marker("F_END"));
     lumps.push(lump("ENDOOM", vec![b' '; ENDOOM_BYTES]));
+    lumps.push(marker("P_START"));
+    lumps.push(lump("WALLP1", patch(16, 16, 0x11_u8)));
+    lumps.push(lump("STEPP1", patch(16, 8, 0x22_u8)));
+    lumps.push(marker("P_END"));
+    lumps.push(lump("PNAMES", pnames()));
+    lumps.push(lump("TEXTURE1", texture1()));
     lumps
 }
 
@@ -216,7 +313,8 @@ fn write_iwad(dir: &Path, file: &str, lumps: Vec<Lump>) -> PathBuf {
 }
 
 /// A minimal `DOOM II` style `IWAD`: palettes, one two-room `MAP01` block,
-/// one flat region with `FLOOR1` and an `ENDOOM`.
+/// one flat region with `FLOOR1`, an `ENDOOM`, and the two-room map's
+/// textures (`WALLP1`/`STEPP1` patches, `PNAMES`, `TEXTURE1`).
 ///
 /// # Panics
 ///

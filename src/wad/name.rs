@@ -160,6 +160,14 @@ fn glob(name: &[u8], pattern: &[u8]) -> bool {
     })
 }
 
+/// Matches raw name bytes against a case-insensitive glob, the same rule
+/// [`LumpName::matches_glob`] applies to a parsed name. For listings whose
+/// rows hold plain strings rather than [`LumpName`]s.
+#[must_use]
+pub(crate) fn glob_match(name: &[u8], pattern: &str) -> bool {
+    glob(name, pattern.as_bytes())
+}
+
 /// Writes `bytes` to `formatter` unchanged where printable, escaping every
 /// other byte as `\xNN` with uppercase hex. Shared by the `Display` and
 /// `Debug` implementations.
@@ -210,7 +218,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{LumpName, MAX_NAME_LEN, NAME_LEN};
+    use super::{LumpName, MAX_NAME_LEN, NAME_LEN, glob_match};
     use crate::error::CyberError;
 
     #[test]
@@ -416,5 +424,20 @@ mod tests {
         assert!(empty.matches_glob("*"), "star matches the empty name");
         assert!(!empty.matches_glob("?"), "question needs one character");
         assert!(!empty.matches_glob("MAP*"), "a literal still fails");
+    }
+
+    #[test]
+    fn glob_match_applies_the_same_rules_to_raw_bytes() {
+        assert!(glob_match(b"TEXTURE1", "*"), "star matches a raw name");
+        assert!(glob_match(b"TEXTURE1", "tex*"), "case-insensitive prefix");
+        assert!(
+            glob_match(b"TEXTURE1", "TEXTUR?1"),
+            "question matches one byte"
+        );
+        assert!(!glob_match(b"TEXTURE1", "PNAMES*"), "a literal mismatch");
+        assert!(
+            !glob_match(b"", "TEXTURE1"),
+            "an empty name holds no pattern"
+        );
     }
 }

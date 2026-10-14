@@ -1,0 +1,85 @@
+type	name	sprite	frame	radius	category	flags	game
+1	Player 1 Start	PLAY	A	16	Player Starts	-	heretic
+2	Player 2 Start	PLAY	B	16	Player Starts	-	heretic
+3	Player 3 Start	PLAY	C	16	Player Starts	-	heretic
+4	Player 4 Start	PLAY	D	16	Player Starts	-	heretic
+11	Deathmatch Start	PLAY	F	16	Player Starts	-	heretic
+14	Teleport Destination	TELE	A	20	Teleports	-	heretic
+52	Teleport Glitter (Blue: Exit)	TGLT	F	20	Teleports	-	heretic
+74	Teleport Glitter (Red)	TGLT	A	20	Teleports	-	heretic
+66	Gargoyle	IMPX	A	20	Monsters	-	heretic
+5	Fire Gargoyle	IMPX	F	20	Monsters	-	heretic
+68	Golem	MUMM	A	22	Monsters	-	heretic
+69	Golem Ghost	MUMM	A	22	Monsters	-	heretic
+45	Nitrogolem	MUMM	Y	22	Monsters	-	heretic
+46	Nitrogolem Ghost	MUMM	Y	22	Monsters	-	heretic
+15	Disciple Of D'Sparil	WZRD	A	20	Monsters	-	heretic
+6	Iron Lich	HEAD	A	40	Monsters	-	heretic
+7	D'Sparil	SRCR	A	28	Monsters	-	heretic
+56	D'Sparil Teleport Location	SOR2	I	20	Monsters	-	heretic
+9	Maulotaur	MNTR	A	28	Monsters	-	heretic
+64	Undead Warrior	KNIG	A	24	Monsters	-	heretic
+65	Undead Warrior Ghost	KNIG	A	24	Monsters	-	heretic
+70	Weredragon	BEAS	A	32	Monsters	-	heretic
+90	Sabreclaw	CLNK	A	20	Monsters	-	heretic
+92	Ophidian	SNKE	A	22	Monsters	-	heretic
+81	Crystal Vial	PTN1	A	20	Health And Armour	-	heretic
+85	Silver Shield	SHLD	A	20	Health And Armour	-	heretic
+31	Enchanted Shield	SHD2	A	20	Health And Armour	-	heretic
+53	Dragon Claw	WBLS	A	20	Weapons	-	heretic
+2001	Ethereal Crossbow	WBOW	A	20	Weapons	-	heretic
+2002	Firemace	WMCE	A	20	Weapons	-	heretic
+2003	Phoenix Rod	WPHX	A	20	Weapons	-	heretic
+2004	Hellstaff	WSKL	A	20	Weapons	-	heretic
+2005	Gauntlets of the Necromancer	WGNT	A	20	Weapons	-	heretic
+10	Wand Crystal	AMG1	A	20	Ammunition	-	heretic
+12	Crystal Geode	AMG2	A	20	Ammunition	-	heretic
+13	Mace Spheres	AMM1	A	20	Ammunition	-	heretic
+16	Pile Of Mace Spheres	AMM2	A	20	Ammunition	-	heretic
+18	Ethereal Arrows	AMC1	A	20	Ammunition	-	heretic
+19	Quiver Of Ethereal Arrows	AMC2	A	20	Ammunition	-	heretic
+20	Lesser Runes	AMS1	A	20	Ammunition	-	heretic
+21	Greater Runes	AMS2	A	20	Ammunition	-	heretic
+22	Flame Orb	AMP1	A	20	Ammunition	-	heretic
+23	Inferno Orb	AMP2	A	20	Ammunition	-	heretic
+54	Claw Orb	AMB1	A	20	Ammunition	-	heretic
+55	Energy Orb	AMB2	A	20	Ammunition	-	heretic
+8	Bag Of Holding	BAGH	A	20	Ammunition	-	heretic
+30	Morph Ovum	ARTI	E	20	Powerups	-	heretic
+32	Mystic Urn	ARTI	S	20	Powerups	-	heretic
+33	Torch	ARTI	T	20	Powerups	-	heretic
+34	Time Bomb Of The Ancients	ARTI	F	20	Powerups	-	heretic
+35	Map Scroll	SPMP	A	20	Powerups	-	heretic
+36	Chaos Device	ARTI	A	20	Powerups	-	heretic
+75	Shadowsphere	ARTI	I	20	Powerups	-	heretic
+82	Quartz Flask	ARTI	P	20	Powerups	-	heretic
+83	Wings Of Wrath	ARTI	S	20	Powerups	-	heretic
+84	Ring of Invulnerability	ARTI	I	20	Powerups	-	heretic
+86	Tome of Power	ARTI	P	20	Powerups	-	heretic
+73	Green Key	AKYY	A	20	Keys	-	heretic
+79	Blue Key	BKYY	A	20	Keys	-	heretic
+80	Yellow Key	CKYY	A	20	Keys	-	heretic
+51	Hanging Corpse	HCOR	A	16	Gore/Hanging Skulls & Bodies	hanging	heretic
+17	Hanging Skull (Long Rope)	SKH1	A	16	Gore/Hanging Skulls & Bodies	hanging	heretic
+24	Hanging Skull (Medium Rope)	SKH2	A	16	Gore/Hanging Skulls & Bodies	hanging	heretic
+25	Hanging Skull (Short Rope)	SKH3	A	16	Gore/Hanging Skulls & Bodies	hanging	heretic
+26	Hanging Skull (Shortest Rope)	SKH4	A	16	Gore/Hanging Skulls & Bodies	hanging	heretic
+27	Serpent Torch	SRTC	A	16	Lighting	-	heretic
+28	Chandelier	CHDL	A	16	Lighting	hanging	heretic
+50	Wall Torch	WTRH	A	16	Lighting	-	heretic
+76	Fire Brazier	KFR1	A	16	Lighting	-	heretic
+94	Blue Key Marker	KGZB	A	16	Decorations/Castle	-	heretic
+95	Green Key Marker	KGZG	A	16	Decorations/Castle	-	heretic
+96	Yellow Key Marker	KGZY	A	16	Decorations/Castle	-	heretic
+44	Barrel	BARL	A	16	Decorations/Castle	-	heretic
+47	Brown Pillar	BRPL	A	16	Decorations/Castle	-	heretic
+29	Small Pillar	SMPL	A	16	Decorations/Castle	-	heretic
+48	Moss 1	MOS1	A	16	Decorations/Plants	hanging	heretic
+49	Moss 2	MOS2	A	16	Decorations/Plants	hanging	heretic
+2035	Gas Pod	PPOD	A	16	Decorations/Plants	-	heretic
+43	Gas Pod Generator	PPOD	A	16	Decorations/Plants	-	heretic
+37	Stalagmite (Small)	STGS	A	16	Decorations/Rocks	-	heretic
+38	Stalagmite (Large)	STGL	A	16	Decorations/Rocks	-	heretic
+39	Stalactite (Small)	STCS	A	16	Decorations/Rocks	hanging	heretic
+40	Stalactite (Large)	STCL	A	16	Decorations/Rocks	hanging	heretic
+87	Volcano	VLCO	E	16	Decorations/Rocks	-	heretic

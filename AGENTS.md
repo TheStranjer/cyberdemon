@@ -124,7 +124,9 @@ data/
                   under the 64 KiB `large_include_file` budget), parsed by
                   `src/defs/table.rs`. `doom_things.tsv` is the DOOM/DOOM II
                   thing table, `doom_specials.tsv` and `doom_sectors.tsv` the
-                  linedef special and sector type tables.
+                  linedef special and sector type tables;
+                  `heretic_things.tsv`, `heretic_specials.tsv` and
+                  `heretic_sectors.tsv` are Heretic's own three.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

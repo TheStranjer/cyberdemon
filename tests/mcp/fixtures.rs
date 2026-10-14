@@ -239,6 +239,34 @@ pub fn iwad_duplicated(dir: &Path) -> PathBuf {
     write_iwad(dir, "iwad-floors.wad", iwad_lumps(true))
 }
 
+/// The lump directory of the Heretic `IWAD` fixture: palettes, the `TITLE`
+/// and `MUS_E1M1` signature lumps Heretic detection looks for, and two
+/// episode map blocks.
+fn heretic_lumps() -> Vec<Lump> {
+    let mut lumps = vec![
+        lump("PLAYPAL", playpal()),
+        lump("COLORMAP", colormap()),
+        lump("TITLE", vec![b'H'; 64]),
+        lump("MUS_E1M1", vec![0_u8; 16]),
+    ];
+    lumps.extend(map_block("E1M1"));
+    lumps.extend(map_block("E2M1"));
+    lumps
+}
+
+/// A minimal `Heretic` style `IWAD`: the same palettes as the `DOOM II`
+/// fixture, the `E1M1` and `E2M1` episode blocks, and the `TITLE` plus
+/// `MUS_E1M1` lumps that make a session detect Heretic.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn iwad_heretic(dir: &Path) -> PathBuf {
+    write_iwad(dir, "iwad-heretic.wad", heretic_lumps())
+}
+
 /// A `PWAD` overriding `FLOOR1`, adding a `DEHACKED` global and a two-room
 /// `MAP02` block.
 ///

@@ -319,7 +319,9 @@ fn resolve_game(state: &AppState, text: Option<&str>) -> Result<Game, CyberError
 }
 
 /// Whether `game` follows the DOOM-family (Boom-compatible) special and
-/// sector bit layouts.
+/// sector bit layouts: `DOOM`, `DOOM II`, `Strife` and unidentified
+/// sessions. Heretic and Hexen carry their own special sets and are never
+/// bit-decoded, even though they are `Doom`-engine games.
 const fn is_doom_family(game: Game) -> bool {
     match game {
         Game::Doom | Game::Doom2 | Game::Strife | Game::Unknown => true,
@@ -477,7 +479,7 @@ fn sector_specials_report(
 impl Cyberdemon {
     /// Lists the thing types known for a game.
     #[tool(
-        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; the heretic and hexen tables are not shipped yet and report empty with a warning."
+        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; doom, doom2 and heretic ship their own tables, so only the hexen table is not shipped yet and reports empty with a warning."
     )]
     fn get_thing_types(
         &self,
@@ -491,7 +493,7 @@ impl Cyberdemon {
 
     /// Lists the linedef specials known for a game, decoding Boom generalized values.
     #[tool(
-        description = "Lists the game's special-table linedef actions (numbers, names, categories, target: \"sector\" for tagged sectors or \"sector_back\" for the sector behind the line, args) sorted by special, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Doors\"), search (case-insensitive name substring) and special (exact number). A special of 0x2F80..=0x7FFF on a DOOM-family game answers through the \"generalized\" field with Boom's decoded bit-packed action {kind, trigger, speed, fields, summary} and no table rows; the trigger prefixes are W=walk over, S=switch/use, G=gun shot, D=use on the line, 1=once, R=repeatable. Returns {game, count, specials, generalized, warnings}; unknown numbers return an empty list, not an error."
+        description = "Lists the game's special-table linedef actions (numbers, names, categories, target: \"sector\" for tagged sectors or \"sector_back\" for the sector behind the line, args) sorted by special, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Doors\"), search (case-insensitive name substring) and special (exact number). A special of 0x2F80..=0x7FFF on a DOOM-family game answers through the \"generalized\" field with Boom's decoded bit-packed action {kind, trigger, speed, fields, summary} and no table rows; the trigger prefixes are W=walk over, S=switch/use, G=gun shot, D=use on the line, 1=once, R=repeatable. Heretic ships its own plain-numbered specials and is not Boom-compatible: a heretic special never answers through \"generalized\". Returns {game, count, specials, generalized, warnings}; unknown numbers return an empty list, not an error."
     )]
     fn get_linedef_specials(
         &self,
@@ -505,7 +507,7 @@ impl Cyberdemon {
 
     /// Lists the sector types known for a game, decoding Boom sector values.
     #[tool(
-        description = "Lists the game's sector types (values, names) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). With special set on a DOOM-family game, also returns the Boom decoding of that sector value: decoded = {base, base_name, damage (\"none\"|\"5%\"|\"10%\"|\"20%\"), flags (some of \"secret\", \"friction\", \"push\")}; bits above 9 are ignored, unassigned bases name \"Unknown\". Returns {game, count, special, decoded, sector_types, warnings}."
+        description = "Lists the game's sector types (values, names) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). With special set on a DOOM-family game, also returns the Boom decoding of that sector value: decoded = {base, base_name, damage (\"none\"|\"5%\"|\"10%\"|\"20%\"), flags (some of \"secret\", \"friction\", \"push\")}; bits above 9 are ignored, unassigned bases name \"Unknown\". Heretic's sector types are plain table values from its own table and are not Boom-decoded, so decoded stays null there. Returns {game, count, special, decoded, sector_types, warnings}."
     )]
     fn get_sector_specials(
         &self,

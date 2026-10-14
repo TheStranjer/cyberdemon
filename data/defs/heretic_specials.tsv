@@ -1,0 +1,106 @@
+special	name	category	target	args	game
+1	DR Door	Doors/Local	sector_back	-	heretic
+26	DR Door Blue Key	Doors/Local	sector_back	-	heretic
+27	DR Door Yellow Key	Doors/Local	sector_back	-	heretic
+28	DR Door Green Key	Doors/Local	sector_back	-	heretic
+31	D1 Door Stay Open	Doors/Local	sector_back	-	heretic
+32	D1 Door Blue Key	Doors/Local	sector_back	-	heretic
+33	D1 Door Green Key	Doors/Local	sector_back	-	heretic
+34	D1 Door Yellow Key	Doors/Local	sector_back	-	heretic
+29	S1 Door	Doors/Remote	sector	-	heretic
+63	SR Door	Doors/Remote	sector	-	heretic
+4	W1 Door	Doors/Remote	sector	-	heretic
+90	WR Door	Doors/Remote	sector	-	heretic
+103	S1 Door Stay Open	Doors/Remote	sector	-	heretic
+61	SR Door Stay Open	Doors/Remote	sector	-	heretic
+2	W1 Door Stay Open	Doors/Remote	sector	-	heretic
+86	WR Door Stay Open	Doors/Remote	sector	-	heretic
+50	S1 Door Close	Doors/Remote	sector	-	heretic
+42	SR Door Close	Doors/Remote	sector	-	heretic
+3	W1 Door Close	Doors/Remote	sector	-	heretic
+75	WR Door Close	Doors/Remote	sector	-	heretic
+16	W1 Door Close + Open	Doors/Remote	sector	-	heretic
+76	WR Door Close + Open	Doors/Remote	sector	-	heretic
+100	WR Door Triple Speed	Doors/Remote	sector	-	heretic
+46	GR Door Also Monsters	Doors/Remote	sector	-	heretic
+40	W1 Ceil To Highest Ceil	Ceilings	sector	-	heretic
+41	S1 Ceil To Floor	Ceilings	sector	-	heretic
+43	SR Ceil To Floor	Ceilings	sector	-	heretic
+49	S1 Ceil To 8 Above Floor	Ceilings	sector	-	heretic
+44	W1 Ceil To 8 Above Floor	Ceilings	sector	-	heretic
+72	WR Ceil To 8 Above Floor	Ceilings	sector	-	heretic
+21	S1 Lift	Lifts	sector	-	heretic
+62	SR Lift	Lifts	sector	-	heretic
+10	W1 Lift	Lifts	sector	-	heretic
+88	WR Lift	Lifts	sector	-	heretic
+18	S1 Floor To Higher Adjacent Floor	Floors/Move Up	sector	-	heretic
+69	SR Floor To Higher Adjacent Floor	Floors/Move Up	sector	-	heretic
+5	W1 Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	heretic
+91	WR Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	heretic
+101	S1 Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	heretic
+64	SR Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	heretic
+24	G1 Floor To Lowest Adjacent Ceil	Floors/Move Up	sector	-	heretic
+55	S1 Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	heretic
+65	SR Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	heretic
+56	W1 Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	heretic
+94	WR Floor To 8 Below LAC + Crush	Floors/Move Up	sector	-	heretic
+58	W1 Floor Up 24	Floors/Move Up	sector	-	heretic
+92	WR Floor Up 24	Floors/Move Up	sector	-	heretic
+30	W1 Floor Up Shortest Lo Tex	Floors/Move Up	sector	-	heretic
+96	WR Floor Up Shortest Lo Tex	Floors/Move Up	sector	-	heretic
+20	S1 Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	heretic
+68	SR Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	heretic
+22	W1 Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	heretic
+95	WR Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	heretic
+47	G1 Floor To Higher Floor Change Tex	Floors/Move Up	sector	-	heretic
+15	S1 Floor Up 24 Change Tex	Floors/Move Up	sector	-	heretic
+66	SR Floor Up 24 Change Tex	Floors/Move Up	sector	-	heretic
+59	W1 Floor Up 24 Change Tex + Type	Floors/Move Up	sector	-	heretic
+93	WR Floor Up 24 Change Tex + Type	Floors/Move Up	sector	-	heretic
+14	S1 Floor Up 32 Change Tex	Floors/Move Up	sector	-	heretic
+67	SR Floor Up 32 Change Tex	Floors/Move Up	sector	-	heretic
+38	W1 Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	heretic
+23	S1 Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	heretic
+82	WR Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	heretic
+60	SR Floor To Lowest Adjacent Floor	Floors/Move Down	sector	-	heretic
+19	W1 Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	heretic
+102	S1 Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	heretic
+83	WR Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	heretic
+45	SR Floor To Highest Adjacent Floor	Floors/Move Down	sector	-	heretic
+36	W1 Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	heretic
+71	S1 Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	heretic
+98	WR Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	heretic
+70	SR Floor To 8 Above HAF Fast	Floors/Move Down	sector	-	heretic
+37	W1 Floor To LAF Change Tex + Type	Floors/Move Down	sector	-	heretic
+84	WR Floor To LAF Change Tex + Type	Floors/Move Down	sector	-	heretic
+9	S1 Floor Donut	Floors/Move Down	sector	-	heretic
+7	S1 Build Stairs 8	Stair Builders	sector	-	heretic
+8	W1 Build Stairs 8	Stair Builders	sector	-	heretic
+106	W1 Build Stairs 16	Stair Builders	sector	-	heretic
+107	S1 Build Stairs 16	Stair Builders	sector	-	heretic
+53	W1 Start Moving Floor	Moving Floors	sector	-	heretic
+87	WR Start Moving Floor	Moving Floors	sector	-	heretic
+54	W1 Stop Moving Floor	Moving Floors	sector	-	heretic
+89	WR Stop Moving Floor	Moving Floors	sector	-	heretic
+25	W1 Start Crusher, Slow Damage	Crushers	sector	-	heretic
+73	WR Start Crusher, Slow Damage	Crushers	sector	-	heretic
+6	W1 Start Crusher, Fast Damage	Crushers	sector	-	heretic
+77	WR Start Crusher, Fast Damage	Crushers	sector	-	heretic
+57	W1 Stop Crusher	Crushers	sector	-	heretic
+74	WR Stop Crusher	Crushers	sector	-	heretic
+11	S1 Exit (Normal)	Exits	-	-	heretic
+52	W1 Exit (Normal)	Exits	-	-	heretic
+51	S1 Exit (Secret)	Exits	-	-	heretic
+105	W1 Exit (Secret)	Exits	-	-	heretic
+97	WR Teleport	Teleports	sector	-	heretic
+39	W1 Teleport	Teleports	sector	-	heretic
+35	W1 Light To 35	Light Effects	sector	-	heretic
+79	WR Light To 35	Light Effects	sector	-	heretic
+13	W1 Light To 255	Light Effects	sector	-	heretic
+81	WR Light To 255	Light Effects	sector	-	heretic
+12	W1 Light To Highest Adjacent Level	Light Effects	sector	-	heretic
+80	WR Light To Highest Adjacent Level	Light Effects	sector	-	heretic
+104	W1 Light To Lowest Adjacent Level	Light Effects	sector	-	heretic
+17	W1 Light Blink 1.0 Sec	Light Effects	sector	-	heretic
+48	Scrolling Wall Left	Misc	-	-	heretic
+99	Scrolling Wall Right	Misc	-	-	heretic

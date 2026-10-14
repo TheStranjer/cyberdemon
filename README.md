@@ -42,7 +42,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > style every render tool starts from, plus the integer gamma curve) and a
 > pure planar geometry engine (`src/geom*`: layered polygons and external
 > segments arranged into non-crossing, side-labelled integer pieces; all
-> drawing goes through `geom::arrange`) back the first WAD tools.
+> drawing goes through `geom::arrange`) and a pure float-free BSP node
+> builder (`src/bsp*`: segs from linedef sides, 16.16/i128 side tests,
+> splitting and cost-chosen partition lines, a tree of convex subsectors
+> with integer bounding boxes) back the first WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
 > for import tools.

@@ -4,10 +4,10 @@
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! audio-group tests in `audio`, the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
-//! `lumps`-group tests in `lumps`, the render-group tests in `render`, and
-//! the documentation-layout checks in `docs`; every helper is exercised by a
-//! test in `server`, and the real result/error contract is checked end to
-//! end through a small probe server.
+//! `lumps`-group tests in `lumps`, the music-group tests in `music`, the
+//! render-group tests in `render`, and the documentation-layout checks in
+//! `docs`; every helper is exercised by a test in `server`, and the real
+//! result/error contract is checked end to end through a small probe server.
 
 // Linked for other targets, unused by this test crate.
 use anyhow as _;
@@ -42,6 +42,9 @@ pub mod fixtures;
 #[cfg(test)]
 #[path = "mcp/lumps.rs"]
 mod lumps;
+#[cfg(test)]
+#[path = "mcp/music.rs"]
+mod music;
 #[cfg(test)]
 #[path = "mcp/render.rs"]
 mod render;

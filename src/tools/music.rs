@@ -1,10 +1,15 @@
-//! Music tools: bringing external music files into the working archive.
+//! Music tools: bringing external music files into the working archive and
+//! previewing the music lumps a session holds.
 //!
-//! The first tool of the group is [`Cyberdemon::import_music`]: fetch a
+//! The group's first tool is [`Cyberdemon::import_music`]: fetch a
 //! music file through [`AppState::fetch_source`], identify its container
 //! with [`crate::music::sniff_music`] and either store a vanilla `MUS`
 //! `D_*` lump (converting `MIDI` with [`midi_to_mus`], validating `MUS`
 //! with [`mus_to_midi`]) or keep the original bytes unchanged.
+//! [`Cyberdemon::preview_music`] goes the other way: it reads one music
+//! lump of the session and publishes it as a playable asset, converting
+//! `MUS` to `MIDI`. The conversion itself lives in the crate-visible
+//! [`music_to_playable`] so `get_asset_url` can reuse it.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -13,11 +18,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::fetch::derive_lump_name;
+use crate::assets::server::AssetRef;
+use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
 use crate::music::{MusicKind, midi_to_mus, mus_to_midi, sniff_music};
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
+use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::{fail, ok};
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::name::{LumpName, MAX_NAME_LEN};
@@ -308,6 +316,93 @@ async fn import(
     })
 }
 
+/// Arguments for [`Cyberdemon::preview_music`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PreviewMusicParams {
+    /// The lump selector: `name` plus optional `scope`, `namespace` and
+    /// `occurrence` (see `skill/reference/lumps.md`).
+    #[serde(flatten)]
+    selector: LumpSelector,
+}
+
+/// Structured result of [`Cyberdemon::preview_music`].
+#[derive(Serialize)]
+struct PreviewMusicReport {
+    /// The previewed lump name.
+    name: LumpName,
+    /// The container the lump's bytes were sniffed as.
+    input_format: MusicKind,
+    /// The playable container that was published: `mid`, `ogg`, `mp3`,
+    /// `flac`, `wav` or one of the tracker-module extensions.
+    output_format: &'static str,
+    /// The published playable file.
+    asset: AssetRef,
+}
+
+/// The result of making one music lump playable: the file bytes, its
+/// extension (without the dot) and the sniffed input kind.
+type Playable = (Vec<u8>, &'static str, MusicKind);
+
+/// Make one music lump's bytes playable: the file bytes, the extension to
+/// publish them under (without the dot) and the sniffed input kind.
+///
+/// `MUS` scores are converted to type-0 `SMF` with [`mus_to_midi`]; every
+/// other recognised container is kept byte for byte. This is the tools-
+/// visible conversion `preview_music` uses and `get_asset_url` can reuse.
+///
+/// # Errors
+///
+/// [`mus_to_midi`]'s [`CyberError::Format`] for a corrupt `MUS` lump;
+/// [`CyberError::Unsupported`] for bytes no recognised music container owns.
+pub(in crate::tools) fn music_to_playable(bytes: &[u8]) -> Result<Playable, CyberError> {
+    let kind = sniff_music(bytes);
+    match kind {
+        MusicKind::Mus => Ok((mus_to_midi(bytes)?, "mid", kind)),
+        MusicKind::Midi => Ok((bytes.to_vec(), "mid", kind)),
+        MusicKind::Ogg => Ok((bytes.to_vec(), "ogg", kind)),
+        MusicKind::Mp3 => Ok((bytes.to_vec(), "mp3", kind)),
+        MusicKind::Flac => Ok((bytes.to_vec(), "flac", kind)),
+        MusicKind::Wav => Ok((bytes.to_vec(), "wav", kind)),
+        MusicKind::Xm => Ok((bytes.to_vec(), "xm", kind)),
+        MusicKind::It => Ok((bytes.to_vec(), "it", kind)),
+        MusicKind::S3m => Ok((bytes.to_vec(), "s3m", kind)),
+        MusicKind::Mod => Ok((bytes.to_vec(), "mod", kind)),
+        MusicKind::Unknown => Err(CyberError::Unsupported(
+            "these bytes are not recognised music: expected MUS, MIDI, OGG, MP3, FLAC, WAV \
+             or a tracker module (XM, IT, S3M, MOD)"
+                .to_owned(),
+        )),
+    }
+}
+
+/// Run `preview_music` end to end: resolve the lump, convert it and publish
+/// the playable file.
+///
+/// # Errors
+///
+/// [`resolve`] errors for the selector; [`CyberError::Unsupported`] naming
+/// the lump when its bytes are not recognised music; [`music_to_playable`]
+/// errors for the bytes; [`AppState::publish`] errors for the asset store.
+fn preview(state: &AppState, args: &PreviewMusicParams) -> Result<PreviewMusicReport, CyberError> {
+    let row = state.with_session(|session| resolve(session, &args.selector))?;
+    let name = row.name;
+    if sniff_music(&row.lump.data) == MusicKind::Unknown {
+        return Err(CyberError::Unsupported(format!(
+            "lump {name} is not recognised music; use get_lump format=url for raw bytes"
+        )));
+    }
+    let (data, extension, kind) = music_to_playable(&row.lump.data)?;
+    let filename = format!("{name}.{extension}");
+    let mime = mime_for_extension(extension);
+    let asset = state.publish(&filename, mime, data)?;
+    Ok(PreviewMusicReport {
+        name,
+        input_format: kind,
+        output_format: extension,
+        asset,
+    })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -327,11 +422,27 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Publishes one music lump as a playable MIDI or original-file asset.
+    #[tool(
+        description = "Publishes one music lump of the session as a playable file on the localhost asset server; the archives are not modified. Takes the shared lump selector: name plus optional scope (\"merged\" default, \"working\", \"layer:N\"), namespace and occurrence (default the last, winning match). The lump's bytes are sniffed: a MUS (vanilla Doom D_* score) is converted to a type-0 Standard MIDI File and published as NAME.mid (audio/midi), a corrupt one is a format_error; a MIDI lump is published unchanged as NAME.mid; OGG, MP3, FLAC and WAV lumps pass through unchanged with their own extension (audio/ogg, audio/mpeg, audio/flac, audio/wav); tracker modules (XM, IT, S3M, MOD) pass through unchanged as NAME.xm/.it/.s3m/.mod (application/octet-stream). Bytes no recognised music container owns are unsupported (use get_lump format=url for raw bytes); a name with no match is not_found. Returns {name, input_format, output_format, asset: {url, filename, mime, size}}."
+    )]
+    fn preview_music(
+        &self,
+        Parameters(args): Parameters<PreviewMusicParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match preview(self.state(), &args) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportMusicParams, MusicKind, Plan, StorageFormat, sniff_music};
+    use super::{
+        ImportMusicParams, MusicKind, Plan, StorageFormat, music_to_playable, sniff_music,
+    };
     use super::{chosen_format, chosen_name, parse_format, plan, store_payload};
 
     /// The arguments of a `source`-only call, everything else defaulted.
@@ -512,6 +623,92 @@ mod tests {
         assert!(
             error.to_string().contains("pass name"),
             "the message asks for the name: {error}"
+        );
+    }
+
+    /// Bytes of the fixed `MUS` header in the fixture.
+    const HEADER_LEN: u16 = 16_u16;
+
+    /// A minimal valid `MUS` lump: the 16-byte header plus a score holding
+    /// one middle-C note and the end marker.
+    fn mus_fixture() -> Vec<u8> {
+        let score: [u8; 6] = [0x10_u8, 0x3C, 0x80, 0x3C, 0x0A, 0x60];
+        let score_len = u16::try_from(score.len()).expect("the fixture score fits");
+        let mut bytes = Vec::from(&b"MUS\x1A"[..]);
+        bytes.extend_from_slice(&score_len.to_le_bytes());
+        bytes.extend_from_slice(&HEADER_LEN.to_le_bytes());
+        for _word in 0_usize..4 {
+            bytes.extend_from_slice(&0_u16.to_le_bytes());
+        }
+        bytes.extend_from_slice(&score);
+        bytes
+    }
+
+    #[test]
+    fn playable_mus_becomes_a_midi_file_and_midi_passes_through() {
+        let (midi, extension, kind) =
+            music_to_playable(&mus_fixture()).expect("the MUS fixture converts");
+        assert_eq!(extension, "mid", "the playable container is SMF");
+        assert_eq!(kind, MusicKind::Mus, "the input kind is reported");
+        assert!(midi.starts_with(b"MThd"), "the conversion writes SMF");
+        assert!(
+            midi.windows(2).any(|pair| pair == [0x90_u8, 0x3C]),
+            "the note-on event survives: {midi:02X?}"
+        );
+        let raw = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01".to_vec();
+        let (through, smf_ext, smf_kind) =
+            music_to_playable(&raw).expect("MIDI is already playable");
+        assert_eq!(through, raw, "the bytes are unchanged");
+        assert_eq!(smf_ext, "mid", "the same container");
+        assert_eq!(smf_kind, MusicKind::Midi, "reported as the input kind");
+    }
+
+    #[test]
+    fn containers_and_modules_pass_through_under_their_own_extension() {
+        let mut ogg = b"OggS\x00\x01".to_vec();
+        ogg.extend_from_slice(&[0_u8; 20]);
+        for (bytes, want) in [
+            (ogg.clone(), ("ogg", MusicKind::Ogg)),
+            (b"ID3\x04\0rest".to_vec(), ("mp3", MusicKind::Mp3)),
+            (b"fLaC\0\0meta".to_vec(), ("flac", MusicKind::Flac)),
+            (b"RIFF\0\0\0\0WAVEfmt ".to_vec(), ("wav", MusicKind::Wav)),
+            (b"Extended Module: XModule".to_vec(), ("xm", MusicKind::Xm)),
+            (b"IMPM\0\0\0\0body".to_vec(), ("it", MusicKind::It)),
+        ] {
+            let (data, extension, kind) =
+                music_to_playable(&bytes).expect("a recognised container plays");
+            assert_eq!(data, bytes, "byte for byte for {want:?}");
+            assert_eq!(extension, want.0, "extension for {want:?}");
+            assert_eq!(kind, want.1, "kind for {want:?}");
+        }
+        let mut s3m = vec![0_u8; 48];
+        s3m[44..48].copy_from_slice(b"SCRM");
+        let mut mod_bytes = vec![0_u8; 1084];
+        mod_bytes[1080..1084].copy_from_slice(b"M.K.");
+        for (bytes, want) in [
+            (s3m, ("s3m", MusicKind::S3m)),
+            (mod_bytes, ("mod", MusicKind::Mod)),
+        ] {
+            let (data, extension, kind) = music_to_playable(&bytes).expect("a module plays");
+            assert_eq!(data, bytes, "byte for byte for {want:?}");
+            assert_eq!(extension, want.0, "extension for {want:?}");
+            assert_eq!(kind, want.1, "kind for {want:?}");
+        }
+    }
+
+    #[test]
+    fn unrecognised_and_corrupt_music_refuse_to_convert() {
+        let error = music_to_playable(b"total nonsense").expect_err("no magic here");
+        assert_eq!(error.code(), "unsupported", "unrecognised code");
+        assert!(
+            error.to_string().contains("not recognised music"),
+            "the message names the fix: {error}"
+        );
+        let corrupt_error = music_to_playable(b"MUS\x1A").expect_err("a truncated MUS");
+        assert_eq!(
+            corrupt_error.code(),
+            "format_error",
+            "the converter's code survives"
         );
     }
 }

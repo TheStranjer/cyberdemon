@@ -112,6 +112,7 @@ mod tests {
                 "new_wad",
                 "open_iwad",
                 "open_wad",
+                "preview_music",
                 "preview_sound",
                 "redo",
                 "remove_lump",
@@ -170,6 +171,12 @@ mod tests {
             &["name", "scope", "namespace", "occurrence", "bits"],
         );
         assert_required(&preview_sound, "name");
+        let preview_music = schema_of(tool_named(&tools, "preview_music"));
+        assert_flattens(
+            &preview_music,
+            &["name", "scope", "namespace", "occurrence"],
+        );
+        assert_required(&preview_music, "name");
     }
 
     #[tokio::test]

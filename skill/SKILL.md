@@ -119,6 +119,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `import_sound`          | `reference/audio.md`    |
 | `preview_sound`         | `reference/audio.md`    |
 | `import_music`          | `reference/music.md`    |
+| `preview_music`         | `reference/music.md`    |
 | `get_palette`           | `reference/palette.md`  |
 | `set_palette`           | `reference/palette.md`  |
 | `open_iwad`             | `reference/session.md`  |

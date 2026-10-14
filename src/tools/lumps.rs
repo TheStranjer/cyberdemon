@@ -11,8 +11,8 @@
 
 mod edit;
 mod place;
-mod rows;
-mod select;
+pub(in crate::tools) mod rows;
+pub(in crate::tools) mod select;
 
 use std::path::{Path, PathBuf};
 

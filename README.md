@@ -15,7 +15,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`), an `audio` group
-> (`import_sound`), a `music` group (`import_music`),
+> (`import_sound`, `preview_sound`), a `music` group (`import_music`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
 > `get_session_info`, `get_wad_info`) and a `render` group
@@ -27,7 +27,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure
 > integer image ops, Doom patch (incl. tall) and flat codecs), an internal
 > audio core (`src/audio*`: interleaved
-> `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, `symphonia`-backed
+> `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, `DP*` PC speaker
+> tone-list synthesis, `symphonia`-backed
 > `WAV`/`OGG`/`MP3`/`FLAC` import decoding, integer mono downmix
 > and resampling), an internal music core (`src/music*`: Doom `MUS` to
 > type-0 `MIDI` conversion and back, an `SMF` writer, a track-merging

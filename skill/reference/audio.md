@@ -1,6 +1,7 @@
 # Audio tools
 
-Bringing external sound files into the working archive.
+Bringing external sound files into the working archive and previewing the
+sounds a session holds.
 
 ## `import_sound`
 
@@ -69,4 +70,62 @@ Bringing external sound files into the working archive.
 
   ```json
   {"source": "/data/pistol.ogg", "name": "PISTOL22", "format": "passthrough"}
+  ```
+
+## `preview_sound`
+
+- Purpose: publishes one sound lump of the session as a playable file on
+  the localhost asset server and returns its `URL`. The archives are not
+  modified and nothing is recorded in the undo history.
+- Arguments:
+  - The shared lump selector: `name` (required) plus `scope`
+    (`"merged"` default, `"working"`, `"layer:N"`), `namespace` and
+    `occurrence` (default the last, winning match) — see
+    `reference/lumps.md`.
+  - `bits` (integer, optional): `8` or `16`, default `16`. The sample
+    width of the generated `WAV` files; container lumps pass through
+    unchanged.
+- Behaviour by the lump's detected kind:
+  - `doom_sound` (a `DMX` `DS*` lump): decoded and re-encoded as
+    `NAME.wav`.
+  - `pc_speaker` (a `DP*` tone-list lump: `u16` format `0`, `u16` tick
+    count, one byte per 1/140 s tick): synthesized into a mono 11025 Hz
+    square-wave `WAV`. Each tick keeps its exact share of samples, so
+    timing does not drift. **The pitch is approximate**: tone `n` plays at
+    `110 + 13·n` Hz instead of the vanilla divisor table, so treat it as a
+    rhythmic preview, not a reference for the real tune.
+  - `wav`, `ogg`, `mp3`, `flac`: the bytes are published unchanged with the
+    matching extension.
+  - anything else: `unsupported`, message
+    `lump NAME is not a recognised sound; use get_lump format=url for raw
+    bytes`.
+- Returns (structured content):
+
+  ```json
+  {
+    "name": "DSTEST",
+    "kind": "doom_sound",
+    "format": "wav",
+    "sample_rate": 22050,
+    "duration_ms": 1000,
+    "asset": {
+      "url": "http://localhost:25369/assets/3f9a.../DSTEST.wav",
+      "filename": "DSTEST.wav",
+      "mime": "audio/wav",
+      "size": 44144
+    }
+  }
+  ```
+
+  `sample_rate` and `duration_ms` are present when the format names them:
+  `DMX`, `WAV` and `PC` speaker results; `ogg`/`mp3`/`flac` pass-throughs
+  report only the asset.
+- Errors: `invalid_argument` for a bad selector field or a `bits` value
+  that is neither `8` nor `16`; `not_found` when no lump matches;
+  `format_error` for a corrupt `DMX` or `DP` lump; `unsupported` for a
+  non-sound kind.
+- Example: listen to the working copy of a door sound:
+
+  ```json
+  {"name": "DSDOORSW", "scope": "working"}
   ```

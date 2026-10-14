@@ -47,7 +47,9 @@ src/
   audio/          Audio building blocks (no MCP concerns): `audio/pcm.rs`
                   interleaved i16 `Pcm` with mono downmix, integer linear
                   resampling and 8-bit conversion, `audio/dmx.rs` Doom
-                  "DS*" DMX sound lump decode/encode, `audio/wav.rs`
+                  "DS*" DMX sound lump decode/encode,
+                  `audio/pcspeaker.rs` Doom "DP*" PC speaker tone-list
+                  square-wave synthesis, `audio/wav.rs`
                   RIFF/WAV decode (8/16/24/32-bit and extensible PCM) and
                   canonical 8/16-bit encode, `audio/decode.rs` any-container
                   import decode (`decode_any` over WAV/OGG/MP3/FLAC via

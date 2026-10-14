@@ -116,6 +116,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `remove_lump`           | `reference/lumps.md`    |
 | `rename_lump`           | `reference/lumps.md`    |
 | `import_sound`          | `reference/audio.md`    |
+| `preview_sound`         | `reference/audio.md`    |
 | `import_music`          | `reference/music.md`    |
 | `open_iwad`             | `reference/session.md`  |
 | `open_wad`              | `reference/session.md`  |

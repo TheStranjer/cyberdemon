@@ -16,25 +16,25 @@ use crate::session::{Scope, Session};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::wad::name::LumpName;
 
-/// The fields that pick one lump, flattened into a tool's parameters.
+/// The fields that pick one lump, flattened into each tool's arguments.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-pub(super) struct LumpSelector {
+pub(in crate::tools) struct LumpSelector {
     /// Lump name to read: 1 to 8 printable `ASCII` characters, matched
     /// case-insensitively (it is uppercased), e.g. `"PLAYPAL"`.
-    pub(super) name: String,
+    pub(in crate::tools) name: String,
     /// Which archive to read from: `"merged"` (the default: what an engine
     /// sees), `"working"` or `"layer:N"` (0 is the `IWAD`).
     #[serde(default)]
-    pub(super) scope: Option<String>,
+    pub(in crate::tools) scope: Option<String>,
     /// Keep only matches inside this namespace region (`sprites`, `flats`,
     /// `patches`, `colormaps`, `acs`, `voices`, `hires`, `textures`);
     /// without it any region and the loose lumps match.
     #[serde(default)]
-    pub(super) namespace: Option<String>,
+    pub(in crate::tools) namespace: Option<String>,
     /// 0-based index among the matching lumps, in the scope's directory
     /// order; the default is the last one, i.e. the copy that wins.
     #[serde(default)]
-    pub(super) occurrence: Option<usize>,
+    pub(in crate::tools) occurrence: Option<usize>,
 }
 
 /// The [`LumpRow`] the selector picks.
@@ -45,7 +45,10 @@ pub(super) struct LumpSelector {
 /// does not parse; [`CyberError::NotFound`] when no lump in the scope
 /// matches, or when `occurrence` reaches past the matches (the message
 /// names how many exist); [`build_rows`]' errors for the scope itself.
-pub(super) fn resolve(session: &Session, selector: &LumpSelector) -> Result<LumpRow, CyberError> {
+pub(in crate::tools) fn resolve(
+    session: &Session,
+    selector: &LumpSelector,
+) -> Result<LumpRow, CyberError> {
     let name = LumpName::parse(&selector.name)?;
     let scope = super::parse_scope(selector.scope.as_deref())?;
     let namespace = super::parse_namespace(selector.namespace.as_deref())?;

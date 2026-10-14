@@ -2,20 +2,23 @@
 //!
 //! Pure data processing on owned buffers: [`pcm::Pcm`] is the in-memory
 //! sample container, [`dmx`] decodes and encodes `Doom` `DS*` sound lumps,
-//! [`wav`] reads and writes canonical `RIFF`/`WAVE` files and [`decode`]
-//! brings `WAV`, `OGG`, `MP3` and `FLAC` files of any layout into [`Pcm`]
-//! through `symphonia`. Nothing here knows about MCP, lumps or the
-//! filesystem; the sound tools compose these pieces. All arithmetic is
-//! integer-only, like the rest of the crate (see [`crate::fixed`]).
+//! [`wav`] reads and writes canonical `RIFF`/`WAVE` files, [`pcspeaker`]
+//! synthesizes `Doom` `DP*` `PC` speaker tone lists and [`decode`] brings
+//! `WAV`, `OGG`, `MP3` and `FLAC` files of any layout into [`Pcm`] through
+//! `symphonia`. Nothing here knows about `MCP`, lumps or the filesystem;
+//! the sound tools compose these pieces. All arithmetic is integer-only,
+//! like the rest of the crate (see [`crate::fixed`]).
 
 pub mod decode;
 pub mod dmx;
 pub mod pcm;
+pub mod pcspeaker;
 pub mod wav;
 
 pub use decode::{decode_any, sniff_format};
 pub use dmx::{decode_dmx, encode_dmx};
 pub use pcm::Pcm;
+pub use pcspeaker::synthesize_pc_speaker;
 pub use wav::{decode_wav, encode_wav};
 
 /// Smallest sample rate [`Pcm::resample`](pcm::Pcm::resample) accepts.

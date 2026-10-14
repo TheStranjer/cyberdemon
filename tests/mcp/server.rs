@@ -98,6 +98,7 @@ mod tests {
                 "new_wad",
                 "open_iwad",
                 "open_wad",
+                "preview_sound",
                 "remove_lump",
                 "rename_lump",
                 "replace_lump",
@@ -145,6 +146,12 @@ mod tests {
         );
         assert_required(&extract_lump, "name");
         assert_required(&extract_lump, "path");
+        let preview_sound = schema_of(tool_named(&tools, "preview_sound"));
+        assert_flattens(
+            &preview_sound,
+            &["name", "scope", "namespace", "occurrence", "bits"],
+        );
+        assert_required(&preview_sound, "name");
     }
 
     #[tokio::test]

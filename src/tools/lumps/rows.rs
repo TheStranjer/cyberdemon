@@ -17,27 +17,27 @@ use crate::wad::name::LumpName;
 
 /// One lump of a listed scope, in the shared row shape.
 #[derive(Clone, Debug, Serialize)]
-pub(super) struct LumpRow {
+pub(in crate::tools) struct LumpRow {
     /// Position in the listed scope (the merged-view index for `merged`).
-    pub(super) index: usize,
+    pub(in crate::tools) index: usize,
     /// Normalised lump name.
-    pub(super) name: LumpName,
+    pub(in crate::tools) name: LumpName,
     /// Payload size in bytes.
-    pub(super) size: usize,
+    pub(in crate::tools) size: usize,
     /// Byte offset of the data inside the source archive, as `save_wad`
     /// would lay that archive out.
-    pub(super) offset: u32,
+    pub(in crate::tools) offset: u32,
     /// Type hint from [`analyze`].
-    pub(super) kind: LumpKind,
+    pub(in crate::tools) kind: LumpKind,
     /// Namespace region the lump sits in, if any.
-    pub(super) namespace: Option<Namespace>,
+    pub(in crate::tools) namespace: Option<Namespace>,
     /// Map block the lump belongs to, if any.
-    pub(super) map: Option<LumpName>,
+    pub(in crate::tools) map: Option<LumpName>,
     /// Archive the lump was taken from.
-    pub(super) source: Source,
+    pub(in crate::tools) source: Source,
     /// The lump itself, for content searches; never serialized.
     #[serde(skip)]
-    pub(super) lump: Lump,
+    pub(in crate::tools) lump: Lump,
 }
 
 /// The save-layout data offsets of the archives a scope lists, one table
@@ -53,7 +53,10 @@ type OffsetTables = Vec<(Source, Vec<u32>)>;
 /// [`CyberError::NotFound`] for an out-of-range layer scope (through
 /// [`Session::lumps_in`]) and [`CyberError::LimitExceeded`] when a source
 /// archive no longer fits the `WAD` layout.
-pub(super) fn build_rows(session: &Session, scope: Scope) -> Result<Vec<LumpRow>, CyberError> {
+pub(in crate::tools) fn build_rows(
+    session: &Session,
+    scope: Scope,
+) -> Result<Vec<LumpRow>, CyberError> {
     let entries = session.lumps_in(scope)?;
     let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
     let analysis = analyze(&lumps);

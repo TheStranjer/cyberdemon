@@ -1,9 +1,14 @@
-//! Audio tools: bringing external sound files into the working archive.
+//! Audio tools: bringing external sound files into the working archive and
+//! previewing the sounds a session holds.
 //!
-//! The first tool of the group is [`Cyberdemon::import_sound`]: fetch a
+//! The group's first tool is [`Cyberdemon::import_sound`]: fetch a
 //! `WAV`/`OGG`/`MP3`/`FLAC` file through [`AppState::fetch_source`], decode
 //! it with [`crate::audio::decode_any`] and either convert it to a vanilla
 //! `DMX` `DS*` lump or store the original bytes unchanged.
+//! [`Cyberdemon::preview_sound`] goes the other way: it reads one sound
+//! lump of the session and publishes it as a playable asset, converting
+//! `DMX` and `PC` speaker lumps to `WAV`. The conversion itself lives in
+//! the crate-visible [`sound_to_playable`] so `get_asset_url` can reuse it.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -12,13 +17,21 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::fetch::derive_lump_name;
-use crate::audio::{Pcm, decode_any, encode_dmx, sniff_format};
+use crate::assets::server::AssetRef;
+use crate::assets::store::mime_for_extension;
+use crate::audio::{
+    Pcm, decode_any, decode_dmx, decode_wav, encode_dmx, encode_wav, sniff_format,
+    synthesize_pc_speaker,
+};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::{fail, ok};
+use crate::tools::fail;
+use crate::tools::lumps::select::{LumpSelector, resolve};
+use crate::tools::ok;
 use crate::wad::archive::{Lump, Wad};
+use crate::wad::classify::LumpKind;
 use crate::wad::name::{LumpName, MAX_NAME_LEN};
 
 /// Prefix `Doom`'s sound table puts in front of every built-in sound name;
@@ -367,6 +380,199 @@ async fn import(
     })
 }
 
+/// Sample width of the generated `WAV` files unless `bits` says otherwise.
+const DEFAULT_BITS: u16 = 16_u16;
+
+/// Arguments for [`Cyberdemon::preview_sound`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PreviewSoundParams {
+    /// The lump selector: `name` plus optional `scope`, `namespace` and
+    /// `occurrence` (see `skill/reference/lumps.md`).
+    #[serde(flatten)]
+    selector: LumpSelector,
+    /// Sample width of a generated `WAV`: `8` or `16` (default `16`). It
+    /// applies to the conversions (`doom_sound` and `pc_speaker` lumps);
+    /// container lumps (`wav`, `ogg`, `mp3`, `flac`) pass through unchanged.
+    #[serde(default)]
+    bits: Option<u16>,
+}
+
+/// What a playable conversion knows about the file it produced.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::tools) struct SoundInfo {
+    /// Sample rate of the playable audio in Hz.
+    pub(in crate::tools) sample_rate: u32,
+    /// Length of the playable audio in whole milliseconds.
+    pub(in crate::tools) duration_ms: u64,
+}
+
+impl SoundInfo {
+    /// The facts of one decoded [`Pcm`].
+    fn of_pcm(pcm: &Pcm) -> Self {
+        Self {
+            sample_rate: pcm.sample_rate,
+            duration_ms: pcm.duration_ms(),
+        }
+    }
+}
+
+/// Structured result of [`Cyberdemon::preview_sound`].
+#[derive(Serialize)]
+struct PreviewSoundReport {
+    /// The previewed lump name.
+    name: LumpName,
+    /// The lump's detected kind.
+    kind: LumpKind,
+    /// The playable container that was published: `wav`, `ogg`, `mp3` or
+    /// `flac`.
+    format: &'static str,
+    /// Sample rate in Hz, when the format names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sample_rate: Option<u32>,
+    /// Length in whole milliseconds, when it is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    /// The published playable file.
+    asset: AssetRef,
+}
+
+/// The `bits` parameter, defaulting to [`DEFAULT_BITS`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] unless the value is `8` or `16`.
+fn parse_bits(value: Option<u16>) -> Result<u16, CyberError> {
+    match value {
+        None => Ok(DEFAULT_BITS),
+        Some(bits @ (8_u16 | 16_u16)) => Ok(bits),
+        Some(bits) => Err(CyberError::InvalidArgument(format!(
+            "bits {bits} is neither 8 nor 16: pass bits 8 or bits 16"
+        ))),
+    }
+}
+
+/// Whether a classification names a sound [`sound_to_playable`] converts.
+const fn is_sound_kind(kind: LumpKind) -> bool {
+    matches!(
+        kind,
+        LumpKind::DoomSound
+            | LumpKind::PcSpeaker
+            | LumpKind::Wav
+            | LumpKind::Ogg
+            | LumpKind::Mp3
+            | LumpKind::Flac
+    )
+}
+
+/// The result of making one sound lump playable: the file bytes, its
+/// extension (without the dot) and, where the format names them, the
+/// sample rate and length.
+type Playable = (Vec<u8>, &'static str, Option<SoundInfo>);
+
+/// Render one decoded [`Pcm`] as the `WAV` file plus its facts.
+///
+/// # Errors
+///
+/// [`encode_wav`]'s errors pass through.
+fn playable_wav(pcm: &Pcm, bits: u16) -> Result<Playable, CyberError> {
+    let info = SoundInfo::of_pcm(pcm);
+    Ok((encode_wav(pcm, bits)?, "wav", Some(info)))
+}
+
+/// Convert one sound lump's bytes into a playable file: the file bytes,
+/// its extension (without the dot) and, where the format names them, the
+/// sample rate and length.
+///
+/// `doom_sound` lumps are decoded and re-encoded as `WAV` at `bits`;
+/// `pc_speaker` lumps are synthesized (mono 11025 Hz square wave, pitch
+/// approximate, see [`synthesize_pc_speaker`]) and encoded as `WAV` at
+/// `bits`; the four container kinds pass through unchanged.
+///
+/// # Errors
+///
+/// [`decode_dmx`], [`synthesize_pc_speaker`] and [`encode_wav`]'s errors
+/// for malformed sound data; [`CyberError::Unsupported`] for a kind that
+/// is not a sound.
+pub(in crate::tools) fn sound_to_playable(
+    bytes: &[u8],
+    kind: LumpKind,
+    bits: u16,
+) -> Result<Playable, CyberError> {
+    match kind {
+        LumpKind::DoomSound => playable_wav(&decode_dmx(bytes)?, bits),
+        LumpKind::PcSpeaker => playable_wav(&synthesize_pc_speaker(bytes)?, bits),
+        LumpKind::Wav => {
+            // The bytes publish unchanged; the rate and length are extras
+            // when the header still decodes.
+            let info = decode_wav(bytes).ok().as_ref().map(SoundInfo::of_pcm);
+            Ok((bytes.to_vec(), "wav", info))
+        }
+        LumpKind::Ogg => Ok((bytes.to_vec(), "ogg", None)),
+        LumpKind::Mp3 => Ok((bytes.to_vec(), "mp3", None)),
+        LumpKind::Flac => Ok((bytes.to_vec(), "flac", None)),
+        other @ (LumpKind::Marker
+        | LumpKind::MapMarker
+        | LumpKind::MapData
+        | LumpKind::Palette
+        | LumpKind::Colormap
+        | LumpKind::Pnames
+        | LumpKind::TextureDefs
+        | LumpKind::Endoom
+        | LumpKind::Demo
+        | LumpKind::Dehacked
+        | LumpKind::Decorate
+        | LumpKind::Zscript
+        | LumpKind::Mapinfo
+        | LumpKind::Png
+        | LumpKind::Jpeg
+        | LumpKind::Gif
+        | LumpKind::Mus
+        | LumpKind::Midi
+        | LumpKind::Flat
+        | LumpKind::Sprite
+        | LumpKind::Patch
+        | LumpKind::Text
+        | LumpKind::Empty
+        | LumpKind::Unknown) => Err(CyberError::Unsupported(format!(
+            "a {} lump is not a recognised sound; use get_lump format=url \
+             for raw bytes",
+            other.as_str()
+        ))),
+    }
+}
+
+/// Run `preview_sound` end to end: resolve the lump, convert it and
+/// publish the playable file.
+///
+/// # Errors
+///
+/// [`parse_bits`] and [`resolve`] errors for the arguments;
+/// [`CyberError::Unsupported`] naming the lump when its kind is not a
+/// sound; [`sound_to_playable`] errors for the bytes;
+/// [`AppState::publish`] errors for the asset store.
+fn preview(state: &AppState, args: &PreviewSoundParams) -> Result<PreviewSoundReport, CyberError> {
+    let bits = parse_bits(args.bits)?;
+    let row = state.with_session(|session| resolve(session, &args.selector))?;
+    if !is_sound_kind(row.kind) {
+        let name = row.name;
+        return Err(CyberError::Unsupported(format!(
+            "lump {name} is not a recognised sound; use get_lump format=url for raw bytes"
+        )));
+    }
+    let (data, extension, info) = sound_to_playable(&row.lump.data, row.kind, bits)?;
+    let filename = format!("{}.{extension}", row.name);
+    let mime = mime_for_extension(extension);
+    let asset = state.publish(&filename, mime, data)?;
+    Ok(PreviewSoundReport {
+        name: row.name,
+        kind: row.kind,
+        format: extension,
+        sample_rate: info.map(|facts| facts.sample_rate),
+        duration_ms: info.map(|facts| facts.duration_ms),
+        asset,
+    })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -386,11 +592,48 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Publishes one sound lump as a playable audio asset.
+    #[tool(
+        description = "Publishes one sound lump of the session as a playable file on the localhost asset server; the archives are not modified. Takes the shared lump selector: name plus optional scope (\"merged\" default, \"working\", \"layer:N\"), namespace and occurrence (default the last, winning match). What runs depends on the lump's detected kind: a doom_sound (DMX DS* lump) is decoded and re-encoded as a WAV - bits 8 or 16 (default 16) is the sample width of generated WAVs; a pc_speaker (DP* tone-list lump) is synthesized into a mono 11025 Hz square-wave WAV (each 1/140 s tick keeps its exact share of samples so timing does not drift; tone n plays at 110 + 13n Hz, an approximation of the vanilla tone table, so the pitch is approximate); wav, ogg, mp3 and flac lumps are published unchanged with their own extension. Any other kind is unsupported (use get_lump format=url for raw bytes); a name with no match is not_found; a bad bits value is invalid_argument. Returns {name, kind, format, sample_rate, duration_ms (the last two when the format names them: DMX, WAV, PC speaker), asset: {url, filename, mime, size}}."
+    )]
+    fn preview_sound(
+        &self,
+        Parameters(args): Parameters<PreviewSoundParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match preview(self.state(), &args) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SoundFormat, extension_of, parse_format, parse_max_seconds, parse_rate};
+    use super::{
+        SoundFormat, extension_of, is_sound_kind, parse_bits, parse_format, parse_max_seconds,
+        parse_rate, sound_to_playable,
+    };
+    use crate::audio::{Pcm, decode_wav, encode_dmx, encode_wav};
+    use crate::wad::classify::LumpKind;
+
+    /// One frame of the small square wave the fixtures use.
+    fn square_at(frame: usize) -> i16 {
+        if frame.checked_rem(2).unwrap_or(0) == 0 {
+            8000_i16
+        } else {
+            -8000_i16
+        }
+    }
+
+    /// Mono `Pcm` of `frames` samples of a small square-ish wave.
+    fn tone(rate: u32, frames: usize) -> Pcm {
+        Pcm {
+            sample_rate: rate,
+            channels: 1,
+            samples: (0..frames).map(square_at).collect(),
+        }
+    }
 
     #[test]
     fn format_parses_the_two_ways_case_insensitively() {
@@ -480,6 +723,139 @@ mod tests {
             extension_of("sound.toolongext"),
             None,
             "over five characters"
+        );
+    }
+
+    #[test]
+    fn bits_defaults_to_16_and_accepts_only_8_and_16() {
+        assert_eq!(parse_bits(None).expect("default"), 16_u16, "16-bit default");
+        assert_eq!(parse_bits(Some(8)).expect("low width"), 8_u16, "8 ok");
+        assert_eq!(parse_bits(Some(16)).expect("high width"), 16_u16, "16 ok");
+        let error = parse_bits(Some(12)).expect_err("not a WAV width");
+        assert_eq!(error.code(), "invalid_argument", "bad bits code");
+        assert!(
+            error.to_string().contains("pass bits 8"),
+            "the message names the fix: {error}"
+        );
+        assert_eq!(
+            parse_bits(Some(0)).expect_err("zero width").code(),
+            "invalid_argument",
+            "zero bits code"
+        );
+    }
+
+    #[test]
+    fn sound_kinds_are_exactly_the_six_playable_ones() {
+        let playable = [
+            LumpKind::DoomSound,
+            LumpKind::PcSpeaker,
+            LumpKind::Wav,
+            LumpKind::Ogg,
+            LumpKind::Mp3,
+            LumpKind::Flac,
+        ];
+        for kind in LumpKind::ALL {
+            assert_eq!(
+                is_sound_kind(kind),
+                playable.contains(&kind),
+                "{kind:?} playability",
+            );
+        }
+    }
+
+    #[test]
+    fn dmx_lump_bytes_become_a_wav_with_their_facts() {
+        let bytes = encode_dmx(&tone(22050, 100), true).expect("mono encodes");
+        let (wav, extension, maybe_facts) =
+            sound_to_playable(&bytes, LumpKind::DoomSound, 16).expect("a DMX sound converts");
+        assert_eq!(extension, "wav", "a WAV is produced");
+        assert_eq!(wav[..4], *b"RIFF", "RIFF magic");
+        let decoded = decode_wav(&wav).expect("the WAV we just encoded");
+        assert_eq!(decoded.sample_rate, 22050, "the lump's rate");
+        assert_eq!(decoded.frames(), 100, "the pads are gone");
+        let facts = maybe_facts.expect("DMX names its rate and length");
+        assert_eq!(facts.sample_rate, 22050, "reported rate");
+        assert_eq!(facts.duration_ms, 4, "100 frames at 22050 Hz floor to 4 ms");
+    }
+
+    #[test]
+    fn bits_8_writes_the_narrower_wav_data() {
+        let bytes = encode_dmx(&tone(11025, 100), true).expect("mono encodes");
+        let (wide, _, _) = sound_to_playable(&bytes, LumpKind::DoomSound, 16).expect("16-bit");
+        let (narrow, _, _) = sound_to_playable(&bytes, LumpKind::DoomSound, 8).expect("8-bit");
+        assert_eq!(
+            wide.len(),
+            44_usize.checked_add(200).expect("test sizes fit"),
+            "canonical header plus i16 frames"
+        );
+        assert_eq!(
+            narrow.len(),
+            44_usize.checked_add(100).expect("test sizes fit"),
+            "canonical header plus byte frames"
+        );
+    }
+
+    #[test]
+    fn pc_speaker_lumps_synthesize_and_broken_ones_refuse() {
+        let lump = [0_u8, 0, 3, 0, 0, 20, 40];
+        let (wav, extension, maybe_facts) =
+            sound_to_playable(&lump, LumpKind::PcSpeaker, 16).expect("a tone list synthesizes");
+        assert_eq!(extension, "wav", "the synthesis is a WAV");
+        let decoded = decode_wav(&wav).expect("the WAV we just encoded");
+        assert_eq!(decoded.sample_rate, 11025, "the engine's rate");
+        assert_eq!(decoded.frames(), 236, "3 * 11025 / 140 floored");
+        let facts = maybe_facts.expect("the synthesis names its rate and length");
+        assert_eq!(
+            facts.duration_ms, 21,
+            "236 frames at 11025 Hz floor to 21 ms"
+        );
+        let broken = [1_u8, 0, 1, 0, 0];
+        let error = sound_to_playable(&broken, LumpKind::PcSpeaker, 16)
+            .expect_err("format 1 is not a tone list");
+        assert_eq!(error.code(), "format_error", "bad DP format code");
+    }
+
+    #[test]
+    fn containers_pass_through_and_only_wav_reports_facts() {
+        let wav = encode_wav(&tone(8000, 30), 16).expect("the fixture encodes");
+        let (kept, extension, facts) =
+            sound_to_playable(&wav, LumpKind::Wav, 16).expect("a WAV passes through");
+        assert_eq!(extension, "wav", "kept as a WAV");
+        assert_eq!(kept, wav, "byte for byte unchanged");
+        let header = facts.expect("the WAV header decodes");
+        assert_eq!(header.sample_rate, 8000, "rate from the header");
+        assert_eq!(header.duration_ms, 3, "30 frames at 8000 Hz floor to 3 ms");
+        for (kind, wanted) in [
+            (LumpKind::Ogg, "ogg"),
+            (LumpKind::Mp3, "mp3"),
+            (LumpKind::Flac, "flac"),
+        ] {
+            let payload = b"\x00\x01\x02\x03";
+            let (data, got, info) = sound_to_playable(payload, kind, 16).expect("bytes pass");
+            assert_eq!(got, wanted, "extension for {kind:?}");
+            assert_eq!(data, payload, "unchanged for {kind:?}");
+            assert!(info.is_none(), "no facts for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_broken_wav_still_passes_through_without_facts() {
+        let not_a_real_wav = b"RIFF\x00\x00\x00\x00WAVEjunk";
+        let (bytes, extension, info) =
+            sound_to_playable(not_a_real_wav, LumpKind::Wav, 16).expect("the bytes pass");
+        assert_eq!(extension, "wav", "the kind picks the extension");
+        assert_eq!(bytes, not_a_real_wav, "unchanged");
+        assert!(info.is_none(), "an undecodable header reports nothing");
+    }
+
+    #[test]
+    fn non_sound_kinds_are_unsupported_with_a_way_out() {
+        let error =
+            sound_to_playable(b"xx", LumpKind::Palette, 16).expect_err("a palette is not a sound");
+        assert_eq!(error.code(), "unsupported", "palette code");
+        assert!(
+            error.to_string().contains("get_lump format=url"),
+            "the message names the way out: {error}"
         );
     }
 }

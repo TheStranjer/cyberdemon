@@ -1,19 +1,20 @@
 //! The `audio` tool group as seen by a real MCP client: `import_sound`
 //! decoding `WAV` files (the in-house reader and the `symphonia` fallback),
 //! building padded `DMX` `DS*` lumps, storing `passthrough` copies, and
-//! every refusal path leaving the session untouched.
+//! every refusal path leaving the session untouched; plus `preview_sound`
+//! turning session sound lumps into playable `WAV` assets.
 
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use cyberdemon::audio::{Pcm, encode_wav};
+    use cyberdemon::audio::{Pcm, decode_wav, encode_dmx, encode_wav};
     use rmcp::RoleClient;
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::support::{call, call_err, connect};
+    use crate::support::{call, call_err, connect, http_get};
 
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
@@ -427,5 +428,216 @@ mod tests {
         let (missing_code, _) = call_err(&client, "import_sound", source_arg(&missing)).await;
         assert_eq!(missing_code, "not_found", "fetch errors surface unchanged");
         assert_untouched(&client).await;
+    }
+
+    /// Bytes in the canonical 44-byte `WAV` header.
+    const WAV_HEADER: usize = 44;
+    /// Bytes per sample of 16-bit audio.
+    const BYTES_16: usize = 2;
+    /// Frames of the `DSTEST` and `WAVTEST` fixtures.
+    const FIXTURE_FRAMES: usize = 100;
+    /// `PC` speaker ticks per second.
+    const TICKS_PER_SECOND: usize = 140;
+
+    /// `bytes` as the space-separated uppercase hex `add_lump` expects.
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Stores `bytes` in the working archive as a lump named `name`.
+    async fn add_working_lump(client: &Client, name: &str, bytes: &[u8]) {
+        call(
+            client,
+            "add_lump",
+            json!({ "name": name, "hex": hex_of(bytes) }),
+        )
+        .await;
+    }
+
+    /// The padded mono 22050 Hz `DMX` fixture lump bytes.
+    fn dmx_fixture() -> Vec<u8> {
+        let pcm = Pcm {
+            sample_rate: SOURCE_RATE,
+            channels: 1,
+            samples: square(FIXTURE_FRAMES),
+        };
+        encode_dmx(&pcm, true).expect("mono, small rate")
+    }
+
+    /// The 8000 Hz mono 16-bit `WAV` fixture bytes (30 frames).
+    fn wav_fixture() -> Vec<u8> {
+        let pcm = Pcm {
+            sample_rate: 8000,
+            channels: 1,
+            samples: vec![500_i16; 30],
+        };
+        encode_wav(&pcm, 16).expect("the fixture encodes")
+    }
+
+    /// The `DPTEST` PC speaker fixture: three ticks, tones 0, 20 and 40.
+    fn pc_speaker_fixture() -> Vec<u8> {
+        vec![0_u8, 0, 3, 0, 0, 20, 40]
+    }
+
+    /// GET a published asset `URL` and require the bytes it serves.
+    async fn fetch_asset(url: &str) -> Vec<u8> {
+        let (base, rest) = url.split_once("/assets/").expect("an asset url");
+        let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
+        assert_eq!(status, 200, "the asset serves: {url}");
+        body
+    }
+
+    /// The asset `URL` of a `preview_sound` report.
+    fn asset_url(report: &Value) -> String {
+        report["asset"]["url"]
+            .as_str()
+            .expect("the report carries an asset url")
+            .to_owned()
+    }
+
+    #[tokio::test]
+    async fn preview_sound_renders_a_dmx_lump_as_a_wav_asset() {
+        let client = connect().await;
+        add_working_lump(&client, "DSTEST", &dmx_fixture()).await;
+        let report = call(&client, "preview_sound", json!({ "name": "DSTEST" })).await;
+        assert_eq!(report["name"], json!("DSTEST"), "the lump echoed");
+        assert_eq!(report["kind"], json!("doom_sound"), "detected by content");
+        assert_eq!(report["format"], json!("wav"), "the conversion target");
+        assert_eq!(report["sample_rate"], json!(22050_u64), "the lump's rate");
+        assert_eq!(report["duration_ms"], json!(4_u64), "100 frames floored");
+        assert_eq!(report["asset"]["filename"], json!("DSTEST.wav"), "NAME.wav");
+        assert_eq!(
+            report["asset"]["mime"],
+            json!("audio/wav"),
+            "the media type"
+        );
+        let body = fetch_asset(&asset_url(&report)).await;
+        assert_eq!(&body[..4], b"RIFF", "a RIFF container");
+        assert_eq!(&body[8..12], b"WAVE", "announcing WAVE");
+        let pcm = decode_wav(&body).expect("the published WAV decodes");
+        assert_eq!(pcm.sample_rate, 22050, "right rate in the header");
+        assert_eq!(pcm.channels, 1, "DMX audio is mono");
+        assert_eq!(pcm.frames(), FIXTURE_FRAMES, "the pads are gone");
+        let expected_size = WAV_HEADER
+            .checked_add(FIXTURE_FRAMES.checked_mul(BYTES_16).expect("16-bit frames"))
+            .expect("test sizes fit");
+        assert_eq!(
+            report["asset"]["size"],
+            json!(expected_size),
+            "header plus i16 frames"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_sound_passes_a_wav_lump_through_unchanged() {
+        let client = connect().await;
+        let original = wav_fixture();
+        add_working_lump(&client, "WAVTEST", &original).await;
+        let report = call(&client, "preview_sound", json!({ "name": "WAVTEST" })).await;
+        assert_eq!(report["kind"], json!("wav"), "detected by magic");
+        assert_eq!(report["format"], json!("wav"), "stays a WAV");
+        assert_eq!(
+            report["sample_rate"],
+            json!(8000_u64),
+            "rate from the header"
+        );
+        assert_eq!(report["duration_ms"], json!(3_u64), "30 frames at 8000 Hz");
+        let body = fetch_asset(&asset_url(&report)).await;
+        assert_eq!(body, original, "byte for byte identical");
+    }
+
+    #[tokio::test]
+    async fn preview_sound_synthesizes_a_pc_speaker_lump() {
+        let client = connect().await;
+        add_working_lump(&client, "DPTEST", &pc_speaker_fixture()).await;
+        let report = call(&client, "preview_sound", json!({ "name": "DPTEST" })).await;
+        assert_eq!(report["kind"], json!("pc_speaker"), "DP name, zero head");
+        assert_eq!(report["format"], json!("wav"), "the synthesis is a WAV");
+        assert_eq!(report["sample_rate"], json!(11025_u64), "the engine's rate");
+        let body = fetch_asset(&asset_url(&report)).await;
+        let pcm = decode_wav(&body).expect("the published WAV decodes");
+        let expected = 3_usize
+            .checked_mul(11025)
+            .and_then(|scaled| scaled.checked_div(TICKS_PER_SECOND))
+            .expect("test sizes fit");
+        let low = expected.saturating_sub(1);
+        let high = expected.saturating_add(1);
+        assert!(
+            (low..=high).contains(&pcm.frames()),
+            "3 ticks of 11025/140 samples: {} frames, expected {expected} +/- 1",
+            pcm.frames()
+        );
+        assert!(
+            pcm.samples.iter().take(78).all(|&sample| sample == 0),
+            "the first tick is tone 0, silence"
+        );
+        assert!(
+            pcm.samples
+                .get(78..)
+                .is_some_and(|rest| rest.iter().any(|&sample| sample != 0)),
+            "the later ticks sound"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_sound_bits_8_writes_an_eight_bit_wav() {
+        let client = connect().await;
+        add_working_lump(&client, "DSTEST", &dmx_fixture()).await;
+        let report = call(
+            &client,
+            "preview_sound",
+            json!({ "name": "DSTEST", "bits": 8_u64 }),
+        )
+        .await;
+        assert_eq!(report["sample_rate"], json!(22050_u64), "same conversion");
+        let body = fetch_asset(&asset_url(&report)).await;
+        assert_eq!(&body[34..36], &[8_u8, 0], "the fmt says 8 bits");
+        assert_eq!(
+            body.len(),
+            WAV_HEADER
+                .checked_add(FIXTURE_FRAMES)
+                .expect("8-bit frames"),
+            "one byte per frame"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_sound_refuses_non_sounds_and_bad_widths() {
+        let client = connect().await;
+        add_working_lump(&client, "PLAYPAL", b"palettes-not-sounds").await;
+        let (code, message) =
+            call_err(&client, "preview_sound", json!({ "name": "PLAYPAL" })).await;
+        assert_eq!(code, "unsupported", "a palette is not a sound");
+        assert!(
+            message.contains("PLAYPAL") && message.contains("get_lump"),
+            "the message names the lump and the way out: {message}"
+        );
+        add_working_lump(&client, "DSTEST", &dmx_fixture()).await;
+        let (bits_code, bits_message) = call_err(
+            &client,
+            "preview_sound",
+            json!({ "name": "DSTEST", "bits": 12_u64 }),
+        )
+        .await;
+        assert_eq!(bits_code, "invalid_argument", "8 or 16 only");
+        assert!(
+            bits_message.contains("bits"),
+            "the message names the parameter: {bits_message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_sound_missing_lump_is_not_found() {
+        let client = connect().await;
+        let (code, message) = call_err(&client, "preview_sound", json!({ "name": "DSNOPE" })).await;
+        assert_eq!(code, "not_found", "no such lump");
+        assert!(
+            message.contains("DSNOPE"),
+            "the message names the lump: {message}"
+        );
     }
 }

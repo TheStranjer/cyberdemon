@@ -80,7 +80,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_defs_lumps_music_render_session_and_textures_tools() {
+    async fn lists_the_meta_assets_audio_defs_lumps_music_palette_render_session_and_textures_tools()
+     {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -94,6 +95,7 @@ mod tests {
                 "get_asset_server_info",
                 "get_linedef_specials",
                 "get_lump",
+                "get_palette",
                 "get_render_settings",
                 "get_sector_specials",
                 "get_session_info",
@@ -118,6 +120,7 @@ mod tests {
                 "save_wad",
                 "search_lumps",
                 "set_asset_capacity",
+                "set_palette",
                 "set_render_options",
                 "set_render_resolution",
                 "version",

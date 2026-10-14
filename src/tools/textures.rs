@@ -744,8 +744,10 @@ fn check_dropped(
 }
 
 /// Writes `data` as the working archive's global lump `name`: over the
-/// last working copy in place, or appended as a new override.
-fn put_global(wad: &mut Wad, name: LumpName, data: Vec<u8>) -> Result<(), CyberError> {
+/// last working copy in place, or appended as a new override. Shared with
+/// the palette tools, which copy-on-write `PLAYPAL` and `COLORMAP` the
+/// same way.
+pub(crate) fn put_global(wad: &mut Wad, name: LumpName, data: Vec<u8>) -> Result<(), CyberError> {
     if let Some(index) = wad.find_last(name) {
         let Some(lump) = wad.lumps.get_mut(index) else {
             return Err(CyberError::Internal(format!(

@@ -97,6 +97,9 @@ mod tests {
                 "new_wad",
                 "open_iwad",
                 "open_wad",
+                "remove_lump",
+                "rename_lump",
+                "replace_lump",
                 "save_wad",
                 "search_lumps",
                 "set_asset_capacity",
@@ -163,6 +166,37 @@ mod tests {
             ],
         );
         assert_required(&add_lump, "name");
+    }
+
+    #[tokio::test]
+    async fn the_three_lump_editors_require_their_own_fields() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let replace = schema_of(tool_named(&tools, "replace_lump"));
+        assert_flattens(
+            &replace,
+            &["name", "namespace", "occurrence", "text", "hex", "source"],
+        );
+        assert_required(&replace, "name");
+        let remove = schema_of(tool_named(&tools, "remove_lump"));
+        assert_flattens(
+            &remove,
+            &["names", "namespace", "occurrence", "all_occurrences"],
+        );
+        assert_required(&remove, "names");
+        let rename = schema_of(tool_named(&tools, "rename_lump"));
+        assert_flattens(
+            &rename,
+            &[
+                "name",
+                "new_name",
+                "namespace",
+                "occurrence",
+                "allow_duplicate",
+            ],
+        );
+        assert_required(&rename, "name");
+        assert_required(&rename, "new_name");
     }
 
     #[tokio::test]

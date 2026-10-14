@@ -3,10 +3,13 @@
 //! [`crate::tools::lumps::rows`], the single-lump readers
 //! [`Cyberdemon::get_lump`] and [`Cyberdemon::extract_lump`], built on the
 //! shared selector in [`crate::tools::lumps::select`], and the editing
-//! tools [`Cyberdemon::add_lump`], [`Cyberdemon::import_asset`] and
-//! [`Cyberdemon::import_file_as_lump`], built on the shared placement in
-//! [`crate::tools::lumps::place`].
+//! tools [`Cyberdemon::add_lump`], [`Cyberdemon::import_asset`],
+//! [`Cyberdemon::import_file_as_lump`], [`Cyberdemon::replace_lump`],
+//! [`Cyberdemon::remove_lump`] and [`Cyberdemon::rename_lump`], built on the
+//! shared placement in [`crate::tools::lumps::place`] and the argument and
+//! mutation logic in [`crate::tools::lumps::edit`].
 
+mod edit;
 mod place;
 mod rows;
 mod select;
@@ -26,6 +29,7 @@ use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
+use crate::tools::lumps::edit::{RemoveLumpParams, RenameLumpParams, ReplaceLumpParams};
 use crate::tools::lumps::place::{Placement, PlacementParams, parse_placement};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::lumps::select::{LumpSelector, resolve};
@@ -1427,6 +1431,48 @@ impl Cyberdemon {
         Parameters(args): Parameters<ImportParams>,
     ) -> Result<CallToolResult, ErrorData> {
         imported(self.state(), &args).await
+    }
+
+    /// Overwrites one lump's payload, overriding a read-only copy when needed.
+    #[tool(
+        description = "Overwrites one lump's payload as a single undoable edit labelled \"replace_lump NAME\" (save_wad writes the result), and is how a lump the IWAD or a resource layer owns gets changed: read-only archives are never modified, an override is created in the working archive instead and the result says \"created_override\": true. Selector: name (1 to 8 printable ASCII characters, case-insensitive) plus optional namespace (keep only matches inside that region, e.g. \"flats\") and occurrence (0-based index among the WORKING archive's same-name matches, default the last one; ignored when the name only a read-only layer holds is overridden, where the winning copy is the one taken). Payload: exactly one of text (UTF-8 written as-is), hex (bytes as hex digits, spaces allowed) or source (absolute path, file:// URI, http(s):// URL or uploaded asset URL, fetched for its bytes); none or several is invalid_argument. A lump the working archive holds is rewritten in place, keeping its name and index. A lump only a layer holds is brought in first: map data copies that whole map block (header, members and GL nodes) into the working archive and rewrites the copy, a namespace member is inserted into that region of the working archive (its canonical markers are created when it has none), a loose global is appended. A name no loaded archive holds is not_found - use add_lump to create one. Returns {name, index, size, created_override} with index counting positions in the working archive."
+    )]
+    async fn replace_lump(
+        &self,
+        Parameters(args): Parameters<ReplaceLumpParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match edit::replace_lump(self.state(), &args).await {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Removes lumps from the working archive, all or nothing.
+    #[tool(
+        description = "Removes lumps from the working archive as one undoable edit labelled \"remove_lump A, B, ...\" (save_wad writes the result). names is a list of one or more lump names (1 to 8 printable ASCII characters, case-insensitive); an empty list, an unparsable name or an unknown namespace is invalid_argument. namespace limits the matches to that region and applies to every name. occurrence picks one copy of a single named lump (default the last working match) and is invalid_argument together with more than one name; all_occurrences (default false) removes every working copy of each name instead of the selected one. Only the working archive is touched: if any name is missing from it the call is not_found and NOTHING is removed, because IWAD and resource-layer lumps cannot be deleted, only overridden with replace_lump. Returns {removed: [{name, index}]} in directory order, with the indices the lumps held before the removal."
+    )]
+    fn remove_lump(
+        &self,
+        Parameters(args): Parameters<RemoveLumpParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = self
+            .state()
+            .with_session(|session| edit::remove_lump(session, &args));
+        reported(report)
+    }
+
+    /// Renames one lump of the working archive.
+    #[tool(
+        description = "Renames one lump of the working archive as one undoable edit labelled \"rename_lump OLD -> NEW\" (save_wad writes the result), keeping its position and payload. name selects the lump, plus optional namespace and occurrence as in replace_lump; new_name is 1 to 8 printable ASCII characters and is uppercased - either name failing to parse is invalid_argument. The working archive only: a name it does not hold is not_found (IWAD and layer lumps cannot be renamed - override one with replace_lump, or add_lump a copy and remove_lump the original). Unless allow_duplicate is true, a working lump already named new_name in the same region (no region counts as its own) is already_exists and nothing changes. Returns {old_name, new_name, index} with index counting positions in the working archive."
+    )]
+    fn rename_lump(
+        &self,
+        Parameters(args): Parameters<RenameLumpParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = self
+            .state()
+            .with_session(|session| edit::rename_lump(session, &args));
+        reported(report)
     }
 }
 

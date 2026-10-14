@@ -97,7 +97,10 @@ src/
                   override rules (map blocks, namespaces, globals, last wins;
                   `merge_into` and `merge_counts` are the whole-archive forms),
                   `session/history.rs` is the labelled undo/redo stack and the
-                  revision bookkeeping behind dirty state.
+                  revision bookkeeping behind dirty state, and
+                  `session/cow.rs` the copy-on-write step that brings one map
+                  block from the merged view into the working archive
+                  (`copy_map_block`, `Session::copy_map_to_working`).
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.

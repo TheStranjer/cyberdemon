@@ -13,7 +13,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > (`get_asset_server_info`, `set_asset_capacity`), a `defs` group
 > (`get_thing_types`, `get_linedef_specials`, `get_sector_specials`), a
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
-> `add_lump`, `import_asset`, `import_file_as_lump`), an `audio` group
+> `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
+> `remove_lump`, `rename_lump`), an `audio` group
 > (`import_sound`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,

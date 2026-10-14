@@ -350,7 +350,7 @@ const MAP_MEMBERS: [&[u8]; 15] = [
 const GL_MEMBERS: [&[u8]; 5] = [b"GL_VERT", b"GL_SEGS", b"GL_SSECT", b"GL_NODES", b"GL_PVS"];
 
 /// The namespace a start marker opens, `None` for any other name.
-const fn namespace_start(name: &[u8]) -> Option<Namespace> {
+pub(crate) const fn namespace_start(name: &[u8]) -> Option<Namespace> {
     match name {
         b"S_START" | b"SS_START" => Some(Namespace::Sprites),
         b"F_START" | b"FF_START" => Some(Namespace::Flats),
@@ -365,7 +365,7 @@ const fn namespace_start(name: &[u8]) -> Option<Namespace> {
 }
 
 /// The namespace an end marker closes, `None` for any other name.
-const fn namespace_end(name: &[u8]) -> Option<Namespace> {
+pub(crate) const fn namespace_end(name: &[u8]) -> Option<Namespace> {
     match name {
         b"S_END" | b"SS_END" => Some(Namespace::Sprites),
         b"F_END" | b"FF_END" => Some(Namespace::Flats),

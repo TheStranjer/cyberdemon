@@ -134,6 +134,8 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `set_render_resolution` | `reference/render.md`   |
 | `set_render_options`    | `reference/render.md`   |
 | `get_render_settings`   | `reference/render.md`   |
+| `get_dehacked`          | `reference/scripts.md`  |
+| `edit_dehacked`         | `reference/scripts.md`  |
 | `list_textures`         | `reference/textures.md` |
 | `list_pnames`           | `reference/textures.md` |
 | `edit_pnames`           | `reference/textures.md` |

@@ -150,7 +150,9 @@ data/
                   `heretic_sectors.tsv` are Heretic's own three.
                   `deh_mobj.tsv` maps the 1-based Doom II DeHackEd mobj
                   indices to their doomednums (`-1`: unplaceable), read by
-                  `src/defs/dehacked.rs`.
+                  `src/defs/dehacked.rs`; `defs/dehacked_edit.rs` is the
+                  line-oriented DeHackEd/BEX patch parser and editor behind
+                  the scripts tools.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

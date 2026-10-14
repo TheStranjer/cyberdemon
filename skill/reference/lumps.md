@@ -1,6 +1,7 @@
 # Lumps tools
 
-Directory browsing and single-lump reads over the session's archives.
+Directory browsing, single-lump reads, and the first editing tools over the
+session's archives. Edits go to the working archive only and are undoable.
 
 ## The row shape
 
@@ -171,8 +172,72 @@ past the last match is `not_found` naming how many copies exist.
   `io_error` (the write failed). The write is atomic: readers see the old
   file or the complete new one.
 
+## Placement
+
+The editing tools all take the same four optional placement fields, and
+**at most one of them** (two is `invalid_argument`):
+
+- `index` (number) — insert at this directory position of the working
+  archive; valid range `0..=current length`, anything larger is
+  `invalid_argument`.
+- `before` / `after` (string) — insert just before/after the **last** lump
+  with that name in the working archive; a name it does not hold is
+  `not_found`.
+- `namespace` (string) — insert just before that region's end marker (any
+  alias counts: `F_END`, `FF_END`, ...). When the working archive has no
+  such region, its canonical markers are created at the end and the lump
+  sits between them (`S_START`/`S_END`, `F_START`/`F_END`,
+  `P_START`/`P_END`, `C_START`/`C_END`, `A_START`/`A_END`,
+  `V_START`/`V_END`, `HI_START`/`HI_END`, `TX_START`/`TX_END`).
+- none — append at the end.
+
+Verify placement results with `list_lumps scope=working`.
+
+## `add_lump`
+
+- Purpose: add a new lump to the **working archive** as one undoable edit.
+- Arguments: `name` (string, 1 to 8 printable ASCII characters) plus at
+  most one payload field — `text` (UTF-8 written as-is), `hex` (bytes as
+  hex digits, spaces allowed) or `source` (an absolute path or URI,
+  fetched) — and no payload field at all makes an **empty lump**, which is
+  how you write a directory marker. Plus the placement fields above and
+  `allow_duplicate` (bool, default `false`).
+- Duplicate rule: when the working archive already holds a lump with this
+  name **in the same namespace** (global, i.e. no region, counts as its
+  own namespace) the call is `already_exists` unless `allow_duplicate` is
+  true. The same name in a different region is not a duplicate.
+- Returns: `{"name", "index", "size", "namespace"}` — `index` is the
+  position in the working archive, `namespace` the region it landed in or
+  `null`. The undo label is `add_lump NAME`.
+- Errors: `invalid_argument` (bad name, two payload fields, bad hex, two
+  placement fields, `index` past the end, unknown `namespace`),
+  `not_found` (missing `before`/`after` anchor; `source` fetch failures
+  pass through as their own codes), `already_exists` (a duplicate without
+  `allow_duplicate` — the message suggests `allow_duplicate` or
+  `replace_lump`).
+
+## `import_asset` / `import_file_as_lump`
+
+- Purpose: fetch a file and insert its bytes into the working archive
+  **without any conversion**, as one undoable edit. The two names are
+  identical; clients may call either.
+- Arguments: `source` (required — absolute path, `file://` URI,
+  `http(s)://` URL or an uploaded asset URL), optional `name`, the
+  placement fields and `allow_duplicate` as in `add_lump`. Without `name`
+  the lump name is derived from the fetched file name: its extension
+  stripped, uppercased, keeping letters/digits/underscore, trimmed to 8
+  characters — when nothing usable remains (e.g. `.png`) the call is
+  `invalid_argument` asking for `name`.
+- Returns: the `add_lump` shape plus `"source"` (the fetched source
+  echoed). The undo label is `import NAME`.
+- Errors: as `add_lump`, plus the `source` fetch errors (`not_found` for a
+  missing file or evicted asset, `fetch_error`, `limit_exceeded`, ...).
+
 ## Notes
 
+- The editing tools touch **only the working archive**; read-only layers
+  never change, and every edit is undoable (`get_session_info` lists the
+  undo labels). Nothing is on disk until `save_wad`.
 - Namespace regions come from marker pairs (`S_START`/`S_END` and friends),
   so region **markers themselves** carry the region's `namespace` and the
   kind `marker`; filters on `namespace` therefore include them.

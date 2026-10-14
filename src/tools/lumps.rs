@@ -1,9 +1,13 @@
 //! Directory browsing tools: [`Cyberdemon::list_lumps`] and
 //! [`Cyberdemon::search_lumps`], built on the shared rows in
-//! [`crate::tools::lumps::rows`], plus the single-lump readers
+//! [`crate::tools::lumps::rows`], the single-lump readers
 //! [`Cyberdemon::get_lump`] and [`Cyberdemon::extract_lump`], built on the
-//! shared selector in [`crate::tools::lumps::select`].
+//! shared selector in [`crate::tools::lumps::select`], and the editing
+//! tools [`Cyberdemon::add_lump`], [`Cyberdemon::import_asset`] and
+//! [`Cyberdemon::import_file_as_lump`], built on the shared placement in
+//! [`crate::tools::lumps::place`].
 
+mod place;
 mod rows;
 mod select;
 
@@ -15,16 +19,18 @@ use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::assets::fetch::derive_lump_name;
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
+use crate::tools::lumps::place::{Placement, PlacementParams, parse_placement};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::{fail, ok};
-use crate::wad::archive::write_file_atomic;
+use crate::wad::archive::{Lump, write_file_atomic};
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
@@ -142,6 +148,59 @@ struct ExtractLumpParams {
     /// Replace the target file when it already exists (default `false`).
     #[serde(default)]
     overwrite: bool,
+}
+
+/// Arguments for [`Cyberdemon::add_lump`]: the name, at most one payload
+/// field, the shared placement and the duplicate rule.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddLumpParams {
+    /// Name for the new lump: 1 to 8 printable ASCII characters, matched
+    /// case-insensitively (it is uppercased).
+    name: String,
+    /// Payload as UTF-8 text, written as-is. At most one of `text`, `hex`
+    /// or `source`.
+    #[serde(default)]
+    text: Option<String>,
+    /// Payload as hex bytes, spaces allowed (e.g. `"4D 55 53 1A"`). At
+    /// most one of `text`, `hex` or `source`.
+    #[serde(default)]
+    hex: Option<String>,
+    /// Absolute path, `file://` URI, `http(s)://` URL or uploaded asset
+    /// URL whose bytes become the payload. At most one of `text`, `hex`
+    /// or `source`.
+    #[serde(default)]
+    source: Option<String>,
+    /// Where the lump goes: at most one of `index`, `before`, `after`,
+    /// `namespace` (see `skill/reference/lumps.md`).
+    #[serde(flatten)]
+    placement: PlacementParams,
+    /// Add the lump even when the working archive already holds one with
+    /// this name in the same namespace (default `false`).
+    #[serde(default)]
+    allow_duplicate: bool,
+}
+
+/// Arguments for [`Cyberdemon::import_asset`] and
+/// [`Cyberdemon::import_file_as_lump`]: the source to fetch, an optional
+/// name, the shared placement and the duplicate rule.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ImportParams {
+    /// Source to fetch: absolute path, `file://` URI, `http(s)://` URL or
+    /// an uploaded asset URL. Its bytes are inserted without conversion.
+    source: String,
+    /// Lump name to store the bytes under; defaults to the fetched file
+    /// name's stem uppercased and trimmed to 8 characters. When nothing
+    /// usable remains the call fails asking for this name.
+    #[serde(default)]
+    name: Option<String>,
+    /// Where the lump goes: at most one of `index`, `before`, `after`,
+    /// `namespace` (see `skill/reference/lumps.md`).
+    #[serde(flatten)]
+    placement: PlacementParams,
+    /// Import even when the working archive already holds one with this
+    /// name in the same namespace (default `false`).
+    #[serde(default)]
+    allow_duplicate: bool,
 }
 
 /// The parsed filters and paging of one `list_lumps` call.
@@ -610,27 +669,35 @@ fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
 /// [`CyberError::InvalidArgument`] for a non-hex character or an odd
 /// number of digits.
 fn parse_hex(text: Option<&str>) -> Result<Option<Vec<u8>>, CyberError> {
-    let Some(raw) = text else {
-        return Ok(None);
-    };
+    text.map(|raw| hex_bytes("contains_hex", raw)).transpose()
+}
+
+/// The bytes a hex argument spells: hex digits in pairs, whitespace
+/// between them ignored; `field` names the argument in the errors.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a non-hex character or an odd
+/// number of digits.
+fn hex_bytes(field: &str, raw: &str) -> Result<Vec<u8>, CyberError> {
     let digits: Vec<char> = raw.chars().filter(|ch| !ch.is_whitespace()).collect();
     let mut bytes = Vec::new();
     let mut pairs = digits.chunks_exact(2);
     for pair in pairs.by_ref() {
         let Some(byte) = parse_pair(pair) else {
             return Err(CyberError::InvalidArgument(format!(
-                "contains_hex {raw:?} holds {pair:?}, which is not a hex pair (use 0-9 and a-f)"
+                "{field} {raw:?} holds {pair:?}, which is not a hex pair (use 0-9 and a-f)"
             )));
         };
         bytes.push(byte);
     }
     if let Some(left) = pairs.remainder().first() {
         return Err(CyberError::InvalidArgument(format!(
-            "contains_hex {raw:?} holds an odd number of hex digits ({left:?} is left over): \
-             write whole bytes such as \"4D 55 53 1A\""
+            "{field} {raw:?} holds an odd number of hex digits ({left:?} is left over): write \
+             whole bytes such as \"4D 55 53 1A\""
         )));
     }
-    Ok(Some(bytes))
+    Ok(bytes)
 }
 
 /// The `get_lump` `format` parameter, defaulting to [`Requested::Auto`].
@@ -983,6 +1050,250 @@ where
     }
 }
 
+/// How the caller supplied a new lump's bytes.
+#[derive(Debug)]
+enum Payload {
+    /// No data field: the lump will be an empty marker.
+    Empty,
+    /// The `text` argument, kept as UTF-8 bytes.
+    Text(String),
+    /// The `hex` argument, waiting to be decoded.
+    Hex(String),
+    /// A `source` to fetch.
+    Source(String),
+}
+
+/// A validated editing call whose payload may still need fetching.
+#[derive(Debug)]
+struct PendingEdit {
+    /// The undo-label verb: `add_lump` or `import`.
+    verb: &'static str,
+    /// The lump name when the arguments carried one; imports otherwise
+    /// derive it from the fetched file name.
+    name: Option<LumpName>,
+    /// Where the payload bytes come from.
+    payload: Payload,
+    /// Where the lump goes in the working archive.
+    placement: Placement,
+    /// Whether a same-name twin in the same namespace is allowed.
+    allow_duplicate: bool,
+    /// The `source` to echo back (the import tools only).
+    source: Option<String>,
+}
+
+/// An editing call with its payload bytes in hand, ready to commit.
+struct Prepared {
+    /// The undo-label verb (`add_lump` or `import`).
+    verb: &'static str,
+    /// The name to insert under.
+    name: LumpName,
+    /// The payload bytes.
+    data: Vec<u8>,
+    /// Where the lump goes in the working archive.
+    placement: Placement,
+    /// Whether a same-name twin in the same namespace is allowed.
+    allow_duplicate: bool,
+    /// The `source` to echo back (the import tools only).
+    source: Option<String>,
+}
+
+/// Structured result of the three editing tools.
+#[derive(Debug, Serialize)]
+struct EditReport {
+    /// The name the lump was added under.
+    name: LumpName,
+    /// Its directory position in the working archive.
+    index: usize,
+    /// Payload bytes.
+    size: usize,
+    /// The region it sits in, `null` for a loose lump.
+    namespace: Option<Namespace>,
+    /// The fetched source; only the import tools carry it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+/// The at-most-one-of rule for the three `add_lump` payload fields.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when more than one is given.
+fn pick_payload(
+    text: Option<&str>,
+    hex: Option<&str>,
+    source: Option<&str>,
+) -> Result<Payload, CyberError> {
+    match (text, hex, source) {
+        (None, None, None) => Ok(Payload::Empty),
+        (Some(body), None, None) => Ok(Payload::Text(body.to_owned())),
+        (None, Some(digits), None) => Ok(Payload::Hex(digits.to_owned())),
+        (None, None, Some(raw)) => Ok(Payload::Source(raw.to_owned())),
+        _ => Err(CyberError::InvalidArgument(
+            "add_lump takes at most one of text, hex and source: pick one payload form".to_owned(),
+        )),
+    }
+}
+
+/// Validate [`Cyberdemon::add_lump`]'s arguments before any fetching.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a bad name, more than one payload
+/// field or more than one placement field.
+fn plan_add(args: &AddLumpParams) -> Result<PendingEdit, CyberError> {
+    Ok(PendingEdit {
+        verb: "add_lump",
+        name: Some(LumpName::parse(&args.name)?),
+        payload: pick_payload(
+            args.text.as_deref(),
+            args.hex.as_deref(),
+            args.source.as_deref(),
+        )?,
+        placement: parse_placement(&args.placement)?,
+        allow_duplicate: args.allow_duplicate,
+        source: None,
+    })
+}
+
+/// Validate the import tools' arguments before any fetching.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for an explicit name that does not
+/// parse or more than one placement field.
+fn plan_import(args: &ImportParams) -> Result<PendingEdit, CyberError> {
+    Ok(PendingEdit {
+        verb: "import",
+        name: args.name.as_deref().map(LumpName::parse).transpose()?,
+        payload: Payload::Source(args.source.clone()),
+        placement: parse_placement(&args.placement)?,
+        allow_duplicate: args.allow_duplicate,
+        source: Some(args.source.clone()),
+    })
+}
+
+/// The name to insert under: the explicit one, else one derived from the
+/// fetched file name.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] asking for `name` when nothing usable
+/// can be derived.
+fn chosen_name(name: Option<LumpName>, filename: Option<&str>) -> Result<LumpName, CyberError> {
+    if let Some(explicit) = name {
+        return Ok(explicit);
+    }
+    let file = filename.unwrap_or_default();
+    derive_lump_name(file).ok_or_else(|| {
+        CyberError::InvalidArgument(format!(
+            "cannot derive a lump name from {file:?}: pass name (1 to 8 printable ASCII \
+             characters)"
+        ))
+    })
+}
+
+/// Bring the payload bytes in, fetching a `source` before the session lock
+/// is ever taken.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for bad hex or an underivable import
+/// name; [`AppState::fetch_source`]'s errors pass through.
+async fn prepare(state: &AppState, pending: PendingEdit) -> Result<Prepared, CyberError> {
+    let PendingEdit {
+        verb,
+        name,
+        payload,
+        placement,
+        allow_duplicate,
+        source,
+    } = pending;
+    let (data, filename) = match payload {
+        Payload::Empty => (Vec::new(), None),
+        Payload::Text(body) => (body.into_bytes(), None),
+        Payload::Hex(digits) => (hex_bytes("hex", &digits)?, None),
+        Payload::Source(raw) => {
+            let fetched = state.fetch_source(&raw).await?;
+            (fetched.bytes, Some(fetched.filename))
+        }
+    };
+    Ok(Prepared {
+        verb,
+        name: chosen_name(name, filename.as_deref())?,
+        data,
+        placement,
+        allow_duplicate,
+        source,
+    })
+}
+
+/// The `already_exists` text for a same-name twin, naming its region.
+fn clash_message(name: LumpName, namespace: Option<Namespace>) -> String {
+    let region = namespace.map_or_else(
+        || "the global area".to_owned(),
+        |wanted| format!("the {} region", wanted.as_str()),
+    );
+    format!(
+        "lump {name} already exists in {region} of the working archive: pass allow_duplicate \
+         true to add a second copy beside it or use replace_lump to overwrite the existing one"
+    )
+}
+
+/// The synchronous half of an edit: one undoable insert into the working
+/// archive plus the duplicate refusal (a refusal rolls the insert back).
+///
+/// # Errors
+///
+/// [`place::insert`]'s errors and [`CyberError::AlreadyExists`] for a
+/// same-name twin in the same namespace when `allow_duplicate` is `false`.
+fn apply(session: &mut Session, edit: &Prepared) -> Result<EditReport, CyberError> {
+    let label = format!("{} {}", edit.verb, edit.name);
+    let size = edit.data.len();
+    let (index, namespace) = session.edit(&label, |wad| {
+        let lump = Lump::new(edit.name, edit.data.clone());
+        let at = place::insert(wad, &edit.placement, lump)?;
+        let here = place::inspect(wad, at);
+        if !edit.allow_duplicate && here.clashes {
+            return Err(CyberError::AlreadyExists(clash_message(
+                edit.name,
+                here.namespace,
+            )));
+        }
+        Ok((at, here.namespace))
+    })?;
+    Ok(EditReport {
+        name: edit.name,
+        index,
+        size,
+        namespace,
+        source: edit.source.clone(),
+    })
+}
+
+/// Run one editing tool end to end: fetch the payload (never holding the
+/// session lock), then commit the undoable edit.
+///
+/// # Errors
+///
+/// Whatever [`prepare`] or [`apply`] reports.
+async fn commit(state: &AppState, pending: PendingEdit) -> Result<EditReport, CyberError> {
+    let prepared = prepare(state, pending).await?;
+    state.with_session(|session| apply(session, &prepared))
+}
+
+/// The shared body of [`Cyberdemon::import_asset`] and
+/// [`Cyberdemon::import_file_as_lump`].
+async fn imported(state: &AppState, args: &ImportParams) -> Result<CallToolResult, ErrorData> {
+    let pending = match plan_import(args) {
+        Ok(pending) => pending,
+        Err(error) => return fail(&error),
+    };
+    match commit(state, pending).await {
+        Ok(report) => ok(&report),
+        Err(error) => fail(&error),
+    }
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -1077,6 +1388,46 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Adds a new lump to the working archive.
+    #[tool(
+        description = "Adds a new lump to the working archive as one undoable edit (read-only layers are never touched; save_wad writes the result). name is 1 to 8 printable ASCII characters, uppercased. Payload: at most one of text (UTF-8 written as-is), hex (bytes as hex digits, spaces allowed) or source (absolute path, file:// or http(s):// URL, or an uploaded asset URL, fetched for its bytes); with none the lump is empty - that is how a directory marker is made. Placement: at most one of index (0..=current working length), before/after (relative to the LAST lump with that name in the working archive), namespace (sprites, flats, patches, colormaps, acs, voices, hires, textures: insert just before that region's end marker, creating the region with its canonical start/end markers when the working archive has none); with none the lump is appended at the end. A lump of this name already in the target namespace (global counts as its own) is already_exists unless allow_duplicate is true. Returns {name, index, size, namespace} with index counting positions in the working archive; the undo label is \"add_lump NAME\"."
+    )]
+    async fn add_lump(
+        &self,
+        Parameters(args): Parameters<AddLumpParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pending = match plan_add(&args) {
+            Ok(pending) => pending,
+            Err(error) => return fail(&error),
+        };
+        match commit(self.state(), pending).await {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Fetches a source and inserts its bytes as a new lump.
+    #[tool(
+        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset/upload URL) and inserts its bytes into the working archive without any conversion, as one undoable edit. Identical to import_file_as_lump; clients may call either name. name defaults to the fetched file name's stem uppercased and trimmed to 8 characters (letters, digits and underscore); when nothing usable remains the call fails with invalid_argument asking for an explicit name. Placement and allow_duplicate work exactly like add_lump. Returns {name, index, size, namespace, source}; the undo label is \"import NAME\"."
+    )]
+    async fn import_asset(
+        &self,
+        Parameters(args): Parameters<ImportParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        imported(self.state(), &args).await
+    }
+
+    /// Fetches a file and inserts its bytes as a new lump.
+    #[tool(
+        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset/upload URL) and inserts its bytes into the working archive without any conversion, as one undoable edit. Identical to import_asset; clients may call either name. name defaults to the fetched file name's stem uppercased and trimmed to 8 characters (letters, digits and underscore); when nothing usable remains the call fails with invalid_argument asking for an explicit name. Placement and allow_duplicate work exactly like add_lump. Returns {name, index, size, namespace, source}; the undo label is \"import NAME\"."
+    )]
+    async fn import_file_as_lump(
+        &self,
+        Parameters(args): Parameters<ImportParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        imported(self.state(), &args).await
+    }
 }
 
 #[cfg(test)]
@@ -1084,13 +1435,16 @@ mod tests {
     use std::path::Path;
 
     use crate::error::CyberError;
-    use crate::session::{Scope, Source};
+    use crate::session::{Scope, Session, Source};
+    use crate::tools::lumps::place::{Placement, PlacementParams};
     use crate::tools::lumps::rows::LumpRow;
     use crate::tools::lumps::{
-        Applied, GetLumpParams, Match, Needle, Requested, Search, asset_naming, decide,
-        find_needle, hex_body, kind_names, namespace_names, parse_format, parse_get_options,
+        AddLumpParams, Applied, GetLumpParams, ImportParams, Match, Needle, Payload, Prepared,
+        Requested, Search, apply, asset_naming, chosen_name, clash_message, decide, find_needle,
+        hex_body, hex_bytes, kind_names, namespace_names, parse_format, parse_get_options,
         parse_hex, parse_hex_length, parse_kind, parse_limit, parse_map, parse_namespace,
-        parse_pair, parse_scope, parse_target, path_text, refuse_existing, text_body,
+        parse_pair, parse_scope, parse_target, path_text, pick_payload, plan_add, plan_import,
+        refuse_existing, text_body,
     };
     use crate::wad::archive::Lump;
     use crate::wad::classify::{LumpKind, Namespace};
@@ -1588,5 +1942,225 @@ mod tests {
             "the default hex window"
         );
         assert_eq!(opts.max_chars, 100_000, "the default text cap");
+    }
+
+    /// `add_lump` arguments carrying only the required name.
+    fn add_args(text: &str) -> AddLumpParams {
+        AddLumpParams {
+            name: text.to_owned(),
+            text: None,
+            hex: None,
+            source: None,
+            placement: PlacementParams::default(),
+            allow_duplicate: false,
+        }
+    }
+
+    /// `import` arguments for `source` with an optional explicit name.
+    fn import_args(source: &str, wanted: Option<&str>) -> ImportParams {
+        ImportParams {
+            source: source.to_owned(),
+            name: wanted.map(str::to_owned),
+            placement: PlacementParams::default(),
+            allow_duplicate: false,
+        }
+    }
+
+    /// A committed edit of `data` bytes under `text`, appending.
+    fn prepared(text: &str, data: &[u8]) -> Prepared {
+        Prepared {
+            verb: "add_lump",
+            name: name(text),
+            data: data.to_vec(),
+            placement: Placement::default(),
+            allow_duplicate: false,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn payload_picking_takes_at_most_one_field() {
+        assert!(
+            matches!(
+                pick_payload(None, None, None).expect("none"),
+                Payload::Empty
+            ),
+            "no data field is a marker"
+        );
+        assert!(
+            matches!(pick_payload(Some("t"), None, None), Ok(Payload::Text(_))),
+            "text wins alone"
+        );
+        assert!(
+            matches!(pick_payload(None, Some("4D55"), None), Ok(Payload::Hex(_))),
+            "hex wins alone"
+        );
+        assert!(
+            matches!(
+                pick_payload(None, None, Some("/x/y.bin")),
+                Ok(Payload::Source(_))
+            ),
+            "source wins alone"
+        );
+        for (text, digits, source) in [
+            (Some("t"), Some("4d"), None),
+            (Some("t"), None, Some("/x")),
+            (None, Some("4d"), Some("/x")),
+        ] {
+            let error = pick_payload(text, digits, source).expect_err("two fields");
+            assert_eq!(code(&error), "invalid_argument", "payload conflict code");
+            assert!(
+                error.to_string().contains("at most one"),
+                "the message states the rule: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_add_validates_name_and_placement_up_front() {
+        let plan = plan_add(&add_args("note")).expect("valid");
+        assert_eq!(plan.name, Some(name("NOTE")), "the name uppercases");
+        assert_eq!(plan.verb, "add_lump", "the undo verb");
+        assert!(plan.source.is_none(), "add_lump echoes no source");
+        let long = plan_add(&add_args("TOO LONG FOR WAD")).expect_err("over eight bytes");
+        assert_eq!(code(&long), "invalid_argument", "bad name code");
+        let conflicted = AddLumpParams {
+            placement: PlacementParams {
+                index: Some(1),
+                after: Some("X".to_owned()),
+                ..PlacementParams::default()
+            },
+            ..add_args("NOTE")
+        };
+        let error = plan_add(&conflicted).expect_err("two placement fields");
+        assert_eq!(code(&error), "invalid_argument", "placement conflict code");
+    }
+
+    #[test]
+    fn plan_import_defers_name_and_fetch_to_prepare() {
+        let plan = plan_import(&import_args("/x/y.png", None)).expect("valid");
+        assert_eq!(plan.name, None, "the name is derived after the fetch");
+        assert_eq!(plan.verb, "import", "the undo verb");
+        assert_eq!(
+            plan.source.as_deref(),
+            Some("/x/y.png"),
+            "the source echoes"
+        );
+        let explicit = plan_import(&import_args("/x/y.png", Some("PIC"))).expect("named");
+        assert_eq!(explicit.name, Some(name("PIC")), "an explicit name parses");
+        let bad = plan_import(&import_args("/x/y.png", Some("too long name here")))
+            .expect_err("over eight bytes");
+        assert_eq!(code(&bad), "invalid_argument", "bad name code");
+    }
+
+    #[test]
+    fn an_import_name_falls_back_to_the_derived_file_stem() {
+        assert_eq!(
+            chosen_name(Some(name("GIVEN")), Some("x.png")).expect("explicit wins"),
+            name("GIVEN"),
+            "the caller's name is kept"
+        );
+        assert_eq!(
+            chosen_name(None, Some("D_RUNNIN.mid")).expect("derived"),
+            name("D_RUNNIN"),
+            "the stem uppercases"
+        );
+        let error = chosen_name(None, Some(".png")).expect_err("nothing to derive");
+        assert_eq!(code(&error), "invalid_argument", "underivable code");
+        assert!(
+            error.to_string().contains("pass name"),
+            "the message asks for name: {error}"
+        );
+        let nofile = chosen_name(None, None).expect_err("no filename at all");
+        assert_eq!(code(&nofile), "invalid_argument", "absent filename code");
+    }
+
+    #[test]
+    fn hex_payloads_report_under_their_own_field_name() {
+        assert_eq!(
+            hex_bytes("hex", "4d 5553").expect("decodes"),
+            vec![0x4D_u8, 0x55, 0x53],
+            "spaces are ignored"
+        );
+        assert!(
+            hex_bytes("hex", "").expect("empty hex").is_empty(),
+            "empty hex is an empty payload"
+        );
+        let odd = hex_bytes("hex", "4D5").expect_err("odd digits");
+        assert_eq!(code(&odd), "invalid_argument", "odd hex code");
+        assert!(
+            odd.to_string().starts_with("hex "),
+            "the field is named: {odd}"
+        );
+        let bad = hex_bytes("hex", "0G").expect_err("not hex");
+        assert!(
+            bad.to_string().starts_with("hex "),
+            "the field is named: {bad}"
+        );
+    }
+
+    #[test]
+    fn clash_messages_name_the_region_and_both_exits() {
+        let global = clash_message(name("TWIN"), None);
+        assert!(
+            global.contains("global area")
+                && global.contains("allow_duplicate")
+                && global.contains("replace_lump"),
+            "the global text names both exits: {global}"
+        );
+        let flats = clash_message(name("TWIN"), Some(Namespace::Flats));
+        assert!(
+            flats.contains("the flats region"),
+            "the region is named: {flats}"
+        );
+    }
+
+    #[test]
+    fn apply_inserts_once_labels_the_history_and_refuses_twins() {
+        let mut session = Session::default();
+        let edit = prepared("NOTE", b"hello");
+        let report = apply(&mut session, &edit).expect("the first add lands");
+        assert_eq!((report.index, report.size), (0, 5), "appended at 0");
+        assert_eq!(report.namespace, None, "a loose lump sits in no region");
+        assert_eq!(
+            session.undo_labels(),
+            vec!["add_lump NOTE"],
+            "the undo label"
+        );
+        assert!(session.is_dirty(), "an unsaved edit");
+        let error = apply(&mut session, &edit).expect_err("the twin is refused");
+        assert_eq!(code(&error), "already_exists", "duplicate code");
+        assert_eq!(session.working().len(), 1, "the refused edit rolled back");
+        assert_eq!(session.undo_labels().len(), 1, "and left no history");
+        let allowed = Prepared {
+            allow_duplicate: true,
+            ..prepared("NOTE", b"again")
+        };
+        let twice = apply(&mut session, &allowed).expect("the twin is allowed");
+        assert_eq!(twice.index, 1, "appended beside it");
+        assert_eq!(session.working().len(), 2, "both copies stand");
+    }
+
+    #[test]
+    fn apply_reports_the_region_a_namespace_insert_joins() {
+        let mut session = Session::default();
+        let edit = Prepared {
+            placement: Placement {
+                namespace: Some(Namespace::Flats),
+                ..Placement::default()
+            },
+            ..prepared("FLATA", b"\0".as_slice())
+        };
+        let report = apply(&mut session, &edit).expect("the region is created");
+        assert_eq!(
+            (report.index, report.namespace),
+            (1, Some(Namespace::Flats)),
+            "the lump sits between the new markers"
+        );
+        assert_eq!(session.working().len(), 3, "start, lump, end");
+        let again = prepared("FLATA", b"\0".as_slice());
+        let loose = apply(&mut session, &again).expect("a global twin is no clash");
+        assert_eq!(loose.namespace, None, "the loose copy is global");
+        assert_eq!(loose.index, 3, "appended past the region");
     }
 }

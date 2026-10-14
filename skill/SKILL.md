@@ -109,6 +109,9 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `search_lumps`          | `reference/lumps.md`    |
 | `get_lump`              | `reference/lumps.md`    |
 | `extract_lump`          | `reference/lumps.md`    |
+| `add_lump`              | `reference/lumps.md`    |
+| `import_asset`          | `reference/lumps.md`    |
+| `import_file_as_lump`   | `reference/lumps.md`    |
 | `open_iwad`             | `reference/session.md`  |
 | `open_wad`              | `reference/session.md`  |
 | `new_wad`               | `reference/session.md`  |

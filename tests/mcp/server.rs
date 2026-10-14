@@ -79,6 +79,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "add_lump",
                 "extract_lump",
                 "get_asset_server_info",
                 "get_linedef_specials",
@@ -88,6 +89,8 @@ mod tests {
                 "get_session_info",
                 "get_thing_types",
                 "get_wad_info",
+                "import_asset",
+                "import_file_as_lump",
                 "list_lumps",
                 "merge_wad",
                 "new_wad",
@@ -102,6 +105,12 @@ mod tests {
             ],
             "sorted tool names"
         );
+    }
+
+    #[tokio::test]
+    async fn the_lump_reader_schemas_flatten_their_selector_fields() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
         let get_lump = schema_of(tool_named(&tools, "get_lump"));
         assert_flattens(
             &get_lump,
@@ -131,6 +140,53 @@ mod tests {
         );
         assert_required(&extract_lump, "name");
         assert_required(&extract_lump, "path");
+    }
+
+    #[tokio::test]
+    async fn add_lump_flattens_its_payload_and_placement_fields() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let add_lump = schema_of(tool_named(&tools, "add_lump"));
+        assert_flattens(
+            &add_lump,
+            &[
+                "name",
+                "text",
+                "hex",
+                "source",
+                "index",
+                "before",
+                "after",
+                "namespace",
+                "allow_duplicate",
+            ],
+        );
+        assert_required(&add_lump, "name");
+    }
+
+    #[tokio::test]
+    async fn the_two_import_tools_share_one_schema_requiring_source() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let import_asset = schema_of(tool_named(&tools, "import_asset"));
+        assert_flattens(
+            &import_asset,
+            &[
+                "source",
+                "name",
+                "index",
+                "before",
+                "after",
+                "namespace",
+                "allow_duplicate",
+            ],
+        );
+        assert_required(&import_asset, "source");
+        assert_eq!(
+            schema_of(tool_named(&tools, "import_file_as_lump")),
+            import_asset,
+            "the two import names share one contract"
+        );
     }
 
     #[tokio::test]

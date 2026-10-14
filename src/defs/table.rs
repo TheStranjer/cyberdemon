@@ -36,14 +36,21 @@ const FLAG_HANGING: &str = "hanging";
 /// The flag text for "no flags".
 const FLAG_NONE: &str = "-";
 
-/// The target text for a linedef special that acts on tagged sectors.
-const TARGET_SECTOR: &str = "sector";
-
-/// The target text for a special that acts on the sector behind the line.
-const TARGET_SECTOR_BACK: &str = "sector_back";
+/// The free-form target texts a special table uses, named in error hints.
+const TARGET_HINTS: &str =
+    "\"sector\", \"sector_or_back\", \"thing\", \"line\", \"ex_5thing\" or \"no\"";
 
 /// The text used for "no value" in the `target` and `args` columns.
 const COLUMN_NONE: &str = "-";
+
+/// The prefix of one `argN=Name` entry in the args column.
+const ARG_PREFIX: &str = "arg";
+
+/// The character separating argument entries in the args column.
+const ARG_SEP: char = ';';
+
+/// The character separating an argument's position from its name.
+const ARG_ASSIGN: char = '=';
 
 /// The length of a Doom sprite name.
 const SPRITE_LEN: usize = 4;
@@ -78,10 +85,13 @@ pub struct SpecialDef {
     pub name: String,
     /// The editor category path, e.g. `"Doors/Local"`.
     pub category: String,
-    /// What the special acts on: `"sector"` (tagged sectors),
-    /// `"sector_back"` (the sector behind the line) or `"-"` (nothing).
+    /// What the special acts on: a free-form table hint such as `"sector"`
+    /// (tagged sectors), `"sector_or_back"`, `"sector_back"`, `"thing"`,
+    /// `"line"`, `"ex_5thing"`, `"no"` or `"-"` (nothing), passed through
+    /// unchanged.
     pub target: String,
-    /// The argument names the special reads, empty for vanilla Doom.
+    /// The argument names the special reads, in order: index 0 is `arg1`.
+    /// Empty for the Doom-family tables and for specials that take none.
     pub args: Vec<String>,
     /// The first game that has this special (`"doom"`, `"doom2"`, ...).
     pub game: String,
@@ -321,40 +331,66 @@ fn parse_flags(text: &str, number: usize) -> Result<bool, String> {
     ))
 }
 
-/// Parse the target column: the accepted vocabulary of linedef actions.
+/// Parse the target column: a free-form hint naming what the special acts
+/// on (`sector`, `sector_or_back`, `thing`, `line`, `ex_5thing`, `no`, `-`,
+/// ...); the text is passed through unchanged and only empty values are
+/// refused.
 ///
 /// # Errors
 ///
-/// A `String` naming the line and the accepted texts.
+/// A `String` naming the line when the column is empty.
 fn parse_target(text: &str, number: usize) -> Result<String, String> {
-    if text == COLUMN_NONE || text == TARGET_SECTOR || text == TARGET_SECTOR_BACK {
-        return Ok(text.to_owned());
+    if text.is_empty() {
+        return Err(format!(
+            "special table line {number}: empty target column: use {COLUMN_NONE:?} for nothing \
+             acted on or one of the hints like {TARGET_HINTS}"
+        ));
     }
-    Err(format!(
-        "special table line {number}: unknown target {text:?}: use {COLUMN_NONE:?} for none, \
-         {TARGET_SECTOR:?} for tagged sectors or {TARGET_SECTOR_BACK:?} for the sector behind \
-         the line"
-    ))
+    Ok(text.to_owned())
 }
 
 /// Parse the args column: `-` when the special takes no arguments, else
-/// the whitespace-separated argument names.
+/// `arg1=Name;arg2=Name` entries listing each argument's name in order, so
+/// the result's index 0 is `arg1`.
 ///
 /// # Errors
 ///
-/// A `String` naming the line when the text is blank without being `-`.
+/// A `String` naming the line and the first entry that does not carry its
+/// position number, or an empty name.
 fn parse_args(text: &str, number: usize) -> Result<Vec<String>, String> {
     if text == COLUMN_NONE {
         return Ok(Vec::new());
     }
-    let names: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
-    if names.is_empty() {
+    text.split(ARG_SEP)
+        .enumerate()
+        .map(|(offset, part)| parse_arg_entry(part, offset, number))
+        .collect()
+}
+
+/// Parse one `argN=Name` entry of the args column: `offset` is its
+/// zero-based position, so the entry must start with `arg{offset + 1}=`.
+///
+/// # Errors
+///
+/// A `String` naming the line and the entry when the position prefix is
+/// missing or wrong, or the name is empty.
+fn parse_arg_entry(part: &str, offset: usize, number: usize) -> Result<String, String> {
+    let wanted = u32::try_from(offset)
+        .ok()
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| format!("special table line {number}: too many arguments near {part:?}"))?;
+    let prefix = format!("{ARG_PREFIX}{wanted}{ARG_ASSIGN}");
+    let Some(name) = part.strip_prefix(prefix.as_str()) else {
         return Err(format!(
-            "special table line {number}: args column {text:?} is neither {COLUMN_NONE:?} nor \
-             space-separated argument names"
+            "special table line {number}: args entry {part:?} does not start with {prefix:?}"
+        ));
+    };
+    if name.is_empty() {
+        return Err(format!(
+            "special table line {number}: args entry {part:?} gives argument {wanted} no name"
         ));
     }
-    Ok(names)
+    Ok(name.to_owned())
 }
 
 #[cfg(test)]
@@ -522,29 +558,68 @@ mod tests {
     }
 
     #[test]
-    fn special_args_split_on_whitespace() {
-        let text =
-            format!("{SPECIAL_MINI}125\tLine teleport\tTeleports\tsector\tside tag\thexen\n");
-        let rows = parse_special_table(&text).expect("named arguments are valid");
-        let args: Vec<&str> = rows
-            .first()
-            .expect("one row")
-            .args
-            .iter()
-            .map(String::as_str)
-            .collect();
-        assert_eq!(args, vec!["side", "tag"], "the argument names split out");
+    fn special_args_name_positions_in_order() {
+        let text = format!(
+            "{SPECIAL_MINI}13\tDoor_LockedRaise\tDoors\tsector_or_back\targ1=Sector Tag;arg2=Speed;\
+             arg3=Delay;arg4=Lock\thexen\n"
+        );
+        let rows = parse_special_table(&text).expect("numbered argument names are valid");
+        let door = rows.first().expect("one row");
+        assert_eq!(
+            door.target, "sector_or_back",
+            "free-form target passes through"
+        );
+        let args: Vec<&str> = door.args.iter().map(String::as_str).collect();
+        assert_eq!(
+            args,
+            vec!["Sector Tag", "Speed", "Delay", "Lock"],
+            "index 0 is arg1 and names keep their spaces"
+        );
     }
 
     #[test]
-    fn an_unknown_special_target_is_rejected() {
-        let text = format!("{SPECIAL_MINI}1\tDoor\tDoors\tthing\t-\tdoom\n");
-        let error = parse_special_table(&text).expect_err("thing is not a target");
-        assert!(
-            error.contains("\"sector_back\""),
-            "accepted texts named: {error}"
-        );
+    fn a_misnumbered_argument_entry_names_the_line_and_entry() {
+        let text = format!("{SPECIAL_MINI}13\tDoor\tDoors\tsector\targ1=Tag;arg3=Speed\thexen\n");
+        let error = parse_special_table(&text).expect_err("arg2 is missing");
         assert!(error.contains("line 2"), "the line is named: {error}");
+        assert!(
+            error.contains("\"arg2=\""),
+            "the wanted prefix is named: {error}"
+        );
+    }
+
+    #[test]
+    fn an_argument_without_a_name_is_rejected() {
+        let text = format!("{SPECIAL_MINI}13\tDoor\tDoors\tsector\targ1=\thexen\n");
+        let error = parse_special_table(&text).expect_err("an empty name is invalid");
+        assert!(error.contains("no name"), "the problem is named: {error}");
+    }
+
+    #[test]
+    fn special_targets_pass_through_free_form() {
+        let text = format!(
+            "{SPECIAL_MINI}120\tRadius_Quake\tScripting\tex_5thing\targ1=Intensity\thexen\n\
+             100\tScroll_Texture_Left\tScrollers\tno\targ1=Speed\thexen\n\
+             121\tLine_SetIdentification\tLines\tline\targ1=Line ID\thexen\n"
+        );
+        let rows = parse_special_table(&text).expect("any non-empty target is a hint");
+        let targets: Vec<&str> = rows.iter().map(|row| row.target.as_str()).collect();
+        assert_eq!(
+            targets,
+            vec!["ex_5thing", "no", "line"],
+            "the texts arrive unchanged"
+        );
+    }
+
+    #[test]
+    fn an_empty_special_target_is_rejected() {
+        let text = format!("{SPECIAL_MINI}1\tDoor\tDoors\t\t-\tdoom\n");
+        let error = parse_special_table(&text).expect_err("an empty target is invalid");
+        assert!(error.contains("target"), "the column is named: {error}");
+        assert!(
+            error.contains("\"sector_or_back\""),
+            "accepted hints are named: {error}"
+        );
     }
 
     #[test]
@@ -669,6 +744,80 @@ mod tests {
         assert_eq!(
             rows.last().map(|row| row.name.as_str()),
             Some("Wind West (25)"),
+            "the last row"
+        );
+    }
+
+    #[test]
+    fn the_shipped_hexen_things_table_parses() {
+        let rows = parse_thing_table(crate::defs::registry::HEXEN_THINGS_TSV)
+            .expect("the embedded table must parse");
+        assert_eq!(rows.len(), 233, "the shipped table's row count");
+        assert!(
+            rows.iter().all(|row| row.game == "hexen"),
+            "every row says hexen"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.hanging).count(),
+            22,
+            "the hanging rows"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.category == "Monsters").count(),
+            18,
+            "the monster rows"
+        );
+    }
+
+    #[test]
+    fn the_shipped_hexen_specials_table_parses() {
+        let rows = parse_special_table(crate::defs::registry::HEXEN_SPECIALS_TSV)
+            .expect("the embedded table must parse");
+        assert_eq!(rows.len(), 86, "the shipped table's row count");
+        assert!(
+            rows.iter().all(|row| row.game == "hexen"),
+            "every row says hexen"
+        );
+        let locked = rows
+            .iter()
+            .find(|row| row.number == 13)
+            .expect("Door_LockedRaise exists");
+        let args: Vec<&str> = locked.args.iter().map(String::as_str).collect();
+        assert_eq!(
+            args,
+            vec!["Sector Tag", "Speed", "Delay", "Lock"],
+            "special 13 lists four argument names, arg1 first"
+        );
+        let endgame = rows
+            .iter()
+            .find(|row| row.number == 75)
+            .expect("Teleport_EndGame exists");
+        assert!(endgame.args.is_empty(), "special 75 takes no arguments");
+        assert_eq!(
+            rows.iter().filter(|row| row.args.len() == 5).count(),
+            11,
+            "the five-argument rows"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.args.is_empty()).count(),
+            2,
+            "the two rows with no arguments"
+        );
+    }
+
+    #[test]
+    fn the_shipped_hexen_sectors_table_parses() {
+        let rows = parse_sector_table(crate::defs::registry::HEXEN_SECTORS_TSV)
+            .expect("the embedded table must parse");
+        assert_eq!(rows.len(), 46, "the shipped table's row count");
+        assert_eq!(
+            rows.first().map(|row| row.name.as_str()),
+            Some("Normal"),
+            "type 0"
+        );
+        assert_eq!(
+            rows.last().map(|row| row.name.as_str()),
+            Some("Scroll SouthWest (25)"),
             "the last row"
         );
     }

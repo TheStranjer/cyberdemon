@@ -1,0 +1,87 @@
+special	name	category	target	args	game
+1	PolyObject Start Line	PolyObjects	-	arg1=PolyObject ID;arg2=Mirror;arg3=Sound Sequence	hexen
+2	Polyobj_RotateLeft	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle	hexen
+3	Polyobj_RotateRight	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle	hexen
+4	Polyobj_Move	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle;arg4=Distance	hexen
+5	Polyobj_ExplicitLine	PolyObjects	-	arg1=PolyObject ID;arg2=Rendering Order;arg3=Mirror PolyObject ID;arg4=Sound Sequence	hexen
+6	Polyobj_MoveTimes8	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle;arg4=Eighth of Distance	hexen
+7	Polyobj_DoorSwing	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle;arg4=Close Delay	hexen
+8	Polyobj_DoorSlide	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle;arg4=Distance;arg5=Close Delay	hexen
+90	Polyobj_OR_RotateLeft	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle	hexen
+91	Polyobj_OR_RotateRight	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle	hexen
+92	Polyobj_OR_Move	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle;arg4=Distance	hexen
+93	Polyobj_OR_MoveTimes8	PolyObjects	-	arg1=PolyObject ID;arg2=Speed;arg3=Byte Angle;arg4=Eighth of Distance	hexen
+10	Door_Close	Doors	sector	arg1=Sector Tag;arg2=Speed	hexen
+11	Door_Open	Doors	sector_or_back	arg1=Sector Tag;arg2=Speed	hexen
+12	Door_Raise	Doors	sector_or_back	arg1=Sector Tag;arg2=Speed;arg3=Delay	hexen
+13	Door_LockedRaise	Doors	sector_or_back	arg1=Sector Tag;arg2=Speed;arg3=Delay;arg4=Lock	hexen
+40	Ceiling_LowerByValue	Ceilings	sector	arg1=Sector Tag;arg2=Speed;arg3=Value	hexen
+41	Ceiling_RaiseByValue	Ceilings	sector	arg1=Sector Tag;arg2=Speed;arg3=Value	hexen
+42	Ceiling_CrushAndRaise	Ceilings	sector	arg1=Sector Tag;arg2=Speed;arg3=Crush Damage	hexen
+43	Ceiling_LowerAndCrush	Ceilings	sector	arg1=Sector Tag;arg2=Speed;arg3=Crush Damage	hexen
+44	Ceiling_CrushStop	Ceilings	sector	arg1=Sector Tag	hexen
+45	Ceiling_CrushRaiseAndStay	Ceilings	sector	arg1=Sector Tag;arg2=Speed;arg3=Crush Damage	hexen
+69	Ceiling_MoveToValueTimes8	Ceilings	sector	arg1=Sector Tag;arg2=Speed;arg3=Eighth of Value;arg4=Negative?	hexen
+60	Plat_PerpetualRaise	Platforms & Lifts	sector	arg1=Sector Tag;arg2=Speed;arg3=Delay (in tics)	hexen
+61	Plat_Stop	Platforms & Lifts	sector	arg1=Sector Tag	hexen
+62	Plat_DownWaitUpStay	Platforms & Lifts	sector	arg1=Sector Tag;arg2=Speed;arg3=Delay (in tics)	hexen
+63	Plat_DownByValue	Platforms & Lifts	sector	arg1=Sector Tag;arg2=Speed;arg3=Delay (in tics);arg4=Eighth of Value	hexen
+64	Plat_UpWaitDownStay	Platforms & Lifts	sector	arg1=Sector Tag;arg2=Speed;arg3=Delay (in tics)	hexen
+65	Plat_UpByValue	Platforms & Lifts	sector	arg1=Sector Tag;arg2=Speed;arg3=Delay (in tics);arg4=Eighth of Value	hexen
+20	Floor_LowerByValue	Floors	sector	arg1=Sector Tag;arg2=Speed;arg3=Value	hexen
+21	Floor_LowerToLowest	Floors	sector	arg1=Sector Tag;arg2=Speed	hexen
+22	Floor_LowerToNearest	Floors	sector	arg1=Sector Tag;arg2=Speed	hexen
+23	Floor_RaiseByValue	Floors	sector	arg1=Sector Tag;arg2=Speed;arg3=Value	hexen
+24	Floor_RaiseToHighest	Floors	sector	arg1=Sector Tag;arg2=Speed	hexen
+25	Floor_RaiseToNearest	Floors	sector	arg1=Sector Tag;arg2=Speed	hexen
+28	Floor_RaiseAndCrush	Floors	sector	arg1=Sector Tag;arg2=Speed;arg3=Crush Damage	hexen
+35	Floor_RaiseByValueTimes8	Floors	sector	arg1=Sector Tag;arg2=Speed;arg3=Eighth of Value	hexen
+36	Floor_LowerByValueTimes8	Floors	sector	arg1=Sector Tag;arg2=Speed;arg3=Eighth of Value	hexen
+46	Floor_CrushStop	Floors	sector	arg1=Sector Tag	hexen
+66	Floor_LowerInstant	Floors	sector	arg1=Sector Tag;arg2=Unused;arg3=Eighth of Value	hexen
+67	Floor_RaiseInstant	Floors	sector	arg1=Sector Tag;arg2=Unused;arg3=Eighth of Value	hexen
+68	Floor_MoveToValueTimes8	Floors	sector	arg1=Sector Tag;arg2=Speed;arg3=Eighth of Value;arg4=Negative?	hexen
+138	Floor_Waggle	Floors	sector	arg1=Sector Tag;arg2=Amplitude;arg3=Speed;arg4=Phase Offset;arg5=Duration (in seconds)	hexen
+26	Stairs_BuildDown	Stair Builders	sector	arg1=Sector Tag;arg2=Speed;arg3=Step Height;arg4=Step Delay (in tics);arg5=Reset Delay (in tics)	hexen
+27	Stairs_BuildUp	Stair Builders	sector	arg1=Sector Tag;arg2=Speed;arg3=Step Height;arg4=Step Delay (in tics);arg5=Reset Delay (in tics)	hexen
+31	Stairs_BuildDownSync	Stair Builders	sector	arg1=Sector Tag;arg2=Speed;arg3=Step Height;arg4=Reset Delay (in tics)	hexen
+32	Stairs_BuildUpSync	Stair Builders	sector	arg1=Sector Tag;arg2=Speed;arg3=Step Height;arg4=Reset Delay (in tics)	hexen
+29	Pillar_Build	Floors & Ceilings	-	arg1=Sector Tag;arg2=Speed;arg3=Floor Height	hexen
+30	Pillar_Open	Floors & Ceilings	-	arg1=Sector Tag;arg2=Speed;arg3=Floor Lower Value;arg4=Ceiling Raise Value	hexen
+94	Pillar_BuildAndCrush	Floors & Ceilings	-	arg1=Sector Tag;arg2=Speed;arg3=Floor Height;arg4=Crushing Damage	hexen
+95	FloorAndCeiling_LowerByValue	Floors & Ceilings	-	arg1=Sector Tag;arg2=Speed;arg3=Value	hexen
+96	FloorAndCeiling_RaiseByValue	Floors & Ceilings	-	arg1=Sector Tag;arg2=Speed;arg3=Value	hexen
+74	Teleport_NewMap	Exits	-	arg1=Map Levelnum;arg2=Player Start;arg3=Keep Facing	hexen
+75	Teleport_EndGame	Exits	-	-	hexen
+70	Teleport	Teleporters	thing	arg1=Dest Thing ID	hexen
+71	Teleport_NoFog	Teleporters	thing	arg1=Dest Thing ID	hexen
+109	Light_ForceLightning	Lighting	sector	-	hexen
+110	Light_RaiseByValue	Lighting	sector	arg1=Sector Tag;arg2=Value	hexen
+111	Light_LowerByValue	Lighting	sector	arg1=Sector Tag;arg2=Value	hexen
+112	Light_ChangeToValue	Lighting	sector	arg1=Sector Tag;arg2=Value	hexen
+113	Light_Fade	Lighting	sector	arg1=Sector Tag;arg2=Value;arg3=Fade Length	hexen
+114	Light_Glow	Lighting	sector	arg1=Sector Tag;arg2=Upper Light Level;arg3=Lower Light Level;arg4=Fade Length	hexen
+115	Light_Flicker	Lighting	sector	arg1=Sector Tag;arg2=Upper Light Level;arg3=Lower Light Level	hexen
+116	Light_Strobe	Lighting	sector	arg1=Sector Tag;arg2=Upper Light Level;arg3=Lower Light Level;arg4=Upper Length;arg5=Lower Length	hexen
+100	Scroll_Texture_Left	Scrollers	no	arg1=Speed	hexen
+101	Scroll_Texture_Right	Scrollers	no	arg1=Speed	hexen
+102	Scroll_Texture_Up	Scrollers	no	arg1=Speed	hexen
+103	Scroll_Texture_Down	Scrollers	no	arg1=Speed	hexen
+80	ACS_Execute	Scripting	-	arg1=Script Number;arg2=Map Levelnum;arg3=First Arg;arg4=Second Arg;arg5=Third Arg	hexen
+81	ACS_Suspend	Scripting	-	arg1=Script Number;arg2=Map Levelnum	hexen
+82	ACS_Terminate	Scripting	-	arg1=Script Number;arg2=Map Levelnum	hexen
+83	ACS_LockedExecute	Scripting	-	arg1=Script Number;arg2=Map Levelnum;arg3=First Arg;arg4=Second Arg;arg5=Lock Number	hexen
+120	Radius_Quake	Scripting	ex_5thing	arg1=Intensity;arg2=Duration;arg3=Damage Radius;arg4=Tremor Radius;arg5=Thing ID	hexen
+129	UsePuzzleItem	Scripting	-	arg1=Puzzle Number;arg2=Script Number;arg3=First Arg;arg4=Second Arg;arg5=Third Arg	hexen
+140	Sector_ChangeSound	Sector	sector	arg1=Sector Tag;arg2=Sound Sequence	hexen
+72	ThrustThing	Things	no	arg1=Angle;arg2=Force	hexen
+73	DamageThing	Things	no	arg1=Amount	hexen
+130	Thing_Activate	Things	thing	arg1=Thing ID	hexen
+131	Thing_Deactivate	Things	thing	arg1=Thing ID	hexen
+132	Thing_Remove	Things	thing	arg1=Thing ID	hexen
+133	Thing_Destroy	Things	thing	arg1=Thing ID	hexen
+134	Thing_Projectile	Things	thing	arg1=Thing ID;arg2=Type;arg3=Angle;arg4=H Speed;arg5=V Speed	hexen
+135	Thing_Spawn	Things	thing	arg1=Thing ID;arg2=Type;arg3=Angle	hexen
+136	Thing_ProjectileGravity	Things	thing	arg1=Thing ID;arg2=Type;arg3=Angle;arg4=H Speed;arg5=V Speed	hexen
+137	Thing_SpawnNoFog	Things	thing	arg1=Thing ID;arg2=Type;arg3=Angle	hexen
+121	Line_SetIdentification	Lines	line	arg1=Line ID	hexen

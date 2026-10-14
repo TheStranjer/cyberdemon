@@ -1,0 +1,234 @@
+type	name	sprite	frame	radius	category	flags	game
+1	Player 1 Start	PLAY	A	16	Player Starts	-	hexen
+2	Player 2 Start	CLER	A	16	Player Starts	-	hexen
+3	Player 3 Start	MAGE	A	16	Player Starts	-	hexen
+4	Player 4 Start	PLAY	B	16	Player Starts	-	hexen
+9100	Player 5 Start	CLER	B	16	Player Starts	-	hexen
+9101	Player 6 Start	MAGE	B	16	Player Starts	-	hexen
+9102	Player 7 Start	PLAY	C	16	Player Starts	-	hexen
+9103	Player 8 Start	CLER	C	16	Player Starts	-	hexen
+11	Deathmatch Start	MAGE	R	16	Player Starts	-	hexen
+14	Teleport Destination	TELE	A	20	Teleports	-	hexen
+140	Teleport Smoke	TSMK	A	20	Teleports	-	hexen
+107	Centaur	CENT	A	20	Monsters	-	hexen
+10060	Affrit	FDMN	A	20	Monsters	-	hexen
+115	Slaughtaur	CENT	F	20	Monsters	-	hexen
+34	Reiver	WRTH	A	20	Monsters	-	hexen
+10011	Reiver (buried)	WRTH	A	20	Monsters	-	hexen
+254	Death Wyvern	DRAG	C	20	Monsters	-	hexen
+10030	Ettin	ETTN	A	25	Monsters	-	hexen
+8020	Wendigo	ICEY	A	22	Monsters	-	hexen
+31	Green Chaos Serpent	DEMN	A	32	Monsters	-	hexen
+8080	Brown Chaos Serpent	DEM2	A	32	Monsters	-	hexen
+114	Dark Bishop	BISH	A	22	Monsters	-	hexen
+121	Stalker	SSPT	B	32	Monsters	-	hexen
+120	Stalker Boss	SSPT	D	32	Monsters	-	hexen
+10100	Zedek (fighter)	PLAY	E	16	Monsters	-	hexen
+10101	Traductus (cleric)	CLER	E	16	Monsters	-	hexen
+10102	Menelkir (mage)	MAGE	E	16	Monsters	-	hexen
+10080	Heresiarch	SORC	A	40	Monsters	-	hexen
+10200	Korax	KORX	A	65	Monsters	-	hexen
+81	Crystal Vial	PTN1	A	20	Health And Armour	-	hexen
+8005	Mesh Armor	ARM1	A	20	Health And Armour	-	hexen
+8006	Falcon Shield	ARM2	A	20	Health And Armour	-	hexen
+8007	Platinum Helm	ARM3	A	20	Health And Armour	-	hexen
+8008	Amulet Of Warding	ARM4	A	20	Health And Armour	-	hexen
+10	Serpent Staff	WCSS	A	20	Weapons	-	hexen
+12	Quietus Piece 1	WFR1	A	20	Weapons	-	hexen
+13	Quietus Piece 2	WFR2	A	20	Weapons	-	hexen
+16	Quietus Piece 3	WFR3	A	20	Weapons	-	hexen
+18	Wraithverge Piece 1	WCH1	A	20	Weapons	-	hexen
+19	Wraithverge Piece 2	WCH2	A	20	Weapons	-	hexen
+20	Wraithverge Piece 3	WCH3	A	20	Weapons	-	hexen
+21	BloodScourge Piece 1	WMS1	A	20	Weapons	-	hexen
+22	BloodScourge Piece 2	WMS2	A	20	Weapons	-	hexen
+23	BloodScourge Piece 3	WMS3	A	20	Weapons	-	hexen
+53	Frost Shards	WMCS	A	20	Weapons	-	hexen
+123	Hammer of Retribution	WFHM	A	20	Weapons	-	hexen
+8009	Firestorm	WCFM	A	20	Weapons	-	hexen
+8010	Timon's Axe	WFAX	A	20	Weapons	-	hexen
+8040	Arc of Death	WMCS	A	20	Weapons	-	hexen
+122	Blue Mana	MAN1	H	8	Ammunition	-	hexen
+124	Green Mana	MAN2	H	8	Ammunition	-	hexen
+8004	Combined Mana	MAN3	A	8	Ammunition	-	hexen
+30	Porkalator	ARTI	P	20	Powerups	-	hexen
+32	Mystic Urn	ARTI	S	20	Powerups	-	hexen
+33	Torch	ARTI	T	20	Powerups	-	hexen
+36	Chaos Device	ARTI	A	20	Powerups	-	hexen
+82	Quartz Flask	ARTI	P	20	Powerups	-	hexen
+83	Wings Of Wrath	ARTI	S	20	Powerups	-	hexen
+84	Icon Of The Defender	ARTI	I	20	Powerups	-	hexen
+86	Dark Servant	ARTI	S	20	Powerups	-	hexen
+8000	Flechette	ARTI	P	20	Powerups	-	hexen
+8002	Boots Of Speed	ARTI	S	20	Powerups	-	hexen
+8003	Krater Of Might	ARTI	B	20	Powerups	-	hexen
+8041	Dragonskin Bracers	ARTI	B	20	Powerups	-	hexen
+10040	Banishment Device	ARTI	T	20	Powerups	-	hexen
+10110	Disc Of Repulsion	ARTI	B	20	Powerups	-	hexen
+10120	Mystic Ambit Incant	ARTI	H	20	Powerups	-	hexen
+9002	Yorick's Skull	ARTI	S	20	Puzzle Items	-	hexen
+9003	Heart Of D'Sparil	ARTI	B	20	Puzzle Items	-	hexen
+9004	Ruby Planet	ARTI	G	20	Puzzle Items	-	hexen
+9005	Emerald Planet 1	ARTI	G	20	Puzzle Items	-	hexen
+9006	Sapphire Planet 1	ARTI	G	20	Puzzle Items	-	hexen
+9007	Daemon Codex	ARTI	B	20	Puzzle Items	-	hexen
+9008	Liber Obscura	ARTI	B	20	Puzzle Items	-	hexen
+9009	Emerald Planet 2	ARTI	G	20	Puzzle Items	-	hexen
+9010	Sapphire Planet 2	ARTI	G	20	Puzzle Items	-	hexen
+9014	Flame mask	ARTI	S	20	Puzzle Items	-	hexen
+9015	Glaive seal	ARTI	F	20	Puzzle Items	-	hexen
+9016	Holy relic	ARTI	C	20	Puzzle Items	-	hexen
+9017	Sigil of the magus	ARTI	M	20	Puzzle Items	-	hexen
+9018	Gear (Steel)	ARTI	G	20	Puzzle Items	-	hexen
+9019	Gear (Bronze)	ARTI	G	20	Puzzle Items	-	hexen
+9020	Gear (Bronze In Steel)	ARTI	G	20	Puzzle Items	-	hexen
+9021	Gear (Silver In Bronze)	ARTI	G	20	Puzzle Items	-	hexen
+8030	Steel Key	KEY1	A	12	Keys	-	hexen
+8031	Cave Key	KEY2	A	12	Keys	-	hexen
+8032	Axe Key	KEY3	A	12	Keys	-	hexen
+8033	Fire Key	KEY4	A	12	Keys	-	hexen
+8034	Emerald Key	KEY5	A	12	Keys	-	hexen
+8035	Dungeon Key	KEY6	A	12	Keys	-	hexen
+8036	Silver Key	KEY7	A	12	Keys	-	hexen
+8037	Rusty Key	KEY8	A	12	Keys	-	hexen
+8038	Horn Key	KEY9	A	12	Keys	-	hexen
+8039	Swamp Key	KEYA	A	12	Keys	-	hexen
+8200	Castle Key	KEYB	A	12	Keys	-	hexen
+8065	Bell	BBLL	A	56	Scripted Objects	-	hexen
+9011	Yorick's Statue	STWN	A	10	Scripted Objects	-	hexen
+9012	Pedestal of D'Sparil	GMPD	A	10	Scripted Objects	-	hexen
+10090	Spike Down	TSPK	D	20	Scripted Objects	-	hexen
+10091	Spike Up	TSPK	B	20	Scripted Objects	-	hexen
+118	Glitter Bridge	TLGL	B	32	Scripted Objects	-	hexen
+10225	Bat Spawner	ABAT	C	20	Scripted Objects	-	hexen
+10000	Fog Spawner	FOGM	E	20	Scripted Objects	-	hexen
+10001	Fog Patch (small)	FOGS	A	20	Scripted Objects	-	hexen
+10002	Fog Patch (medium)	FOGM	A	20	Scripted Objects	-	hexen
+10003	Fog Patch (large)	FOGL	A	20	Scripted Objects	-	hexen
+113	Leaf Spawner	LEF1	C	20	Scripted Objects	-	hexen
+8064	Suit of Armor	SUIT	A	16	Breakable Objects	-	hexen
+104	Pot (tall)	POT1	A	10	Breakable Objects	-	hexen
+105	Pot (medium)	POT2	A	10	Breakable Objects	-	hexen
+106	Pot (short)	POT3	A	15	Breakable Objects	-	hexen
+111	Pool Of Blood	GIBS	A	16	Gore/Hanging & Impaled Bodies	-	hexen
+71	Hanging Corpse	CPS3	A	6	Gore/Hanging & Impaled Bodies	hanging	hexen
+61	Impaled Corpse	CPS1	A	10	Gore/Hanging & Impaled Bodies	-	hexen
+108	Lynched Corpse	CPS4	A	11	Gore/Hanging & Impaled Bodies	hanging	hexen
+109	Lynched Corpse (heartless)	CPS5	A	10	Gore/Hanging & Impaled Bodies	hanging	hexen
+110	Corpse (sitting)	CPS6	A	15	Gore/Hanging & Impaled Bodies	-	hexen
+62	Corpse (sleeping)	CPS2	A	16	Gore/Hanging & Impaled Bodies	-	hexen
+17	Chandelier (lit)	CDLR	A	16	Lighting	hanging	hexen
+8063	Chandelier (unlit)	CDLR	D	16	Lighting	hanging	hexen
+8066	Blue Candle (lit)	CAND	A	16	Lighting	-	hexen
+8502	Candle With Web (unlit)	TST3	A	16	Lighting	-	hexen
+8503	Small Gray Candle (unlit)	TST4	A	16	Lighting	-	hexen
+8504	Small Candle (unlit)	TST5	A	16	Lighting	-	hexen
+119	3 Candles (lit)	CNDL	A	16	Lighting	-	hexen
+10500	Small Flame (timed)	FFSM	A	16	Lighting	-	hexen
+10501	Small Flame	FFSM	A	16	Lighting	-	hexen
+10502	Large Flame (timed)	FFLG	D	16	Lighting	-	hexen
+10503	Large Flame	FFLG	D	16	Lighting	-	hexen
+54	Wall Torch (lit)	WLTR	B	16	Lighting	-	hexen
+55	Wall Torch (unlit)	WLTR	I	16	Lighting	-	hexen
+8042	Minotaur Statue (lit)	FBUL	B	16	Lighting	-	hexen
+8043	Minotaur Statue (unlit)	FBUL	H	16	Lighting	-	hexen
+8069	Cauldron (lit)	CDRN	G	12	Lighting	-	hexen
+8070	Cauldron (unlit)	CDRN	A	12	Lighting	-	hexen
+8060	Skull With Flame	FSKL	A	5	Lighting	-	hexen
+8061	Brazier With Flame	BRTR	B	6	Lighting	-	hexen
+116	Twined Torch (lit)	TWTR	A	10	Lighting	-	hexen
+117	Twined Torch (unlit)	TWTR	I	10	Lighting	-	hexen
+77	Battle Rag Banner	BNR1	A	8	Decorations/Castle	-	hexen
+8100	Barrel	BARL	A	15	Decorations/Castle	-	hexen
+103	Pillar With Vase	VASE	A	12	Decorations/Castle	-	hexen
+8103	Hanging Bucket	BCKT	A	8	Decorations/Castle	hanging	hexen
+8509	Meat Cleaver	TST0	A	16	Decorations/Castle	-	hexen
+8508	Goblet (silver)	TST9	A	16	Decorations/Castle	-	hexen
+8507	Goblet (small)	TST8	A	16	Decorations/Castle	-	hexen
+8506	Goblet (tall)	TST7	A	16	Decorations/Castle	-	hexen
+8505	Goblet (spilled)	TST6	A	16	Decorations/Castle	-	hexen
+8501	Small Silver Stein	TST2	A	16	Decorations/Castle	-	hexen
+8500	Large Brown Stein	TST1	A	16	Decorations/Castle	-	hexen
+8067	Iron Maiden	IRON	A	12	Decorations/Dungeon	-	hexen
+8071	Chain (short)	CHNS	A	4	Decorations/Dungeon	hanging	hexen
+8072	Chain (long)	CHNS	B	4	Decorations/Dungeon	hanging	hexen
+8073	Hook With Heart	CHNS	C	4	Decorations/Dungeon	hanging	hexen
+8077	Hook With Skull	CHNS	G	4	Decorations/Dungeon	hanging	hexen
+8074	Chain With Large Hook	CHNS	D	4	Decorations/Dungeon	hanging	hexen
+8075	Chain With Small Hook	CHNS	E	4	Decorations/Dungeon	hanging	hexen
+8076	Chain with Spike Ball	CHNS	F	4	Decorations/Dungeon	hanging	hexen
+63	Tombstone (RIP)	TMS1	A	10	Decorations/Graveyard	-	hexen
+64	Tombstone (Shane)	TMS2	A	10	Decorations/Graveyard	-	hexen
+65	Tombstone (slimy)	TMS3	A	10	Decorations/Graveyard	-	hexen
+66	Tombstone (Brian R)	TMS4	A	10	Decorations/Graveyard	-	hexen
+67	Tombstone (cross circle)	TMS5	A	10	Decorations/Graveyard	-	hexen
+68	Tombstone (small cross)	TMS6	A	8	Decorations/Graveyard	-	hexen
+69	Tombstone (Brian P)	TMS7	A	8	Decorations/Graveyard	-	hexen
+5	Winged Statue	STTW	A	10	Decorations/Statues	-	hexen
+8051	Bronze Gargoyle (short)	GAR8	A	14	Decorations/Statues	-	hexen
+8047	Bronze Gargoyle (tall)	GAR4	A	14	Decorations/Statues	-	hexen
+8044	Rusty Gargoyle (tall)	GAR1	A	14	Decorations/Statues	-	hexen
+76	Ice Gargoyle (short)	STT5	A	14	Decorations/Statues	-	hexen
+73	Ice Gargoyle (tall)	STT3	A	14	Decorations/Statues	-	hexen
+8050	Lava Gargoyle (short)	GAR7	A	14	Decorations/Statues	-	hexen
+8046	Lava Gargoyle (tall)	GAR3	A	14	Decorations/Statues	-	hexen
+8049	Dark Lava Gargoyle (short)	GAR6	A	14	Decorations/Statues	-	hexen
+8045	Dark Lava Gargoyle (tall)	GAR2	A	14	Decorations/Statues	-	hexen
+74	Stone Gargoyle (short)	STT4	A	14	Decorations/Statues	-	hexen
+72	Stone Gargoyle (tall)	STT2	A	14	Decorations/Statues	-	hexen
+8052	Steel Gargoyle (short)	GAR9	A	14	Decorations/Statues	-	hexen
+8048	Steel Gargoyle (tall)	GAR5	A	14	Decorations/Statues	-	hexen
+80	Gnarled Tree 1	TRE6	A	22	Decorations/Plants	-	hexen
+87	Gnarled Tree 2	TRE7	A	22	Decorations/Plants	-	hexen
+78	Tall Tree 1	TRE5	A	15	Decorations/Plants	-	hexen
+79	Tall Tree 2	TRE4	A	15	Decorations/Plants	-	hexen
+8068	Evergreen Tree	XMAS	A	11	Decorations/Plants	-	hexen
+8062	Rotten Dead Tree (destructible)	TRDT	A	15	Decorations/Plants	-	hexen
+24	Dead Tree	TRE1	A	10	Decorations/Plants	-	hexen
+25	Leafless Tree	TRE1	A	15	Decorations/Plants	-	hexen
+60	Dead Tree (mossy)	SWMV	A	8	Decorations/Plants	-	hexen
+26	Mossy Tree 1	TRE2	A	10	Decorations/Plants	-	hexen
+27	Mossy Tree 2	TRE3	A	10	Decorations/Plants	-	hexen
+88	Log	SLTR	A	16	Decorations/Plants	-	hexen
+29	Tree Stump (bare)	STM2	A	12	Decorations/Plants	-	hexen
+28	Tree Stump (burned)	STM1	A	12	Decorations/Plants	-	hexen
+37	Tree Stump 1	STM3	A	16	Decorations/Plants	-	hexen
+38	Tree Stump 2	STM4	A	16	Decorations/Plants	-	hexen
+39	Large Mushroom 1	MSH1	A	16	Decorations/Plants	-	hexen
+40	Large Mushroom 2	MSH2	A	16	Decorations/Plants	-	hexen
+8104	Large Mushroom (explodes)	SHRM	B	6	Decorations/Plants	-	hexen
+41	Medium Mushroom	MSH3	A	16	Decorations/Plants	-	hexen
+42	Small Mushroom 1	MSH4	A	16	Decorations/Plants	-	hexen
+44	Small Mushroom 2	MSH5	A	16	Decorations/Plants	-	hexen
+45	Small Mushroom 3	MSH6	A	16	Decorations/Plants	-	hexen
+46	Small Mushroom 4	MSH7	A	16	Decorations/Plants	-	hexen
+47	Small Mushroom 5	MSH8	A	16	Decorations/Plants	-	hexen
+8101	Shrub	SHB1	A	8	Decorations/Plants	-	hexen
+8102	Shrub 2	SHB2	A	16	Decorations/Plants	-	hexen
+58	Hanging Moss 1	MSS1	A	16	Decorations/Plants	hanging	hexen
+59	Hanging Moss 2	MSS2	A	16	Decorations/Plants	hanging	hexen
+98	Small Rock (brown)	RKBS	A	15	Decorations/Rocks	-	hexen
+97	Big Rock (brown)	RKBL	A	17	Decorations/Rocks	-	hexen
+99	Big Rock (grey)	RKBK	A	16	Decorations/Rocks	-	hexen
+57	Stalactite (small)	SLC3	A	8	Decorations/Rocks	hanging	hexen
+56	Stalactite (medium)	SLC2	A	6	Decorations/Rocks	hanging	hexen
+52	Stalactite (large)	SLC1	A	8	Decorations/Rocks	hanging	hexen
+48	Stalagmite (pillar)	SGMP	A	8	Decorations/Rocks	-	hexen
+51	Stalagmite (small)	SGM3	A	8	Decorations/Rocks	-	hexen
+50	Stalagmite (medium)	SGM2	A	6	Decorations/Rocks	-	hexen
+49	Stalagmite (large)	SGM1	A	8	Decorations/Rocks	-	hexen
+96	Ice Spike (tiny)	ICM4	A	4	Decorations/Rocks	-	hexen
+95	Ice Spike (small)	ICM3	A	5	Decorations/Rocks	-	hexen
+94	Ice Spike (medium)	ICM2	A	5	Decorations/Rocks	-	hexen
+93	Ice Spike (large)	ICM1	A	8	Decorations/Rocks	-	hexen
+92	Icicle (tiny)	ICT4	A	4	Decorations/Rocks	hanging	hexen
+91	Icicle (small)	ICT3	A	4	Decorations/Rocks	hanging	hexen
+90	Icicle (medium)	ICT2	A	5	Decorations/Rocks	hanging	hexen
+89	Icicle (large)	ICT1	A	8	Decorations/Rocks	hanging	hexen
+6	Tiny Rock (mossy)	RCK1	A	16	Decorations/Rocks	-	hexen
+7	Small Rock (mossy)	RCK2	A	16	Decorations/Rocks	-	hexen
+9	Medium Rock (mossy)	RCK3	A	16	Decorations/Rocks	-	hexen
+15	Big Rock (mossy)	RCK4	A	16	Decorations/Rocks	-	hexen
+101	Brick Rubble (small)	RBL2	A	16	Decorations/Rocks	-	hexen
+102	Brick Rubble (medium)	RBL3	A	16	Decorations/Rocks	-	hexen
+100	Brick Rubble (large)	RBL1	A	16	Decorations/Rocks	-	hexen

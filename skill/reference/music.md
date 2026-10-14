@@ -1,6 +1,7 @@
 # Music tools
 
-Bringing external music files into the working archive.
+Bringing external music files into the working archive and previewing the
+music lumps a session holds.
 
 ## `import_music`
 
@@ -68,4 +69,54 @@ Bringing external music files into the working archive.
 
   ```json
   {"source": "/data/doom3_intro.ogg", "name": "D_INTRO", "format": "passthrough"}
+  ```
+
+## `preview_music`
+
+- Purpose: publishes one music lump of the session as a playable file on
+  the localhost asset server and returns its `URL`. The archives are not
+  modified and nothing is recorded in the undo history.
+- Arguments: the shared lump selector: `name` (required) plus `scope`
+  (`"merged"` default, `"working"`, `"layer:N"`), `namespace` and
+  `occurrence` (default the last, winning match) — see
+  `reference/lumps.md`.
+- Behaviour by the lump's sniffed content (the same magics
+  `import_music` recognises):
+  - `mus` (a vanilla `D_*` score): converted to a type-0 `Standard MIDI`
+    `File` and published as `NAME.mid` (`audio/midi`); a corrupt `MUS`
+    is `format_error`.
+  - `midi`: published unchanged as `NAME.mid` (`audio/midi`).
+  - `ogg`, `mp3`, `flac`, `wav`: the bytes are published unchanged with
+    the matching extension and media type.
+  - `xm`, `it`, `s3m`, `mod` tracker modules: the bytes are published
+    unchanged as `NAME.xm`/`.it`/`.s3m`/`.mod` (`application/octet-stream`;
+    players that take module files directly accept these).
+  - anything else: `unsupported`, message
+    `lump NAME is not recognised music; use get_lump format=url for raw
+    bytes`.
+- Returns (structured content):
+
+  ```json
+  {
+    "name": "D_RUNNIN",
+    "input_format": "mus",
+    "output_format": "mid",
+    "asset": {
+      "url": "http://localhost:25369/assets/3f9a.../D_RUNNIN.mid",
+      "filename": "D_RUNNIN.mid",
+      "mime": "audio/midi",
+      "size": 128
+    }
+  }
+  ```
+
+  `input_format` is what the lump's bytes sniffed as; `output_format` is
+  the published extension; `asset` is the playable file.
+- Errors: `invalid_argument` for a bad selector field; `not_found` when no
+  lump matches; `format_error` for a corrupt `MUS` score; `unsupported`
+  for bytes no recognised music container owns.
+- Example: listen to the working copy of a song converted on import:
+
+  ```json
+  {"name": "D_RUNNIN", "scope": "working"}
   ```

@@ -1,7 +1,8 @@
 //! The `music` tool group as seen by a real MCP client: `import_music`
 //! sniffing containers, converting `MIDI` to vanilla `MUS` `D_*` lumps,
 //! validating and storing `MUS` as-is, passing other formats through, and
-//! every refusal path leaving the session untouched.
+//! every refusal path leaving the session untouched; plus `preview_music`
+//! turning session music lumps into playable `MIDI` or original-file assets.
 
 #[cfg(test)]
 mod tests {
@@ -13,7 +14,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::support::{call, call_err, connect};
+    use crate::support::{call, call_err, connect, http_get};
 
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
@@ -143,6 +144,41 @@ mod tests {
         let path = dir.join(format!("{stem}.{ext}"));
         fs::write(&path, out).expect("write the fixture");
         path
+    }
+
+    /// `bytes` as the space-separated uppercase hex `add_lump` expects.
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Stores `bytes` in the working archive as a lump named `name`.
+    async fn add_working_lump(client: &Client, name: &str, bytes: &[u8]) {
+        call(
+            client,
+            "add_lump",
+            json!({ "name": name, "hex": hex_of(bytes) }),
+        )
+        .await;
+    }
+
+    /// GET a published asset `URL` and require the bytes it serves.
+    async fn fetch_asset(url: &str) -> Vec<u8> {
+        let (base, rest) = url.split_once("/assets/").expect("an asset url");
+        let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
+        assert_eq!(status, 200, "the asset serves: {url}");
+        body
+    }
+
+    /// The asset `URL` of a `preview_music` report.
+    fn asset_url(report: &Value) -> String {
+        report["asset"]["url"]
+            .as_str()
+            .expect("the report carries an asset url")
+            .to_owned()
     }
 
     #[tokio::test]
@@ -344,5 +380,121 @@ mod tests {
         let (missing_code, _) = call_err(&client, "import_music", source_arg(&missing)).await;
         assert_eq!(missing_code, "not_found", "fetch errors surface unchanged");
         assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn preview_music_converts_a_mus_lump_to_a_midi_asset() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let midi = write_midi(dir.path(), "runnin", &ONE_NOTE);
+        call(&client, "import_music", source_arg(&midi)).await;
+        let report = call(&client, "preview_music", json!({ "name": "D_RUNNIN" })).await;
+        assert_eq!(report["name"], json!("D_RUNNIN"), "the lump echoed");
+        assert_eq!(report["input_format"], json!("mus"), "the lump sniffs MUS");
+        assert_eq!(
+            report["output_format"],
+            json!("mid"),
+            "the conversion target"
+        );
+        assert_eq!(
+            report["asset"]["filename"],
+            json!("D_RUNNIN.mid"),
+            "NAME.mid"
+        );
+        assert_eq!(
+            report["asset"]["mime"],
+            json!("audio/midi"),
+            "the media type"
+        );
+        let body = fetch_asset(&asset_url(&report)).await;
+        assert_eq!(&body[..4], b"MThd", "a Standard MIDI File");
+        assert!(
+            body.windows(2).any(|pair| pair == [0x90_u8, 0x3C]),
+            "the note-on event survives: {body:02X?}"
+        );
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["import_music D_RUNNIN"],
+            "previewing records no edit"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_music_publishes_a_passthrough_midi_unchanged() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let midi = write_midi(dir.path(), "rawrun", &ONE_NOTE);
+        let mut args = source_arg(&midi);
+        args["format"] = json!("passthrough");
+        call(&client, "import_music", args).await;
+        let report = call(&client, "preview_music", json!({ "name": "D_RAWRUN" })).await;
+        assert_eq!(
+            report["input_format"],
+            json!("midi"),
+            "the lump sniffs MIDI"
+        );
+        assert_eq!(report["output_format"], json!("mid"), "the same container");
+        let body = fetch_asset(&asset_url(&report)).await;
+        let original = fs::read(&midi).expect("read the fixture back");
+        assert_eq!(body, original, "byte for byte identical");
+        assert_eq!(report["asset"]["size"], json!(original.len()), "the size");
+    }
+
+    #[tokio::test]
+    async fn preview_music_passes_an_ogg_lump_through_under_its_own_name() {
+        let client = connect().await;
+        let mut bytes = Vec::from(&b"OggS\x01\x02"[..]);
+        bytes.extend_from_slice(&[0_u8; 16]);
+        add_working_lump(&client, "OGGTEST", &bytes).await;
+        let report = call(&client, "preview_music", json!({ "name": "OGGTEST" })).await;
+        assert_eq!(report["input_format"], json!("ogg"), "the magic sniffed");
+        assert_eq!(report["output_format"], json!("ogg"), "stays an OGG");
+        assert_eq!(
+            report["asset"]["filename"],
+            json!("OGGTEST.ogg"),
+            "NAME.ogg"
+        );
+        assert_eq!(report["asset"]["mime"], json!("audio/ogg"), "the type");
+        let url = asset_url(&report);
+        assert!(
+            Path::new(&url)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("ogg")),
+            "the URL carries the extension: {url}"
+        );
+        let body = fetch_asset(&url).await;
+        assert_eq!(body, bytes, "identical bytes served");
+    }
+
+    #[tokio::test]
+    async fn preview_music_refuses_non_music_and_reports_missing_lumps() {
+        let client = connect().await;
+        add_working_lump(&client, "PLAYPAL", b"palettes-not-music").await;
+        let (code, message) =
+            call_err(&client, "preview_music", json!({ "name": "PLAYPAL" })).await;
+        assert_eq!(code, "unsupported", "a palette is not music");
+        assert!(
+            message.contains("PLAYPAL") && message.contains("not recognised music"),
+            "the message names the lump and the way out: {message}"
+        );
+        let mut broken = Vec::from(&b"MUS\x1A"[..]);
+        broken.extend_from_slice(&968_u16.to_le_bytes());
+        broken.extend_from_slice(&16_u16.to_le_bytes());
+        broken.resize(20, 0_u8);
+        add_working_lump(&client, "DBROKEN", &broken).await;
+        let (mus_code, mus_message) =
+            call_err(&client, "preview_music", json!({ "name": "DBROKEN" })).await;
+        assert_eq!(mus_code, "format_error", "the validator's refusal survives");
+        assert!(
+            mus_message.contains("MUS score"),
+            "the converter names the fault: {mus_message}"
+        );
+        let (missing_code, missing_message) =
+            call_err(&client, "preview_music", json!({ "name": "D_NOPE" })).await;
+        assert_eq!(missing_code, "not_found", "no such lump");
+        assert!(
+            missing_message.contains("D_NOPE"),
+            "the message names the lump: {missing_message}"
+        );
     }
 }

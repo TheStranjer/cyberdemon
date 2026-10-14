@@ -317,6 +317,58 @@ pub fn pwad(dir: &Path) -> PathBuf {
     write_wad(dir, "pwad-extra.wad", &wad)
 }
 
+/// The DEHACKED text of the custom-definitions fixture: the Imp (mobj 12)
+/// moves to 20000 and gets a 10-unit radius (655360 in 16.16 fixed).
+const DEHACKED_CUSTOM: &str = "Thing 12 (Evil Imp)\nID # = 20000\nWidth = 655360\n";
+
+/// The DECORATE text: a plain actor, a parent and a child that inherits
+/// the parent's sprite and radius; the comment and string braces must not
+/// confuse the parser.
+const DECORATE_CUSTOM: &str = "// a comment with an open brace {\n\
+                               actor PlasmaLamp 20010 {\n  Radius 24\n  States {\n    \
+                               Spawn: PLSM A 10 A_Look(\"} closed\")\n  }\n}\n\
+                               actor LampBase : Actor {\n  radius 16.5\n  States {\n    \
+                               Spawn: LAMP B 5\n  }\n}\n\
+                               actor DerivedLamp : LampBase 20011 { }\n";
+
+/// The ZSCRIPT text includes the `ZEXTRA` lump for the real class.
+const ZSCRIPT_CUSTOM: &str = "#include \"ZEXTRA\"\n";
+
+/// The included class text.
+const ZEXTRA_CUSTOM: &str = "class Torch : Actor { Default { Radius 10; } States { Spawn: TORC \
+                             D 3 } }\n";
+
+/// The MAPINFO text with unrelated blocks around the `DoomEdNums` block.
+const MAPINFO_CUSTOM: &str = "GameInfo { sky1 = SKY1 }\nDoomEdNums {\n  20012 = LampBase\n  \
+                              20013 = NotAClass\n}\n";
+
+/// The ZMAPINFO text maps the included `ZScript` class.
+const ZMAPINFO_CUSTOM: &str = "DoomEdNums {\n  12345 = Torch\n}\n";
+
+/// A `PWAD` carrying the custom-definitions fixture: a `DEHACKED` move of
+/// the Imp, `DECORATE` actors with inheritance, a `ZSCRIPT` that includes
+/// `ZEXTRA`, and `MAPINFO`/`ZMAPINFO` `DoomEdNums` blocks.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn pwad_custom_defs(dir: &Path) -> PathBuf {
+    let wad = Wad {
+        kind: WadKind::Pwad,
+        lumps: vec![
+            lump("DEHACKED", DEHACKED_CUSTOM.as_bytes().to_vec()),
+            lump("DECORATE", DECORATE_CUSTOM.as_bytes().to_vec()),
+            lump("ZSCRIPT", ZSCRIPT_CUSTOM.as_bytes().to_vec()),
+            lump("ZEXTRA", ZEXTRA_CUSTOM.as_bytes().to_vec()),
+            lump("MAPINFO", MAPINFO_CUSTOM.as_bytes().to_vec()),
+            lump("ZMAPINFO", ZMAPINFO_CUSTOM.as_bytes().to_vec()),
+        ],
+    };
+    write_wad(dir, "pwad-custom.wad", &wad)
+}
+
 /// A file that is not a `WAD` at all, for `format_error` paths.
 ///
 /// # Panics

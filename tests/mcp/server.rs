@@ -113,6 +113,7 @@ mod tests {
                 "open_iwad",
                 "open_wad",
                 "preview_sound",
+                "redo",
                 "remove_lump",
                 "rename_lump",
                 "reorder_lumps",
@@ -123,6 +124,7 @@ mod tests {
                 "set_palette",
                 "set_render_options",
                 "set_render_resolution",
+                "undo",
                 "version",
             ],
             "sorted tool names"

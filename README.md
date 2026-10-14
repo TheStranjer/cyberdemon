@@ -17,8 +17,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `remove_lump`, `rename_lump`, `reorder_lumps`), an `audio` group
 > (`import_sound`, `preview_sound`), a `music` group (`import_music`),
 > a `session` group
-> (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`,
-> `get_session_info`, `get_wad_info`), a `render` group
+> (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
+> `redo`, `get_session_info`, `get_wad_info`), a `render` group
 > (`set_render_resolution`, `set_render_options`, `get_render_settings`),
 > a `textures` group (`list_textures`, `list_pnames`, `edit_pnames`)
 > and a `palette` group (`get_palette`, `set_palette`),

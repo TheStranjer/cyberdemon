@@ -1,0 +1,48 @@
+type	name
+0	Normal
+1	Light On+Off Randomly
+2	Light Strobe 0.5 Sec
+3	Light Strobe 1 Sec
+4	5% Lava Damage + Scroll East (28) + Strobe 0.5 Sec
+5	5% Lava Damage
+7	4% Damage
+8	Light Glow
+9	Secret
+10	Door Close After 30 Sec
+12	Light Strobe 0.5 Sec In Sync
+13	Light Strobe 1.0 Sec In Sync
+14	Door Open After 5 Min
+15	Low Friction
+16	8% Damage
+20	Scroll East (5)
+21	Scroll East (10)
+22	Scroll East (25)
+23	Scroll East (30)
+24	Scroll East (35)
+25	Scroll North (5)
+26	Scroll North (10)
+27	Scroll North (25)
+28	Scroll North (30)
+29	Scroll North (35)
+30	Scroll South (5)
+31	Scroll South (10)
+32	Scroll South (25)
+33	Scroll South (30)
+34	Scroll South (35)
+35	Scroll West (5)
+36	Scroll West (10)
+37	Scroll West (25)
+38	Scroll West (30)
+39	Scroll West (35)
+40	Wind East (5)
+41	Wind East (10)
+42	Wind East (25)
+43	Wind North (5)
+44	Wind North (10)
+45	Wind North (25)
+46	Wind South (5)
+47	Wind South (10)
+48	Wind South (25)
+49	Wind West (5)
+50	Wind West (10)
+51	Wind West (25)

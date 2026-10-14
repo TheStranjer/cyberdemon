@@ -623,4 +623,53 @@ mod tests {
             "type 0"
         );
     }
+
+    #[test]
+    fn the_shipped_heretic_things_table_parses() {
+        let rows = parse_thing_table(crate::defs::registry::HERETIC_THINGS_TSV)
+            .expect("the embedded table must parse");
+        assert_eq!(rows.len(), 84, "the shipped table's row count");
+        assert!(
+            rows.iter().all(|row| row.game == "heretic"),
+            "every row says heretic"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.hanging).count(),
+            10,
+            "the hanging rows"
+        );
+    }
+
+    #[test]
+    fn the_shipped_heretic_specials_table_parses() {
+        let rows = parse_special_table(crate::defs::registry::HERETIC_SPECIALS_TSV)
+            .expect("the embedded table must parse");
+        assert_eq!(rows.len(), 105, "the shipped table's row count");
+        assert!(
+            rows.iter().all(|row| row.game == "heretic"),
+            "every row says heretic"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.target == "-").count(),
+            6,
+            "the four exits and two scrolling walls act on no sector"
+        );
+    }
+
+    #[test]
+    fn the_shipped_heretic_sectors_table_parses() {
+        let rows = parse_sector_table(crate::defs::registry::HERETIC_SECTORS_TSV)
+            .expect("the embedded table must parse");
+        assert_eq!(rows.len(), 47, "the shipped table's row count");
+        assert_eq!(
+            rows.first().map(|row| row.name.as_str()),
+            Some("Normal"),
+            "type 0"
+        );
+        assert_eq!(
+            rows.last().map(|row| row.name.as_str()),
+            Some("Wind West (25)"),
+            "the last row"
+        );
+    }
 }

@@ -6,7 +6,7 @@
 mod tests {
     use serde_json::{Value, json};
 
-    use crate::fixtures::iwad;
+    use crate::fixtures::{iwad, iwad_heretic};
     use crate::support::{call, call_err, connect};
 
     /// A generalized floor value: `0x6000 | WR | fast | up | lowest
@@ -79,6 +79,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_heretic_iwad_defaults_to_the_heretic_tables() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let base = iwad_heretic(dir.path());
+        let client = connect().await;
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        let things = call(&client, "get_thing_types", json!({})).await;
+        assert_eq!(
+            things["game"],
+            json!("heretic"),
+            "the fixture IWAD identifies Heretic"
+        );
+        assert_eq!(
+            things["count"].as_u64(),
+            Some(84),
+            "and picks the heretic thing table"
+        );
+        assert!(types(&things).contains(&66), "the Gargoyle is in it");
+        assert_eq!(things["warnings"], json!([]), "no fallback warning");
+        let specials = call(&client, "get_linedef_specials", json!({})).await;
+        assert_eq!(specials["game"], json!("heretic"), "specials follow too");
+        assert_eq!(
+            specials["count"].as_u64(),
+            Some(105),
+            "the heretic special table"
+        );
+        let sectors = call(&client, "get_sector_specials", json!({})).await;
+        assert_eq!(
+            sectors["count"].as_u64(),
+            Some(47),
+            "the heretic sector table"
+        );
+    }
+
+    #[tokio::test]
     async fn an_explicit_doom_game_excludes_doom_ii_things() {
         let client = connect().await;
         let report = call(&client, "get_thing_types", json!({ "game": "doom" })).await;
@@ -104,11 +143,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn heretic_reports_empty_with_a_not_yet_available_warning() {
+    async fn heretic_lists_its_own_thing_table() {
         let client = connect().await;
         let report = call(&client, "get_thing_types", json!({ "game": "heretic" })).await;
         assert_eq!(report["game"], json!("heretic"), "echoed game");
-        assert_eq!(report["count"].as_u64(), Some(0), "no heretic table yet");
+        assert_eq!(report["count"].as_u64(), Some(84), "the whole heretic set");
+        let kinds = types(&report);
+        assert_eq!(kinds.len(), 84, "count mirrors the list");
+        let mut sorted = kinds.clone();
+        sorted.sort_unstable();
+        assert_eq!(kinds, sorted, "rows arrive sorted by type");
+        assert_eq!(report["warnings"], json!([]), "heretic has its own table");
+        assert!(kinds.contains(&66), "the Gargoyle is a heretic thing");
+        assert!(!kinds.contains(&3001), "the Imp is not");
+        let gargoyle = report["things"]
+            .as_array()
+            .expect("things is an array")
+            .iter()
+            .find(|entry| entry["type"] == json!(66_i64))
+            .cloned()
+            .expect("type 66 is listed");
+        assert_eq!(
+            gargoyle,
+            json!({
+                "type": 66_i64,
+                "name": "Gargoyle",
+                "sprite": "IMPX",
+                "frame": "A",
+                "radius": 20_i64,
+                "category": "Monsters",
+                "hanging": false,
+            }),
+            "the heretic row reads as ticketed"
+        );
+    }
+
+    #[tokio::test]
+    async fn heretic_things_filter_by_category_search_and_type() {
+        let client = connect().await;
+        let monsters = call(
+            &client,
+            "get_thing_types",
+            json!({ "game": "heretic", "category": "monsters" }),
+        )
+        .await;
+        assert_eq!(monsters["count"].as_u64(), Some(16), "the heretic monsters");
+        let keys = call(
+            &client,
+            "get_thing_types",
+            json!({ "game": "heretic", "category": "Keys" }),
+        )
+        .await;
+        assert_eq!(
+            types(&keys),
+            vec![73_u64, 79_u64, 80_u64],
+            "the three heretic keys in type order"
+        );
+        let gargoyle = call(
+            &client,
+            "get_thing_types",
+            json!({ "game": "heretic", "search": "gargoyle" }),
+        )
+        .await;
+        assert_eq!(
+            gargoyle["count"].as_u64(),
+            Some(2),
+            "Gargoyle and Fire Gargoyle"
+        );
+        let hanging = call(
+            &client,
+            "get_thing_types",
+            json!({ "game": "heretic", "type": 51_i64 }),
+        )
+        .await;
+        let corpse = hanging["things"].get(0).expect("one row").clone();
+        assert_eq!(corpse["name"], json!("Hanging Corpse"), "name");
+        assert_eq!(corpse["hanging"], json!(true), "the flag came through");
+        assert_eq!(
+            corpse["category"],
+            json!("Gore/Hanging Skulls & Bodies"),
+            "category"
+        );
+    }
+
+    #[tokio::test]
+    async fn hexen_still_reports_empty_with_a_not_yet_available_warning() {
+        let client = connect().await;
+        let report = call(&client, "get_thing_types", json!({ "game": "hexen" })).await;
+        assert_eq!(report["game"], json!("hexen"), "echoed game");
+        assert_eq!(report["count"].as_u64(), Some(0), "no hexen table yet");
         assert_eq!(report["things"], json!([]), "and an empty list");
         let warnings = report["warnings"].as_array().expect("warnings is an array");
         assert_eq!(warnings.len(), 1, "one warning");
@@ -356,7 +479,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generalized_numbers_stay_table_rows_on_other_games() {
+    async fn a_heretic_special_number_gives_the_heretic_row() {
+        let client = connect().await;
+        let report = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "heretic", "special": 100_i64 }),
+        )
+        .await;
+        assert_eq!(report["game"], json!("heretic"), "echoed game");
+        assert_eq!(
+            report["specials"],
+            json!([{
+                "special": 100_i64,
+                "name": "WR Door Triple Speed",
+                "category": "Doors/Remote",
+                "target": "sector",
+                "args": [],
+            }]),
+            "100 means the heretic door, not the DOOM II stair builder"
+        );
+        assert_eq!(report["count"].as_u64(), Some(1), "one row");
+        assert_eq!(
+            report["generalized"],
+            json!(null),
+            "100 is a plain table number"
+        );
+        assert_eq!(report["warnings"], json!([]), "heretic has its own tables");
+    }
+
+    #[tokio::test]
+    async fn heretic_specials_filter_by_category_and_search() {
+        let client = connect().await;
+        let crushers = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "heretic", "category": "crushers" }),
+        )
+        .await;
+        assert_eq!(crushers["count"].as_u64(), Some(6), "the heretic crushers");
+        let doors = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "heretic", "category": "doors/" }),
+        )
+        .await;
+        assert_eq!(doors["count"].as_u64(), Some(24), "local plus remote doors");
+        let donut = call(
+            &client,
+            "get_linedef_specials",
+            json!({ "game": "heretic", "search": "donut" }),
+        )
+        .await;
+        assert_eq!(donut["count"].as_u64(), Some(1), "S1 Floor Donut");
+        let exit = donut["specials"]
+            .get(0)
+            .expect("one row")
+            .get("target")
+            .cloned()
+            .expect("a target field");
+        assert_eq!(exit, json!("sector"), "the donut acts on tagged sectors");
+    }
+
+    #[tokio::test]
+    async fn generalized_numbers_are_not_decoded_on_heretic() {
         let client = connect().await;
         let report = call(
             &client,
@@ -369,18 +555,12 @@ mod tests {
             json!(null),
             "no Boom decoding for heretic"
         );
+        assert_eq!(report["count"].as_u64(), Some(0), "and no such heretic row");
+        assert_eq!(report["specials"], json!([]), "an empty list stands");
         assert_eq!(
-            report["count"].as_u64(),
-            Some(0),
-            "and no heretic table yet"
-        );
-        assert_eq!(
-            report["warnings"]
-                .as_array()
-                .expect("warnings is an array")
-                .len(),
-            1,
-            "the missing-table warning still shows"
+            report["warnings"],
+            json!([]),
+            "heretic has its own tables now"
         );
     }
 
@@ -413,6 +593,47 @@ mod tests {
             "type 16 is in the table: {rows:?}"
         );
         assert_eq!(report["warnings"], json!([]), "DOOM has its own table");
+    }
+
+    #[tokio::test]
+    async fn heretic_sector_types_list_without_decoding() {
+        let client = connect().await;
+        let report = call(&client, "get_sector_specials", json!({ "game": "heretic" })).await;
+        assert_eq!(report["game"], json!("heretic"), "echoed game");
+        assert_eq!(report["count"].as_u64(), Some(47), "the heretic rows");
+        assert_eq!(report["decoded"], json!(null), "nothing asked for");
+        let rows = report["sector_types"]
+            .as_array()
+            .expect("sector_types is an array");
+        assert_eq!(rows.len(), 47, "count mirrors the list");
+        assert!(
+            rows.iter()
+                .any(|row| row["type"] == json!(5_i64) && row["name"] == json!("5% Lava Damage")),
+            "the heretic damage type is in the table: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row["type"] == json!(51_i64) && row["name"] == json!("Wind West (25)")),
+            "the last heretic row is there: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row["name"] == json!("20% Damage")),
+            "no Doom sector rows leaked in: {rows:?}"
+        );
+        assert_eq!(report["warnings"], json!([]), "heretic has its own table");
+        let decoded = call(
+            &client,
+            "get_sector_specials",
+            json!({ "game": "heretic", "special": 16_i64 }),
+        )
+        .await;
+        assert_eq!(decoded["special"], json!(16_i64), "the number is echoed");
+        assert_eq!(
+            decoded["decoded"],
+            json!(null),
+            "heretic sector values are not Boom bits"
+        );
+        assert_eq!(decoded["count"].as_u64(), Some(47), "the table still ships");
     }
 
     #[tokio::test]

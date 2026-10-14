@@ -7,12 +7,15 @@ need no archives loaded.
 
 ## What ships
 
-DOOM and DOOM II ship today: 123 thing types and 100 + 39 linedef
-specials (SLADE-style categories), and the 16 named Doom sector types.
-Each row's `game` names the first game that has it. Heretic and Hexen
-tables are planned: those games currently answer with empty lists and a
-"not yet available" warning. Strife and an unidentified session fall back
-to the DOOM II rows, with a warning saying so.
+DOOM, DOOM II and Heretic ship today. The Doom side has 123 thing types
+and 100 + 39 linedef specials (SLADE-style categories) and the 16 named
+Doom sector types; each row's `game` names the first game that has it.
+Heretic has its own three tables: 84 thing types, 105 linedef specials and
+47 sector types, all plain values — Heretic is a Doom-engine game but not
+Boom-compatible, so its specials and sector types are never generalized or
+bit-decoded. Hexen tables are planned: that game currently answers with
+empty lists and a "not yet available" warning. Strife and an unidentified
+session fall back to the DOOM II rows, with a warning saying so.
 
 All three tools share the `game` argument: `"doom"`, `"doom2"`,
 `"heretic"` or `"hexen"`, defaulting to the game detected from the
@@ -52,7 +55,7 @@ reports `internal`.
 
   `count` is the number of things after filtering and `things` is sorted
   by `type` ascending. `warnings` explains an empty table or a fallback
-  game; it is empty for DOOM and DOOM II.
+  game; it is empty for DOOM, DOOM II and Heretic.
 - Typical use: looking up spawn numbers when writing `THINGS`, and
   translating a type number found in a map (`{ "type": 3001 }` gives the
   Imp; pair it with the map's game when the row matters).
@@ -123,7 +126,8 @@ Bit layout: every generalized value carries trigger (bits 0-2) and speed
 | `0x3000..=0x33FF` | Stairs      | monsters bit 5, step bits 6-7 (4, 8, 16, 24), direction bit 8 (`down`/`up`), ignore-textures bit 9 |
 | `0x2F80..=0x2FFF` | Crusher     | monsters bit 5, silent bit 6 |
 
-Outside the range, on heretic/hexen, or absent, `generalized` is null.
+Outside the range, on heretic/hexen (Heretic has its own tables but is not
+Boom-compatible), or absent, `generalized` is null.
 - Typical use: translating a `special` read from `LINEDEFS` (a number
   above 141 is likely generalized — decode it), or picking an action by
   category when building a map.
@@ -161,5 +165,9 @@ Outside the range, on heretic/hexen, or absent, `generalized` is null.
 - Bit layout: basic type = `value & 31` (its table name, or `"Unknown"`
   for the unassigned values 6, 15 and 18-31); damage bits 5-6; secret
   bit 7; friction bit 8; push bit 9. Bits above 9 are ignored.
+- Heretic lists its own 47 plain types instead (`count` 47, `decoded`
+  always null): damage, light and scroll/wind effects are separate values,
+  e.g. `5` is `5% Lava Damage`, `20` is `Scroll East (5)` and `43` is
+  `Wind North (5)`.
 - Typical use: reading a sector's `special` from a map and asking what it
   does (`{ "special": 201 }` → secret sector that drains 10% per touch).

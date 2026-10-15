@@ -99,9 +99,10 @@ src/
                   (resolution, lighting, markers, sky, FOV, gamma, top-down
                   style, background), their ranges and validating setters.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
-                  rasters and the `analyze` entry point. It measures ink,
-                  stroke width, marks, enclosed regions and wall gaps in
-                  pixels; it never interprets them.
+                  rasters and the `analyze` and `vectorize` entry points.
+                  It measures ink, stroke width, marks, enclosed regions
+                  and wall gaps in pixels and grows the regions into
+                  integer polygons; it never interprets them.
   sketch/         Sketch building blocks (no MCP concerns):
                   `sketch/mask.rs` `Mask`, `InkMode`, `ink_mask` and
                   `stroke_width`, `sketch/morph.rs` square-element
@@ -109,7 +110,16 @@ src/
                   O(w·h)), `sketch/components.rs` `Labels`, `Component`
                   and deterministic scan-order `label_components`,
                   `sketch/analyze.rs` the `Analysis` pipeline: marks
-                  split from walls, closing, regions, gaps and warnings.
+                  split from walls, closing, regions, gaps and warnings,
+                  `sketch/expand.rs` centreline BFS growth of regions
+                  into the closed walls plus region `adjacency`,
+                  `sketch/outline.rs` crack-following region outlines
+                  (pixel-corner vertices, clockwise) and `is_simple`,
+                  `sketch/simplify.rs` Douglas-Peucker for closed rings
+                  and `snap_right_angles`, `sketch/weld.rs` clustering
+                  wall coordinates across shapes so shared walls meet
+                  exactly, `sketch/vectorize.rs` the `Analysis` to
+                  `Vectorized` pipeline.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools

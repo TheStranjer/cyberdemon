@@ -65,8 +65,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > splitting and cost-chosen partition lines, a tree of convex subsectors
 > with integer bounding boxes) and a pure raster sketch measurer
 > (`src/sketch*`: ink mask, stroke width, morphological closing,
-> deterministic components, enclosed regions, marks and wall gaps; it
-> measures and never interprets) back the first WAD tools.
+> deterministic components, enclosed regions, marks and wall gaps, and
+> regions grown to wall centrelines then traced, simplified, straightened
+> and welded integer polygons; it measures and never interprets) back the
+> first WAD tools.
 > `AppState::fetch_source` turns client `source` strings (absolute paths,
 > `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
 > for import tools.

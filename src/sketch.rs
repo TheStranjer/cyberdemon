@@ -14,15 +14,27 @@
 //! Everything here is integer-only, deterministic and side-effect free:
 //! no floats, no `MCP`, no filesystem. Component ids follow raster scan
 //! order so repeated runs label the same sketch identically.
-//! Vectorisation and lump writing build on these measurements; they never
-//! re-interpret them.
+//! [`fn@vectorize`] turns one [`Analysis`] into welded, simplified vector
+//! [`RegionShape`](vectorize::RegionShape)s; it still only measures,
+//! never interprets. Lump writing builds on those vectors and never
+//! re-derives them.
 
 pub mod analyze;
 pub mod components;
+pub mod expand;
 pub mod mask;
 pub mod morph;
+pub mod outline;
+pub mod simplify;
+pub mod vectorize;
+pub mod weld;
 
 pub use analyze::{Analysis, AnalyzeOptions, Gap, Mark, analyze};
 pub use components::{Component, Connectivity, Labels, label_components};
+pub use expand::{Adjacent, adjacency, expand_regions};
 pub use mask::{InkMode, Mask, ink_mask, stroke_width};
 pub use morph::{close, dilate, erode};
+pub use outline::{Outline, is_simple, trace_outline};
+pub use simplify::{simplify, snap_right_angles};
+pub use vectorize::{VectorizeOptions, Vectorized, vectorize};
+pub use weld::weld;

@@ -1,15 +1,20 @@
-//! Script tools: reading and editing the DeHackEd/BEX patch lumps a session
-//! holds.
+//! Script tools: reading and editing the DeHackEd/BEX patch lumps and the
+//! `DECORATE`/`ZSCRIPT` script lumps a session holds.
 //!
 //! [`Cyberdemon::get_dehacked`] parses one patch lump's text into its header
 //! values, blocks and BEX sections (the tolerant line parser in
 //! [`crate::defs::dehacked_edit`]); [`Cyberdemon::edit_dehacked`] writes one
 //! patch lump back, either wholesale (`text`/`source`) or line by line
 //! (`set`/`remove`), as a single undoable [`crate::session::Session::edit`]
-//! labelled `edit_dehacked`. A lump held only by a read-only layer is
-//! copied-on-write: the edited text is appended to the working archive as
-//! the winning override. `get_thing_types` reads the same merged texts, so
-//! Thing-block edits show up there.
+//! labelled `edit_dehacked`. [`Cyberdemon::edit_decorate`] and
+//! [`Cyberdemon::edit_zscript`] run one [`text_edit::TextOp`] over a script
+//! lump's whole text with the same copy-on-write discipline, labelled
+//! `edit_decorate LUMP` / `edit_zscript LUMP`. A lump held only by a
+//! read-only layer is copied-on-write: the edited text is appended to the
+//! working archive as the winning override. `get_thing_types` reads the same
+//! merged texts, so `Thing`-block and script edits show up there.
+
+mod text_edit;
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -23,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::defs::dehacked_edit::{self, Block, Field, Section};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::{LayerRole, Scope, Session, Source};
+use crate::session::{LayerRole, MergedLump, Scope, Session, Source};
 use crate::state::AppState;
 use crate::tools::fail;
 use crate::tools::lumps::rows::LumpRow;
@@ -31,6 +36,8 @@ use crate::tools::lumps::rows::build_rows;
 use crate::tools::ok;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::name::LumpName;
+
+use text_edit::TextOp;
 
 /// The lump both tools read and edit when `name` is left out.
 const DEFAULT_LUMP: &str = "DEHACKED";
@@ -183,6 +190,73 @@ struct EditReport {
     lines: usize,
     /// Lines rewritten, inserted or removed by this call.
     changed_lines: usize,
+    /// Whether the lump was created in the working archive (it was absent,
+    /// or held only by a read-only layer that was copied-on-write).
+    created: bool,
+}
+
+/// Which text-lump tool is running: its name and default lump.
+struct TextTool {
+    /// The tool name, also the prefix of the undo label.
+    name: &'static str,
+    /// The lump edited when the `lump` argument is left out.
+    default_lump: &'static str,
+}
+
+/// The [`Cyberdemon::edit_decorate`] descriptor.
+const EDIT_DECORATE: TextTool = TextTool {
+    name: "edit_decorate",
+    default_lump: "DECORATE",
+};
+
+/// The [`Cyberdemon::edit_zscript`] descriptor.
+const EDIT_ZSCRIPT: TextTool = TextTool {
+    name: "edit_zscript",
+    default_lump: "ZSCRIPT",
+};
+
+/// Arguments for [`Cyberdemon::edit_decorate`]: the optional lump name plus
+/// exactly one [`TextOp`], flattened through its `op` tag.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EditDecorateParams {
+    /// Text lump to edit: 1 to 8 printable `ASCII` characters, matched
+    /// case-insensitively. Defaults to `"DECORATE"`.
+    #[serde(default)]
+    lump: Option<String>,
+    /// The single operation to apply, selected by its `op` field.
+    #[serde(flatten)]
+    op: TextOp,
+}
+
+/// Arguments for [`Cyberdemon::edit_zscript`]: the optional lump name plus
+/// exactly one [`TextOp`], flattened through its `op` tag.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EditZscriptParams {
+    /// Text lump to edit: 1 to 8 printable `ASCII` characters, matched
+    /// case-insensitively. Defaults to `"ZSCRIPT"`; pass the name of an
+    /// `#include`d lump (e.g. `"ZSCRIPT2"`) to edit that file instead.
+    #[serde(default)]
+    lump: Option<String>,
+    /// The single operation to apply, selected by its `op` field.
+    #[serde(flatten)]
+    op: TextOp,
+}
+
+/// Structured result of [`Cyberdemon::edit_decorate`] and
+/// [`Cyberdemon::edit_zscript`].
+#[derive(Debug, Serialize)]
+struct TextReport {
+    /// The lump that was written.
+    lump: LumpName,
+    /// Total lines of the resulting text.
+    lines: usize,
+    /// The 1-based inclusive range of changed lines, `[0, 0]` when nothing
+    /// changed.
+    changed_range: (usize, usize),
+    /// The changed lines with two lines of context, each numbered.
+    excerpt: String,
+    /// Non-fatal notes about the result (e.g. unbalanced braces).
+    warnings: Vec<String>,
     /// Whether the lump was created in the working archive (it was absent,
     /// or held only by a read-only layer that was copied-on-write).
     created: bool,
@@ -612,6 +686,114 @@ fn edit_run(session: &mut Session, name: LumpName, body: Body) -> Result<EditRep
     })
 }
 
+/// The lump name a text tool acts on, defaulting per [`TextTool`].
+///
+/// # Errors
+///
+/// [`LumpName::parse`]'s [`CyberError::InvalidArgument`] for a name that
+/// does not parse.
+fn text_lump_name(tool: &TextTool, text: Option<&str>) -> Result<LumpName, CyberError> {
+    LumpName::parse(text.unwrap_or(tool.default_lump))
+}
+
+/// The winning copy of `name` in the merged view: the last match, the form
+/// global script lumps take.
+fn merged_copy(session: &Session, name: LumpName) -> Option<MergedLump> {
+    session
+        .merged()
+        .into_iter()
+        .rev()
+        .find(|found| found.lump.name == name)
+}
+
+/// A lump payload that must be valid `UTF-8` text.
+///
+/// # Errors
+///
+/// [`CyberError::Format`] when the bytes are not `UTF-8`.
+fn decode_text(name: LumpName, lump: &Lump) -> Result<String, CyberError> {
+    String::from_utf8(lump.data.to_vec()).map_err(|error| {
+        CyberError::Format(format!(
+            "lump {name} is not valid UTF-8 text ({error}): this editor stores UTF-8 only; \
+             read the bytes with get_lump format=hex"
+        ))
+    })
+}
+
+/// The base text the operation runs on: the merged copy decoded strictly,
+/// or `None` (meaning "start empty") when a creating operation runs against
+/// an absent lump.
+///
+/// # Errors
+///
+/// [`CyberError::Format`] for a non-`UTF-8` lump, [`CyberError::NotFound`]
+/// for a line operation against no lump at all.
+fn text_base(
+    session: &Session,
+    tool: &TextTool,
+    name: LumpName,
+    op: &TextOp,
+) -> Result<Option<String>, CyberError> {
+    match merged_copy(session, name) {
+        Some(found) => decode_text(name, &found.lump).map(Some),
+        None if op.is_wholesale() => Ok(None),
+        None => Err(CyberError::NotFound(format!(
+            "lump {name} is in none of the loaded archives: {tool} with op replace_all or \
+             append creates it in the working archive; get_lump lists what exists",
+            tool = tool.name
+        ))),
+    }
+}
+
+/// `edit_decorate`/`edit_zscript`'s synchronous work: compute the new text,
+/// then commit exactly one undoable write.
+///
+/// # Errors
+///
+/// [`text_base`]' refusals and [`text_edit::apply`]' refusals (the session
+/// does not change), and [`crate::session::Session::edit`]'s error
+/// pass-through.
+fn text_edit_run(
+    session: &mut Session,
+    tool: &TextTool,
+    name: LumpName,
+    op: &TextOp,
+) -> Result<TextReport, CyberError> {
+    let at = session.working().find_last(name);
+    let base = text_base(session, tool, name, op)?;
+    let outcome = text_edit::apply(base.as_deref().unwrap_or(""), op)?;
+    let created = at.is_none();
+    let label = format!("{} {name}", tool.name);
+    let body = outcome.text.clone();
+    session.edit(&label, |wad| {
+        write_lump(wad, name, at, &body);
+        Ok(())
+    })?;
+    Ok(TextReport {
+        lump: name,
+        lines: outcome.lines,
+        changed_range: outcome.changed_range,
+        excerpt: outcome.excerpt,
+        warnings: outcome.warnings,
+        created,
+    })
+}
+
+/// One text tool call: resolve the name, run the edit, shape the result.
+fn run_text_tool(
+    state: &AppState,
+    tool: &TextTool,
+    lump: Option<&str>,
+    op: &TextOp,
+) -> Result<CallToolResult, ErrorData> {
+    let outcome = text_lump_name(tool, lump)
+        .and_then(|name| state.with_session(|session| text_edit_run(session, tool, name, op)));
+    match outcome {
+        Ok(found) => ok(&found),
+        Err(error) => fail(&error),
+    }
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -661,18 +843,44 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Edits one `DECORATE` script lump as text, as one undoable write.
+    #[tool(
+        description = "Edits one DECORATE script lump in the working archive as exactly one undoable edit labelled \"edit_decorate LUMP\" (undo it with undo). lump defaults to \"DECORATE\" (1 to 8 printable ASCII characters, case-insensitive); it is a global lump, so the last merged copy wins and a copy held only by the IWAD or a resource layer is copied-on-write: the edited text is appended to the working archive as the winning override and created reports true. Read the current text first with get_lump format=text. Pass exactly one operation, selected by its \"op\" field: {\"op\":\"replace_all\",\"text\":T} replaces the whole text; {\"op\":\"append\",\"text\":T} adds T at the end, inserting a newline separator when the text does not end with one; {\"op\":\"find_replace\",\"find\":F,\"replace\":R[,\"all\":true]} replaces the first literal, case-sensitive occurrence (all=true replaces every one); {\"op\":\"insert_lines\",\"line\":N,\"text\":T} inserts T's lines before 1-based line N (N = line count + 1 appends at the end); {\"op\":\"replace_lines\",\"start\":S,\"end\":E,\"text\":T} swaps lines S..=E for T's lines; {\"op\":\"delete_lines\",\"start\":S,\"end\":E} removes them. An absent lump: replace_all/append create it, every other op is not_found; zero find_replace matches are not_found, an empty find, a line number out of range and start > end are invalid_argument and change nothing; non-UTF-8 lump bytes are format_error. CRLF texts keep \\r\\n endings, LF texts keep LF. get_thing_types reads the same merged DECORATE texts (actors with a doomednum become thing rows). Returns {lump, lines, changed_range: [first, last] (1-based inclusive, [0, 0] when nothing changed), excerpt (the changed lines with two lines of context, each prefixed by its number; capped at 40 lines with a \"... (N more lines)\" note), warnings (e.g. unbalanced { } counted outside strings and // and /* */ comments), created}."
+    )]
+    fn edit_decorate(
+        &self,
+        Parameters(args): Parameters<EditDecorateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        run_text_tool(self.state(), &EDIT_DECORATE, args.lump.as_deref(), &args.op)
+    }
+
+    /// Edits one `ZScript` lump as text, as one undoable write.
+    #[tool(
+        description = "Edits one ZScript lump in the working archive as exactly one undoable edit labelled \"edit_zscript LUMP\" (undo it with undo). lump defaults to \"ZSCRIPT\" (1 to 8 printable ASCII characters, case-insensitive); pass any lump name to edit an #include-d file (e.g. \"ZSCRIPT2\"): includes are followed by lump name when get_thing_types reads the merged texts. ZSCRIPT is a global lump, so the last merged copy wins and a copy held only by the IWAD or a resource layer is copied-on-write: the edited text is appended to the working archive as the winning override and created reports true. Read the current text first with get_lump format=text. Pass exactly one operation, selected by its \"op\" field: {\"op\":\"replace_all\",\"text\":T} replaces the whole text; {\"op\":\"append\",\"text\":T} adds T at the end, inserting a newline separator when the text does not end with one; {\"op\":\"find_replace\",\"find\":F,\"replace\":R[,\"all\":true]} replaces the first literal, case-sensitive occurrence (all=true replaces every one); {\"op\":\"insert_lines\",\"line\":N,\"text\":T} inserts T's lines before 1-based line N (N = line count + 1 appends at the end); {\"op\":\"replace_lines\",\"start\":S,\"end\":E,\"text\":T} swaps lines S..=E for T's lines; {\"op\":\"delete_lines\",\"start\":S,\"end\":E} removes them. An absent lump: replace_all/append create it, every other op is not_found; zero find_replace matches are not_found, an empty find, a line number out of range and start > end are invalid_argument and change nothing; non-UTF-8 lump bytes are format_error. CRLF texts keep \\r\\n endings, LF texts keep LF. Returns {lump, lines, changed_range: [first, last] (1-based inclusive, [0, 0] when nothing changed), excerpt (the changed lines with two lines of context, each prefixed by its number; capped at 40 lines with a \"... (N more lines)\" note), warnings (e.g. unbalanced { } counted outside strings and // and /* */ comments), created}."
+    )]
+    fn edit_zscript(
+        &self,
+        Parameters(args): Parameters<EditZscriptParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        run_text_tool(self.state(), &EDIT_ZSCRIPT, args.lump.as_deref(), &args.op)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
+    use serde_json::json;
+
     use super::{
-        Body, Draft, EditDehackedParams, Op, apply_ops, changed_against, edit_run, find_lump,
-        lump_name, parse_scope, plan,
+        Body, Draft, EDIT_DECORATE, EDIT_ZSCRIPT, EditDehackedParams, Op, TextOp, apply_ops,
+        changed_against, edit_run, find_lump, lump_name, parse_scope, plan, run_text_tool,
+        text_edit_run, text_lump_name,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
+    use crate::state::AppState;
     use crate::tools::lumps::rows::build_rows;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::name::LumpName;
@@ -1024,5 +1232,200 @@ mod tests {
         assert!(report.created, "the lump is new");
         assert_eq!(report.changed_lines, 2, "all lines are new");
         assert_eq!(session.working().len(), 1, "one lump was appended");
+    }
+
+    /// An `IWAD`-layer session holding one `DECORATE` lump.
+    fn with_decorate(body: &str) -> Session {
+        let mut session = Session::default();
+        session.set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![carrying("DECORATE", body)],
+            },
+        ));
+        session
+    }
+
+    #[test]
+    fn text_lump_names_default_per_tool_and_refuse_junk() {
+        assert_eq!(
+            text_lump_name(&EDIT_DECORATE, None).expect("the default"),
+            name("DECORATE"),
+            "the decorate default"
+        );
+        assert_eq!(
+            text_lump_name(&EDIT_ZSCRIPT, None).expect("the default"),
+            name("ZSCRIPT"),
+            "the zscript default"
+        );
+        assert_eq!(
+            text_lump_name(&EDIT_ZSCRIPT, Some("zscript2")).expect("an include file"),
+            name("ZSCRIPT2"),
+            "case folds"
+        );
+        assert_eq!(
+            code(&text_lump_name(&EDIT_DECORATE, Some("TOO LONG")).expect_err("nine characters")),
+            "invalid_argument",
+            "bad name code"
+        );
+    }
+
+    #[test]
+    fn text_edit_run_creates_a_missing_lump_by_appending() {
+        let mut session = Session::default();
+        let op = TextOp::Append {
+            text: "actor Test 20001 { }\n".to_owned(),
+        };
+        let report =
+            text_edit_run(&mut session, &EDIT_DECORATE, name("DECORATE"), &op).expect("a create");
+        assert!(report.created, "the lump is new");
+        assert_eq!(report.lines, 1, "one line");
+        assert_eq!(report.changed_range, (1, 1), "the added line");
+        assert!(
+            report.warnings.is_empty(),
+            "balanced: {:?}",
+            report.warnings
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["edit_decorate DECORATE"],
+            "the label carries the lump"
+        );
+        session.undo().expect("undo the create");
+        assert!(session.working().is_empty(), "the lump went back");
+    }
+
+    #[test]
+    fn text_edit_run_refuses_line_ops_on_an_absent_lump() {
+        let mut session = Session::default();
+        let op = TextOp::DeleteLines { start: 1, end: 1 };
+        let error = text_edit_run(&mut session, &EDIT_ZSCRIPT, name("ZSCRIPT"), &op)
+            .expect_err("nothing to delete");
+        assert_eq!(code(&error), "not_found", "absent lump code");
+        assert!(
+            error.to_string().contains("replace_all"),
+            "the message names the creating ops: {error}"
+        );
+        assert!(session.undo_labels().is_empty(), "no history was made");
+    }
+
+    #[test]
+    fn text_edit_run_copies_on_write_then_edits_in_place() {
+        let mut session = with_decorate("actor A {\n}\n");
+        let op = TextOp::InsertLines {
+            line: 2,
+            text: "  radius 30".to_owned(),
+        };
+        let first =
+            text_edit_run(&mut session, &EDIT_DECORATE, name("DECORATE"), &op).expect("a write");
+        assert!(first.created, "the layer copy was not editable");
+        assert_eq!(first.lines, 3, "the insert added a line");
+        assert_eq!(first.changed_range, (2, 2), "its line");
+        assert!(first.warnings.is_empty(), "still balanced");
+        let second = text_edit_run(
+            &mut session,
+            &EDIT_DECORATE,
+            name("DECORATE"),
+            &TextOp::ReplaceAll {
+                text: "actor A {\n}\n".to_owned(),
+            },
+        )
+        .expect("an in-place edit");
+        assert!(!second.created, "the working copy won the merged view");
+        assert_eq!(session.working().len(), 1, "one override only");
+        assert_eq!(
+            session.undo_labels(),
+            vec!["edit_decorate DECORATE", "edit_decorate DECORATE"],
+            "two labelled steps"
+        );
+    }
+
+    #[test]
+    fn text_edit_run_reports_unbalanced_braces_after_a_replace() {
+        let mut session = with_decorate("actor A { }\n");
+        let report = text_edit_run(
+            &mut session,
+            &EDIT_DECORATE,
+            name("DECORATE"),
+            &TextOp::ReplaceAll {
+                text: "actor A {\n".to_owned(),
+            },
+        )
+        .expect("a write");
+        assert_eq!(report.warnings.len(), 1, "one note: {:?}", report.warnings);
+        assert!(
+            report
+                .warnings
+                .first()
+                .is_some_and(|w| w.contains("unbalanced")),
+            "the brace note: {:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_lump_is_a_format_error_and_changes_nothing() {
+        let mut session = Session::default();
+        session
+            .edit("seed", |wad| {
+                wad.lumps
+                    .push(Lump::new(name("DECORATE"), vec![0x61_u8, 0xFF_u8]));
+                Ok(())
+            })
+            .expect("a plain append");
+        let error = text_edit_run(
+            &mut session,
+            &EDIT_DECORATE,
+            name("DECORATE"),
+            &TextOp::Append {
+                text: "b".to_owned(),
+            },
+        )
+        .expect_err("not UTF-8");
+        assert_eq!(code(&error), "format_error", "non-UTF-8 code");
+        assert!(
+            error.to_string().contains("get_lump format=hex"),
+            "the message points at the byte reader: {error}"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["seed"],
+            "the edit left no trace"
+        );
+    }
+
+    #[test]
+    fn run_text_tool_answers_through_the_result_helpers() {
+        let state = AppState::default();
+        let good = run_text_tool(
+            &state,
+            &EDIT_DECORATE,
+            None,
+            &TextOp::ReplaceAll {
+                text: "actor A { }\n".to_owned(),
+            },
+        )
+        .expect("a protocol-level success");
+        assert_ne!(good.is_error, Some(true), "the edit ran");
+        let content = good.structured_content.expect("structured content");
+        assert_eq!(content["lump"], json!("DECORATE"), "the lump field");
+        assert_eq!(content["created"], json!(true), "it created the lump");
+        let bad = run_text_tool(
+            &state,
+            &EDIT_DECORATE,
+            Some("TOO LONG"),
+            &TextOp::Append {
+                text: "x".to_owned(),
+            },
+        )
+        .expect("a protocol-level answer");
+        assert_eq!(bad.is_error, Some(true), "a bad name is a domain error");
+        assert_eq!(
+            bad.structured_content.expect("error content")["error"],
+            json!("invalid_argument"),
+            "the code field"
+        );
     }
 }

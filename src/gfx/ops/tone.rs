@@ -7,13 +7,10 @@ use serde_json::{Value, json};
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
+use crate::gfx::ops::threshold::{BINS, luminance_histogram};
 use crate::gfx::ops::{arg_error, check_i32_range, clamp_u8, luminance};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
-/// Alpha at or above which a pixel counts toward the histogram.
-const OPAQUE_ALPHA: u8 = 128;
-/// One `luminance` bin per channel value.
-const BINS: usize = 256;
 /// Largest accepted `clip_percent`.
 const MAX_CLIP_PERCENT: u8 = 10;
 
@@ -53,21 +50,6 @@ pub(crate) fn auto_levels(
     }
     let lut = build_lut(low, high);
     Ok(report_levels(apply_lut(img, &lut), true, low, high))
-}
-
-/// Per-`luminance` counts of opaque pixels.
-fn luminance_histogram(img: &RgbaImage) -> [u32; BINS] {
-    let mut histogram = [0_u32; BINS];
-    for chunk in img.pixels.chunks_exact(BYTES_PER_PIXEL) {
-        let pixel @ [_, _, _, alpha] = to_pixel(chunk);
-        if alpha < OPAQUE_ALPHA {
-            continue;
-        }
-        if let Some(slot) = histogram.get_mut(usize::from(luminance(pixel))) {
-            *slot = slot.saturating_add(1);
-        }
-    }
-    histogram
 }
 
 /// The clipped `luminance` bounds: `low` is the smallest value with at

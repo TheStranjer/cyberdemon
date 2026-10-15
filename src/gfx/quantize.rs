@@ -79,7 +79,7 @@ fn squared_distance(a: [u8; 3], b: [u8; 3]) -> i32 {
 }
 
 /// Whether the pixel is transparent under `mode`.
-fn is_transparent(rgb: [u8; 3], alpha: u8, mode: Transparency) -> bool {
+pub(crate) fn is_transparent(rgb: [u8; 3], alpha: u8, mode: Transparency) -> bool {
     match mode {
         Transparency::Alpha { threshold } => alpha < threshold,
         Transparency::ColorKey { rgb: key } => rgb == key,

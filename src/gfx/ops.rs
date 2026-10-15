@@ -4,13 +4,18 @@
 //! Operations run in order over one [`RgbaImage`]; each returns its result
 //! plus a `JSON` object of measurements, collected into an [`OpsReport`].
 //! Geometry (crop/fit/rotate/flip) lives in [`geometry`], size-changing
-//! sampling in [`resample`], tonal corrections in [`tone`] and alpha
-//! handling in [`alpha`]. Everything here is pure: no MCP, no filesystem,
-//! no floats.
+//! sampling in [`resample`], tonal corrections in [`tone`], alpha handling
+//! in [`alpha`] and [`background`], seamless tiling in [`tile`],
+//! binarization in [`threshold`] and dithered quantization in [`dither`].
+//! Everything here is pure: no MCP, no filesystem, no floats.
 
 pub mod alpha;
+pub mod background;
+pub mod dither;
 pub mod geometry;
 pub mod resample;
+pub mod threshold;
+pub mod tile;
 pub mod tone;
 
 use schemars::JsonSchema;
@@ -131,6 +136,42 @@ pub enum ImageOp {
         #[serde(default)]
         padding: u32,
     },
+    /// Make transparent every pixel reached by a flood fill from the image
+    /// border that matches the background colour; unlike `color_key`,
+    /// interior regions of the same colour survive.
+    RemoveBackground {
+        /// Per-channel match tolerance, `0..=255`; default `32`.
+        #[serde(default = "default_background_tolerance")]
+        tolerance: u8,
+        /// Background colour as `#RRGGBBAA` or `#RRGGBB`; default: the
+        /// average colour of the dominant border bucket.
+        #[serde(default)]
+        color: Option<String>,
+    },
+    /// Blend each edge into its opposite half-period shift so the result
+    /// tiles seamlessly.
+    MakeTileable {
+        /// Blend width in pixels; default `width / 4` on the horizontal
+        /// axis and `height / 4` on the vertical one, `1..=length / 2`
+        /// on every enabled axis.
+        #[serde(default)]
+        band: Option<u32>,
+        /// Blend the left and right edges.
+        #[serde(default = "default_true")]
+        horizontal: bool,
+        /// Blend the top and bottom edges.
+        #[serde(default = "default_true")]
+        vertical: bool,
+    },
+    /// Binarize every pixel to opaque black or white by `luminance`.
+    Threshold {
+        /// Cut-off `0..=255`; `None` (the default) picks the Otsu level.
+        #[serde(default)]
+        level: Option<u8>,
+        /// Swap the black and white classes.
+        #[serde(default)]
+        invert: bool,
+    },
 }
 
 /// Default [`ImageOp::AutoLevels::clip_percent`].
@@ -146,6 +187,16 @@ const fn default_hundred() -> i32 {
 /// Default [`ImageOp::Trim::alpha_threshold`].
 const fn default_trim_threshold() -> u8 {
     128_u8
+}
+
+/// Default [`ImageOp::RemoveBackground::tolerance`].
+const fn default_background_tolerance() -> u8 {
+    32_u8
+}
+
+/// Default for [`ImageOp::MakeTileable`]'s axis switches.
+const fn default_true() -> bool {
+    true
 }
 
 /// Measurements collected by [`apply_ops`]: one `JSON` object per op.
@@ -179,13 +230,36 @@ pub fn apply_ops(img: RgbaImage, ops: &[ImageOp]) -> Result<(RgbaImage, OpsRepor
 /// Runs one op and enforces the result-size limit.
 fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Value), CyberError> {
     let (out, step) = match op {
+        ImageOp::Crop { .. }
+        | ImageOp::Fit { .. }
+        | ImageOp::Rotate { .. }
+        | ImageOp::Flip { .. } => geometry_op(&img, index, op)?,
+        ImageOp::AutoLevels { .. }
+        | ImageOp::Adjust { .. }
+        | ImageOp::ColorKey { .. }
+        | ImageOp::Trim { .. }
+        | ImageOp::RemoveBackground { .. }
+        | ImageOp::MakeTileable { .. }
+        | ImageOp::Threshold { .. } => pixel_op(img, index, op)?,
+    };
+    check_output_size(index, &out)?;
+    Ok((out, step))
+}
+
+/// Runs the shape-changing ops; the pixel dispatcher rejects these.
+fn geometry_op(
+    img: &RgbaImage,
+    index: usize,
+    op: ImageOp,
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (out, step) = match op {
         ImageOp::Crop {
             x,
             y,
             width,
             height,
         } => geometry::crop(
-            &img,
+            img,
             index,
             &geometry::CropSpec {
                 x,
@@ -201,7 +275,7 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
             filter,
             background,
         } => geometry::fit(
-            &img,
+            img,
             index,
             &geometry::FitSpec {
                 width,
@@ -211,12 +285,12 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
                 background: background.as_deref(),
             },
         )?,
-        ImageOp::Rotate { quarter_turns } => geometry::rotate(&img, index, quarter_turns)?,
+        ImageOp::Rotate { quarter_turns } => geometry::rotate(img, index, quarter_turns)?,
         ImageOp::Flip {
             horizontal,
             vertical,
         } => geometry::flip(
-            &img,
+            img,
             &geometry::FlipSpec {
                 horizontal,
                 vertical,
@@ -225,9 +299,15 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
-        | ImageOp::Trim { .. } => pixel_op(img, index, op)?,
+        | ImageOp::Trim { .. }
+        | ImageOp::RemoveBackground { .. }
+        | ImageOp::MakeTileable { .. }
+        | ImageOp::Threshold { .. } => {
+            return Err(CyberError::Internal(format!(
+                "ops[{index}]: pixel op reached the geometric dispatcher"
+            )));
+        }
     };
-    check_output_size(index, &out)?;
     Ok((out, step))
 }
 
@@ -242,23 +322,21 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
             brightness,
             contrast,
             saturation,
-        } => tone::adjust(
-            img,
-            index,
-            &tone::AdjustSpec {
+        } => {
+            let spec = tone::AdjustSpec {
                 brightness,
                 contrast,
                 saturation,
-            },
-        ),
-        ImageOp::ColorKey { color, tolerance } => alpha::color_key(
-            img,
-            index,
-            &alpha::ColorKeySpec {
+            };
+            tone::adjust(img, index, &spec)
+        }
+        ImageOp::ColorKey { color, tolerance } => {
+            let spec = alpha::ColorKeySpec {
                 color: &color,
                 tolerance,
-            },
-        ),
+            };
+            alpha::color_key(img, index, &spec)
+        }
         ImageOp::Trim {
             alpha_threshold,
             padding,
@@ -270,11 +348,58 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
                 padding,
             },
         ),
+        ImageOp::RemoveBackground { .. }
+        | ImageOp::MakeTileable { .. }
+        | ImageOp::Threshold { .. } => restoration_op(img, index, op),
         ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
         | ImageOp::Flip { .. } => Err(CyberError::Internal(format!(
             "ops[{index}]: geometric op reached the pixel dispatcher"
+        ))),
+    }
+}
+
+/// Runs the restoration group: border background removal, seamless tiling
+/// and binarization; any other variant reaching it is a dispatch bug.
+fn restoration_op(
+    img: RgbaImage,
+    index: usize,
+    op: ImageOp,
+) -> Result<(RgbaImage, Value), CyberError> {
+    match op {
+        ImageOp::RemoveBackground { tolerance, color } => {
+            let spec = background::BackgroundSpec {
+                color: color.as_deref(),
+                tolerance,
+            };
+            background::remove_background(img, index, &spec)
+        }
+        ImageOp::MakeTileable {
+            band,
+            horizontal,
+            vertical,
+        } => {
+            let spec = tile::TileSpec {
+                band,
+                horizontal,
+                vertical,
+            };
+            tile::make_tileable(img, index, &spec)
+        }
+        ImageOp::Threshold { level, invert } => {
+            let spec = threshold::ThresholdSpec { level, invert };
+            Ok(threshold::binarize(img, &spec))
+        }
+        ImageOp::AutoLevels { .. }
+        | ImageOp::Adjust { .. }
+        | ImageOp::ColorKey { .. }
+        | ImageOp::Trim { .. }
+        | ImageOp::Crop { .. }
+        | ImageOp::Fit { .. }
+        | ImageOp::Rotate { .. }
+        | ImageOp::Flip { .. } => Err(CyberError::Internal(format!(
+            "ops[{index}]: op reached the wrong pixel dispatcher"
         ))),
     }
 }
@@ -524,6 +649,62 @@ mod tests {
     }
 
     #[test]
+    fn the_new_ops_reach_their_modules_through_apply_ops() {
+        let ops = [
+            ImageOp::RemoveBackground {
+                tolerance: 8,
+                color: Some("#0000ff".to_owned()),
+            },
+            ImageOp::MakeTileable {
+                band: Some(1),
+                horizontal: true,
+                vertical: false,
+            },
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+        ];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report
+                .steps
+                .iter()
+                .map(|step| step["op"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["remove_background", "make_tileable", "threshold"],
+            "each new op reports under its documented name"
+        );
+        assert_eq!(
+            report.steps[0]["background"], "#0000FF",
+            "the requested colour is reported"
+        );
+        assert_eq!(
+            report.steps[0]["removed_pixels"], 1_i32,
+            "only the blue border pixel floods"
+        );
+        assert_eq!(report.steps[1]["band_x"], 1_i32, "explicit horizontal band");
+        assert!(
+            report.steps[1]["band_y"].is_null(),
+            "vertical axis disabled"
+        );
+        assert_eq!(
+            report.steps[2]["level"], 128_i32,
+            "explicit threshold level"
+        );
+        assert_eq!(
+            out.get(0, 0),
+            Some([255, 255, 255, 255]),
+            "green's luminance 149 exceeds the level and binarizes to white"
+        );
+        assert_eq!(
+            out.get(1, 0),
+            Some([255, 255, 255, 255]),
+            "the tiling pass overwrote blue with the white column, everything ends opaque"
+        );
+    }
+
+    #[test]
     fn pixel_op_rejects_geometric_variants_it_was_not_routed_for() {
         let error = super::pixel_op(
             quad(),
@@ -534,6 +715,40 @@ mod tests {
             },
         )
         .expect_err("a flip never belongs to the pixel dispatcher");
+        assert_eq!(error.code(), "internal", "dispatch bugs are internal");
+    }
+
+    #[test]
+    fn restoration_op_rejects_variants_it_was_not_routed_for() {
+        let error = super::restoration_op(
+            quad(),
+            5,
+            ImageOp::Trim {
+                alpha_threshold: 128,
+                padding: 0,
+            },
+        )
+        .expect_err("a trim never belongs to the restoration dispatcher");
+        let CyberError::Internal(message) = error else {
+            panic!("expected Internal");
+        };
+        assert!(
+            message.contains("ops[5]") && message.contains("wrong pixel dispatcher"),
+            "misdispatch names the op and the fault: {message}"
+        );
+    }
+
+    #[test]
+    fn geometry_op_rejects_pixel_variants_it_was_not_routed_for() {
+        let error = super::geometry_op(
+            &quad(),
+            1,
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+        )
+        .expect_err("a threshold never belongs to the geometric dispatcher");
         assert_eq!(error.code(), "internal", "dispatch bugs are internal");
     }
 
@@ -655,5 +870,62 @@ mod tests {
             panic!("expected Trim at index 7");
         };
         assert_eq!((alpha_threshold, padding), (128, 0), "trim defaults");
+    }
+
+    #[test]
+    fn new_pixel_ops_deserialize_with_documented_defaults() {
+        let text = r##"[
+            {"op":"remove_background"},
+            {"op":"remove_background","tolerance":8,"color":"#102030"},
+            {"op":"make_tileable"},
+            {"op":"make_tileable","band":3,"vertical":false},
+            {"op":"threshold"},
+            {"op":"threshold","level":128,"invert":true}
+        ]"##;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(ops.len(), 6, "all six entries parse");
+        assert_eq!(background_of(&ops[0]), (32, None), "background defaults");
+        assert_eq!(
+            background_of(&ops[1]),
+            (8, Some("#102030".to_owned())),
+            "explicit background"
+        );
+        assert_eq!(tile_of(&ops[2]), (None, true, true), "tile defaults");
+        assert_eq!(tile_of(&ops[3]), (Some(3), true, false), "explicit tile");
+        assert_eq!(threshold_of(&ops[4]), (None, false), "threshold defaults");
+        assert_eq!(
+            threshold_of(&ops[5]),
+            (Some(128), true),
+            "explicit threshold"
+        );
+    }
+
+    /// The `RemoveBackground` fields of an op that must be one.
+    fn background_of(op: &ImageOp) -> (u8, Option<String>) {
+        let ImageOp::RemoveBackground { tolerance, color } = op.clone() else {
+            panic!("expected a RemoveBackground op");
+        };
+        (tolerance, color)
+    }
+
+    /// The `MakeTileable` fields of an op that must be one.
+    fn tile_of(op: &ImageOp) -> (Option<u32>, bool, bool) {
+        let ImageOp::MakeTileable {
+            band,
+            horizontal,
+            vertical,
+        } = op.clone()
+        else {
+            panic!("expected a MakeTileable op");
+        };
+        (band, horizontal, vertical)
+    }
+
+    /// The `Threshold` fields of an op that must be one.
+    fn threshold_of(op: &ImageOp) -> (Option<u8>, bool) {
+        let ImageOp::Threshold { level, invert } = op.clone() else {
+            panic!("expected a Threshold op");
+        };
+        (level, invert)
     }
 }

@@ -3,9 +3,9 @@
 //! raw shapes, the `PNG` headers and the `Doom` patch headers, the sprite
 //! grouping with its mirrored rotations and its invalid list), the
 //! pattern/prefix and paging rules, the merged-view last-wins resolution,
-//! and the image tools that publish a flat, a patch or one sprite rotation
-//! as a `PNG` or raw `RGBA` asset - with their quantization, `grAb`
-//! offsets, palette and scale handling and their error codes.
+//! the image tools that publish a flat, a patch or one sprite rotation as
+//! a `PNG` or raw `RGBA` asset, the thing-sprite preview that starts from
+//! a definition's type number, and their error codes.
 
 #[cfg(test)]
 mod tests {
@@ -19,7 +19,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, iwad_duplicated};
+    use crate::fixtures::{iwad, iwad_duplicated, pwad_custom_defs};
     use crate::support::{call, call_err, connect, http_get};
 
     /// A connected MCP client.
@@ -1260,5 +1260,197 @@ mod tests {
             ],
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn get_thing_sprite_publishes_the_definition_rotation() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let imp = call(&client, "get_thing_sprite", json!({ "type": 3001_u64 })).await;
+        assert_eq!(imp["type"], json!(3001_u64), "the number echoes");
+        assert_eq!(imp["name"], json!("Imp"), "the definition's display name");
+        assert_eq!(imp["sprite"], json!("TROO"), "the sprite column");
+        assert_eq!(
+            imp["frame"],
+            json!("A"),
+            "the definition's frame by default"
+        );
+        assert_eq!(imp["rotation"], json!(1_u64), "the documented default");
+        assert_eq!(imp["lump"], json!("TROOA1"), "the exact rotation lump");
+        assert_eq!(imp["mirrored"], json!(false), "served as stored");
+        assert_eq!(imp["hanging"], json!(false), "an Imp stands on the floor");
+        check_dims(&imp, 8_u64, 8_u64);
+        check_offsets(&imp, 0_i64, 0_i64);
+        assert_eq!(
+            imp["asset"]["filename"],
+            json!("TROOA1.png"),
+            "published under the rotation name"
+        );
+        let image = fetch_image(&asset_url(&imp, "asset")).await;
+        assert_eq!(
+            image.get(0, 0),
+            Some([51_u8, 204, 51, 255]),
+            "the fixture fill index in palette colour"
+        );
+        let eight = call(
+            &client,
+            "get_thing_sprite",
+            json!({ "type": 3001_u64, "rotation": 8_u64 }),
+        )
+        .await;
+        assert_eq!(eight["lump"], json!("TROOA2A8"), "the mirror pair serves 8");
+        assert_eq!(eight["mirrored"], json!(true), "flipped horizontally");
+        check_offsets(&eight, 8_i64, 0_i64);
+    }
+
+    #[tokio::test]
+    async fn get_thing_sprite_scales_up_and_marks_a_hanging_thing() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let raw = call(
+            &client,
+            "get_thing_sprite",
+            json!({ "type": 3001_u64, "format": "rgba", "scale": 2_u64 }),
+        )
+        .await;
+        check_dims(&raw, 16_u64, 16_u64);
+        assert_eq!(
+            raw["asset"]["filename"],
+            json!("TROOA1.rgba"),
+            "the raw encoding"
+        );
+        check_offsets(&raw, 0_i64, 0_i64);
+        add_in(
+            &client,
+            "GOR1A1",
+            &hex_of(&stripe_bytes(4, 0, (0_i16, 0_i16))),
+            "sprites",
+        )
+        .await;
+        let hanging = call(&client, "get_thing_sprite", json!({ "type": 63_u64 })).await;
+        assert_eq!(
+            hanging["name"],
+            json!("Hanging Swaying Body"),
+            "the gore row"
+        );
+        assert_eq!(hanging["hanging"], json!(true), "the flag survives");
+        assert_eq!(hanging["lump"], json!("GOR1A1"), "the added custom lump");
+        check_dims(&hanging, 4_u64, 2_u64);
+    }
+
+    #[tokio::test]
+    async fn get_thing_sprite_falls_back_to_the_all_angles_image() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let player = call(&client, "get_thing_sprite", json!({ "type": 1_u64 })).await;
+        assert_eq!(player["name"], json!("Player 1 Start"), "the spawn row");
+        assert_eq!(player["sprite"], json!("PLAY"), "the sprite column");
+        assert_eq!(
+            player["lump"],
+            json!("PLAYA0"),
+            "the all-angles image answers rotation 1"
+        );
+        assert_eq!(player["mirrored"], json!(false), "used as stored");
+        check_dims(&player, 16_u64, 16_u64);
+    }
+
+    /// The `get_thing_sprite` refusals: unknown types, missing lumps and
+    /// malformed selections.
+    fn thing_sprite_cases() -> Vec<Refusal> {
+        vec![
+            (
+                "get_thing_sprite",
+                json!({ "type": 999_999_u64 }),
+                "not_found",
+                "no thing type 999999",
+            ),
+            (
+                "get_thing_sprite",
+                json!({ "type": 3004_u64 }),
+                "not_found",
+                "POSSA1 / POSSA0",
+            ),
+            (
+                "get_thing_sprite",
+                json!({ "type": 1_u64, "frame": "B" }),
+                "not_found",
+                "PLAYB1 / PLAYB0",
+            ),
+            (
+                "get_thing_sprite",
+                json!({ "type": 3001_u64, "rotation": 0_u64 }),
+                "invalid_argument",
+                "rotation",
+            ),
+            (
+                "get_thing_sprite",
+                json!({ "type": 3001_u64, "rotation": 9_u64 }),
+                "invalid_argument",
+                "rotation",
+            ),
+            (
+                "get_thing_sprite",
+                json!({ "type": 3001_u64, "frame": "1" }),
+                "invalid_argument",
+                "frame",
+            ),
+            (
+                "get_thing_sprite",
+                json!({ "type": 3001_u64, "palette": 20_u64 }),
+                "not_found",
+                "PLAYPAL",
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn get_thing_sprite_reports_missing_definitions_lumps_and_arguments() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        refuse_all(&client, &thing_sprite_cases()).await;
+        let fresh = connect().await;
+        refuse(
+            &fresh,
+            "get_thing_sprite",
+            json!({ "type": 3001_u64 }),
+            ("not_found", "TROOA1 / TROOA0"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn get_thing_sprite_previews_a_decorate_defined_thing() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let base = iwad(dir.path());
+        let extra = pwad_custom_defs(dir.path());
+        call(&client, "open_iwad", path_arg(&base)).await;
+        call(
+            &client,
+            "merge_wad",
+            json!({ "path": extra.display().to_string() }),
+        )
+        .await;
+        add_in(
+            &client,
+            "PLSMA1",
+            &hex_of(&stripe_bytes(4, 0, (1_i16, 2_i16))),
+            "sprites",
+        )
+        .await;
+        let lamp = call(&client, "get_thing_sprite", json!({ "type": 20_010_u64 })).await;
+        assert_eq!(lamp["name"], json!("PlasmaLamp"), "the class name");
+        assert_eq!(lamp["sprite"], json!("PLSM"), "the spawn state's sprite");
+        assert_eq!(lamp["frame"], json!("A"), "its frame letter");
+        assert_eq!(lamp["lump"], json!("PLSMA1"), "the custom sprite lump");
+        check_dims(&lamp, 4_u64, 2_u64);
+        check_offsets(&lamp, 1_i64, 2_i64);
+        let (code, message) =
+            call_err(&client, "get_thing_sprite", json!({ "type": 20_013_u64 })).await;
+        assert_eq!(code, "not_found", "the classless MAPINFO entry");
+        assert!(
+            message.contains("thing type 20013 has no sprite"),
+            "the message says so: {message}"
+        );
     }
 }

@@ -38,6 +38,8 @@ src/
                   `gfx/patch.rs` the Doom patch codec (incl. tall patches),
                   `gfx/flat.rs` the flat codec,
                   `gfx/sprite_name.rs` the sprite lump name grammar,
+                  `gfx/sprite_rotation.rs` the engine's viewer-angle to
+                  rotation-number bucketing (`rotation_for`),
                   `gfx/ops.rs` the image-op framework (`ImageOp`, `apply_ops`,
                   reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/

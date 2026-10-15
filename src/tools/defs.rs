@@ -2,7 +2,7 @@
 //! overlaid with the custom thing definitions of the loaded archives
 //! ([`crate::tools::defs::collect`] collects the lump texts).
 
-mod collect;
+pub(in crate::tools) mod collect;
 
 use alloc::collections::BTreeMap;
 

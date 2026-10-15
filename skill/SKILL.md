@@ -122,6 +122,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `get_flat`              | `reference/graphics.md` |
 | `get_patch`             | `reference/graphics.md` |
 | `get_sprite`            | `reference/graphics.md` |
+| `get_thing_sprite`      | `reference/graphics.md` |
 | `decode_patch`          | `reference/graphics.md` |
 | `import_sound`          | `reference/audio.md`    |
 | `preview_sound`         | `reference/audio.md`    |

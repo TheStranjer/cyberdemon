@@ -6,7 +6,8 @@
 //! [`quantize`] colour mapping, the [`ops`] image-operation framework and
 //! the `Doom` lump codecs [`patch`] (columns, posts and `DeePsea` tall
 //! patches) and [`flat`] (raw indexed planes), plus the sprite lump name
-//! grammar [`sprite_name`]. Nothing here knows about MCP or the
+//! grammar [`sprite_name`] and the engine's sprite rotation bucketing
+//! [`sprite_rotation`]. Nothing here knows about MCP or the
 //! filesystem; later sprite and texture tools compose these pieces.
 
 pub mod codec;
@@ -18,6 +19,7 @@ pub mod palette;
 pub mod patch;
 pub mod quantize;
 pub mod sprite_name;
+pub mod sprite_rotation;
 
 use crate::error::CyberError;
 

@@ -96,6 +96,18 @@ src/
                   `render/settings.rs` the session-level `RenderSettings`
                   (resolution, lighting, markers, sky, FOV, gamma, top-down
                   style, background), their ranges and validating setters.
+  sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
+                  rasters and the `analyze` entry point. It measures ink,
+                  stroke width, marks, enclosed regions and wall gaps in
+                  pixels; it never interprets them.
+  sketch/         Sketch building blocks (no MCP concerns):
+                  `sketch/mask.rs` `Mask`, `InkMode`, `ink_mask` and
+                  `stroke_width`, `sketch/morph.rs` square-element
+                  `dilate`/`erode`/`close` (separable running counts,
+                  O(w·h)), `sketch/components.rs` `Labels`, `Component`
+                  and deterministic scan-order `label_components`,
+                  `sketch/analyze.rs` the `Analysis` pipeline: marks
+                  split from walls, closing, regions, gaps and warnings.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools

@@ -12,6 +12,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > state, exposes a `version` tool, an `assets` group
 > (`get_asset_server_info`, `set_asset_capacity`), a `defs` group
 > (`get_thing_types`, `get_linedef_specials`, `get_sector_specials`), a
+> `graphics` group (`list_flats`, `list_patches`, `list_sprites`), a
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`, `reorder_lumps`), an `audio` group

@@ -5,8 +5,9 @@
 //! the private [`grab`] `grAb` `PNG` chunk, [`palette`] handling,
 //! [`quantize`] colour mapping, the [`ops`] image-operation framework and
 //! the `Doom` lump codecs [`patch`] (columns, posts and `DeePsea` tall
-//! patches) and [`flat`] (raw indexed planes). Nothing here knows about MCP
-//! or the filesystem; later sprite and texture tools compose these pieces.
+//! patches) and [`flat`] (raw indexed planes), plus the sprite lump name
+//! grammar [`sprite_name`]. Nothing here knows about MCP or the
+//! filesystem; later sprite and texture tools compose these pieces.
 
 pub mod codec;
 pub mod flat;
@@ -16,6 +17,7 @@ pub mod ops;
 pub mod palette;
 pub mod patch;
 pub mod quantize;
+pub mod sprite_name;
 
 use crate::error::CyberError;
 

@@ -148,7 +148,7 @@ mod tests {
         );
         assert_eq!(
             report["lumps"].as_u64(),
-            Some(35),
+            Some(45),
             "IWAD plus the PWAD's contributions, FLOOR1 replaced in place"
         );
         assert_eq!(report["dirty"], json!(true), "an export is not a save");

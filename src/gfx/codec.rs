@@ -11,8 +11,13 @@ use image::{ExtendedColorType, ImageEncoder as _, ImageError, ImageFormat, Image
 
 use crate::error::CyberError;
 use crate::gfx::MAX_DIMENSION;
-use crate::gfx::grab;
+use crate::gfx::grab::{self, PNG_SIGNATURE, next_chunk, read_u32_be};
 use crate::gfx::image::RgbaImage;
+
+/// The chunk type of the mandatory `PNG` header chunk.
+const IHDR_TYPE: [u8; 4] = *b"IHDR";
+/// Bytes of one `IHDR` dimension field.
+const IHDR_FIELD_BYTES: usize = 4;
 
 /// Decoder resource limits: [`MAX_DIMENSION`] per edge, no allocation cap
 /// beyond the shape that implies.
@@ -91,6 +96,29 @@ pub fn decode_image(bytes: &[u8]) -> Result<RgbaImage, CyberError> {
     })
 }
 
+/// Whether `bytes` start with the `PNG` file signature: the cheap check
+/// listings use to tell a `PNG` lump from other data.
+#[must_use]
+#[inline]
+pub fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(&PNG_SIGNATURE)
+}
+
+/// The `(width, height)` an `PNG`'s `IHDR` chunk declares, `None` when
+/// `bytes` are not a chunked `PNG` or the header chunk is missing, out of
+/// place or truncated. Nothing is decoded: this reads the header.
+#[must_use]
+#[inline]
+pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let rest = bytes.strip_prefix(&PNG_SIGNATURE)?;
+    let (kind, data, _next) = next_chunk(rest)?;
+    if kind != IHDR_TYPE {
+        return None;
+    }
+    let (width, height) = data.split_at_checked(IHDR_FIELD_BYTES)?;
+    Some((read_u32_be(width)?, read_u32_be(height)?))
+}
+
 /// Encodes an `RGBA8` image as `PNG`.
 ///
 /// When `offsets` is `Some((x, y))` a `grAb` chunk holding them is
@@ -116,7 +144,7 @@ pub fn encode_png(img: &RgbaImage, offsets: Option<(i32, i32)>) -> Result<Vec<u8
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_image, encode_png};
+    use super::{decode_image, encode_png, is_png, png_dimensions};
     use crate::gfx::grab::read_grab;
     use crate::gfx::image::RgbaImage;
 
@@ -294,5 +322,35 @@ mod tests {
         let error =
             RgbaImage::new(9_000, 1, vec![0; 0x8CA0]).expect_err("9000 exceeds MAX_DIMENSION");
         assert_eq!(error.code(), "invalid_argument", "constructor limit code");
+    }
+
+    #[test]
+    fn png_headers_answer_the_dimension_probe() {
+        let png = encode_png(&sample(), None).expect("encode");
+        assert!(is_png(&png), "an encoded PNG carries the signature");
+        assert_eq!(
+            png_dimensions(&png),
+            Some((3_u32, 2_u32)),
+            "IHDR reports the sample's shape"
+        );
+        let truncated = png.get(..20).expect("20 bytes exist");
+        assert!(is_png(truncated), "the signature survives");
+        assert!(
+            png_dimensions(truncated).is_none(),
+            "a cut-off IHDR payload answers nothing"
+        );
+    }
+
+    #[test]
+    fn non_png_bytes_answer_the_probe_with_none() {
+        assert!(!is_png(b"not a png"), "no signature, not a PNG");
+        assert_eq!(png_dimensions(b"not a png"), None, "no header either");
+        let mut no_ihdr: Vec<u8> = vec![0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+        no_ihdr.extend_from_slice(&[0_u8, 0, 0, 8, b'Z', b'Z', b'Z', b'Z', 1, 2, 3, 4]);
+        assert_eq!(
+            png_dimensions(&no_ihdr),
+            None,
+            "a first chunk that is not IHDR is refused"
+        );
     }
 }

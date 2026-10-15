@@ -99,9 +99,9 @@ mod tests {
         let client = iwad_plus_pwad(dir.path()).await;
         let report = call(&client, "list_lumps", json!({ "limit": 100_u64 })).await;
         assert_eq!(report["scope"], json!("merged"), "the default scope");
-        assert_eq!(report["total"].as_u64(), Some(35), "iwad 23 + 12 additions");
+        assert_eq!(report["total"].as_u64(), Some(45), "iwad 33 + 12 additions");
         assert_eq!(report["offset"].as_u64(), Some(0), "echoed offset");
-        assert_eq!(report["count"].as_u64(), Some(35), "one page");
+        assert_eq!(report["count"].as_u64(), Some(45), "one page");
         let floor = row_named(&report, "FLOOR1");
         assert_eq!(
             floor["index"].as_u64(),
@@ -159,7 +159,7 @@ mod tests {
         .await;
         let report = call(&client, "list_lumps", json!({ "scope": "layer:0" })).await;
         assert_eq!(report["scope"], json!({ "layer": 0_u64 }), "echoed scope");
-        assert_eq!(report["total"].as_u64(), Some(23), "the IWAD fixture alone");
+        assert_eq!(report["total"].as_u64(), Some(33), "the IWAD fixture alone");
         assert_eq!(
             row_named(&report, "FLOOR1")["offset"].as_u64(),
             Some(
@@ -252,7 +252,7 @@ mod tests {
         let flats = call(&client, "list_lumps", json!({ "namespace": "flats" })).await;
         assert_eq!(
             names(&flats),
-            vec!["F_START", "FLOOR1", "F_END"],
+            vec!["F_START", "FLOOR1", "PNGFLAT", "F_END"],
             "the flats region of the merged view",
         );
         assert_eq!(
@@ -286,14 +286,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
         let all = call(&client, "list_lumps", json!({ "limit": 100_u64 })).await;
-        assert_eq!(all["total"].as_u64(), Some(35), "everything");
+        assert_eq!(all["total"].as_u64(), Some(45), "everything");
         let page = call(
             &client,
             "list_lumps",
             json!({ "offset": 5_u64, "limit": 4_u64 }),
         )
         .await;
-        assert_eq!(page["total"].as_u64(), Some(35), "total counts all matches");
+        assert_eq!(page["total"].as_u64(), Some(45), "total counts all matches");
         assert_eq!(page["offset"].as_u64(), Some(5), "echoed offset");
         assert_eq!(page["count"].as_u64(), Some(4), "one page");
         assert_eq!(
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(past["count"].as_u64(), Some(0), "nothing past the end");
         assert_eq!(
             past["total"].as_u64(),
-            Some(35),
+            Some(45),
             "total still reports the matches"
         );
     }
@@ -379,7 +379,7 @@ mod tests {
         let flats = call(&client, "search_lumps", json!({ "namespace": "flats" })).await;
         assert_eq!(
             names(&flats),
-            vec!["F_START", "FLOOR1", "F_END"],
+            vec!["F_START", "FLOOR1", "PNGFLAT", "F_END"],
             "everything inside the flats region",
         );
     }

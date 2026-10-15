@@ -45,16 +45,20 @@ pub(super) struct PlacementParams {
 }
 
 /// The validated placement of one new lump: at most one field set.
+///
+/// Tool groups outside `lumps` build a `namespace`-mode placement directly
+/// to drop an imported lump into a region; `index`, `before` and `after`
+/// stay `None` there.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct Placement {
+pub(in crate::tools) struct Placement {
     /// Insert at this directory position.
-    pub(super) index: Option<usize>,
+    pub(in crate::tools) index: Option<usize>,
     /// Insert before the last lump with this name.
-    pub(super) before: Option<LumpName>,
+    pub(in crate::tools) before: Option<LumpName>,
     /// Insert after the last lump with this name.
-    pub(super) after: Option<LumpName>,
+    pub(in crate::tools) after: Option<LumpName>,
     /// Insert at the end of this namespace region.
-    pub(super) namespace: Option<Namespace>,
+    pub(in crate::tools) namespace: Option<Namespace>,
 }
 
 impl Placement {
@@ -140,7 +144,7 @@ fn given(placement: &Placement) -> usize {
 /// [`CyberError::NotFound`] when `before`/`after` name a lump `wad` does not
 /// hold, [`CyberError::LimitExceeded`] if the address space cannot take one
 /// more entry.
-pub(super) fn insert(
+pub(in crate::tools) fn insert(
     wad: &mut Wad,
     placement: &Placement,
     lump: Lump,

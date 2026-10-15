@@ -7,6 +7,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cyberdemon::gfx::codec::encode_png;
+use cyberdemon::gfx::image::RgbaImage;
 use cyberdemon::wad::archive::write_file_atomic;
 use cyberdemon::wad::map::doom::write_doom_map;
 use cyberdemon::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
@@ -185,18 +187,23 @@ fn colormap() -> Vec<u8> {
     tables
 }
 
-/// A hand-built `Doom` patch: `width` by `height`, zero offsets, one full-
-/// height post per column filled with `fill`. Encoded here rather than
-/// through a graphics tool so the texture fixtures stand on their own.
+/// A hand-built `Doom` patch: `width` by `height`, zero offsets, one
+/// full-height post per column filled with `fill`. Encoded here rather
+/// than through a graphics tool so the texture fixtures stand on their
+/// own.
 fn patch(width: usize, height: usize, fill: u8) -> Vec<u8> {
     let column_len = height.checked_add(4_usize).expect("test column fits");
-    let directory_end = 16_usize
+    let directory_end = 8_usize
         .checked_add(width.checked_mul(4).expect("test width fits"))
         .expect("test directory fits");
     let mut bytes = Vec::new();
-    for field in [width, height, 0_usize, 0_usize] {
-        let stored = i32::try_from(field).expect("test patch fields fit");
+    for field in [width, height] {
+        let stored = u16::try_from(field).expect("test patch fields fit");
         bytes.extend_from_slice(&stored.to_le_bytes());
+    }
+    for _offset in 0_usize..2 {
+        let zero = 0_i16;
+        bytes.extend_from_slice(&zero.to_le_bytes());
     }
     for column in 0..width {
         let step = column.checked_mul(column_len).expect("test offsets fit");
@@ -240,6 +247,40 @@ fn tile(patch_index: u16, columns: usize, rows: usize, step: (i16, i16)) -> Vec<
     placements
 }
 
+/// A 64x64 `RGBA` `PNG`, encoded through the library codec, for the
+/// `PNGFLAT` fixture flat: a flat whose bytes are `PNG` rather than a raw
+/// indexed plane.
+fn png64() -> Vec<u8> {
+    let side = 64_usize;
+    let pixels = vec![
+        0x7F_u8;
+        side.checked_mul(side)
+            .expect("64x64 fits")
+            .checked_mul(4)
+            .expect("png pixels fit")
+    ];
+    let img = RgbaImage::new(64, 64, pixels).expect("64x64 is a valid shape");
+    encode_png(&img, None).expect("the fixture PNG encodes")
+}
+
+/// The fixture sprites region: one `TROO` frame spread over the naming
+/// grammar (`A1` plain, `A2A8`/`A3A7`/`A4A6` mirrored pairs, `A5` plain),
+/// an all-angles `PLAYA0`, and the malformed `BADNAME`, all as small
+/// `Doom` patches so every sprite lump is also readable patch data.
+fn sprite_lumps() -> Vec<Lump> {
+    vec![
+        marker("S_START"),
+        lump("TROOA1", patch(8, 8, 0x33_u8)),
+        lump("TROOA2A8", patch(8, 8, 0x33_u8)),
+        lump("TROOA3A7", patch(8, 8, 0x33_u8)),
+        lump("TROOA4A6", patch(8, 8, 0x33_u8)),
+        lump("TROOA5", patch(8, 8, 0x33_u8)),
+        lump("PLAYA0", patch(16, 16, 0x44_u8)),
+        lump("BADNAME", vec![b'?'; 5]),
+        marker("S_END"),
+    ]
+}
+
 /// The fixture `PNAMES`: the two patch lumps, in index order.
 fn pnames() -> Vec<u8> {
     write_pnames(&["WALLP1".to_owned(), "STEPP1".to_owned()])
@@ -279,11 +320,13 @@ fn write_wad(dir: &Path, file: &str, wad: &Wad) -> PathBuf {
     path
 }
 
-/// The directory of the `iwad` fixtures: palettes, one two-room `MAP01`
+/// The directory of the `IWAD` fixtures: palettes, one two-room `MAP01`
 /// block, one flat region with `FLOOR1` (and a second, byte-3 copy when
-/// `duplicate_flat` is set), an `ENDOOM`, and the texture fixtures: a
-/// patches region with `WALLP1` and `STEPP1` plus the `PNAMES` and
-/// `TEXTURE1` lumps describing `WALL1` and `STEP1`.
+/// `duplicate_flat` is set) plus the `PNG` flat `PNGFLAT`, an `ENDOOM`,
+/// the texture fixtures: a patches region with `WALLP1` and `STEPP1`
+/// plus the `PNAMES` and `TEXTURE1` lumps describing `WALL1` and `STEP1`,
+/// and a sprites region (`TROO` and `PLAY` frames plus one malformed
+/// name).
 fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
     let mut lumps = vec![lump("PLAYPAL", playpal()), lump("COLORMAP", colormap())];
     lumps.extend(map_block("MAP01"));
@@ -292,12 +335,14 @@ fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
     if duplicate_flat {
         lumps.push(lump("FLOOR1", vec![3_u8; FLAT_BYTES]));
     }
+    lumps.push(lump("PNGFLAT", png64()));
     lumps.push(marker("F_END"));
     lumps.push(lump("ENDOOM", vec![b' '; ENDOOM_BYTES]));
     lumps.push(marker("P_START"));
     lumps.push(lump("WALLP1", patch(16, 16, 0x11_u8)));
     lumps.push(lump("STEPP1", patch(16, 8, 0x22_u8)));
     lumps.push(marker("P_END"));
+    lumps.extend(sprite_lumps());
     lumps.push(lump("PNAMES", pnames()));
     lumps.push(lump("TEXTURE1", texture1()));
     lumps
@@ -312,9 +357,12 @@ fn write_iwad(dir: &Path, file: &str, lumps: Vec<Lump>) -> PathBuf {
     write_wad(dir, file, &wad)
 }
 
-/// A minimal `DOOM II` style `IWAD`: palettes, one two-room `MAP01` block,
-/// one flat region with `FLOOR1`, an `ENDOOM`, and the two-room map's
-/// textures (`WALLP1`/`STEPP1` patches, `PNAMES`, `TEXTURE1`).
+/// A minimal `DOOM II` style `IWAD`: palettes, one two-room `MAP01`
+/// block, and a sprites region.
+///
+/// It also carries one flat region with `FLOOR1` and the `PNG` flat
+/// `PNGFLAT`, an `ENDOOM`, and the two-room map's textures (`WALLP1`/
+/// `STEPP1` patches, `PNAMES`, `TEXTURE1`).
 ///
 /// # Panics
 ///

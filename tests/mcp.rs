@@ -4,7 +4,8 @@
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! audio-group tests in `audio`, the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
-//! `lumps`-group tests in `lumps`, the music-group tests in `music`, the
+//! `lumps`-group tests in `lumps`, the graphics-group tests in `graphics`,
+//! the music-group tests in `music`, the
 //! palette-group tests in `palette`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
 //! the textures-group tests in `textures`, and the documentation-layout
@@ -42,6 +43,9 @@ mod docs;
 #[cfg(test)]
 #[path = "mcp/fixtures.rs"]
 pub mod fixtures;
+#[cfg(test)]
+#[path = "mcp/graphics.rs"]
+mod graphics;
 #[cfg(test)]
 #[path = "mcp/lumps.rs"]
 mod lumps;

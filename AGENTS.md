@@ -37,6 +37,7 @@ src/
                   PLAYPAL/hex palettes, `gfx/quantize.rs` quantization,
                   `gfx/patch.rs` the Doom patch codec (incl. tall patches),
                   `gfx/flat.rs` the flat codec,
+                  `gfx/sprite_name.rs` the sprite lump name grammar,
                   `gfx/ops.rs` the image-op framework (`ImageOp`, `apply_ops`,
                   reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/

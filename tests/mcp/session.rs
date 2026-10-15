@@ -62,7 +62,7 @@ mod tests {
             "echoed path"
         );
         assert_eq!(report["kind"], json!("IWAD"), "header magic");
-        assert_eq!(report["lumps"].as_u64(), Some(23), "fixture lump count");
+        assert_eq!(report["lumps"].as_u64(), Some(33), "fixture lump count");
         assert_eq!(report["maps"].as_u64(), Some(1), "MAP01 only");
         assert_eq!(report["game"], json!("doom2"), "MAP01 identifies DOOM II");
     }
@@ -205,13 +205,14 @@ mod tests {
         let info = call(&client, "get_wad_info", Value::Null).await;
         assert_eq!(
             info["total_lumps"].as_u64(),
-            Some(35),
+            Some(45),
             "FLOOR1 replaced, not doubled"
         );
         assert_eq!(
             info["namespaces"],
-            json!({ "flats": 1_u64, "patches": 2_u64 }),
-            "the merged flats region holds one FLOOR1, the patches region both fixtures' patches"
+            json!({ "flats": 2_u64, "patches": 2_u64, "sprites": 7_u64 }),
+            "the merged flats region holds one FLOOR1 and the PNG flat, the patches region both \
+             fixtures' patches, the sprites region the seven sprite lumps"
         );
     }
 
@@ -237,8 +238,8 @@ mod tests {
         );
         assert_eq!(
             first["added"].as_u64(),
-            Some(9),
-            "five globals, one flat, two patches, one map"
+            Some(17),
+            "five globals, two flats, two patches, seven sprites, one map"
         );
         let second = call(
             &client,
@@ -349,7 +350,7 @@ mod tests {
         );
         assert_eq!(
             session["iwad"]["lumps"].as_u64(),
-            Some(23),
+            Some(33),
             "the fixture's directory"
         );
         let layers = session["layers"].as_array().expect("a layer list");
@@ -396,7 +397,7 @@ mod tests {
         );
         assert_eq!(
             info["total_lumps"].as_u64(),
-            Some(35),
+            Some(45),
             "the merged directory"
         );
         assert_eq!(
@@ -409,8 +410,8 @@ mod tests {
         );
         assert_eq!(
             info["namespaces"],
-            json!({ "flats": 1_u64, "patches": 2_u64 }),
-            "one flat wins, the patches region rides along"
+            json!({ "flats": 2_u64, "patches": 2_u64, "sprites": 7_u64 }),
+            "one flat wins, the PNG flat and the patches and sprites regions ride along"
         );
         assert_eq!(info["warnings"], json!([]), "the fixtures are well formed");
     }

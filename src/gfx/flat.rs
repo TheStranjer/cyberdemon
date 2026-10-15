@@ -21,7 +21,9 @@ const FLAT_SHAPES: [(usize, u32, u32); 4] = [
 
 /// The `(width, height)` a flat of `len` raw bytes must have, or `None`
 /// for an unsupported size.
-fn flat_shape(len: usize) -> Option<(u32, u32)> {
+#[must_use]
+#[inline]
+pub fn flat_shape(len: usize) -> Option<(u32, u32)> {
     FLAT_SHAPES
         .into_iter()
         .find(|&(size, _, _)| size == len)

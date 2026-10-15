@@ -20,7 +20,7 @@
 use crate::error::CyberError;
 use crate::gfx::image::IndexedImage;
 use crate::gfx::pixel_count;
-use crate::wad::bytes::{Reader, Writer, u32_to_usize, usize_to_u32};
+use crate::wad::bytes::{Reader, Writer, i16_at, u16_at, u32_to_usize, usize_to_u32};
 
 /// Largest patch edge this codec accepts.
 const MAX_PATCH_DIM: u32 = 4_096_u32;
@@ -51,6 +51,48 @@ pub struct Patch {
     /// The patch pixels; places no post covers are transparent with
     /// index 0.
     pub image: IndexedImage,
+}
+
+/// The header fields of a `Doom` patch lump, without the column bodies:
+/// what a listing needs to describe a patch without decoding it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PatchHeader {
+    /// Width in pixels.
+    pub width: u16,
+    /// Height in pixels.
+    pub height: u16,
+    /// Horizontal offset of the image's left edge, in pixels.
+    pub left_offset: i16,
+    /// Vertical offset of the image's top edge, in pixels.
+    pub top_offset: i16,
+}
+
+/// Reads only the eight header bytes of a `Doom` patch lump: dimensions
+/// and drawing offsets, without touching the column table or bodies.
+///
+/// `None` when the lump is shorter than a header or declares a dimension
+/// outside `1..=4096`; a lump may still hold corrupt columns that this
+/// never looks at.
+#[must_use]
+#[inline]
+pub fn patch_header(bytes: &[u8]) -> Option<PatchHeader> {
+    let width = u16_at(bytes, 0).ok()?;
+    let height = u16_at(bytes, 2).ok()?;
+    let left_offset = i16_at(bytes, 4).ok()?;
+    let top_offset = i16_at(bytes, 6).ok()?;
+    let sane = fits_patch_dim(width) && fits_patch_dim(height);
+    sane.then_some(PatchHeader {
+        width,
+        height,
+        left_offset,
+        top_offset,
+    })
+}
+
+/// Whether a header dimension is inside the codec's `1..=4096` range.
+fn fits_patch_dim(value: u16) -> bool {
+    let pixels = u32::from(value);
+    pixels != 0 && pixels <= MAX_PATCH_DIM
 }
 
 /// Decodes a `Doom` patch lump, accepting `DeePsea` tall patches.
@@ -392,7 +434,10 @@ fn write_filler(out: &mut Writer, last_top: &mut u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{COLUMN_OFFSET_LEN, Patch, decode_column, decode_patch, encode_patch, paint_post};
+    use super::{
+        COLUMN_OFFSET_LEN, Patch, decode_column, decode_patch, encode_patch, paint_post,
+        patch_header,
+    };
     use crate::error::CyberError;
     use crate::gfx::image::IndexedImage;
     use crate::wad::bytes::u32_at;
@@ -713,6 +758,40 @@ mod tests {
             Some((7, true)),
             "the in-range row is painted"
         );
+    }
+
+    #[test]
+    fn patch_header_reads_the_eight_header_bytes_alone() {
+        let bytes = patch_lump(2, 3, (-3, -2), &[&[0xFF_u8], &[0xFF_u8]]);
+        let header = patch_header(&bytes).expect("a built patch starts with a header");
+        assert_eq!((header.width, header.height), (2, 3), "dimensions");
+        assert_eq!(
+            (header.left_offset, header.top_offset),
+            (-3, -2),
+            "drawing offsets, negatives included"
+        );
+        let head_only: Vec<u8> = bytes.into_iter().take(8).collect();
+        assert!(
+            patch_header(&head_only).is_some(),
+            "no column table is needed for the header"
+        );
+    }
+
+    #[test]
+    fn patch_header_rejects_bytes_that_carry_no_patch_header() {
+        assert!(
+            patch_header(&[1_u8, 0, 0]).is_none(),
+            "shorter than a header"
+        );
+        assert!(
+            patch_header(&patch_lump(0, 1, (0, 0), &[])).is_none(),
+            "zero width"
+        );
+        assert!(
+            patch_header(&patch_lump(4_097, 1, (0, 0), &[&[0xFF_u8]])).is_none(),
+            "width past the cap"
+        );
+        assert!(patch_header(b"png?").is_none(), "four bytes of text");
     }
 
     #[test]

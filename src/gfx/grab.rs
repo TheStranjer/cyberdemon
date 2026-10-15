@@ -10,7 +10,7 @@
 use crate::error::CyberError;
 
 /// The `PNG` file signature every chunk walk starts from.
-const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 /// The `grAb` chunk type.
 const GRAB_TYPE: [u8; 4] = *b"grAb";
 /// The mandatory first chunk of every `PNG`.
@@ -31,7 +31,7 @@ const GRAB_CHUNK_BYTES: usize = 20;
 pub type GrabOffsets = (i32, i32);
 
 /// A parsed chunk: its type, its payload and the bytes following it.
-type Chunk<'bytes> = ([u8; 4], &'bytes [u8], &'bytes [u8]);
+pub(crate) type Chunk<'bytes> = ([u8; 4], &'bytes [u8], &'bytes [u8]);
 
 /// The error reported for any malformed chunk stream.
 fn truncated() -> CyberError {
@@ -40,7 +40,7 @@ fn truncated() -> CyberError {
 
 /// Reads a big-endian `u32` by reversing the bytes before decoding them
 /// little-endian (the `big_endian_bytes` lint denies `from_be_bytes`).
-fn read_u32_be(bytes: &[u8]) -> Option<u32> {
+pub(crate) fn read_u32_be(bytes: &[u8]) -> Option<u32> {
     let mut word = *bytes.first_chunk::<FIELD_BYTES>()?;
     word.reverse();
     Some(u32::from_le_bytes(word))
@@ -76,7 +76,7 @@ fn after_signature(png: &[u8]) -> Result<&[u8], CyberError> {
 
 /// Splits the next chunk into its type, payload and the remaining bytes;
 /// `None` when the stream ends mid-chunk.
-fn next_chunk(bytes: &[u8]) -> Option<Chunk<'_>> {
+pub(crate) fn next_chunk(bytes: &[u8]) -> Option<Chunk<'_>> {
     let length = usize::try_from(read_u32_be(bytes)?).ok()?;
     let data_end = HEADER_BYTES.checked_add(length)?;
     let total = data_end.checked_add(FIELD_BYTES)?;

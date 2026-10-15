@@ -11,6 +11,7 @@ pub(crate) mod assets;
 pub(crate) mod audio;
 pub(crate) mod defs;
 pub(crate) mod graphics;
+pub(crate) mod imports;
 pub(crate) mod lumps;
 pub(crate) mod meta;
 pub(crate) mod music;

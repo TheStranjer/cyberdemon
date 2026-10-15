@@ -79,69 +79,71 @@ mod tests {
         );
     }
 
+    /// Every tool the server lists, sorted by name.
+    const EXPECTED_TOOLS: [&str; 53] = [
+        "add_lump",
+        "decode_patch",
+        "edit_decorate",
+        "edit_dehacked",
+        "edit_pnames",
+        "edit_zscript",
+        "extract_lump",
+        "get_asset_server_info",
+        "get_dehacked",
+        "get_flat",
+        "get_linedef_specials",
+        "get_lump",
+        "get_palette",
+        "get_patch",
+        "get_render_settings",
+        "get_sector_specials",
+        "get_session_info",
+        "get_sprite",
+        "get_thing_sprite",
+        "get_thing_types",
+        "get_wad_info",
+        "import_asset",
+        "import_file_as_lump",
+        "import_image_as_patch",
+        "import_image_as_raw",
+        "import_music",
+        "import_png_as_patch",
+        "import_sound",
+        "list_flats",
+        "list_lumps",
+        "list_patches",
+        "list_pnames",
+        "list_sprites",
+        "list_textures",
+        "merge_wad",
+        "new_wad",
+        "open_iwad",
+        "open_wad",
+        "preview_music",
+        "preview_sound",
+        "redo",
+        "remove_lump",
+        "rename_lump",
+        "reorder_lumps",
+        "replace_lump",
+        "save_wad",
+        "search_lumps",
+        "set_asset_capacity",
+        "set_palette",
+        "set_render_options",
+        "set_render_resolution",
+        "undo",
+        "version",
+    ];
+
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_defs_graphics_lumps_music_palette_render_scripts_session_and_textures_tools()
+    async fn lists_the_meta_assets_audio_defs_graphics_imports_lumps_music_palette_render_scripts_session_and_textures_tools()
      {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         names.sort_unstable();
-        assert_eq!(
-            names,
-            [
-                "add_lump",
-                "decode_patch",
-                "edit_decorate",
-                "edit_dehacked",
-                "edit_pnames",
-                "edit_zscript",
-                "extract_lump",
-                "get_asset_server_info",
-                "get_dehacked",
-                "get_flat",
-                "get_linedef_specials",
-                "get_lump",
-                "get_palette",
-                "get_patch",
-                "get_render_settings",
-                "get_sector_specials",
-                "get_session_info",
-                "get_sprite",
-                "get_thing_sprite",
-                "get_thing_types",
-                "get_wad_info",
-                "import_asset",
-                "import_file_as_lump",
-                "import_music",
-                "import_sound",
-                "list_flats",
-                "list_lumps",
-                "list_patches",
-                "list_pnames",
-                "list_sprites",
-                "list_textures",
-                "merge_wad",
-                "new_wad",
-                "open_iwad",
-                "open_wad",
-                "preview_music",
-                "preview_sound",
-                "redo",
-                "remove_lump",
-                "rename_lump",
-                "reorder_lumps",
-                "replace_lump",
-                "save_wad",
-                "search_lumps",
-                "set_asset_capacity",
-                "set_palette",
-                "set_render_options",
-                "set_render_resolution",
-                "undo",
-                "version",
-            ],
-            "sorted tool names"
-        );
+        assert_eq!(names, EXPECTED_TOOLS.to_vec(), "sorted tool names");
     }
 
     #[tokio::test]
@@ -222,6 +224,36 @@ mod tests {
         let decoded = schema_of(tool_named(&tools, "decode_patch"));
         assert_flattens(&decoded, &["name", "source", "palette"]);
         assert_nothing_required(&decoded);
+    }
+
+    /// The image imports flatten their shared pipeline parameters into the
+    /// tool schema, and the alias carries the patch tool's schema exactly.
+    #[tokio::test]
+    async fn the_image_import_schemas_flatten_their_shared_parameters() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let patch = schema_of(tool_named(&tools, "import_image_as_patch"));
+        assert_flattens(
+            &patch,
+            &[
+                "source",
+                "name",
+                "palette",
+                "transparency",
+                "offsets",
+                "replace",
+                "add_to_pnames",
+            ],
+        );
+        assert_required(&patch, "source");
+        assert_eq!(
+            schema_of(tool_named(&tools, "import_png_as_patch")),
+            patch,
+            "the alias takes the same arguments"
+        );
+        let raw = schema_of(tool_named(&tools, "import_image_as_raw"));
+        assert_flattens(&raw, &["source", "name", "namespace", "replace"]);
+        assert_required(&raw, "source");
     }
 
     #[tokio::test]

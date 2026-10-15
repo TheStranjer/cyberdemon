@@ -12,7 +12,7 @@
 //! both from [`crate::tools::lumps::reorder`].
 
 mod edit;
-mod place;
+pub(in crate::tools) mod place;
 mod reorder;
 pub(in crate::tools) mod rows;
 pub(in crate::tools) mod select;

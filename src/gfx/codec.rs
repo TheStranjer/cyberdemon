@@ -119,6 +119,31 @@ pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((read_u32_be(width)?, read_u32_be(height)?))
 }
 
+/// The `Doom` lump format `bytes` sniff as, or `None` when they are no
+/// readable image.
+///
+/// The `"png"`, `"jpeg"`, `"gif"` and `"bmp"` names follow the same
+/// magic-byte sniffing [`decode_image`] starts from, so bytes that decode
+/// always answer a name.
+#[must_use]
+#[inline]
+pub fn format_name(bytes: &[u8]) -> Option<&'static str> {
+    let format = image::guess_format(bytes).ok()?;
+    if format == ImageFormat::Png {
+        return Some("png");
+    }
+    if format == ImageFormat::Jpeg {
+        return Some("jpeg");
+    }
+    if format == ImageFormat::Gif {
+        return Some("gif");
+    }
+    if format == ImageFormat::Bmp {
+        return Some("bmp");
+    }
+    None
+}
+
 /// Encodes an `RGBA8` image as `PNG`.
 ///
 /// When `offsets` is `Some((x, y))` a `grAb` chunk holding them is
@@ -144,7 +169,7 @@ pub fn encode_png(img: &RgbaImage, offsets: Option<(i32, i32)>) -> Result<Vec<u8
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_image, encode_png, is_png, png_dimensions};
+    use super::{decode_image, encode_png, format_name, is_png, png_dimensions};
     use crate::gfx::grab::read_grab;
     use crate::gfx::image::RgbaImage;
 
@@ -338,6 +363,30 @@ mod tests {
         assert!(
             png_dimensions(truncated).is_none(),
             "a cut-off IHDR payload answers nothing"
+        );
+    }
+
+    #[test]
+    fn format_names_the_four_supported_codecs() {
+        let img = sample();
+        assert_eq!(
+            format_name(&encode_png(&img, None).expect("encode")),
+            Some("png")
+        );
+        assert_eq!(format_name(&encode_jpeg(&img)), Some("jpeg"));
+        assert_eq!(format_name(&encode_gif(&img)), Some("gif"));
+        assert_eq!(format_name(&encode_bmp(&img)), Some("bmp"));
+    }
+
+    #[test]
+    fn format_answers_none_for_unreadable_bytes() {
+        assert_eq!(format_name(b"plain text"), None, "no magic, no name");
+        let mut qoi_like: Vec<u8> = b"qoif".to_vec();
+        qoi_like.extend_from_slice(&[0_u8, 0, 0, 3, 0, 0, 0, 2]);
+        assert_eq!(
+            format_name(&qoi_like),
+            None,
+            "a sniffable but unsupported format"
         );
     }
 

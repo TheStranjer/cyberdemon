@@ -99,8 +99,11 @@ src/
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization, lookup and atomic I/O, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
-                  `MapBlock`s and `LumpKind` type hints, and `wad/game.rs`
-                  the pure game signature detection (`detect_game`).
+                  `MapBlock`s and `LumpKind` type hints, `wad/game.rs`
+                  the pure game signature detection (`detect_game`), and
+                  `wad/udmf.rs` the `UDMF` `TEXTMAP` grammar: tokenizer,
+                  parser and writer over `UdmfDoc` blocks and key/value
+                  pairs (no map model, no MCP).
   wad/map.rs      Map layer root: the `read_map`/`write_map` format
                   dispatcher and the model re-exports.
   wad/map/        Map data (no MCP concerns): `map/model.rs` the

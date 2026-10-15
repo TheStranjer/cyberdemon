@@ -31,8 +31,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
 > bounds-checked little-endian reader/writer, an in-memory `Wad` archive
-> with parsing, serialization, name lookup and atomic file I/O, and a lump
-> classifier reporting namespaces, map blocks and type hints) and a session
+> with parsing, serialization, name lookup and atomic file I/O, a lump
+> classifier reporting namespaces, map blocks and type hints, and a `UDMF`
+> `TEXTMAP` tokenizer, parser and writer over documents of blocks and
+> key/value pairs) and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, and a labelled undo/redo history with dirty-state tracking) and a

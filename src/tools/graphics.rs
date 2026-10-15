@@ -1,5 +1,5 @@
-//! Graphics browsing tools: the flats, patch and sprite listings of the
-//! merged view.
+//! Graphics tools: the flats, patch and sprite listings of the merged view
+//! and the image tools that publish one picture as an asset.
 //!
 //! Every tool reads [`crate::session::Scope::Merged`] through the shared
 //! rows in [`crate::tools::lumps::rows`]: the lumps of one namespace, last
@@ -8,8 +8,15 @@
 //! of the `P_START` region (plus any lump `PNAMES` names from outside the
 //! flats and sprites regions), and `list_sprites` groups the `S_START`
 //! region by the sprite name grammar of
-//! [`crate::gfx::sprite_name::parse_sprite_name`]. Nothing here decodes
-//! pixels or edits lumps: sizes, dimensions, offsets and names only.
+//! [`crate::gfx::sprite_name::parse_sprite_name`]. The listings decode no
+//! pixels: sizes, dimensions, offsets and names only.
+//!
+//! `get_flat`, `get_patch`, `get_sprite` and `decode_patch` do read
+//! pixels, through the shared resolvers in [`resolve`], and never inline
+//! them: each publishes a `PNG` or a raw `RGBA` asset and returns the
+//! [`AssetRef`] with the dimensions and drawing offsets it encoded.
+
+pub(in crate::tools) mod resolve;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
@@ -19,15 +26,23 @@ use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::assets::fetch::derive_lump_name;
+use crate::assets::server::AssetRef;
 use crate::error::CyberError;
-use crate::gfx::codec::{is_png, png_dimensions};
+use crate::gfx::codec::{encode_png, is_png, png_dimensions};
 use crate::gfx::flat::flat_shape;
-use crate::gfx::grab::read_grab;
-use crate::gfx::patch::{PatchHeader, patch_header};
+use crate::gfx::grab::{GrabOffsets, read_grab};
+use crate::gfx::image::{IndexedImage, RgbaImage, scale_integer};
+use crate::gfx::patch::{Patch, PatchHeader, decode_patch, patch_header};
 use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session, Source};
+use crate::state::AppState;
+use crate::tools::graphics::resolve::{
+    load_flat, load_patch, load_sprite, load_sprite_lump, lump_bytes,
+};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
+use crate::tools::palette::load_palette;
 use crate::tools::{fail, ok};
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::{LumpName, glob_match};
@@ -41,6 +56,22 @@ const MAX_LIMIT: usize = 2000;
 const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
 /// Characters of the four-character sprite prefix `list_sprites` filters by.
 const SPRITE_PREFIX_LEN: usize = 4;
+/// Default `PLAYPAL` entry the image tools colour a picture with.
+const DEFAULT_PALETTE: usize = 0_usize;
+/// Default published-image scale: the stored size.
+const DEFAULT_SCALE: u32 = 1_u32;
+/// Largest whole-pixel upscale the image tools accept.
+const MAX_SCALE: u32 = 8_u32;
+/// Frame letter `get_sprite` assumes without one.
+const DEFAULT_FRAME: char = 'A';
+/// Rotation `get_sprite` assumes without one: the first of the eight views.
+const DEFAULT_ROTATION: u8 = 1_u8;
+/// Largest rotation number a sprite frame serves.
+const MAX_ROTATION: u8 = 8_u8;
+/// Name `decode_patch` publishes under when a `source` names no file.
+const FALLBACK_NAME: &str = "PATCH";
+/// Media type of the raw `RGBA8` assets.
+const RGBA_MIME: &str = "application/octet-stream";
 
 /// Arguments for [`Cyberdemon::list_flats`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -456,19 +487,26 @@ type Groups = BTreeMap<String, BTreeMap<char, Vec<RotationRow>>>;
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected text.
 fn parse_prefix(text: Option<&str>) -> Result<Option<String>, CyberError> {
-    let Some(raw) = text else {
-        return Ok(None);
-    };
-    let upper = raw.to_ascii_uppercase();
+    text.map(parse_sprite).transpose()
+}
+
+/// One validated sprite prefix: four `ASCII` letters or digits,
+/// uppercased.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the rejected text.
+fn parse_sprite(text: &str) -> Result<String, CyberError> {
+    let upper = text.to_ascii_uppercase();
     let well_formed = upper.len() == SPRITE_PREFIX_LEN
         && upper
             .bytes()
             .all(|byte| byte.is_ascii_alphabetic() || byte.is_ascii_digit());
     if well_formed {
-        return Ok(Some(upper));
+        return Ok(upper);
     }
     Err(CyberError::InvalidArgument(format!(
-        "prefix {raw:?} is not four ASCII letters or digits: pass the sprite prefix, e.g. \
+        "prefix {text:?} is not four ASCII letters or digits: pass the sprite prefix, e.g. \
          \"POSS\"; leave it out to list every sprite"
     )))
 }
@@ -568,6 +606,660 @@ fn list_sprites_run(
     })
 }
 
+/// The shared picture options of the image tools, flattened into each
+/// tool's arguments.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct ImageParams {
+    /// Which `PLAYPAL` entry colours the picture (default 0: the normal
+    /// palette). Past the entries the lump holds is `not_found`, as is a
+    /// session with no `PLAYPAL`.
+    #[serde(default)]
+    palette: Option<usize>,
+    /// How the asset is encoded: `"png"` (default) or `"rgba"` for raw
+    /// row-major `RGBA8` bytes, `width*height*4` of them.
+    #[serde(default)]
+    format: Option<String>,
+    /// Whole-pixel nearest-neighbour upscale applied before publishing,
+    /// `1..=8` (default 1); it multiplies the reported dimensions and
+    /// drawing offsets too.
+    #[serde(default)]
+    scale: Option<u32>,
+}
+
+/// Arguments for [`Cyberdemon::get_flat`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetFlatParams {
+    /// The flat's lump name: 1 to 8 printable `ASCII` characters, matched
+    /// case-insensitively.
+    name: String,
+    /// The shared `palette`, `format` and `scale` options.
+    #[serde(flatten)]
+    common: ImageParams,
+}
+
+/// Arguments for [`Cyberdemon::get_patch`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetPatchParams {
+    /// The patch's lump name: 1 to 8 printable `ASCII` characters,
+    /// matched case-insensitively.
+    name: String,
+    /// The shared `palette`, `format` and `scale` options.
+    #[serde(flatten)]
+    common: ImageParams,
+}
+
+/// Arguments for [`Cyberdemon::get_sprite`]: exactly one of `name` and
+/// `sprite` says which picture to read.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetSpriteParams {
+    /// The whole sprite lump name to serve as stored, e.g. `"TROOA1"` (1
+    /// to 8 printable `ASCII` characters, case-insensitive). Give this or
+    /// `sprite`, never both.
+    #[serde(default)]
+    name: Option<String>,
+    /// The four-character sprite name to resolve, e.g. `"TROO"` (case-
+    /// insensitive). Give this with `frame`/`rotation` instead of `name`.
+    #[serde(default)]
+    sprite: Option<String>,
+    /// Frame letter of the rotation to read: one character of `A`-`Z` then
+    /// `[`, `\`, `]` (default `"A"`). With `sprite`.
+    #[serde(default)]
+    frame: Option<String>,
+    /// Rotation to read, `0`-`8` (default 1): `0` is the all-angles image,
+    /// `1`..`8` the eight views, served by a mirror-pair lump flipped when
+    /// no lump names the rotation itself. With `sprite`.
+    #[serde(default)]
+    rotation: Option<u8>,
+    /// The shared `palette`, `format` and `scale` options.
+    #[serde(flatten)]
+    common: ImageParams,
+}
+
+/// Arguments for [`Cyberdemon::decode_patch`]: exactly one of `name` and
+/// `source` says where the patch bytes come from.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct DecodePatchParams {
+    /// The lump to decode, `Doom` patch format only: 1 to 8 printable
+    /// `ASCII` characters, case-insensitive, resolved anywhere in the
+    /// merged view. Give this or `source`, never both.
+    #[serde(default)]
+    name: Option<String>,
+    /// Absolute path, `file://` URI, `http(s)://` `URL` or this server's
+    /// asset `URL` of the patch file to decode. Give this or `name`, never
+    /// both.
+    #[serde(default)]
+    source: Option<String>,
+    /// Which `PLAYPAL` entry colours the picture (default 0).
+    #[serde(default)]
+    palette: Option<usize>,
+}
+
+/// How an image tool encodes the asset it publishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AssetFormat {
+    /// A `PNG`, with a `grAb` chunk carrying the drawing offsets when the
+    /// source has any.
+    Png,
+    /// Raw row-major `RGBA8` bytes.
+    Rgba,
+}
+
+impl AssetFormat {
+    /// The client's `format` word, defaulting to `png`.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] for any other name.
+    fn parse(text: Option<&str>) -> Result<Self, CyberError> {
+        match text {
+            None | Some("png") => Ok(Self::Png),
+            Some("rgba") => Ok(Self::Rgba),
+            Some(other) => Err(CyberError::InvalidArgument(format!(
+                "format {other:?} is unknown: pass \"png\" for a PNG asset or \"rgba\" for raw \
+                 RGBA8 bytes"
+            ))),
+        }
+    }
+
+    /// This encoding's filename extension and media type.
+    const fn extension(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Png => ("png", "image/png"),
+            Self::Rgba => ("rgba", RGBA_MIME),
+        }
+    }
+}
+
+/// The validated `palette`, `format` and `scale` of one image call.
+#[derive(Debug)]
+struct ImageOptions {
+    /// `PLAYPAL` entry to colour with.
+    palette: usize,
+    /// How to encode the asset.
+    format: AssetFormat,
+    /// Whole-pixel upscale factor.
+    scale: u32,
+}
+
+/// The validated options of one image call.
+///
+/// # Errors
+///
+/// [`AssetFormat::parse`] and [`parse_scale`]' [`CyberError::InvalidArgument`].
+fn parse_options(common: &ImageParams) -> Result<ImageOptions, CyberError> {
+    Ok(ImageOptions {
+        palette: common.palette.unwrap_or(DEFAULT_PALETTE),
+        format: AssetFormat::parse(common.format.as_deref())?,
+        scale: parse_scale(common.scale)?,
+    })
+}
+
+/// The `scale` factor: a whole number in `1..=8`, defaulting to 1.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the rejected factor.
+fn parse_scale(value: Option<u32>) -> Result<u32, CyberError> {
+    match value {
+        None => Ok(DEFAULT_SCALE),
+        Some(factor @ (DEFAULT_SCALE..=MAX_SCALE)) => Ok(factor),
+        Some(factor) => Err(CyberError::InvalidArgument(format!(
+            "scale {factor} is out of range: pass a whole factor between {DEFAULT_SCALE} and \
+             {MAX_SCALE}"
+        ))),
+    }
+}
+
+/// A picture's pixels and drawing offsets, rendered and ready to publish.
+struct Rendered {
+    /// The scaled pixels.
+    image: RgbaImage,
+    /// Horizontal drawing offset in published pixels; `None` for a flat.
+    left_offset: Option<i32>,
+    /// Vertical drawing offset in published pixels; `None` for a flat.
+    top_offset: Option<i32>,
+}
+
+/// What one image call answers with: the picture plus the sprite extras
+/// the plain image tools leave out.
+struct Prepared {
+    /// The name the report answers with.
+    name: LumpName,
+    /// The lump that actually served the image (`get_sprite` only).
+    lump: Option<LumpName>,
+    /// Whether a stored sprite image was flipped (`get_sprite` only).
+    mirrored: Option<bool>,
+    /// The pixels and offsets to publish.
+    rendered: Rendered,
+}
+
+impl Prepared {
+    /// The answer for a flat or a patch: the requested name, no extras.
+    const fn plain(name: LumpName, rendered: Rendered) -> Self {
+        Self {
+            name,
+            lump: None,
+            mirrored: None,
+            rendered,
+        }
+    }
+
+    /// The answer for a sprite call, which also names the lump that served
+    /// the rotation and whether its stored image was flipped.
+    const fn served(name: LumpName, lump: LumpName, mirrored: bool, rendered: Rendered) -> Self {
+        Self {
+            name,
+            lump: Some(lump),
+            mirrored: Some(mirrored),
+            rendered,
+        }
+    }
+}
+
+/// Structured result of `get_flat`, `get_patch` and `get_sprite`.
+#[derive(Serialize)]
+struct ImageReport {
+    /// The picture's name: the flat or patch lump, or the sprite name the
+    /// call asked for (`TROOA8`).
+    name: LumpName,
+    /// Width in published pixels: `scale` times the stored image.
+    width: u32,
+    /// Height in published pixels.
+    height: u32,
+    /// Horizontal drawing offset in published pixels; absent for flats,
+    /// which have none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    left_offset: Option<i32>,
+    /// Vertical drawing offset in published pixels, like `left_offset`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_offset: Option<i32>,
+    /// The lump whose pixels served the call; `get_sprite` only, because a
+    /// mirror-pair or all-angles lump can stand in for the requested name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lump: Option<LumpName>,
+    /// Whether the stored sprite image was flipped horizontally to serve
+    /// the rotation; `get_sprite` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mirrored: Option<bool>,
+    /// The published picture.
+    asset: AssetRef,
+}
+
+/// Colours `image` with the session's requested palette, upscales it and
+/// keeps the drawing offsets scaled along.
+///
+/// # Errors
+///
+/// [`load_palette`]' [`CyberError::NotFound`] for a palette index the
+/// session's `PLAYPAL` does not hold.
+fn render_indexed(
+    session: &Session,
+    image: &IndexedImage,
+    offsets: Option<(i16, i16)>,
+    options: &ImageOptions,
+) -> Result<Rendered, CyberError> {
+    let palette = load_palette(session, options.palette)?;
+    Ok(Rendered {
+        image: scale_integer(&image.to_rgba(&palette), options.scale),
+        left_offset: offsets.map(|(left, _)| scale_offset(left, options.scale)),
+        top_offset: offsets.map(|(_, top)| scale_offset(top, options.scale)),
+    })
+}
+
+/// The render of a patch or sprite: its pixels plus both drawing offsets.
+///
+/// # Errors
+///
+/// [`render_indexed`]' errors.
+fn render_patch(
+    session: &Session,
+    patch: &Patch,
+    options: &ImageOptions,
+) -> Result<Rendered, CyberError> {
+    let offsets = (patch.left_offset, patch.top_offset);
+    render_indexed(session, &patch.image, Some(offsets), options)
+}
+
+/// One drawing offset in published pixels: `scale` times the stored
+/// offset, keeping it as is when the product would not fit.
+fn scale_offset(value: i16, scale: u32) -> i32 {
+    let factor = i32::try_from(scale).unwrap_or(1_i32);
+    let scaled = i32::from(value);
+    scaled.checked_mul(factor).unwrap_or(scaled)
+}
+
+/// The `grAb` offsets a published `PNG` carries: a render's drawing
+/// offsets, and none for a flat.
+fn grab_of(rendered: &Rendered) -> Option<GrabOffsets> {
+    let (left, top) = (rendered.left_offset?, rendered.top_offset?);
+    Some((left, top))
+}
+
+/// The asset bytes of one render in one encoding.
+///
+/// # Errors
+///
+/// [`encode_png`]' errors for a `PNG`; raw `RGBA8` bytes cannot fail.
+fn encode_rendered(rendered: &Rendered, format: AssetFormat) -> Result<Vec<u8>, CyberError> {
+    match format {
+        AssetFormat::Png => encode_png(&rendered.image, grab_of(rendered)),
+        AssetFormat::Rgba => Ok(rendered.image.pixels.clone()),
+    }
+}
+
+/// Publishes one render as `NAME.png` or `NAME.rgba`.
+///
+/// # Errors
+///
+/// [`encode_rendered`]' errors and [`AppState::publish`]' for the store.
+fn publish_image(
+    state: &AppState,
+    name: &str,
+    rendered: &Rendered,
+    options: &ImageOptions,
+) -> Result<AssetRef, CyberError> {
+    let (extension, mime) = options.format.extension();
+    let data = encode_rendered(rendered, options.format)?;
+    state.publish(&format!("{name}.{extension}"), mime, data)
+}
+
+/// Publishes a prepared picture and assembles the shared report.
+///
+/// # Errors
+///
+/// [`publish_image`]' errors.
+fn finish(
+    state: &AppState,
+    prepared: Prepared,
+    options: &ImageOptions,
+) -> Result<ImageReport, CyberError> {
+    let Prepared {
+        name,
+        lump,
+        mirrored,
+        rendered,
+    } = prepared;
+    let width = rendered.image.width;
+    let height = rendered.image.height;
+    let left_offset = rendered.left_offset;
+    let top_offset = rendered.top_offset;
+    let asset = publish_image(state, &name.to_string(), &rendered, options)?;
+    Ok(ImageReport {
+        name,
+        width,
+        height,
+        left_offset,
+        top_offset,
+        lump,
+        mirrored,
+        asset,
+    })
+}
+
+/// `get_flat`'s work: resolve and render under the session lock, then
+/// publish outside it.
+///
+/// # Errors
+///
+/// [`load_flat`]' errors for the lump and [`finish`]' for the asset.
+fn get_flat_run(
+    state: &AppState,
+    name: LumpName,
+    options: &ImageOptions,
+) -> Result<ImageReport, CyberError> {
+    let prepared = state.with_session(|session| {
+        let image = load_flat(session, name)?;
+        Ok(Prepared::plain(
+            name,
+            render_indexed(session, &image, None, options)?,
+        ))
+    })?;
+    finish(state, prepared, options)
+}
+
+/// `get_patch`'s work: resolve and render under the session lock, then
+/// publish outside it.
+///
+/// # Errors
+///
+/// [`load_patch`]' errors for the lump and [`finish`]' for the asset.
+fn get_patch_run(
+    state: &AppState,
+    name: LumpName,
+    options: &ImageOptions,
+) -> Result<ImageReport, CyberError> {
+    let prepared = state.with_session(|session| {
+        let patch = load_patch(session, name)?;
+        Ok(Prepared::plain(
+            name,
+            render_patch(session, &patch, options)?,
+        ))
+    })?;
+    finish(state, prepared, options)
+}
+
+/// What a `get_sprite` call names: one lump exactly, or one rotation.
+#[derive(Debug)]
+enum SpriteRequest {
+    /// The whole lump name to serve as stored (`TROOA2A8`).
+    Lump(LumpName),
+    /// One rotation of a sprite, resolved by the engine's rules.
+    Rotation {
+        /// The name this rotation would carry: what the report answers
+        /// with (`TROOA8`).
+        name: LumpName,
+        /// Four-character sprite prefix, uppercased.
+        sprite: String,
+        /// Frame letter, uppercased.
+        frame: char,
+        /// Rotation `0`-`8`.
+        rotation: u8,
+    },
+}
+
+/// Which sprite one `get_sprite` call asks for: exactly one of `name` and
+/// `sprite`, with `frame` (default `A`) and `rotation` (default 1).
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for both or neither selector, or for a
+/// malformed `sprite`, `frame` or `rotation`.
+fn sprite_request(args: &GetSpriteParams) -> Result<SpriteRequest, CyberError> {
+    match (args.name.as_deref(), args.sprite.as_deref()) {
+        (Some(text), None) => Ok(SpriteRequest::Lump(LumpName::parse(text)?)),
+        (None, Some(text)) => by_rotation(text, args.frame.as_deref(), args.rotation),
+        (Some(_), Some(_)) => Err(CyberError::InvalidArgument(
+            "get_sprite takes either name or sprite, not both: name one lump like \"TROOA1\", \
+             or give sprite with frame and rotation"
+                .to_owned(),
+        )),
+        (None, None) => Err(CyberError::InvalidArgument(
+            "get_sprite needs a sprite to read: pass the full lump name, or the four-character \
+             sprite with an optional frame and rotation"
+                .to_owned(),
+        )),
+    }
+}
+
+/// The rotation request behind a `sprite` with its `frame` and `rotation`.
+///
+/// # Errors
+///
+/// [`parse_sprite`], [`parse_frame`] and [`parse_rotation`]'
+/// [`CyberError::InvalidArgument`] errors.
+fn by_rotation(
+    sprite: &str,
+    frame: Option<&str>,
+    rotation: Option<u8>,
+) -> Result<SpriteRequest, CyberError> {
+    let prefix = parse_sprite(sprite)?;
+    let letter = parse_frame(frame)?;
+    let number = parse_rotation(rotation)?;
+    Ok(SpriteRequest::Rotation {
+        name: LumpName::parse(&format!("{prefix}{letter}{number}"))?,
+        sprite: prefix,
+        frame: letter,
+        rotation: number,
+    })
+}
+
+/// The frame letter: one character of `A`-`Z` then `[`, `\`, `]`,
+/// uppercased, defaulting to [`DEFAULT_FRAME`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for any other text.
+fn parse_frame(text: Option<&str>) -> Result<char, CyberError> {
+    let Some(raw) = text else {
+        return Ok(DEFAULT_FRAME);
+    };
+    let upper = raw.to_ascii_uppercase();
+    let single = upper.chars().count() == 1;
+    if let Some(letter) = upper.chars().next()
+        && single
+        && is_frame_letter(letter)
+    {
+        return Ok(letter);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "frame {text:?} is not one sprite frame letter: pass a single character A-Z, [, \\ or ]"
+    )))
+}
+
+/// Whether `letter` is a sprite frame letter: `A`-`Z`, then the three
+/// characters after `Z`.
+const fn is_frame_letter(letter: char) -> bool {
+    matches!(letter, 'A'..='Z' | '[' | '\\' | ']')
+}
+
+/// The rotation number: `0`-`8`, defaulting to [`DEFAULT_ROTATION`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the rejected number.
+fn parse_rotation(value: Option<u8>) -> Result<u8, CyberError> {
+    match value {
+        None => Ok(DEFAULT_ROTATION),
+        Some(rotation @ (0_u8..=MAX_ROTATION)) => Ok(rotation),
+        Some(rotation) => Err(CyberError::InvalidArgument(format!(
+            "rotation {rotation} is out of range: pass 0 for the all-angles image, or 1 to \
+             {MAX_ROTATION} for the eight views"
+        ))),
+    }
+}
+
+/// `get_sprite`'s work: resolve and render under the session lock, then
+/// publish outside it.
+///
+/// # Errors
+///
+/// [`prepare_sprite`]' errors and [`finish`]' for the asset.
+fn get_sprite_run(
+    state: &AppState,
+    request: SpriteRequest,
+    options: &ImageOptions,
+) -> Result<ImageReport, CyberError> {
+    let prepared = state.with_session(|session| prepare_sprite(session, request, options))?;
+    finish(state, prepared, options)
+}
+
+/// Resolves one sprite request and renders the picture it names: a whole
+/// lump as stored, or a rotation by the engine's rules.
+///
+/// # Errors
+///
+/// [`load_sprite_lump`] and [`load_sprite`]' errors, and
+/// [`render_patch`]' for the pixels.
+fn prepare_sprite(
+    session: &Session,
+    request: SpriteRequest,
+    options: &ImageOptions,
+) -> Result<Prepared, CyberError> {
+    match request {
+        SpriteRequest::Lump(name) => {
+            let patch = load_sprite_lump(session, name)?;
+            let rendered = render_patch(session, &patch, options)?;
+            Ok(Prepared::served(name, name, false, rendered))
+        }
+        SpriteRequest::Rotation {
+            name,
+            sprite,
+            frame,
+            rotation,
+        } => {
+            let found = load_sprite(session, &sprite, frame, rotation)?;
+            let rendered = render_patch(session, &found.patch, options)?;
+            Ok(Prepared::served(name, found.lump, found.mirrored, rendered))
+        }
+    }
+}
+
+/// The name and bytes of the patch one `decode_patch` call reads, from the
+/// merged view or from a fetched file: exactly one of the two.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for both `name` and `source` or for
+/// neither; [`lump_bytes`]' and [`AppState::fetch_source`]' errors for the
+/// chosen one.
+async fn patch_payload(
+    state: &AppState,
+    args: &DecodePatchParams,
+) -> Result<(String, Vec<u8>), CyberError> {
+    match (args.name.as_deref(), args.source.as_deref()) {
+        (Some(text), None) => {
+            let name = LumpName::parse(text)?;
+            let data = state.with_session(|session| lump_bytes(session, name))?;
+            Ok((name.to_string(), data))
+        }
+        (None, Some(uri)) => {
+            let fetched = state.fetch_source(uri).await?;
+            Ok((display_name(&fetched.filename), fetched.bytes))
+        }
+        (Some(_), Some(_)) => Err(CyberError::InvalidArgument(
+            "decode_patch takes either name or source, not both: name one session lump or one \
+             external file"
+                .to_owned(),
+        )),
+        (None, None) => Err(CyberError::InvalidArgument(
+            "decode_patch needs a patch to read: pass the name of a session lump or the source \
+             of a file"
+                .to_owned(),
+        )),
+    }
+}
+
+/// The name a fetched file is reported and published under: the lump name
+/// its stem allows, else its filename, else [`FALLBACK_NAME`].
+fn display_name(filename: &str) -> String {
+    derive_lump_name(filename)
+        .map(|name| name.to_string())
+        .or_else(|| (!filename.is_empty()).then(|| filename.to_owned()))
+        .unwrap_or_else(|| FALLBACK_NAME.to_owned())
+}
+
+/// Structured result of [`Cyberdemon::decode_patch`]: one patch as both
+/// encodings.
+#[derive(Serialize)]
+struct DecodedPatchReport {
+    /// The patch's name: the lump, or the fetched file's name.
+    name: String,
+    /// Width in pixels.
+    width: u32,
+    /// Height in pixels.
+    height: u32,
+    /// Horizontal drawing offset in pixels.
+    left_offset: i32,
+    /// Vertical drawing offset in pixels.
+    top_offset: i32,
+    /// The `PLAYPAL` entry both published pictures are coloured with.
+    palette: usize,
+    /// The published `PNG`, drawing offsets in a `grAb` chunk.
+    png: AssetRef,
+    /// The same picture as raw `RGBA8` bytes.
+    rgba: AssetRef,
+}
+
+/// `decode_patch`'s work: fetch or read the bytes, decode the `Doom`
+/// format and publish both encodings.
+///
+/// # Errors
+///
+/// [`patch_payload`]' errors for the arguments, [`decode_patch`]'
+/// [`CyberError::Format`] for bytes that are no patch,
+/// [`load_palette`]' [`CyberError::NotFound`] for the palette and
+/// [`AppState::publish`]' errors for the two assets.
+async fn decode_patch_run(
+    state: &AppState,
+    args: &DecodePatchParams,
+) -> Result<DecodedPatchReport, CyberError> {
+    let index = args.palette.unwrap_or(DEFAULT_PALETTE);
+    let (name, data) = patch_payload(state, args).await?;
+    let patch = decode_patch(&data)?;
+    let palette = state.with_session(|session| load_palette(session, index))?;
+    let image = patch.image.to_rgba(&palette);
+    let left_offset = i32::from(patch.left_offset);
+    let top_offset = i32::from(patch.top_offset);
+    let rgba = image.pixels.clone();
+    let (width, height) = (image.width, image.height);
+    let png_asset = state.publish(
+        &format!("{name}.png"),
+        "image/png",
+        encode_png(&image, Some((left_offset, top_offset)))?,
+    )?;
+    let rgba_asset = state.publish(&format!("{name}.rgba"), RGBA_MIME, rgba)?;
+    Ok(DecodedPatchReport {
+        name,
+        width,
+        height,
+        left_offset,
+        top_offset,
+        palette: index,
+        png: png_asset,
+        rgba: rgba_asset,
+    })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -576,7 +1268,7 @@ fn list_sprites_run(
 impl Cyberdemon {
     /// Lists the flat textures of the session.
     #[tool(
-        description = "Lists the flat (wall/floor/ceiling) lumps of the merged view's flats regions (between F_START/F_END or FF_START/FF_END; markers excluded, and when a name repeats the last lump wins): {name, size, width, height, format, source}. format is `\"png\"` when the bytes carry a PNG signature - then width/height come from the IHDR - and `\"raw\"` otherwise, where the vanilla shapes answer: 4096 bytes is 64x64, 8192 is 64x128, 16384 is 128x128, 65536 is 256x256; an unsupported size answers width/height null. source is list_lumps' archive origin (\"working\" or {\"layer\": N}). A session without flats answers {total: 0, flats: []}, not an error. Optional pattern is a case-insensitive name glob (* and ?); paging is offset (default 0) and limit (default 200, max 2000). Returns {total, flats} where total counts pattern matches before paging. Patch lumps (texture components) are listed by list_patches and sprite graphics by list_sprites; read a flat's bytes with get_lump or extract_lump."
+        description = "Lists the flat (wall/floor/ceiling) lumps of the merged view's flats regions (between F_START/F_END or FF_START/FF_END; markers excluded, and when a name repeats the last lump wins): {name, size, width, height, format, source}. format is `\"png\"` when the bytes carry a PNG signature - then width/height come from the IHDR - and `\"raw\"` otherwise, where the vanilla shapes answer: 4096 bytes is 64x64, 8192 is 64x128, 16384 is 128x128, 65536 is 256x256; an unsupported size answers width/height null. source is list_lumps' archive origin (\"working\" or {\"layer\": N}). A session without flats answers {total: 0, flats: []}, not an error. Optional pattern is a case-insensitive name glob (* and ?); paging is offset (default 0) and limit (default 200, max 2000). Returns {total, flats} where total counts pattern matches before paging. Patch lumps (texture components) are listed by list_patches and sprite graphics by list_sprites; publish a flat's picture with get_flat, or read its bytes with get_lump or extract_lump."
     )]
     fn list_flats(
         &self,
@@ -597,7 +1289,7 @@ impl Cyberdemon {
 
     /// Lists the patch lumps of the session.
     #[tool(
-        description = "Lists the patch lumps of the merged view: every lump in a patches region (between P_START/P_END or PP_START/PP_END; markers excluded, last lump with a name wins) plus every lump PNAMES names from outside the flats and sprites regions. Rows are {name, size, width, height, left_offset, top_offset, format, in_pnames, namespace, source}: format is `\"doom\"` when the first eight bytes read as a Doom patch header (dimensions and drawing offsets from it; the column bodies are never touched), `\"png\"` for a PNG lump (dimensions from the IHDR, offsets from a grAb chunk when present) and `\"unknown\"` otherwise, where every measurement is null. in_pnames says whether PNAMES lists the name; namespace is `\"patches\"` inside a patches region and null elsewhere; source is list_lumps' archive origin. A session without patches answers {total: 0, patches: []}, not an error; a malformed PNAMES fails with format_error. Optional pattern is a case-insensitive name glob (* and ?), in_pnames_only (default false) restricts the list to PNAMES entries, and paging is offset (default 0) and limit (default 200, max 2000). Returns {total, patches} where total counts matches before paging. See list_textures and list_pnames for the textures these patches compose, list_flats and list_sprites for the other graphic lumps."
+        description = "Lists the patch lumps of the merged view: every lump in a patches region (between P_START/P_END or PP_START/PP_END; markers excluded, last lump with a name wins) plus every lump PNAMES names from outside the flats and sprites regions. Rows are {name, size, width, height, left_offset, top_offset, format, in_pnames, namespace, source}: format is `\"doom\"` when the first eight bytes read as a Doom patch header (dimensions and drawing offsets from it; the column bodies are never touched), `\"png\"` for a PNG lump (dimensions from the IHDR, offsets from a grAb chunk when present) and `\"unknown\"` otherwise, where every measurement is null. in_pnames says whether PNAMES lists the name; namespace is `\"patches\"` inside a patches region and null elsewhere; source is list_lumps' archive origin. A session without patches answers {total: 0, patches: []}, not an error; a malformed PNAMES fails with format_error. Optional pattern is a case-insensitive name glob (* and ?), in_pnames_only (default false) restricts the list to PNAMES entries, and paging is offset (default 0) and limit (default 200, max 2000). Returns {total, patches} where total counts matches before paging. See list_textures and list_pnames for the textures these patches compose, list_flats and list_sprites for the other graphic lumps; publish one as a picture with get_patch."
     )]
     fn list_patches(
         &self,
@@ -623,7 +1315,7 @@ impl Cyberdemon {
 
     /// Lists the sprite lumps of the session, grouped by sprite.
     #[tool(
-        description = "Groups the merged view's sprite-region lumps (between S_START/S_END or SS_START/SS_END; markers excluded, last lump with a name wins) by the Doom sprite name grammar: four characters of sprite name, a frame letter (A-Z, then [, \\, ]), a rotation digit 0-8 - and optionally a second frame+rotation served by the same image horizontally mirrored, e.g. POSSA2A8 serves rotation 2 directly and rotation 8 flipped; rotation 0 serves every angle with the one image. Answers {total, sprites, invalid}: sprites is [{sprite, frames: [{frame, rotations: [{rotation, lump, mirrored}]}]}] grouped by prefix, frames in letter order, rotations by number then lump name; invalid lists the region lumps whose names match no grammar, in directory order. total counts sprite groups before paging (the prefix filter applied); paging is offset (default 0) and limit (default 200, max 2000) over groups. Optional prefix keeps one four-character sprite (case-insensitive letters or digits) - any other text fails with invalid_argument. A session without sprites answers {total: 0, sprites: [], invalid: []}, not an error. Flats are listed by list_flats, patches by list_patches."
+        description = "Groups the merged view's sprite-region lumps (between S_START/S_END or SS_START/SS_END; markers excluded, last lump with a name wins) by the Doom sprite name grammar: four characters of sprite name, a frame letter (A-Z, then [, \\, ]), a rotation digit 0-8 - and optionally a second frame+rotation served by the same image horizontally mirrored, e.g. POSSA2A8 serves rotation 2 directly and rotation 8 flipped; rotation 0 serves every angle with the one image. Answers {total, sprites, invalid}: sprites is [{sprite, frames: [{frame, rotations: [{rotation, lump, mirrored}]}]}] grouped by prefix, frames in letter order, rotations by number then lump name; invalid lists the region lumps whose names match no grammar, in directory order. total counts sprite groups before paging (the prefix filter applied); paging is offset (default 0) and limit (default 200, max 2000) over groups. Optional prefix keeps one four-character sprite (case-insensitive letters or digits) - any other text fails with invalid_argument. A session without sprites answers {total: 0, sprites: [], invalid: []}, not an error. Flats are listed by list_flats, patches by list_patches; publish one rotation with get_sprite."
     )]
     fn list_sprites(
         &self,
@@ -645,6 +1337,87 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Publishes one flat as an image asset.
+    #[tool(
+        description = "Publishes one flat (wall/floor/ceiling) texture as an image asset on the localhost asset server; nothing is edited. name (1 to 8 printable ASCII characters, case-insensitive) is resolved the way an engine resolves it in the merged view: the last flats-region lump of that name wins, then any other lump of that name. A raw flat is decoded from the vanilla sizes (4096 bytes = 64x64, 8192 = 64x128, 16384 = 128x128, 65536 = 256x256); a PNG flat, as ZDoom-family mods store them, is decoded and quantized to PLAYPAL entry 0, so alpha-transparent pixels stay transparent holes. palette picks the PLAYPAL entry that colours the published picture (default 0); an index the PLAYPAL does not hold, or a session with no PLAYPAL at all, is not_found - open_iwad first. format is \"png\" (default: a PNG asset NAME.png, image/png) or \"rgba\" (raw row-major RGBA8 bytes, width*height*4 of them, NAME.rgba, application/octet-stream). scale (1..=8, default 1) upscales nearest-neighbour before publishing and multiplies the reported dimensions. Flats store no drawing offsets, so the result has none. A name no archive holds is not_found (list_flats shows the names); bytes that are neither a supported raw size nor a readable PNG are format_error. Returns {name, width, height, asset: {url, filename, mime, size}}; fetch the url to see the picture. get_patch publishes texture components, get_sprite one sprite rotation."
+    )]
+    fn get_flat(
+        &self,
+        Parameters(args): Parameters<GetFlatParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let options = match parse_options(&args.common) {
+            Ok(options) => options,
+            Err(error) => return fail(&error),
+        };
+        let name = match LumpName::parse(&args.name) {
+            Ok(name) => name,
+            Err(error) => return fail(&error),
+        };
+        match get_flat_run(self.state(), name, &options) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Publishes one patch lump as an image asset.
+    #[tool(
+        description = "Publishes one patch lump (a texture component, HUD graphic or port graphic) as an image asset; nothing is edited. name (1 to 8 printable ASCII characters, case-insensitive) is resolved in the merged view: the last patches-region lump of that name wins, then the last loose lump of that name from outside the flats and sprites regions (PNAMES can name a patch anywhere). Doom column/post patches decode with their header drawing offsets; PNG patches are quantized to PLAYPAL entry 0 with alpha transparency and take their offsets from a grAb chunk, defaulting to 0,0. Transparent pixels are published as holes. palette (default 0) colours the published picture and is not_found when the PLAYPAL lacks that entry. format is \"png\" (default: NAME.png, with the offsets kept in a grAb chunk) or \"rgba\" (raw row-major RGBA8 bytes, width*height*4 of them, NAME.rgba, application/octet-stream). scale (1..=8, default 1) upscales nearest-neighbour and multiplies the reported dimensions and offsets alike. A name no archive holds is not_found (list_patches shows the names, get_lump or extract_lump the raw bytes); bytes that are neither format are format_error. Returns {name, width, height, left_offset, top_offset, asset}; left_offset and top_offset are where the image's top-left corner sits relative to the drawing point, in published pixels."
+    )]
+    fn get_patch(
+        &self,
+        Parameters(args): Parameters<GetPatchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let options = match parse_options(&args.common) {
+            Ok(options) => options,
+            Err(error) => return fail(&error),
+        };
+        let name = match LumpName::parse(&args.name) {
+            Ok(name) => name,
+            Err(error) => return fail(&error),
+        };
+        match get_patch_run(self.state(), name, &options) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Publishes one sprite lump or rotation as an image asset.
+    #[tool(
+        description = "Publishes one sprite rotation as an image asset; nothing is edited. Name the picture exactly one way: name is a whole sprite lump name, served as stored (\"TROOA1\", or \"TROOA2A8\" for that lump's own unflipped image), while sprite is the four-character prefix with an optional frame (one letter A-Z, then [, \\, ]; default \"A\") and rotation (0..=8; default 1). Both given, or neither, is invalid_argument. A sprite/frame/rotation request resolves the way an engine does: the lump named for that rotation wins, then a lump whose eight-character name carries this rotation as its mirror pair - published flipped horizontally, its left_offset mirrored to width - left_offset - then the frame's rotation-0 all-angles image, so PLAYA0 answers every rotation of frame A; rotation 0 is that all-angles image itself. Rotations are looked for in the sprite regions; a whole lump name falls back to the patches region and to loose lumps. palette (default 0), format (\"png\" default, \"rgba\" for raw row-major RGBA8 bytes) and scale (1..=8, default 1) work as in get_patch, and PNG assets carry the drawing offsets in a grAb chunk. An unknown sprite, frame or rotation is not_found (list_sprites groups what exists); a malformed selector is invalid_argument; a lump that is no picture is format_error. Returns {name, lump, mirrored, width, height, left_offset, top_offset, asset}: name is the rotation asked for (\"TROOA8\"), lump the name whose pixels served it and mirrored whether they were flipped."
+    )]
+    fn get_sprite(
+        &self,
+        Parameters(args): Parameters<GetSpriteParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let request = match sprite_request(&args) {
+            Ok(request) => request,
+            Err(error) => return fail(&error),
+        };
+        let options = match parse_options(&args.common) {
+            Ok(options) => options,
+            Err(error) => return fail(&error),
+        };
+        match get_sprite_run(self.state(), request, &options) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Decodes a Doom-format patch from a lump or a file and publishes it
+    /// as both a PNG and raw RGBA.
+    #[tool(
+        description = "Decodes one Doom-format patch - from a session lump or from an external file - and publishes it both ways, so the caller can pick an encoding; nothing is edited. Exactly one of name and source is required, both or neither is invalid_argument: name is a lump (1 to 8 printable ASCII characters, case-insensitive) resolved anywhere in the merged view, source an absolute path, file:// URI, http(s):// URL or this server's asset URL, fetched for its bytes. Only the Doom column/post encoding is read here, DeePsea tall patches included; PNG lumps and files are not (get_patch and list_patches read those), and bytes that are no Doom patch fail with format_error, as does a name no archive holds (not_found). palette picks the PLAYPAL entry that colours both pictures (default 0; not_found when the PLAYPAL lacks it). The result always carries both assets: png is a PNG named after the lump or file with the drawing offsets in a grAb chunk, rgba the same picture as raw row-major RGBA8 bytes (width*height*4 of them, application/octet-stream). Transparent pixels stay transparent. Returns {name, width, height, left_offset, top_offset, palette, png, rgba}; name is the lump name, or the fetched file's stem uppercased to a lump name when it allows one. Use it to read a patch file that is not in a WAD yet (add it later with add_lump or import_file_as_lump), or to check the bytes you wrote into a P_START lump."
+    )]
+    async fn decode_patch(
+        &self,
+        Parameters(args): Parameters<DecodePatchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match decode_patch_run(self.state(), &args).await {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -653,9 +1426,11 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Groups, Page, collect_sprite, in_namespace, is_patch_candidate, last_wins, list_flats_run,
-        list_patches_run, list_sprites_run, parse_page, parse_prefix, patch_row, pnames_of,
-        sprite_rows,
+        AssetFormat, GetSpriteParams, Groups, ImageParams, Page, Prepared, Rendered, SpriteRequest,
+        collect_sprite, display_name, grab_of, in_namespace, is_patch_candidate, last_wins,
+        list_flats_run, list_patches_run, list_sprites_run, parse_frame, parse_options, parse_page,
+        parse_prefix, parse_rotation, parse_sprite, patch_row, pnames_of, scale_offset,
+        sprite_request, sprite_rows,
     };
     use crate::error::CyberError;
     use crate::gfx::codec::encode_png;
@@ -1052,5 +1827,191 @@ mod tests {
             .expect("one frame");
         assert_eq!(frames.rotations.len(), 2, "direct and mirrored entries");
         assert!(frames.rotations[1].mirrored, "the second one is mirrored");
+    }
+
+    /// The shared picture options of a test call.
+    fn params(palette: Option<usize>, format: Option<&str>, scale: Option<u32>) -> ImageParams {
+        ImageParams {
+            palette,
+            format: format.map(str::to_owned),
+            scale,
+        }
+    }
+
+    #[test]
+    fn picture_options_default_and_reject_a_bad_format_or_scale() {
+        let plain = parse_options(&params(None, None, None)).expect("defaults are valid");
+        assert_eq!(
+            (plain.palette, plain.format, plain.scale),
+            (0_usize, AssetFormat::Png, 1_u32),
+            "the documented defaults"
+        );
+        let picked = parse_options(&params(Some(13), Some("rgba"), Some(8))).expect("in range");
+        assert_eq!(
+            (picked.palette, picked.format, picked.scale),
+            (13_usize, AssetFormat::Rgba, 8_u32),
+            "everything as asked"
+        );
+        let odd_format =
+            parse_options(&params(None, Some("jpg"), None)).expect_err("no such encoding");
+        assert_eq!(code(&odd_format), "invalid_argument", "bad format code");
+        for factor in [0_u32, 9_u32] {
+            let odd = parse_options(&params(None, None, Some(factor))).expect_err("out of range");
+            assert_eq!(code(&odd), "invalid_argument", "scale {factor} code");
+        }
+        assert_eq!(
+            (AssetFormat::Png.extension(), AssetFormat::Rgba.extension()),
+            (("png", "image/png"), ("rgba", "application/octet-stream")),
+            "the published extensions and media types"
+        );
+    }
+
+    #[test]
+    fn frames_rotations_and_prefixes_are_normalised_and_checked() {
+        assert_eq!(parse_frame(None).expect("the default"), 'A', "frame A");
+        for (text, want) in [("b", 'B'), ("[", '['), ("\\", '\\'), ("]", ']')] {
+            assert_eq!(
+                parse_frame(Some(text)).expect("a frame letter"),
+                want,
+                "{text:?} is a frame"
+            );
+        }
+        for bad in ["", "AB", "1", "-"] {
+            let error = parse_frame(Some(bad)).expect_err("not a frame letter");
+            assert_eq!(code(&error), "invalid_argument", "frame {bad:?} code");
+        }
+        assert_eq!(parse_rotation(None).expect("the default"), 1, "rotation 1");
+        for allowed in [0_u8, 4, 8] {
+            assert_eq!(
+                parse_rotation(Some(allowed)).expect("in range"),
+                allowed,
+                "rotation {allowed}"
+            );
+        }
+        let high = parse_rotation(Some(9)).expect_err("past eight");
+        assert_eq!(code(&high), "invalid_argument", "rotation 9 code");
+        assert_eq!(
+            parse_sprite("poss").expect("four letters"),
+            "POSS",
+            "the prefix is uppercased"
+        );
+        assert_eq!(
+            parse_prefix(Some("troo")).expect("four letters"),
+            Some("TROO".to_owned()),
+            "the listing shares the check"
+        );
+        for bad in ["", "POS", "PO!S", "TROO1"] {
+            let error = parse_sprite(bad).expect_err("not four letters or digits");
+            assert_eq!(code(&error), "invalid_argument", "prefix {bad:?} code");
+        }
+    }
+
+    /// The `get_sprite` arguments naming one lump, one sprite, or both.
+    fn sprite_params(name: Option<&str>, sprite: Option<&str>) -> GetSpriteParams {
+        GetSpriteParams {
+            name: name.map(str::to_owned),
+            sprite: sprite.map(str::to_owned),
+            frame: None,
+            rotation: None,
+            common: ImageParams::default(),
+        }
+    }
+
+    #[test]
+    fn a_sprite_call_names_one_lump_as_stored_or_one_rotation() {
+        let stored = sprite_request(&sprite_params(Some("trooa2a8"), None)).expect("a name");
+        assert!(
+            matches!(stored, SpriteRequest::Lump(text) if text == name("TROOA2A8")),
+            "the whole lump name is served as stored"
+        );
+        let parts = sprite_request(&sprite_params(None, Some("troo"))).expect("a sprite");
+        let SpriteRequest::Rotation {
+            name: wanted,
+            sprite,
+            frame,
+            rotation,
+        } = parts
+        else {
+            panic!("a sprite/frame/rotation request was asked for: {parts:?}");
+        };
+        assert_eq!(wanted, name("TROOA1"), "the defaults name the lump");
+        assert_eq!(sprite, "TROO", "uppercased prefix");
+        assert_eq!((frame, rotation), ('A', 1), "the documented defaults");
+        let both = sprite_request(&sprite_params(Some("TROOA1"), Some("TROO")))
+            .expect_err("two selectors");
+        assert_eq!(code(&both), "invalid_argument", "both selectors code");
+        let neither = sprite_request(&sprite_params(None, None)).expect_err("no selector");
+        assert_eq!(code(&neither), "invalid_argument", "no selector code");
+    }
+
+    /// A one-pixel render with optional drawing offsets.
+    fn rendered(offsets: Option<(i32, i32)>) -> Rendered {
+        let image = RgbaImage::new(1, 1, vec![0_u8; 4]).expect("1x1 is a valid shape");
+        match offsets {
+            Some((left, top)) => Rendered {
+                image,
+                left_offset: Some(left),
+                top_offset: Some(top),
+            },
+            None => Rendered {
+                image,
+                left_offset: None,
+                top_offset: None,
+            },
+        }
+    }
+
+    #[test]
+    fn offsets_scale_with_the_picture_and_only_a_grab_writes_grab() {
+        assert_eq!(scale_offset(-2, 4), -8_i32, "the published offset");
+        assert_eq!(scale_offset(8, 1), 8_i32, "an unscaled offset");
+        assert_eq!(
+            grab_of(&rendered(None)),
+            None,
+            "a flat carries no grAb chunk"
+        );
+        assert_eq!(
+            grab_of(&rendered(Some((3_i32, -4_i32)))),
+            Some((3_i32, -4_i32)),
+            "both offsets or neither"
+        );
+    }
+
+    #[test]
+    fn a_prepared_picture_reports_the_sprite_extras_only_for_a_sprite() {
+        let flat = Prepared::plain(name("FLOOR1"), rendered(None));
+        assert!(
+            flat.lump.is_none() && flat.mirrored.is_none(),
+            "a flat answers with its own name"
+        );
+        let sprite = Prepared::served(name("TROOA8"), name("TROOA2A8"), true, rendered(None));
+        assert_eq!(
+            sprite.name,
+            name("TROOA8"),
+            "the rotation that was asked for"
+        );
+        assert_eq!(
+            sprite.lump,
+            Some(name("TROOA2A8")),
+            "the lump that served it"
+        );
+        assert_eq!(sprite.mirrored, Some(true), "and the flip it needed");
+    }
+
+    #[test]
+    fn a_fetched_file_is_named_from_its_stem() {
+        assert_eq!(display_name("WALLP1.png"), "WALLP1", "a lump-name stem");
+        assert_eq!(
+            display_name("my-drawing.png"),
+            "MYDRAWIN",
+            "filtered and trimmed to eight characters"
+        );
+        assert_eq!(display_name("notes"), "NOTES", "no extension to strip");
+        assert_eq!(
+            display_name("?!"),
+            "?!".to_owned(),
+            "no lump name in it: the filename"
+        );
+        assert_eq!(display_name(""), "PATCH", "a source naming no file at all");
     }
 }

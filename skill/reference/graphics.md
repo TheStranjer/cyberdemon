@@ -1,11 +1,14 @@
 # Graphics tools
 
-Browsing the session's graphic lumps: `list_flats`, `list_patches` and
-`list_sprites`. All three read the **merged view** — the same directory an
-engine sees — and report measurements only: names, sizes, dimensions,
-drawing offsets and grouping. They never decode pixels and never edit;
-use the lump tools (`reference/lumps.md`) for content and
-`reference/textures.md` for the `PNAMES`/`TEXTURE1` definitions.
+Browsing the session's graphic lumps: the listings `list_flats`,
+`list_patches` and `list_sprites`, and the image tools `get_flat`,
+`get_patch`, `get_sprite` and `decode_patch`. All of them read the
+**merged view** — the same directory an engine sees. The listings report
+measurements only: names, sizes, dimensions, drawing offsets and grouping.
+The image tools decode pixels and publish them as files on the asset
+origin (see `reference/assets.md`), never inline. Use the lump tools
+(`reference/lumps.md`) for raw content and `reference/textures.md` for the
+`PNAMES`/`TEXTURE1` definitions.
 
 ## Flats, patches and sprites
 
@@ -141,3 +144,154 @@ in real WADs.
   `{"total": 0, "sprites": [], "invalid": []}` — not an error.
 - Errors: `invalid_argument` for a malformed `prefix` or a `limit`
   outside 1..2000.
+
+## Pictures as assets
+
+`get_flat`, `get_patch`, `get_sprite` and `decode_patch` decode pixels.
+Nothing is inlined and nothing is edited: each publishes a file on the
+asset origin and returns its `AssetRef`, so you fetch the `url` with any
+HTTP client. Three arguments shape every picture result:
+
+- `palette` (number, default 0): which `PLAYPAL` entry colours the
+  picture. An index the `PLAYPAL` does not hold is `not_found`, as is a
+  session with no `PLAYPAL` at all (`open_iwad` first).
+- `format` (string, default `"png"`): `"png"` publishes `NAME.png`
+  (`image/png`), with the drawing offsets kept in a `grAb` chunk when the
+  picture has any; `"rgba"` publishes `NAME.rgba`
+  (`application/octet-stream`) as raw row-major `RGBA8` bytes, exactly
+  `width*height*4` of them.
+- `scale` (number, default 1, `1..=8`): whole-pixel nearest-neighbour
+  upscale applied before publishing. It multiplies the reported
+  dimensions *and* the reported drawing offsets, so the numbers always
+  describe the published file.
+
+Both stored encodings read: the vanilla `Doom` formats, and the `PNG` form
+ports carry (high-resolution flats, HUD art, ZDoom sprite lumps). A `PNG`
+is quantized to `PLAYPAL` entry **0** — pixels with alpha below 128 become
+transparent holes — and is then coloured with the `palette` you asked for,
+so `scale` and `palette` are how you inspect a picture without touching
+the archive. Transparent pixels are published as holes, not as index 0.
+Name resolution follows the engine: within the region the **last** lump of
+a name wins.
+
+## `get_flat`
+
+- Purpose: publishes one flat (wall/floor/ceiling) texture.
+- Arguments:
+  - `name` (string, required): the flat's lump name, case-insensitive.
+    The last flats-region lump of that name wins; failing that, any other
+    lump of that name.
+  - `palette` / `format` / `scale`: as described above.
+- Returns:
+
+  ```json
+  {
+    "name": "FLOOR1", "width": 64, "height": 64,
+    "asset": {"url": "http://localhost:PORT/assets/ID/FLOOR1.png",
+              "filename": "FLOOR1.png", "mime": "image/png", "size": 194}
+  }
+  ```
+
+  Flats store no drawing offsets, so the result carries none.
+- Errors: `not_found` for a name no archive holds (`list_flats` shows the
+  names) or an out-of-range `palette`; `format_error` for bytes that are
+  neither a supported raw size nor a readable `PNG`; `invalid_argument`
+  for a bad `format`, `scale` or name.
+
+## `get_patch`
+
+- Purpose: publishes one patch lump — a texture component, HUD graphic or
+  port graphic.
+- Arguments:
+  - `name` (string, required): the patch's lump name, case-insensitive.
+    The last patches-region lump wins; failing that, the last loose lump
+    of that name from outside the flats and sprites regions (`PNAMES` can
+    name a patch anywhere).
+  - `palette` / `format` / `scale`: as described above.
+- Returns:
+
+  ```json
+  {
+    "name": "WALLP1", "width": 16, "height": 16,
+    "left_offset": -2, "top_offset": -14,
+    "asset": {"url": "...", "filename": "WALLP1.png", "mime": "image/png",
+              "size": 371}
+  }
+  ```
+
+  `left_offset` and `top_offset` say where the image's top-left corner
+  sits relative to the drawing point, in published pixels; a `PNG` asset
+  carries the same pair in a `grAb` chunk.
+- Errors: as `get_flat`, with `not_found` naming `list_patches`. Read the
+  raw bytes with `get_lump` or `extract_lump`.
+
+## `get_sprite`
+
+- Purpose: publishes one sprite rotation.
+- Arguments — exactly one of `name` and `sprite`:
+  - `name` (string, optional): a whole sprite lump name, served **as
+    stored**: `"TROOA1"`, or `"TROOA2A8"` for that lump's own unflipped
+    image.
+  - `sprite` (string, optional): the four-character prefix, e.g. `"TROO"`.
+  - `frame` (string, optional, default `"A"`): one frame letter.
+  - `rotation` (number, optional, default 1): `0`-`8`.
+  - `palette` / `format` / `scale`: as described above.
+- Returns:
+
+  ```json
+  {
+    "name": "TROOA8", "lump": "TROOA2A8", "mirrored": true,
+    "width": 8, "height": 8, "left_offset": 8, "top_offset": 0,
+    "asset": {"url": "...", "filename": "TROOA8.png", "mime": "image/png",
+              "size": 402}
+  }
+  ```
+
+  A `sprite`/`frame`/`rotation` request resolves the way an engine does:
+  the lump named for that rotation wins, then a lump whose eight-character
+  name carries this rotation as its **mirror pair** — published flipped
+  horizontally, with `left_offset` mirrored to `width - left_offset` —
+  then the frame's rotation-`0` all-angles image, so `PLAYA0` answers
+  every rotation of frame `A`. `name` is the rotation you asked for,
+  `lump` the name whose pixels served it, and `mirrored` says whether they
+  were flipped. Rotations are looked for in the sprite regions; a whole
+  `name` also falls back to the patches region and to loose lumps.
+- Errors: `invalid_argument` for both selectors or neither, a malformed
+  `sprite`, `frame` or `rotation`; `not_found` for a sprite nothing serves
+  (`list_sprites` groups what exists); `format_error` for a lump that is no
+  picture.
+
+## `decode_patch`
+
+- Purpose: decodes one **`Doom`-format** patch — from a session lump or
+  from an external file — and publishes it *both* ways, so you pick the
+  encoding afterwards. Use it to read a patch file that is not in a WAD
+  yet, or to check the bytes you wrote into a `P_START` lump.
+- Arguments — exactly one of `name` and `source`:
+  - `name` (string, optional): a lump, resolved anywhere in the merged
+    view.
+  - `source` (string, optional): absolute path, `file://` URI,
+    `http(s)://` URL or this server's asset URL (see
+    `reference/assets.md`).
+  - `palette` (number, optional, default 0): colours both published
+    pictures.
+- Returns:
+
+  ```json
+  {
+    "name": "STEPP1", "width": 16, "height": 8,
+    "left_offset": 0, "top_offset": 0, "palette": 0,
+    "png": {"url": "...", "filename": "STEPP1.png", "mime": "image/png",
+            "size": 118},
+    "rgba": {"url": "...", "filename": "STEPP1.rgba",
+             "mime": "application/octet-stream", "size": 512}
+  }
+  ```
+
+  `name` is the lump name, or the fetched file's stem uppercased to a lump
+  name when it allows one. There is no `format` or `scale`: the tool
+  always answers with both encodings at the stored size.
+- Errors: `invalid_argument` for both `name` and `source` or neither;
+  `not_found` for a missing lump or file; `format_error` for bytes that
+  are no `Doom` patch — `PNG` lumps and files are not read here, use
+  `get_patch` for those.

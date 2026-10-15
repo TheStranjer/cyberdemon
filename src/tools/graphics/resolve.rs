@@ -1,0 +1,852 @@
+//! The shared graphic-resource resolvers: a lump name in, decoded pixels
+//! out.
+//!
+//! [`load_flat`], [`load_patch`], [`load_sprite`] and [`load_sprite_lump`]
+//! implement how an engine finds one picture in the merged view - the
+//! flats region first for a flat, the patches region then any loose lump
+//! for a patch (a `PNAMES` component may sit anywhere), the sprite regions
+//! plus the name grammar for a sprite rotation - and decode what they
+//! find: raw `Doom` flats and column/post patches, or the `PNG` form ports
+//! also carry, quantized against `PLAYPAL` entry 0 with alpha transparency
+//! and with the drawing offsets taken from a `grAb` chunk. [`lump_bytes`]
+//! is the same name lookup for a tool that reads a lump of any kind. The
+//! image tools of [`crate::tools::graphics`] publish through these; the
+//! renderer and the texture compositor read pictures through them too, so
+//! name resolution is written once.
+
+use crate::error::CyberError;
+use crate::gfx::codec::{decode_image, is_png};
+use crate::gfx::flat::decode_flat;
+use crate::gfx::grab::{GrabOffsets, read_grab};
+use crate::gfx::image::{IndexedImage, flip_horizontal};
+use crate::gfx::palette::Palette;
+use crate::gfx::patch::{Patch, decode_patch};
+use crate::gfx::quantize::{QuantizeOptions, quantize};
+use crate::gfx::sprite_name::parse_sprite_name;
+use crate::session::{Scope, Session};
+use crate::tools::lumps::rows::{LumpRow, build_rows};
+use crate::tools::palette::load_palette;
+use crate::wad::classify::{LumpKind, Namespace};
+use crate::wad::name::LumpName;
+
+/// The `PLAYPAL` entry `PNG` graphics are quantized to: ports store such
+/// a picture's colours in the normal palette, and a call's own `palette`
+/// only recolours the resulting indices.
+const PNG_PALETTE: usize = 0_usize;
+/// The drawing offsets of a `PNG` picture without a `grAb` chunk.
+const NO_OFFSETS: GrabOffsets = (0_i32, 0_i32);
+/// The sprite rotation every frame's single all-angles image serves.
+const ALL_ANGLES: u8 = 0_u8;
+/// Where [`load_patch`] looks: the patches region first, then any loose
+/// lump outside the flats and sprites regions.
+const PATCH_PLACES: [Place; 2] = [Place::In(Namespace::Patches), Place::Loose];
+/// Where [`load_flat`] looks: the flats region first, then anywhere.
+const FLAT_PLACES: [Place; 2] = [Place::In(Namespace::Flats), Place::Anywhere];
+
+/// Where a name lookup may find its lump in the merged view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Place {
+    /// Inside one namespace region.
+    In(Namespace),
+    /// Outside the flats and sprites regions: the loose lumps `PNAMES` can
+    /// name.
+    Loose,
+    /// Any data lump.
+    Anywhere,
+}
+
+impl Place {
+    /// Whether [`build_rows`]' row is a lump this rule lets a lookup
+    /// reach; region markers carry no pixels and never match.
+    fn allows(self, row: &LumpRow) -> bool {
+        if row.kind == LumpKind::Marker {
+            return false;
+        }
+        match self {
+            Self::In(wanted) => row.namespace == Some(wanted),
+            Self::Loose => !matches!(row.namespace, Some(Namespace::Flats | Namespace::Sprites)),
+            Self::Anywhere => true,
+        }
+    }
+}
+
+/// How a found sprite lump serves the rotation that was asked for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Serving {
+    /// The stored image is the answer.
+    Direct,
+    /// The stored image serves it horizontally flipped.
+    Mirrored,
+}
+
+/// One sprite rotation a resolver looks for, with the two lump names it
+/// can be answered by.
+#[derive(Debug)]
+struct Request {
+    /// Uppercased four-character sprite prefix (`TROO`).
+    sprite: String,
+    /// Uppercased frame letter.
+    frame: char,
+    /// Rotation number `0`-`8`.
+    rotation: u8,
+    /// The name this rotation's own image carries (`TROOA8`).
+    exact: LumpName,
+    /// The frame's all-angles name (`TROOA0`).
+    angles: LumpName,
+}
+
+impl Request {
+    /// Builds the request for one sprite rotation, uppercasing the prefix
+    /// and frame.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] when a frame or prefix character
+    /// cannot appear in a lump name.
+    fn new(sprite: &str, frame: char, rotation: u8) -> Result<Self, CyberError> {
+        let prefix = sprite.to_ascii_uppercase();
+        let letter = frame.to_ascii_uppercase();
+        Ok(Self {
+            exact: LumpName::parse(&format!("{prefix}{letter}{rotation}"))?,
+            angles: LumpName::parse(&format!("{prefix}{letter}{ALL_ANGLES}"))?,
+            sprite: prefix,
+            frame: letter,
+            rotation,
+        })
+    }
+
+    /// The `not_found` for a rotation no sprite region serves.
+    fn missing(&self) -> CyberError {
+        CyberError::NotFound(format!(
+            "no {} frame {} rotation {} sprite in the merged view; list_sprites with prefix \
+             \"{}\" lists what the session has",
+            self.sprite, self.frame, self.rotation, self.sprite
+        ))
+    }
+}
+
+/// Where [`load_sprite_lump`] looks: the sprite regions first, then the
+/// patches region and any loose lump, because a whole name is not bound to
+/// one region.
+const SPRITE_PLACES: [Place; 3] = [
+    Place::In(Namespace::Sprites),
+    Place::In(Namespace::Patches),
+    Place::Loose,
+];
+
+/// The merged directory's rows: every lump of the view an engine reads,
+/// in directory order.
+///
+/// # Errors
+///
+/// [`build_rows`]' errors for the merged scope.
+fn merged_rows(session: &Session) -> Result<Vec<LumpRow>, CyberError> {
+    build_rows(session, Scope::Merged)
+}
+
+/// The winning row for `name`: the last row of that name the first of
+/// `places` with a match allows, which is what an engine's lookup of a
+/// name reaches for.
+fn locate(rows: &[LumpRow], name: LumpName, places: &[Place]) -> Option<LumpRow> {
+    places
+        .iter()
+        .find_map(|place| {
+            rows.iter()
+                .rev()
+                .find(|row| row.name == name && place.allows(row))
+        })
+        .cloned()
+}
+
+/// The `not_found` for a missing picture: names what was looked for and
+/// the listing tool that knows what the session holds.
+fn not_found(kind: &str, lister: &str, name: LumpName) -> CyberError {
+    CyberError::NotFound(format!(
+        "no {kind} named {name} in the merged view; {lister} lists what is there"
+    ))
+}
+
+/// The indexed pixels of the flat `name`: the last flats-region lump of
+/// that name, else the last lump of that name anywhere, decoded as a raw
+/// `PLAYPAL` plane or, for `PNG` bytes, quantized against palette 0 with
+/// alpha transparency.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] when no loaded archive holds `name`;
+/// [`CyberError::Format`] when the bytes are neither a raw flat of a
+/// supported size nor a readable `PNG`; [`load_palette`]' errors when a
+/// `PNG` flat has no `PLAYPAL` to quantize against.
+pub(in crate::tools) fn load_flat(
+    session: &Session,
+    name: LumpName,
+) -> Result<IndexedImage, CyberError> {
+    let row = locate(&merged_rows(session)?, name, &FLAT_PLACES)
+        .ok_or_else(|| not_found("flat", "list_flats", name))?;
+    decode_flat_bytes(session, &row.lump.data)
+}
+
+/// The patch `name`: the last patches-region lump, else the last loose one
+/// outside the flats and sprites regions, as a `Doom` patch or a quantized
+/// `PNG` with its `grAb` offsets.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] when no loaded archive holds `name`;
+/// [`decode_patch_bytes`]' [`CyberError::Format`] for bytes that are
+/// neither format; [`load_palette`]' errors for a `PNG` without a
+/// `PLAYPAL`.
+pub(in crate::tools) fn load_patch(session: &Session, name: LumpName) -> Result<Patch, CyberError> {
+    let row = locate(&merged_rows(session)?, name, &PATCH_PLACES)
+        .ok_or_else(|| not_found("patch", "list_patches", name))?;
+    decode_patch_bytes(session, &row.lump.data)
+}
+
+/// The sprite image for one rotation: `sprite` is the four-character
+/// prefix, `frame` its letter and `rotation` a number `0`-`8`. The exact
+/// lump wins; failing that a lump whose eight-character name carries this
+/// rotation as its mirror pair (flipped here, with `left' = width - left`);
+/// failing that the frame's rotation-`0` image.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when a prefix or frame character cannot
+/// appear in a lump name; [`Request::missing`]' [`CyberError::NotFound`]
+/// when the sprite regions serve nothing for the rotation;
+/// [`decode_patch_bytes`]' errors for a lump that is not a picture.
+pub(in crate::tools) fn load_sprite(
+    session: &Session,
+    sprite: &str,
+    frame: char,
+    rotation: u8,
+) -> Result<Sprite, CyberError> {
+    let wanted = Request::new(sprite, frame, rotation)?;
+    let rows = sprite_rows(session)?;
+    let (row, serving) = find_rotation(&rows, &wanted).ok_or_else(|| wanted.missing())?;
+    let stored = decode_patch_bytes(session, &row.lump.data)?;
+    Ok(Sprite::of(row.name, stored, serving))
+}
+
+/// The patch stored in the lump `name`, served exactly as stored: no
+/// rotation rules and no flipping, so `TROOA2A8` answers with its own
+/// image. A whole sprite name is looked for in the sprite regions first,
+/// then wherever else a patch may live.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] when no loaded archive holds `name`;
+/// [`decode_patch_bytes`]' errors for bytes that are neither a `Doom`
+/// patch nor a readable `PNG`.
+pub(in crate::tools) fn load_sprite_lump(
+    session: &Session,
+    name: LumpName,
+) -> Result<Patch, CyberError> {
+    let row = locate(&merged_rows(session)?, name, &SPRITE_PLACES)
+        .ok_or_else(|| not_found("sprite", "list_sprites", name))?;
+    decode_patch_bytes(session, &row.lump.data)
+}
+
+/// One resolved sprite image.
+#[derive(Debug)]
+pub(in crate::tools) struct Sprite {
+    /// The lump the pixels came from.
+    pub(in crate::tools) lump: LumpName,
+    /// Its image and drawing offsets, already flipped for a mirrored
+    /// rotation.
+    pub(in crate::tools) patch: Patch,
+    /// Whether the stored image was flipped horizontally to serve the
+    /// requested rotation.
+    pub(in crate::tools) mirrored: bool,
+}
+
+impl Sprite {
+    /// The answer from the lump that was found and how it served.
+    fn of(lump: LumpName, patch: Patch, serving: Serving) -> Self {
+        let mirrored = serving == Serving::Mirrored;
+        Self {
+            lump,
+            patch: match serving {
+                Serving::Direct => patch,
+                Serving::Mirrored => mirror_patch(&patch),
+            },
+            mirrored,
+        }
+    }
+}
+
+/// The data lumps of the sprite regions, in directory order.
+///
+/// # Errors
+///
+/// [`merged_rows`]' errors.
+fn sprite_rows(session: &Session) -> Result<Vec<LumpRow>, CyberError> {
+    Ok(merged_rows(session)?
+        .into_iter()
+        .filter(|row| row.kind != LumpKind::Marker && row.namespace == Some(Namespace::Sprites))
+        .collect())
+}
+
+/// The last row that serves the request, with how it serves it.
+fn find_rotation<'rows>(
+    rows: &'rows [LumpRow],
+    wanted: &Request,
+) -> Option<(&'rows LumpRow, Serving)> {
+    exact_row(rows, wanted)
+        .or_else(|| mirror_row(rows, wanted))
+        .or_else(|| angles_row(rows, wanted))
+}
+
+/// The lump named for this very rotation.
+fn exact_row<'rows>(rows: &'rows [LumpRow], wanted: &Request) -> Option<(&'rows LumpRow, Serving)> {
+    rows.iter()
+        .rev()
+        .find(|row| row.name == wanted.exact)
+        .map(|row| (row, Serving::Direct))
+}
+
+/// The last lump whose name carries this rotation as its mirror pair.
+fn mirror_row<'rows>(
+    rows: &'rows [LumpRow],
+    wanted: &Request,
+) -> Option<(&'rows LumpRow, Serving)> {
+    rows.iter()
+        .rev()
+        .find(|row| serves_mirror(row, wanted))
+        .map(|row| (row, Serving::Mirrored))
+}
+
+/// The frame's all-angles lump, for a rotation nothing else serves.
+fn angles_row<'rows>(
+    rows: &'rows [LumpRow],
+    wanted: &Request,
+) -> Option<(&'rows LumpRow, Serving)> {
+    if wanted.rotation == ALL_ANGLES {
+        return None;
+    }
+    rows.iter()
+        .rev()
+        .find(|row| row.name == wanted.angles)
+        .map(|row| (row, Serving::Direct))
+}
+
+/// Whether `row`'s name carries the request's frame and rotation as its
+/// second, mirrored, pair.
+fn serves_mirror(row: &LumpRow, wanted: &Request) -> bool {
+    parse_sprite_name(&row.name.to_string()).is_some_and(|parsed| {
+        parsed.sprite == wanted.sprite && parsed.mirror == Some((wanted.frame, wanted.rotation))
+    })
+}
+
+/// The same patch flipped horizontally, the way an engine draws a mirrored
+/// sprite rotation: `left' = width - left`, the top offset unchanged.
+fn mirror_patch(patch: &Patch) -> Patch {
+    let width = i32::try_from(patch.image.width).unwrap_or_else(|_| i32::from(i16::MAX));
+    let left = i32::from(patch.left_offset);
+    Patch {
+        left_offset: width
+            .checked_sub(left)
+            .map_or_else(|| clamp_offset(left), clamp_offset),
+        top_offset: patch.top_offset,
+        image: flip_horizontal(&patch.image),
+    }
+}
+
+/// Saturates an offset into the `i16` range a patch header stores.
+fn clamp_offset(value: i32) -> i16 {
+    i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
+}
+
+/// A flat lump's pixels: the raw indexed plane, or a `PNG` flat quantized
+/// against palette 0.
+///
+/// # Errors
+///
+/// [`decode_flat`]' [`CyberError::Format`] for a raw lump of an
+/// unsupported size; [`quantize_png`]' errors for a `PNG`.
+fn decode_flat_bytes(session: &Session, data: &[u8]) -> Result<IndexedImage, CyberError> {
+    if is_png(data) {
+        return quantize_png(session, data);
+    }
+    decode_flat(data)
+}
+
+/// A patch or sprite lump's pixels and drawing offsets: the `Doom`
+/// column/post format, or a `PNG` quantized against palette 0 with its
+/// offsets from a `grAb` chunk (defaulting to `(0, 0)`).
+///
+/// # Errors
+///
+/// [`decode_patch`]' [`CyberError::Format`] for `Doom` bytes that are
+/// corrupt; [`quantize_png`]' errors for a `PNG`; [`read_grab`]'
+/// [`CyberError::Format`] for a chunk stream that does not parse.
+fn decode_patch_bytes(session: &Session, data: &[u8]) -> Result<Patch, CyberError> {
+    if !is_png(data) {
+        return decode_patch(data);
+    }
+    let image = quantize_png(session, data)?;
+    let (left, top) = read_grab(data)?.unwrap_or(NO_OFFSETS);
+    Ok(Patch {
+        left_offset: clamp_offset(left),
+        top_offset: clamp_offset(top),
+        image,
+    })
+}
+
+/// A `PNG` image as indexed pixels against the session's palette 0:
+/// `Doom` lumps store indices, and pixels below the alpha threshold stay
+/// transparent.
+///
+/// # Errors
+///
+/// [`decode_image`]' errors for bytes that are not a readable image;
+/// [`load_palette`]' [`CyberError::NotFound`] for a session without a
+/// `PLAYPAL`.
+fn quantize_png(session: &Session, data: &[u8]) -> Result<IndexedImage, CyberError> {
+    let rgba = decode_image(data)?;
+    Ok(quantize(
+        &rgba,
+        &reference_palette(session)?,
+        &QuantizeOptions::default(),
+    ))
+}
+
+/// The palette `PNG` graphics are quantized against: `PLAYPAL` entry 0.
+///
+/// # Errors
+///
+/// [`load_palette`]' [`CyberError::NotFound`] for a session without a
+/// `PLAYPAL`.
+fn reference_palette(session: &Session) -> Result<Palette, CyberError> {
+    load_palette(session, PNG_PALETTE)
+}
+
+/// The winning lump's payload bytes anywhere in the merged view: what a
+/// tool that reads one named lump, whatever it holds, starts from.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] when no loaded archive holds `name`.
+pub(in crate::tools) fn lump_bytes(
+    session: &Session,
+    name: LumpName,
+) -> Result<Vec<u8>, CyberError> {
+    locate(&merged_rows(session)?, name, &[Place::Anywhere])
+        .map(|row| row.lump.data.to_vec())
+        .ok_or_else(|| not_found("lump", "list_lumps", name))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        Place, Request, Serving, clamp_offset, decode_patch_bytes, find_rotation, load_flat,
+        load_patch, load_sprite, load_sprite_lump, locate, lump_bytes, merged_rows, mirror_patch,
+        not_found, sprite_rows,
+    };
+    use crate::error::CyberError;
+    use crate::gfx::codec::encode_png;
+    use crate::gfx::image::{IndexedImage, RgbaImage};
+    use crate::gfx::patch::{Patch, encode_patch};
+    use crate::session::{Layer, LayerRole, Session};
+    use crate::tools::lumps::rows::LumpRow;
+    use crate::wad::archive::{Lump, Wad, WadKind};
+    use crate::wad::classify::Namespace;
+    use crate::wad::name::LumpName;
+
+    /// A parsed fixture name.
+    fn name(text: &str) -> LumpName {
+        LumpName::parse(text).expect("test names are valid")
+    }
+
+    /// A lump named `text` carrying `data`.
+    fn lump(text: &str, data: Vec<u8>) -> Lump {
+        Lump::new(name(text), data)
+    }
+
+    /// The error code of a [`CyberError`], for compact asserts.
+    fn code(error: &CyberError) -> &str {
+        error.code()
+    }
+
+    /// One opaque `RGBA` pixel of `color`.
+    fn pixel(color: [u8; 3]) -> [u8; 4] {
+        let [red, green, blue] = color;
+        [red, green, blue, 255_u8]
+    }
+
+    /// A `width`x`height` `PNG` of one colour with optional `grAb` offsets.
+    fn png(width: u32, height: u32, color: [u8; 3], offsets: Option<(i32, i32)>) -> Vec<u8> {
+        flat_png(width, height, pixel(color), offsets)
+    }
+
+    /// A `width`x`height` `PNG` repeating one pixel, with optional `grAb`.
+    fn flat_png(width: u32, height: u32, one: [u8; 4], offsets: Option<(i32, i32)>) -> Vec<u8> {
+        let count = usize::try_from(width)
+            .expect("test width")
+            .checked_mul(usize::try_from(height).expect("test height"))
+            .expect("test pixels fit");
+        let mut pixels = Vec::with_capacity(count.saturating_mul(4));
+        for _pixel in 0..count {
+            pixels.extend_from_slice(&one);
+        }
+        let img = RgbaImage::new(width, height, pixels).expect("test shape is valid");
+        encode_png(&img, offsets).expect("test PNGs encode")
+    }
+
+    /// One `PLAYPAL` entry: colour `i` is `(i, 255 - i, i)`, 14 copies.
+    fn playpal() -> Vec<u8> {
+        let mut entry = Vec::new();
+        for index in 0_u8..=255 {
+            entry.extend_from_slice(&[index, 255_u8.wrapping_sub(index), index]);
+        }
+        let mut palettes = Vec::new();
+        for _palette in 0_u8..14 {
+            palettes.extend_from_slice(&entry);
+        }
+        palettes
+    }
+
+    /// A `Doom` patch of a shape and offsets, every pixel `fill`.
+    fn doom_patch(width: u32, height: u32, offsets: (i16, i16), fill: u8) -> Vec<u8> {
+        let columns = usize::try_from(width).expect("test width");
+        let total = columns
+            .checked_mul(usize::try_from(height).expect("test height"))
+            .expect("test pixels fit");
+        let image = IndexedImage::new(width, height, vec![fill; total], vec![true; total])
+            .expect("test shapes are valid");
+        encode_patch(&Patch {
+            left_offset: offsets.0,
+            top_offset: offsets.1,
+            image,
+        })
+        .expect("test patches encode")
+    }
+
+    /// A `Doom` patch `width` by 2 whose only opaque column is `column`.
+    fn stripe(width: u32, column: u32, offsets: (i16, i16)) -> Vec<u8> {
+        let columns = usize::try_from(width).expect("test width");
+        let total = columns.checked_mul(2).expect("test pixels fit");
+        let mut indices = vec![0_u8; total];
+        let mut opaque = vec![false; total];
+        for row in 0_usize..2 {
+            let slot = row
+                .checked_mul(columns)
+                .and_then(|start| start.checked_add(usize::try_from(column).expect("test column")))
+                .expect("test index fits");
+            indices[slot] = 5_u8;
+            opaque[slot] = true;
+        }
+        let image = IndexedImage::new(width, 2, indices, opaque).expect("test shape is valid");
+        encode_patch(&Patch {
+            left_offset: offsets.0,
+            top_offset: offsets.1,
+            image,
+        })
+        .expect("test patches encode")
+    }
+
+    /// Appends `extra` to the fixture session as one working-archive edit.
+    fn with_extra(extra: Vec<Lump>) -> Session {
+        let mut built = session();
+        built
+            .edit("add extras", |wad| {
+                wad.lumps.extend(extra);
+                Ok(())
+            })
+            .expect("plain append");
+        built
+    }
+
+    /// The fixture session: a loose flat, two `FLOOR1` copies, a `PNG`
+    /// flat, a region patch and a loose `PNG` patch, sprite-region lumps
+    /// covering the direct, mirrored and all-angles grammar, and one lump
+    /// that is no picture at all.
+    fn session() -> Session {
+        let mut built = Session::default();
+        built.set_iwad(Layer::new(
+            PathBuf::from("gfx.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    lump("PLAYPAL", playpal()),
+                    lump("LOOSE1", vec![9_u8; 4_096]),
+                    lump("FLOOR1", vec![1_u8; 4_096]),
+                    lump("PNGFLAT", png(2, 2, [64, 191, 64], None)),
+                    lump("FLOOR1", vec![2_u8; 4_096]),
+                    lump("WALLP1", doom_patch(4, 4, (-2, -14), 0x11)),
+                    lump(
+                        "PNGPAT",
+                        png(3, 2, [0x11, 0x22, 0x33], Some((3_i32, -4_i32))),
+                    ),
+                    Lump::marker(name("S_START")),
+                    lump("TROOA1", doom_patch(8, 8, (4, 0), 0x33)),
+                    lump("TROOA2A8", stripe(4, 0, (1, 2))),
+                    lump("PLAYA0", doom_patch(16, 16, (0, 0), 0x44)),
+                    Lump::marker(name("S_END")),
+                    lump("JUNK", vec![b'x'; 40]),
+                ],
+            },
+        ));
+        built
+    }
+
+    /// The first index of a decoded image, for "which bytes won" checks.
+    fn first_index(image: &IndexedImage) -> u8 {
+        *image.indices.first().expect("a decoded image holds pixels")
+    }
+
+    #[test]
+    fn flats_resolve_the_region_copy_first_and_the_last_of_a_name() {
+        let session = session();
+        assert_eq!(
+            first_index(&load_flat(&session, name("FLOOR1")).expect("FLOOR1 is a flat")),
+            2,
+            "the last FLOOR1 wins"
+        );
+        assert_eq!(
+            load_flat(&session, name("LOOSE1"))
+                .expect("a loose flat is the second chance")
+                .width,
+            64,
+            "4096 bytes is 64x64"
+        );
+        let missing = load_flat(&session, name("NOPE")).expect_err("no such flat");
+        assert_eq!(code(&missing), "not_found", "missing flat code");
+        assert!(
+            missing.to_string().contains("list_flats"),
+            "the message names the listing: {missing}"
+        );
+    }
+
+    #[test]
+    fn a_png_flat_is_quantized_to_palette_zero() {
+        let session = session();
+        let flat = load_flat(&session, name("PNGFLAT")).expect("the PNG flat decodes");
+        assert_eq!((flat.width, flat.height), (2, 2), "the PNG shape");
+        assert_eq!(first_index(&flat), 64, "(64,191,64) is colour 64");
+        assert!(
+            flat.opaque.iter().all(|visible| *visible),
+            "opaque pixels stay opaque"
+        );
+    }
+
+    #[test]
+    fn a_png_pixel_below_the_alpha_threshold_stays_a_hole() {
+        let hole = flat_png(1, 1, [0_u8, 0, 0, 0], None);
+        let session = with_extra(vec![lump("HOLE", hole)]);
+        let image = load_flat(&session, name("HOLE")).expect("the PNG flat decodes");
+        assert_eq!(
+            image.get(0, 0).map(|(_, visible)| visible),
+            Some(false),
+            "alpha 0 is a hole"
+        );
+    }
+
+    #[test]
+    fn patches_prefer_the_region_and_reject_unreadable_bytes() {
+        let session = session();
+        let wall = load_patch(&session, name("WALLP1")).expect("the region patch");
+        assert_eq!(
+            (wall.left_offset, wall.top_offset),
+            (-2, -14),
+            "header offsets survive"
+        );
+        assert_eq!(wall.image.width, 4, "the stored shape");
+        let junk = load_patch(&session, name("JUNK")).expect_err("40 x's are no patch");
+        assert_eq!(code(&junk), "format_error", "undecodable patch code");
+        let missing = load_patch(&session, name("NOPE")).expect_err("no such patch");
+        assert!(
+            missing.to_string().contains("list_patches"),
+            "the message names the listing: {missing}"
+        );
+    }
+
+    #[test]
+    fn loose_png_patches_quantize_and_carry_their_grab_offsets() {
+        let session = session();
+        let loose = load_patch(&session, name("PNGPAT")).expect("the loose PNG");
+        assert_eq!((loose.left_offset, loose.top_offset), (3, -4), "from grAb");
+        assert_eq!(
+            (loose.image.width, loose.image.height),
+            (3, 2),
+            "the PNG shape"
+        );
+        let no_grab = png(2, 1, [0x10, 0x20, 0x30], None);
+        let grown = with_extra(vec![lump("NOGRAB", no_grab)]);
+        assert_eq!(
+            load_patch(&grown, name("NOGRAB"))
+                .expect("the PNG decodes")
+                .left_offset,
+            0,
+            "no grAb is offset 0"
+        );
+    }
+
+    /// The sprite rows of the fixture session.
+    fn rows(session: &Session) -> Vec<LumpRow> {
+        sprite_rows(session).expect("the fixture lists")
+    }
+
+    /// The request for one fixture rotation.
+    fn request(sprite: &str, frame: char, rotation: u8) -> Request {
+        Request::new(sprite, frame, rotation).expect("test requests are valid")
+    }
+
+    #[test]
+    fn rotations_find_their_exact_mirrored_or_all_angles_lump() {
+        let directory = rows(&session());
+        let one = find_rotation(&directory, &request("TROO", 'A', 1)).expect("A1 is stored");
+        assert_eq!((one.0.name, one.1), (name("TROOA1"), Serving::Direct));
+        let eight = find_rotation(&directory, &request("TROO", 'A', 8)).expect("A2A8 mirrors it");
+        assert_eq!(
+            (eight.0.name, eight.1),
+            (name("TROOA2A8"), Serving::Mirrored),
+            "the pair name serves rotation 8"
+        );
+        let seven = find_rotation(&directory, &request("TROO", 'A', 7));
+        assert!(seven.is_none(), "nothing serves rotation 7");
+        let angles = find_rotation(&directory, &request("PLAY", 'A', 5)).expect("PLAYA0");
+        assert_eq!(angles.0.name, name("PLAYA0"), "the all-angles image");
+        let none = find_rotation(&directory, &request("PLAY", 'A', 0)).expect("PLAYA0 itself");
+        assert_eq!(none.0.name, name("PLAYA0"), "the exact name is rotation 0");
+    }
+
+    #[test]
+    fn a_frame_letter_outside_a_lump_name_is_an_invalid_argument() {
+        let session = session();
+        let error = load_sprite(&session, "TROO", ' ', 1).expect_err("a space is no name");
+        assert_eq!(code(&error), "invalid_argument", "bad frame code");
+        let missing = load_sprite(&session, "BOGUS12", 'A', 1).expect_err("not four characters");
+        assert_eq!(
+            code(&missing),
+            "invalid_argument",
+            "a nine-character name is refused"
+        );
+    }
+
+    #[test]
+    fn sprites_decode_flip_and_report_their_lump() {
+        let session = session();
+        let direct = load_sprite(&session, "troo", 'a', 1).expect("TROOA1 serves rotation 1");
+        assert!(
+            !direct.mirrored && direct.lump == name("TROOA1"),
+            "case-insensitive, stored as is"
+        );
+        assert_eq!(
+            (direct.patch.left_offset, direct.patch.top_offset),
+            (4, 0),
+            "the header's offsets"
+        );
+        let flipped = load_sprite(&session, "TROO", 'A', 8).expect("the mirror pair answers");
+        assert!(flipped.mirrored, "the pair is flipped");
+        assert_eq!(flipped.lump, name("TROOA2A8"), "named for rotation 2");
+        assert_eq!(
+            (flipped.patch.left_offset, flipped.patch.top_offset),
+            (3, 2),
+            "left' = width - left = 4 - 1"
+        );
+        assert_eq!(
+            flipped.patch.image.get(3, 0),
+            Some((5, true)),
+            "the only opaque column moved from 0 to the right edge"
+        );
+        let all = load_sprite(&session, "PLAY", 'A', 3).expect("the all-angles image");
+        assert_eq!(all.lump, name("PLAYA0"), "rotation 0 serves every angle");
+        assert!(!all.mirrored, "used as stored");
+        let missing = load_sprite(&session, "PLAY", 'B', 1).expect_err("no frame B");
+        assert_eq!(code(&missing), "not_found", "missing sprite code");
+        assert!(
+            missing.to_string().contains("list_sprites"),
+            "the message names the listing: {missing}"
+        );
+    }
+
+    #[test]
+    fn mirroring_clamps_offsets_a_stored_width_cannot_reach() {
+        let stored = Patch {
+            left_offset: i16::MIN,
+            top_offset: -1,
+            image: IndexedImage::new(4, 1, vec![0_u8; 4], vec![false; 4])
+                .expect("4x1 is a valid shape"),
+        };
+        let flipped = mirror_patch(&stored);
+        assert_eq!(flipped.left_offset, i16::MAX, "4 - (-32768) saturates");
+        assert_eq!(flipped.top_offset, -1, "the top offset is untouched");
+        assert_eq!(clamp_offset(-1_i32), -1, "an offset inside i16 survives");
+    }
+
+    #[test]
+    fn a_sprite_region_lump_that_is_no_picture_fails_as_a_format_error() {
+        let session = with_extra(vec![
+            Lump::marker(name("S_START")),
+            lump("TROOA3", vec![b'?'; 60]),
+            Lump::marker(name("S_END")),
+        ]);
+        let error = load_sprite(&session, "TROO", 'A', 3).expect_err("junk is not a patch");
+        assert_eq!(code(&error), "format_error", "undecodable sprite code");
+    }
+
+    #[test]
+    fn decoders_read_the_doom_format_before_the_png_one() {
+        let session = session();
+        let bytes = doom_patch(2, 2, (1, 2), 0x22);
+        let stored = decode_patch_bytes(&session, &bytes).expect("a Doom patch decodes");
+        assert_eq!(
+            (stored.left_offset, stored.top_offset),
+            (1, 2),
+            "header offsets"
+        );
+        let png_bytes = png(1, 2, [0x11, 0x11, 0x11], Some((-1_i32, 9_i32)));
+        let as_png = decode_patch_bytes(&session, &png_bytes).expect("a PNG decodes");
+        assert_eq!(as_png.left_offset, -1, "grAb offsets");
+        assert_eq!(as_png.image.height, 2, "the PNG shape");
+    }
+
+    #[test]
+    fn locate_and_lump_bytes_answer_for_any_winning_lump() {
+        let session = session();
+        let missing = lump_bytes(&session, name("PNAMES")).expect_err("the fixture has none");
+        assert_eq!(code(&missing), "not_found", "missing lump code");
+        let bytes = lump_bytes(&session, name("PLAYPAL")).expect("a global resolves");
+        assert_eq!(bytes.len(), 768_usize.saturating_mul(14), "the whole lump");
+        let directory = merged_rows(&session).expect("the fixture lists");
+        assert!(
+            locate(&directory, name("PLAYPAL"), &[Place::Anywhere]).is_some(),
+            "an anywhere place matches a global"
+        );
+        assert!(
+            locate(&directory, name("PLAYPAL"), &[Place::In(Namespace::Flats)]).is_none(),
+            "a wrong region matches nothing"
+        );
+        assert!(
+            locate(&directory, name("S_START"), &[Place::Anywhere]).is_none(),
+            "a marker is never a picture"
+        );
+        let error = not_found("flat", "list_flats", name("NOPE"));
+        assert_eq!(code(&error), "not_found", "the helper's code");
+    }
+
+    #[test]
+    fn a_named_sprite_lump_is_served_exactly_as_stored() {
+        let session = session();
+        let stored = load_sprite_lump(&session, name("TROOA2A8")).expect("the name resolves");
+        assert_eq!(
+            (stored.left_offset, stored.top_offset),
+            (1, 2),
+            "not mirrored"
+        );
+        assert_eq!(
+            stored.image.get(0, 0),
+            Some((5, true)),
+            "the opaque column stays at the left edge"
+        );
+        let missing = load_sprite_lump(&session, name("NOPEA1")).expect_err("no such lump");
+        assert_eq!(code(&missing), "not_found", "missing name code");
+        assert!(
+            missing.to_string().contains("list_sprites"),
+            "the message names the listing: {missing}"
+        );
+    }
+}

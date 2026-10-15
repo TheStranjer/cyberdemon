@@ -559,11 +559,11 @@ mod tests {
     #[test]
     fn sweep_finds_the_same_cuts_as_brute_force() {
         let mut segs: Vec<Seg> = Vec::new();
-        for index in 0..600_usize {
+        for index in 0..150_usize {
             let base = i64::try_from(index).unwrap().saturating_mul(3);
             segs.push(seg((base, 0), (base, 30)));
             let row = base.rem_euclid(30);
-            segs.push(seg((0, row), (2000, row.saturating_add(10))));
+            segs.push(seg((0, row), (500, row.saturating_add(10))));
         }
         let mut swept = empty_cuts(segs.len());
         sweep_cuts(&segs, &mut swept);

@@ -17,7 +17,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`, `reorder_lumps`), an `audio` group
 > (`import_sound`, `preview_sound`), a `music` group (`import_music`,
-> `preview_music`), a `scripts` group (`get_dehacked`, `edit_dehacked`),
+> `preview_music`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
+> `edit_decorate`, `edit_zscript`),
 > a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group

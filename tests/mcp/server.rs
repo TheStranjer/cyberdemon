@@ -90,8 +90,10 @@ mod tests {
             names,
             [
                 "add_lump",
+                "edit_decorate",
                 "edit_dehacked",
                 "edit_pnames",
+                "edit_zscript",
                 "extract_lump",
                 "get_asset_server_info",
                 "get_dehacked",

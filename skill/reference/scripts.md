@@ -1,10 +1,13 @@
 # Scripts tools
 
-Reading and editing DeHackEd/BEX patch lumps (`DEHACKED` by default).
-`get_dehacked` parses one patch into header values, blocks and BEX sections;
-`edit_dehacked` writes one back — wholesale or line by line — as a single
-undoable edit. Editing `Thing` blocks feeds `get_thing_types` immediately:
-it reads the same merged texts (see `reference/defs.md`).
+Reading and editing the text lumps a session holds: DeHackEd/BEX patches
+(`get_dehacked`, `edit_dehacked`) and `DECORATE`/`ZScript` scripts
+(`edit_decorate`, `edit_zscript`). `get_dehacked` parses one patch into
+header values, blocks and BEX sections; `edit_dehacked` writes one back —
+wholesale or line by line — as a single undoable edit. The two script
+editors run one tagged text operation over a whole lump. All of them feed
+`get_thing_types` immediately: it reads the same merged texts (see
+`reference/defs.md`).
 
 ## What the parser recognises
 
@@ -109,10 +112,72 @@ its 1-based line number, never as an error.
   with `get_thing_types { "type": 20000 }` to confirm and `render_topdown`
   style checks for anything placed at it.
 
+## `edit_decorate` / `edit_zscript`
+
+- Purpose: run exactly one text operation on one script lump as a single
+  undoable edit (label `edit_decorate LUMP` / `edit_zscript LUMP`; take it
+  back with `undo`).
+- Arguments: `lump` (default `"DECORATE"` / `"ZSCRIPT"`; for `edit_zscript`
+  you can pass the name of an `#include`d lump, e.g. `"ZSCRIPT2"`) plus one
+  operation, selected by its `op` field:
+  - `{"op": "replace_all", "text": T}` — replaces the whole text with `T`.
+  - `{"op": "append", "text": T}` — adds `T` at the end, inserting a newline
+    separator when the text does not already end with one.
+  - `{"op": "find_replace", "find": F, "replace": R, "all": A}` — replaces
+    the first literal, case-sensitive occurrence of `F` (`all: true`
+    replaces every one). `F` empty is `invalid_argument`; zero matches is
+    `not_found`.
+  - `{"op": "insert_lines", "line": N, "text": T}` — inserts `T`'s lines
+    before the 1-based line `N` (`N = line count + 1` appends at the end).
+  - `{"op": "replace_lines", "start": S, "end": E, "text": T}` — swaps the
+    inclusive 1-based range `S..=E` for `T`'s lines.
+  - `{"op": "delete_lines", "start": S, "end": E}` — removes that range.
+- Line numbers out of range or `start > end` are `invalid_argument` and
+  change nothing; non-UTF-8 lump bytes are `format_error`. CRLF texts keep
+  `\r\n` endings and LF texts keep LF; the trailing newline is preserved.
+- Creation and copy-on-write: a missing lump is created in the working
+  archive by `replace_all`/`append` (`created` reports `true`); every other
+  op on a missing lump is `not_found`. A lump held only by the `IWAD` or a
+  resource layer is copied-on-write (the edited text is appended to the
+  working archive as the winning override, `created: true`).
+- Read the current text first with `get_lump format=text`; the result's
+  `excerpt` shows the changed lines with two lines of numbered context.
+- Returns:
+
+  ```json
+  {
+    "lump": "DECORATE",
+    "lines": 3,
+    "changed_range": [1, 3],
+    "excerpt": "1: actor TestImp 20100 {\n2:   radius 24\n3: }",
+    "warnings": ["unbalanced braces: 1 '{' vs 0 '}' outside strings and comments"],
+    "created": true
+  }
+  ```
+
+  `changed_range` is the 1-based inclusive `[first, last]` of changed lines
+  (`[0, 0]` when nothing changed); `warnings` is normally `[]` and carries
+  the brace-balance note when `{`/`}` counts differ outside strings and
+  `//` / `/* */` comments.
+- Typical use:
+
+  ```json
+  { "op": "append", "text": "actor TestImp 20100 {\n  radius 24\n}\n" }
+  ```
+
+  adds an actor; follow it with `get_thing_types { "type": 20100 }` to
+  confirm it became a thing row.
+
 ## Limits
 
-Both tools read the winning copy of the name (last match in the scope).
-The tools carry text only: they do not follow `Include`, do not apply
-`[CODEPTR]` semantics beyond storing the lines, and never interpret
-values. Width-style 16.16 fixed values and `ID #` semantics are the
-definition overlay's concern (`reference/defs.md`).
+All four tools read the winning copy of the name (last match in the scope)
+and carry text only. `get_dehacked`/`edit_dehacked` do not follow `Include`,
+do not apply `[CODEPTR]` semantics beyond storing the lines, and never
+interpret values; Width-style 16.16 fixed values and `ID #` semantics are
+the definition overlay's concern (`reference/defs.md`).
+`edit_decorate`/`edit_zscript` do not follow `#include` either (name the
+included lump directly as `lump` to edit it), do not compile or validate
+DECORATE/ZScript semantics, and only *warn* about unbalanced braces;
+`get_thing_types` reads the merged DECORATE/ZSCRIPT texts
+(`reference/defs.md`), so actors and classes with a doomednum (or a MAPINFO
+`DoomEdNums` entry) show up there.

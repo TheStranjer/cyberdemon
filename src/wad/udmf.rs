@@ -79,6 +79,18 @@ impl UdmfValue {
     pub fn as_str(&self) -> Option<String> {
         string_of(self.clone())
     }
+
+    /// The value rendered as `UDMF` source text: integers decimal, floats
+    /// their own text, strings quoted with escapes, booleans `true` or
+    /// `false` and keywords bare. Re-parsing the result gives this value
+    /// back.
+    #[must_use]
+    #[inline]
+    pub fn to_source(&self) -> String {
+        let mut out = String::new();
+        write_value(&mut out, self.clone());
+        out
+    }
 }
 
 /// The integer a value stands for, its float rounded half away from zero.
@@ -1524,6 +1536,33 @@ mod tests {
             ),
             "ints are decimal, floats keep their text, keywords stand bare"
         );
+    }
+
+    #[test]
+    fn to_source_renders_every_value_kind() {
+        assert_eq!(UdmfValue::Int(-3).to_source(), "-3");
+        assert_eq!(UdmfValue::Float("64.5".to_owned()).to_source(), "64.5");
+        assert_eq!(UdmfValue::Bool(true).to_source(), "true");
+        assert_eq!(UdmfValue::Bool(false).to_source(), "false");
+        assert_eq!(UdmfValue::Keyword("Sky1".to_owned()).to_source(), "Sky1");
+        assert_eq!(
+            UdmfValue::Str("a\"b\\c\nd".to_owned()).to_source(),
+            r#""a\"b\\c\nd""#,
+            "the rendering round trips back to the same value"
+        );
+        let values = [
+            UdmfValue::Int(7),
+            UdmfValue::Float("1.25e2".to_owned()),
+            UdmfValue::Str("x".to_owned()),
+            UdmfValue::Bool(false),
+            UdmfValue::Keyword("bottom".to_owned()),
+        ];
+        for value in values {
+            let text = value.to_source();
+            let doc = parse(&format!("x = {text};"));
+            let rendered = doc.globals.first().expect("the field").1.clone();
+            assert_eq!(rendered, value, "'{text}' parses back");
+        }
     }
 
     #[test]

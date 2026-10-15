@@ -2,8 +2,9 @@
 //!
 //! A [`Map`] holds the five editable lump classes as typed rows: [`Thing`]s,
 //! [`Vertex`]es, [`Linedef`]s, [`Sidedef`]s and [`Sector`]s. Every binary or
-//! textural map format (`wad::map::doom` today, `Hexen` and `UDMF` in later
-//! tickets) maps into these rows and back, and the formats' differences stay
+//! textural map format (`wad::map::doom`, `wad::map::hexen` and
+//! `wad::map::udmf_map`) maps into these rows and back, and the formats'
+//! differences stay
 //! expressible: `flags` keep the raw bit semantics of the map's own format,
 //! `args`, `tid` and `special` on things carry only `Hexen`/`UDMF` data
 //! (zero for `Doom`), and each element's `extra` map holds `UDMF` fields
@@ -23,13 +24,18 @@ use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
 use crate::wad::name::{LumpName, NAME_LEN};
 
+use super::flags::FlagFamily;
+
 /// A map vertex: one point of the map's geometry.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Vertex {
     /// `X` coordinate in map units.
     pub x: i32,
     /// `Y` coordinate in map units.
     pub y: i32,
+    /// Unmodelled format fields (see [`Linedef::extra`]), including the
+    /// written text of fractional coordinates.
+    pub extra: BTreeMap<String, String>,
 }
 
 /// A map line between two vertices, with at most one [`Sidedef`] per side.
@@ -198,6 +204,28 @@ impl Map {
         }
         Some((min_x, min_y, max_x, max_y))
     }
+
+    /// The flag family this map's `flags` columns are stored in: binary
+    /// `Doom` maps use the [`Doom`] family, binary `Hexen` maps the
+    /// [`Hexen`] one, and a `UDMF` map follows its declared namespace —
+    /// `doom`, `heretic` and `strife` pick `Doom`, any other namespace
+    /// (including no namespace at all, which writes as `zdoom`) picks
+    /// `Hexen`.
+    ///
+    /// [`Doom`]: FlagFamily::Doom
+    /// [`Hexen`]: FlagFamily::Hexen
+    #[must_use]
+    #[inline]
+    pub fn flag_family(&self) -> FlagFamily {
+        match self.format {
+            MapFormat::Doom => FlagFamily::Doom,
+            MapFormat::Hexen => FlagFamily::Hexen,
+            MapFormat::Udmf => self
+                .udmf_namespace
+                .as_deref()
+                .map_or(FlagFamily::Hexen, FlagFamily::from_udmf_namespace),
+        }
+    }
 }
 
 impl Default for Map {
@@ -213,6 +241,7 @@ impl Default for Map {
 mod tests {
     use super::{Map, Vertex};
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::flags::FlagFamily;
     use crate::wad::name::LumpName;
 
     /// A valid parsed name for test data.
@@ -222,7 +251,11 @@ mod tests {
 
     /// A vertex at `x`/`y`.
     const fn vertex(x: i32, y: i32) -> Vertex {
-        Vertex { x, y }
+        Vertex {
+            x,
+            y,
+            extra: alloc::collections::BTreeMap::new(),
+        }
     }
 
     #[test]
@@ -246,6 +279,42 @@ mod tests {
         assert_eq!(map.format, MapFormat::Doom, "the default format");
         assert!(map.name.is_empty(), "the default name is the NUL name");
         assert_eq!(map, Map::new_empty(map.name, MapFormat::Doom), "same build");
+    }
+
+    #[test]
+    fn flag_family_follows_the_format_and_the_udmf_namespace() {
+        assert_eq!(
+            Map::new_empty(name("MAP01"), MapFormat::Doom).flag_family(),
+            FlagFamily::Doom,
+            "binary Doom maps are the Doom family"
+        );
+        assert_eq!(
+            Map::new_empty(name("MAP01"), MapFormat::Hexen).flag_family(),
+            FlagFamily::Hexen,
+            "binary Hexen maps are the Hexen family"
+        );
+        let mut udmf = Map::new_empty(name("MAP01"), MapFormat::Udmf);
+        assert_eq!(
+            udmf.flag_family(),
+            FlagFamily::Hexen,
+            "a UDMF map without a namespace writes as zdoom"
+        );
+        for (namespace, family) in [
+            ("doom", FlagFamily::Doom),
+            ("heretic", FlagFamily::Doom),
+            ("Strife", FlagFamily::Doom),
+            ("hexen", FlagFamily::Hexen),
+            ("zdoom", FlagFamily::Hexen),
+            ("gzdoom", FlagFamily::Hexen),
+            ("vavoom", FlagFamily::Hexen),
+        ] {
+            udmf.udmf_namespace = Some(namespace.to_owned());
+            assert_eq!(
+                udmf.flag_family(),
+                family,
+                "the '{namespace}' namespace is the {namespace} map's family"
+            );
+        }
     }
 
     #[test]

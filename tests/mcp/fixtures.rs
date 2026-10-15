@@ -39,7 +39,11 @@ fn parsed(text: &str) -> LumpName {
 
 /// A vertex at `x`/`y`.
 fn vertex(x: i32, y: i32) -> Vertex {
-    Vertex { x, y }
+    Vertex {
+        x,
+        y,
+        ..Default::default()
+    }
 }
 
 /// A fully visible spawn of `kind` at `x`/`y` facing `angle`.

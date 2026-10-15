@@ -175,9 +175,10 @@ mod tests {
 
     /// A fixed point at whole map units.
     fn point(x: i64, y: i64) -> Point {
-        Point::from_vertex(Vertex {
+        Point::from_vertex(&Vertex {
             x: i32::try_from(x).unwrap(),
             y: i32::try_from(y).unwrap(),
+            ..Default::default()
         })
     }
 

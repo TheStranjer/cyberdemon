@@ -133,6 +133,7 @@ pub(super) fn read_vertices(data: &[u8]) -> Result<Vec<Vertex>, CyberError> {
         vertices.push(Vertex {
             x: i32::from(reader.read_i16()?),
             y: i32::from(reader.read_i16()?),
+            ..Default::default()
         });
     }
     Ok(vertices)
@@ -324,6 +325,8 @@ pub(super) mod fixtures {
     //! Element builders shared by the binary-format unit tests. The
     //! two-room map mirrors the `tests/mcp/fixtures.rs` WAD builder.
 
+    use alloc::collections::BTreeMap;
+
     use crate::wad::archive::Lump;
     use crate::wad::classify::MapFormat;
     use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
@@ -346,7 +349,11 @@ pub(super) mod fixtures {
 
     /// A vertex at `x`/`y`.
     pub(in crate::wad::map) const fn vertex(x: i32, y: i32) -> Vertex {
-        Vertex { x, y }
+        Vertex {
+            x,
+            y,
+            extra: BTreeMap::new(),
+        }
     }
 
     /// A fully visible spawn of `kind` at `x`/`y` facing `angle`.

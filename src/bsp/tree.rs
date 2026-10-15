@@ -360,7 +360,11 @@ mod tests {
     fn vertex(map: &mut Map, x: i64, y: i64) -> usize {
         let vx = i32::try_from(x).unwrap();
         let vy = i32::try_from(y).unwrap();
-        map.vertices.push(Vertex { x: vx, y: vy });
+        map.vertices.push(Vertex {
+            x: vx,
+            y: vy,
+            ..Default::default()
+        });
         map.vertices.len().checked_sub(1).unwrap()
     }
 
@@ -445,9 +449,10 @@ mod tests {
 
     /// A fixed point at whole map units.
     fn point(x: i64, y: i64) -> Point {
-        Point::from_vertex(Vertex {
+        Point::from_vertex(&Vertex {
             x: i32::try_from(x).unwrap(),
             y: i32::try_from(y).unwrap(),
+            ..Default::default()
         })
     }
 
@@ -502,8 +507,8 @@ mod tests {
         } else {
             (line.v2, line.v1)
         };
-        let va = map.vertices[from];
-        let vb = map.vertices[to];
+        let va = &map.vertices[from];
+        let vb = &map.vertices[to];
         hypot(
             i64::from(vb.x.saturating_sub(va.x))
                 .checked_mul(0x1_0000)

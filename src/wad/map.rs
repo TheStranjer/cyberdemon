@@ -1,25 +1,27 @@
-//! The map layer: a typed, format-neutral map model and its binary
-//! codecs.
+//! The map layer: a typed, format-neutral map model and its codecs.
 //!
 //! [`model`] defines the rows every map tool edits ([`Map`] and friends,
 //! re-exported here); [`doom`] and [`hexen`] read and write the binary
 //! `Doom` and `Hexen` lump formats, sharing the identical record codecs
-//! through the private `common` module. [`read_map`] and [`write_map`]
-//! dispatch on a block's [`MapFormat`]: `UDMF` shares this model and
-//! gains its codec in
-//! a follow-up ticket, so it currently reports [`CyberError::Unsupported`].
+//! through the private `common` module, and [`udmf_map`] maps the model
+//! to and from the `UDMF` text format parsed by [`crate::wad::udmf`],
+//! with the named bit tables of both flag families in [`flags`].
+//! [`read_map`] and [`write_map`] dispatch on a block's [`MapFormat`].
 //! [`remove`] is the pure deletion engine behind the element-removal
 //! tools: it reports dependents, expands a cascade and renumbers the
 //! references of what survives.
 
 pub mod doom;
+pub mod flags;
 pub mod hexen;
 pub mod model;
 pub mod remove;
+pub mod udmf_map;
 
 mod common;
 
 pub use crate::wad::classify::MapFormat;
+pub use flags::{FlagFamily, FlagKind};
 pub use model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 pub use remove::{
     CascadeOptions, Dependents, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
@@ -35,19 +37,16 @@ use crate::wad::classify::MapBlock;
 /// # Errors
 ///
 /// [`CyberError::Format`] when the block's range leaves `block_lumps` or
-/// the block's binary decoder rejects the members (see
-/// [`doom::read_doom_map`] and [`hexen::read_hexen_map`]);
-/// [`CyberError::Unsupported`] for `UDMF` blocks.
+/// the block's decoder rejects the members (see
+/// [`doom::read_doom_map`], [`hexen::read_hexen_map`] and
+/// [`udmf_map::read_udmf_map`]).
 #[inline]
 pub fn read_map(block_lumps: &[Lump], block: &MapBlock) -> Result<Map, CyberError> {
-    if block.format == MapFormat::Udmf {
-        return Err(not_implemented("reading", "UDMF"));
-    }
     let members = block_members(block_lumps, block)?;
-    if block.format == MapFormat::Doom {
-        doom::read_doom_map(block.name, members)
-    } else {
-        hexen::read_hexen_map(block.name, members)
+    match block.format {
+        MapFormat::Doom => doom::read_doom_map(block.name, members),
+        MapFormat::Hexen => hexen::read_hexen_map(block.name, members),
+        MapFormat::Udmf => udmf_map::read_udmf_map(block.name, members),
     }
 }
 
@@ -74,25 +73,15 @@ fn block_members<'lumps>(
 /// # Errors
 ///
 /// [`CyberError::LimitExceeded`] or [`CyberError::InvalidArgument`] from
-/// the block's binary encoder (see [`doom::write_doom_map`] and
-/// [`hexen::write_hexen_map`]); [`CyberError::Unsupported`] for `UDMF`
-/// maps.
+/// the block's encoder (see [`doom::write_doom_map`],
+/// [`hexen::write_hexen_map`] and [`udmf_map::write_udmf_map`]).
 #[inline]
 pub fn write_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
     match map.format {
         MapFormat::Doom => doom::write_doom_map(map),
         MapFormat::Hexen => hexen::write_hexen_map(map),
-        MapFormat::Udmf => Err(not_implemented("writing", "UDMF")),
+        MapFormat::Udmf => udmf_map::write_udmf_map(map),
     }
-}
-
-/// The `Unsupported` error saying `operation` of `format` maps is a
-/// follow-up ticket.
-fn not_implemented(operation: &str, format: &str) -> CyberError {
-    CyberError::Unsupported(format!(
-        "{operation} {format} format maps is not implemented yet: only binary \
-         Doom and Hexen blocks are decoded and encoded for now"
-    ))
 }
 
 #[cfg(test)]
@@ -100,7 +89,8 @@ mod tests {
     use crate::error::CyberError;
     use crate::wad::archive::Lump;
     use crate::wad::classify::{MapBlock, MapFormat, analyze};
-    use crate::wad::map::{Linedef, Map, read_map, write_map};
+    use crate::wad::map::common::fixtures::lump;
+    use crate::wad::map::{Linedef, Map, Vertex, read_map, write_map};
     use crate::wad::name::LumpName;
 
     /// A valid parsed name for test data.
@@ -168,41 +158,60 @@ mod tests {
         );
     }
 
-    /// The `Unsupported` message from reading a `MAP01` block ending at
-    /// `end` in `format`.
-    fn read_unsupported(end: usize, format: MapFormat) -> String {
-        let lumps = doom_lumps();
-        match read_map(&lumps, &block(end, format)) {
-            Err(CyberError::Unsupported(message)) => message,
-            Err(other) => panic!("expected Unsupported, got {other:?}"),
-            Ok(map) => panic!("expected a refusal, read {} linedefs", map.linedefs.len()),
-        }
-    }
-
-    /// The `Unsupported` message from writing a map in `format`.
-    fn write_unsupported(format: MapFormat) -> String {
-        let map = Map {
-            format,
+    #[test]
+    fn the_dispatcher_reads_and_writes_udmf_blocks() {
+        let mut map = Map {
+            name: name("MAP01"),
+            format: MapFormat::Udmf,
+            udmf_namespace: Some("zdoom".to_owned()),
+            vertices: vec![Vertex {
+                x: 0,
+                y: 0,
+                ..Default::default()
+            }],
             ..Map::default()
         };
-        match write_map(&map) {
-            Err(CyberError::Unsupported(message)) => message,
-            Err(other) => panic!("expected Unsupported, got {other:?}"),
-            Ok(lumps) => panic!("expected a refusal, wrote {} lumps", lumps.len()),
-        }
+        let written = write_map(&map).expect("write_map routes UDMF");
+        let analysis = analyze(&written);
+        let block = analysis.maps.first().expect("analyze finds the block");
+        assert_eq!(
+            block.format,
+            MapFormat::Udmf,
+            "TEXTMAP marks the block UDMF"
+        );
+        let read = read_map(&written, block).expect("read_map routes UDMF");
+        assert_eq!(
+            read, map,
+            "the empty UDMF map round trips through the dispatcher"
+        );
+        map.udmf_namespace = Some("doom".to_owned());
+        let redone = write_map(&map).expect("the Doom namespace writes too");
+        let read_again = read_map(&redone, block).expect("and reads back");
+        assert_eq!(read_again, map, "in both families");
     }
 
     #[test]
-    fn the_dispatcher_reports_udmf_as_unsupported() {
-        let read_message = read_unsupported(doom_lumps().len(), MapFormat::Udmf);
+    fn the_dispatcher_reports_a_broken_udmf_block_as_format_error() {
+        let broken = read_map(&doom_lumps(), &block(doom_lumps().len(), MapFormat::Udmf));
+        let CyberError::Format(message) = broken.expect_err("a UDMF block needs a TEXTMAP") else {
+            panic!("expected Format for members without TEXTMAP");
+        };
+        assert!(message.contains("TEXTMAP"), "the lump is named: {message}");
+        let lumps = vec![
+            Lump::marker(name("MAP01")),
+            lump("TEXTMAP", b"vertex { x = 0; y = 0; }"),
+            Lump::marker(name("ENDMAP")),
+        ];
+        let analysis = analyze(&lumps);
+        let block = analysis.maps.first().expect("analyze finds the block");
+        let CyberError::Format(namespace_message) =
+            read_map(&lumps, block).expect_err("the TEXTMAP has no namespace")
+        else {
+            panic!("expected Format for a namespace-less TEXTMAP");
+        };
         assert!(
-            read_message.contains("not implemented yet") && read_message.contains("UDMF"),
-            "the read refusal is explicit: {read_message}"
-        );
-        let write_message = write_unsupported(MapFormat::Udmf);
-        assert!(
-            write_message.contains("not implemented yet") && write_message.contains("UDMF"),
-            "the write refusal is explicit: {write_message}"
+            namespace_message.contains("namespace"),
+            "the global is named: {namespace_message}"
         );
     }
 

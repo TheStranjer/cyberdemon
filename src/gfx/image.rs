@@ -192,6 +192,19 @@ pub fn resize_nearest(img: &RgbaImage, width: u32, height: u32) -> RgbaImage {
     }
 }
 
+/// The target dimensions of an integer scale: `factor.max(1)` times each
+/// source edge, saturating to `MAX_DIMENSION` on overflow or excess.
+fn scaled_dimensions(width: u32, height: u32, factor: u32) -> (u32, u32) {
+    let multiplier = factor.max(1);
+    let target_width = width
+        .checked_mul(multiplier)
+        .map_or(MAX_DIMENSION, clamp_dimension);
+    let target_height = height
+        .checked_mul(multiplier)
+        .map_or(MAX_DIMENSION, clamp_dimension);
+    (target_width, target_height)
+}
+
 /// Upscales by whole-pixel replication.
 ///
 /// A factor below `1` becomes `1`; the resulting dimensions saturate to
@@ -199,15 +212,7 @@ pub fn resize_nearest(img: &RgbaImage, width: u32, height: u32) -> RgbaImage {
 #[must_use]
 #[inline]
 pub fn scale_integer(img: &RgbaImage, factor: u32) -> RgbaImage {
-    let multiplier = factor.max(1);
-    let width = img
-        .width
-        .checked_mul(multiplier)
-        .map_or(MAX_DIMENSION, clamp_dimension);
-    let height = img
-        .height
-        .checked_mul(multiplier)
-        .map_or(MAX_DIMENSION, clamp_dimension);
+    let (width, height) = scaled_dimensions(img.width, img.height, factor);
     resize_nearest(img, width, height)
 }
 
@@ -282,7 +287,10 @@ fn check_count(name: &str, len: usize, expected: usize) -> Result<(), CyberError
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexedImage, RgbaImage, flip_horizontal, resize_nearest, scale_integer};
+    use super::{
+        IndexedImage, MAX_DIMENSION, RgbaImage, flip_horizontal, resize_nearest, scale_integer,
+        scaled_dimensions,
+    };
     use crate::error::CyberError;
     use crate::gfx::palette::Palette;
 
@@ -413,11 +421,19 @@ mod tests {
         );
         let same = scale_integer(&img, 0);
         assert_eq!((same.width, same.height), (2, 1), "factor 0 behaves as 1");
-        let saturated = scale_integer(&img, 8_192);
+    }
+
+    #[test]
+    fn scaled_dimensions_saturates_oversized_targets() {
         assert_eq!(
-            (saturated.width, saturated.height),
+            scaled_dimensions(2, 1, 8_192),
             (8_192, 8_192),
-            "oversized targets saturate to MAX_DIMENSION"
+            "oversized products clamp to MAX_DIMENSION"
+        );
+        assert_eq!(
+            scaled_dimensions(2, 1, u32::MAX),
+            (MAX_DIMENSION, MAX_DIMENSION),
+            "overflowing products saturate to MAX_DIMENSION"
         );
     }
 

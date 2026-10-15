@@ -268,7 +268,7 @@ fn include_names(text: &str, stream: Stream, notes: &mut Vec<String>) -> Vec<Lum
 ///
 /// [`Session::lumps_in`]'s error for the merged scope (a poisoned lock can
 /// not reach here; the merged scope itself never fails).
-pub(super) fn custom_sources(
+pub(in crate::tools) fn custom_sources(
     session: &Session,
 ) -> Result<(CustomSources, Vec<String>), CyberError> {
     let view = session.lumps_in(Scope::Merged)?;

@@ -107,6 +107,7 @@ mod tests {
                 "get_sector_specials",
                 "get_session_info",
                 "get_sprite",
+                "get_thing_sprite",
                 "get_thing_types",
                 "get_wad_info",
                 "import_asset",
@@ -212,6 +213,12 @@ mod tests {
             ],
         );
         assert_nothing_required(&sprite);
+        let thing = schema_of(tool_named(&tools, "get_thing_sprite"));
+        assert_flattens(
+            &thing,
+            &["type", "frame", "rotation", "palette", "format", "scale"],
+        );
+        assert_required(&thing, "type");
         let decoded = schema_of(tool_named(&tools, "decode_patch"));
         assert_flattens(&decoded, &["name", "source", "palette"]);
         assert_nothing_required(&decoded);

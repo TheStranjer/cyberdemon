@@ -2,9 +2,10 @@
 
 Browsing the session's graphic lumps: the listings `list_flats`,
 `list_patches` and `list_sprites`, and the image tools `get_flat`,
-`get_patch`, `get_sprite` and `decode_patch`. All of them read the
-**merged view** — the same directory an engine sees. The listings report
-measurements only: names, sizes, dimensions, drawing offsets and grouping.
+`get_patch`, `get_sprite`, `get_thing_sprite` and `decode_patch`. All of
+them read the **merged view** — the same directory an engine sees. The
+listings report measurements only: names, sizes, dimensions, drawing
+offsets and grouping.
 The image tools decode pixels and publish them as files on the asset
 origin (see `reference/assets.md`), never inline. Use the lump tools
 (`reference/lumps.md`) for raw content and `reference/textures.md` for the
@@ -147,7 +148,8 @@ in real WADs.
 
 ## Pictures as assets
 
-`get_flat`, `get_patch`, `get_sprite` and `decode_patch` decode pixels.
+`get_flat`, `get_patch`, `get_sprite`, `get_thing_sprite` and
+`decode_patch` decode pixels.
 Nothing is inlined and nothing is edited: each publishes a file on the
 asset origin and returns its `AssetRef`, so you fetch the `url` with any
 HTTP client. Three arguments shape every picture result:
@@ -260,6 +262,52 @@ a name wins.
   `sprite`, `frame` or `rotation`; `not_found` for a sprite nothing serves
   (`list_sprites` groups what exists); `format_error` for a lump that is no
   picture.
+
+## `get_thing_sprite`
+
+- Purpose: publishes what one thing type looks like in game — the sprite
+  rotation an engine shows — as an image asset.
+- Arguments:
+  - `type` (number, required): the thing type number, as editors write it
+    into `THINGS` (e.g. `3001`, the Imp). Looked up in the **session
+    definitions**: the built-in table of the session's game (DOOM II when
+    unidentified) overlaid with the merged view's DEHACKED, DECORATE,
+    ZScript and MAPINFO custom types — load the archives first.
+  - `frame` (string, optional): one frame letter; **default: the
+    definition's own frame**.
+  - `rotation` (number, optional, default 1): `1..=8` — the eight views,
+    `1` the front a head-on viewer sees, `5` the back. (No rotation `0`
+    here; `get_sprite` serves that directly.)
+  - `palette` / `format` / `scale`: as described above.
+- Returns:
+
+  ```json
+  {
+    "type": 3001, "name": "Imp", "sprite": "TROO", "frame": "A",
+    "rotation": 8, "lump": "TROOA2A8", "mirrored": true,
+    "width": 8, "height": 8, "left_offset": 8, "top_offset": 0,
+    "hanging": false,
+    "asset": {"url": "...", "filename": "TROOA8.png", "mime": "image/png",
+              "size": 402}
+  }
+  ```
+
+  The rotation resolves exactly as `get_sprite` does: exact lump, then
+  mirror pair flipped, then the frame's rotation-`0` all-angles image.
+  `name` is the definition's display name, `lump` the sprite lump whose
+  pixels served, `mirrored` whether they were flipped, `hanging` whether
+  the thing hangs from the ceiling.
+- Errors: `not_found` for an unknown type (`get_thing_types` lists what
+  exists), for a definition without a sprite ("thing type N has no
+  sprite") and for a frame/rotation no lump serves — naming the expected
+  pattern, e.g. `TROOA1 / TROOA0`; `invalid_argument` for a malformed
+  `frame` or a `rotation` outside 1..8.
+
+  To see a thing *from a specific viewpoint*, compute the rotation with
+  the engine rule the server documents (`(angle_viewer_to_thing −
+  thing_angle + 202.5°) bucketed into eighths`, `1` = front): viewer due
+  east of an east-facing thing shows rotation 1, due west shows 5, due
+  north shows 3.
 
 ## `decode_patch`
 

@@ -11,10 +11,13 @@
 //! [`crate::gfx::sprite_name::parse_sprite_name`]. The listings decode no
 //! pixels: sizes, dimensions, offsets and names only.
 //!
-//! `get_flat`, `get_patch`, `get_sprite` and `decode_patch` do read
-//! pixels, through the shared resolvers in [`resolve`], and never inline
-//! them: each publishes a `PNG` or a raw `RGBA` asset and returns the
-//! [`AssetRef`] with the dimensions and drawing offsets it encoded.
+//! `get_flat`, `get_patch`, `get_sprite`, `get_thing_sprite` and
+//! `decode_patch` do read pixels, through the shared resolvers in
+//! [`resolve`], and never inline them: each publishes a `PNG` or a raw
+//! `RGBA` asset and returns the [`AssetRef`] with the dimensions and
+//! drawing offsets it encoded. `get_thing_sprite` starts from a thing
+//! type number and reads its sprite through the session-aware definitions
+//! of [`crate::defs::session_definitions`].
 
 pub(in crate::tools) mod resolve;
 
@@ -28,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets::fetch::derive_lump_name;
 use crate::assets::server::AssetRef;
+use crate::defs::{CustomSources, Definitions, ThingDef, session_definitions};
 use crate::error::CyberError;
 use crate::gfx::codec::{encode_png, is_png, png_dimensions};
 use crate::gfx::flat::flat_shape;
@@ -38,6 +42,7 @@ use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session, Source};
 use crate::state::AppState;
+use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::resolve::{
     load_flat, load_patch, load_sprite, load_sprite_lump, lump_bytes,
 };
@@ -45,6 +50,7 @@ use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::palette::load_palette;
 use crate::tools::{fail, ok};
 use crate::wad::classify::{LumpKind, Namespace};
+use crate::wad::game::Game;
 use crate::wad::name::{LumpName, glob_match};
 use crate::wad::textures::parse_pnames;
 
@@ -675,6 +681,28 @@ struct GetSpriteParams {
     common: ImageParams,
 }
 
+/// Arguments for [`Cyberdemon::get_thing_sprite`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetThingSpriteParams {
+    /// The thing type number to preview, as editors write it into
+    /// `THINGS`, e.g. 3001 (the Imp). Looked up in the session's
+    /// definitions: the game's built-in table plus its custom
+    /// DEHACKED/DECORATE/ZScript/MAPINFO types.
+    r#type: u32,
+    /// Sprite frame letter to read: one character of `A`-`Z` then `[`,
+    /// `\`, `]` (case-insensitive). Default: the definition's own frame.
+    #[serde(default)]
+    frame: Option<String>,
+    /// Rotation to read, `1`-`8` (default 1): the eight views, `1` the
+    /// front a head-on viewer sees, `5` the back. Resolved by the engine's
+    /// mirror-pair and rotation-`0` fallback rules.
+    #[serde(default)]
+    rotation: Option<u8>,
+    /// The shared `palette`, `format` and `scale` options.
+    #[serde(flatten)]
+    common: ImageParams,
+}
+
 /// Arguments for [`Cyberdemon::decode_patch`]: exactly one of `name` and
 /// `source` says where the patch bytes come from.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -1154,6 +1182,235 @@ fn prepare_sprite(
     }
 }
 
+/// The validated selection of one `get_thing_sprite` call.
+#[derive(Debug)]
+struct ThingRequest {
+    /// Thing type number, as the client passed it.
+    kind: u32,
+    /// Requested frame letter, `None` for the definition's own.
+    frame: Option<char>,
+    /// Rotation number `1..=8`.
+    rotation: u8,
+}
+
+/// The selection behind a `get_thing_sprite` call: the type number with
+/// its optional `frame` and `rotation` (default 1).
+///
+/// # Errors
+///
+/// [`parse_frame`] and [`parse_thing_rotation`]' [`CyberError::InvalidArgument`]
+/// errors.
+fn thing_request(args: &GetThingSpriteParams) -> Result<ThingRequest, CyberError> {
+    Ok(ThingRequest {
+        kind: args.r#type,
+        frame: args
+            .frame
+            .as_deref()
+            .map(|text| parse_frame(Some(text)))
+            .transpose()?,
+        rotation: parse_thing_rotation(args.rotation)?,
+    })
+}
+
+/// The `get_thing_sprite` rotation number: `1..=8`, defaulting to
+/// [`DEFAULT_ROTATION`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the rejected number.
+fn parse_thing_rotation(value: Option<u8>) -> Result<u8, CyberError> {
+    match value {
+        None => Ok(DEFAULT_ROTATION),
+        Some(rotation @ 1_u8..=MAX_ROTATION) => Ok(rotation),
+        Some(rotation) => Err(CyberError::InvalidArgument(format!(
+            "rotation {rotation} is out of range: get_thing_sprite serves the eight views 1 to \
+             {MAX_ROTATION}; get_sprite also takes the all-angles 0"
+        ))),
+    }
+}
+
+/// The game whose definition tables the session selects: the detected
+/// game, and DOOM II for an unidentified session, as `get_thing_types`
+/// defaults.
+fn session_game(session: &Session) -> Game {
+    let detected = session.game();
+    if detected == Game::Unknown {
+        Game::Doom2
+    } else {
+        detected
+    }
+}
+
+/// The session's thing definitions: the built-in tables of the session's
+/// game overlaid with the custom sources of the merged view.
+///
+/// # Errors
+///
+/// [`session_definitions`]' errors for the tables; collection errors for
+/// the merged scope.
+fn session_things(session: &Session) -> Result<Definitions, CyberError> {
+    let (sources, _notes): (CustomSources, Vec<String>) = custom_sources(session)?;
+    session_definitions(session_game(session), &sources)
+}
+
+/// The definition one `get_thing_sprite` call previews: a known type with
+/// a non-empty sprite.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] for a type the session definitions do not
+/// hold, and for a definition whose sprite is empty.
+fn thing_sprite_def(session: &Session, kind: u32) -> Result<ThingDef, CyberError> {
+    let def = session_things(session)?
+        .thing(kind)
+        .cloned()
+        .ok_or_else(|| {
+            CyberError::NotFound(format!(
+                "no thing type {kind} in the session definitions; get_thing_types lists what the \
+                 game has, and custom types need their archive loaded"
+            ))
+        })?;
+    if def.sprite.is_empty() {
+        return Err(CyberError::NotFound(format!(
+            "thing type {kind} has no sprite; get_thing_types shows which types define one"
+        )));
+    }
+    Ok(def)
+}
+
+/// The `not_found` for a rotation no sprite lump serves: names the
+/// expected lump pattern, the rotation's own image and the frame's
+/// all-angles image.
+fn missing_thing_sprite(sprite: &str, frame: char, rotation: u8) -> CyberError {
+    CyberError::NotFound(format!(
+        "no {sprite}{frame}{rotation} / {sprite}{frame}0 sprite lump in the merged view; \
+         list_sprites with prefix \"{sprite}\" lists what the session has"
+    ))
+}
+
+/// What the session-side half of `get_thing_sprite` prepared.
+struct PreparedThing {
+    /// The definition row the picture came from.
+    def: ThingDef,
+    /// The frame letter that was served.
+    frame: char,
+    /// The rotation name the call resolves to (`TROOA1`), published under.
+    name: LumpName,
+    /// The lump whose pixels served the rotation.
+    lump: LumpName,
+    /// Whether the stored image was flipped to serve it.
+    mirrored: bool,
+    /// The rendered picture.
+    rendered: Rendered,
+}
+
+/// `get_thing_sprite`' work under the session lock: definition lookup,
+/// rotation resolution and rendering.
+///
+/// # Errors
+///
+/// [`thing_sprite_def`]' and [`missing_thing_sprite`]' [`CyberError::NotFound`]
+/// errors, [`load_sprite`]' and [`render_patch`]' errors.
+fn prepare_thing_sprite(
+    session: &Session,
+    request: &ThingRequest,
+    options: &ImageOptions,
+) -> Result<PreparedThing, CyberError> {
+    let def = thing_sprite_def(session, request.kind)?;
+    let frame = request.frame.unwrap_or(def.frame);
+    let sprite = def.sprite.clone();
+    let found = match load_sprite(session, &sprite, frame, request.rotation) {
+        Ok(found) => found,
+        Err(CyberError::NotFound(_)) => {
+            return Err(missing_thing_sprite(&sprite, frame, request.rotation));
+        }
+        Err(error) => return Err(error),
+    };
+    let rotation = request.rotation;
+    let name = LumpName::parse(&format!("{sprite}{frame}{rotation}"))?;
+    let rendered = render_patch(session, &found.patch, options)?;
+    Ok(PreparedThing {
+        def,
+        frame,
+        name,
+        lump: found.lump,
+        mirrored: found.mirrored,
+        rendered,
+    })
+}
+
+/// Structured result of [`Cyberdemon::get_thing_sprite`].
+#[derive(Serialize)]
+struct ThingSpriteReport {
+    /// The thing type number that was asked for.
+    r#type: u32,
+    /// The definition's editor display name.
+    name: String,
+    /// The four-character sprite name.
+    sprite: String,
+    /// The frame letter the picture came from.
+    frame: char,
+    /// The rotation number `1..=8`.
+    rotation: u8,
+    /// The lump whose pixels served the rotation.
+    lump: LumpName,
+    /// Whether the stored image was flipped horizontally to serve it.
+    mirrored: bool,
+    /// Width in published pixels: `scale` times the stored image.
+    width: u32,
+    /// Height in published pixels.
+    height: u32,
+    /// Horizontal drawing offset in published pixels.
+    left_offset: i32,
+    /// Vertical drawing offset in published pixels.
+    top_offset: i32,
+    /// Whether the thing hangs from the ceiling.
+    hanging: bool,
+    /// The published picture.
+    asset: AssetRef,
+}
+
+/// `get_thing_sprite`'s work: resolve and render under the session lock,
+/// then publish outside it.
+///
+/// # Errors
+///
+/// [`prepare_thing_sprite`]' errors and [`publish_image`]' for the asset.
+fn get_thing_sprite_run(
+    state: &AppState,
+    request: &ThingRequest,
+    options: &ImageOptions,
+) -> Result<ThingSpriteReport, CyberError> {
+    let prepared = state.with_session(|session| prepare_thing_sprite(session, request, options))?;
+    let PreparedThing {
+        def,
+        frame,
+        name,
+        lump,
+        mirrored,
+        rendered,
+    } = prepared;
+    let (width, height) = (rendered.image.width, rendered.image.height);
+    let left_offset = rendered.left_offset.unwrap_or(0_i32);
+    let top_offset = rendered.top_offset.unwrap_or(0_i32);
+    let asset = publish_image(state, &name.to_string(), &rendered, options)?;
+    Ok(ThingSpriteReport {
+        r#type: def.kind,
+        name: def.name,
+        sprite: def.sprite,
+        frame,
+        rotation: request.rotation,
+        lump,
+        mirrored,
+        width,
+        height,
+        left_offset,
+        top_offset,
+        hanging: def.hanging,
+        asset,
+    })
+}
+
 /// The name and bytes of the patch one `decode_patch` call reads, from the
 /// merged view or from a fetched file: exactly one of the two.
 ///
@@ -1404,6 +1661,28 @@ impl Cyberdemon {
         }
     }
 
+    /// Previews one thing type's sprite rotation as an image asset.
+    #[tool(
+        description = "Publishes what one thing type looks like in game as an image asset; nothing is edited. type (e.g. 3001, the Imp) is looked up in the SESSION-AWARE definitions: the game's built-in thing table (the session's detected game, DOOM II when unidentified) overlaid with the merged view's DEHACKED, DECORATE, ZScript and MAPINFO custom types - load the archives first (open_iwad/merge_wad). Optional frame (one letter A-Z, then [, \\, ]; case-insensitive; default: the definition's own frame) and rotation (1..=8, default 1: the eight views, 1 the front a head-on viewer sees, 5 the back) pick the picture. The rotation resolves the way an engine does, exactly as get_sprite: the lump named for it (\"TROOA1\") wins, then a mirror-pair lump published flipped (\"TROOA2A8\" serves 8), then the frame's rotation-0 all-angles image (\"PLAYA0\"). palette (default 0), format (\"png\" default with the drawing offsets in a grAb chunk, \"rgba\" for raw row-major RGBA8 bytes) and scale (1..=8, default 1) work as in get_sprite. An unknown type is not_found (get_thing_types lists what exists); a definition without a sprite is not_found (\"thing type N has no sprite\"); a frame or rotation no lump serves is not_found naming the expected lump pattern (e.g. \"TROOA1 / TROOA0\", list_sprites shows the rest); a malformed frame or a rotation outside 1..=8 is invalid_argument. Returns {type, name, sprite, frame, rotation, lump, mirrored, width, height, left_offset, top_offset, hanging, asset}: name is the definition's display name, lump the sprite lump whose pixels served, mirrored whether they were flipped, hanging whether the thing hangs from the ceiling."
+    )]
+    fn get_thing_sprite(
+        &self,
+        Parameters(args): Parameters<GetThingSpriteParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let request = match thing_request(&args) {
+            Ok(request) => request,
+            Err(error) => return fail(&error),
+        };
+        let options = match parse_options(&args.common) {
+            Ok(options) => options,
+            Err(error) => return fail(&error),
+        };
+        match get_thing_sprite_run(self.state(), &request, &options) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
     /// Decodes a Doom-format patch from a lump or a file and publishes it
     /// as both a PNG and raw RGBA.
     #[tool(
@@ -1426,11 +1705,12 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AssetFormat, GetSpriteParams, Groups, ImageParams, Page, Prepared, Rendered, SpriteRequest,
-        collect_sprite, display_name, grab_of, in_namespace, is_patch_candidate, last_wins,
-        list_flats_run, list_patches_run, list_sprites_run, parse_frame, parse_options, parse_page,
-        parse_prefix, parse_rotation, parse_sprite, patch_row, pnames_of, scale_offset,
-        sprite_request, sprite_rows,
+        AssetFormat, GetSpriteParams, GetThingSpriteParams, Groups, ImageParams, Page, Prepared,
+        Rendered, SpriteRequest, ThingRequest, collect_sprite, display_name, grab_of, in_namespace,
+        is_patch_candidate, last_wins, list_flats_run, list_patches_run, list_sprites_run,
+        missing_thing_sprite, parse_frame, parse_options, parse_page, parse_prefix, parse_rotation,
+        parse_sprite, parse_thing_rotation, patch_row, pnames_of, prepare_thing_sprite,
+        scale_offset, session_game, sprite_request, sprite_rows, thing_request, thing_sprite_def,
     };
     use crate::error::CyberError;
     use crate::gfx::codec::encode_png;
@@ -1440,6 +1720,7 @@ mod tests {
     use crate::tools::lumps::rows::{LumpRow, build_rows};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
+    use crate::wad::game::Game;
     use crate::wad::name::LumpName;
     use crate::wad::textures::write_pnames;
 
@@ -2013,5 +2294,143 @@ mod tests {
             "no lump name in it: the filename"
         );
         assert_eq!(display_name(""), "PATCH", "a source naming no file at all");
+    }
+
+    /// The `get_thing_sprite` arguments for one type and selection.
+    fn thing_params(kind: u32, frame: Option<&str>, rotation: Option<u8>) -> GetThingSpriteParams {
+        GetThingSpriteParams {
+            r#type: kind,
+            frame: frame.map(str::to_owned),
+            rotation,
+            common: ImageParams::default(),
+        }
+    }
+
+    /// A direct `ThingRequest` for the session-side helpers.
+    fn thing_selection(kind: u32, frame: Option<char>, rotation: u8) -> ThingRequest {
+        ThingRequest {
+            kind,
+            frame,
+            rotation,
+        }
+    }
+
+    #[test]
+    fn thing_sprite_arguments_default_and_refuse_odd_selections() {
+        let plain = thing_request(&thing_params(3001, None, None)).expect("a type alone");
+        assert_eq!(
+            (plain.kind, plain.frame, plain.rotation),
+            (3001_u32, None, 1_u8),
+            "the definition's frame and rotation 1"
+        );
+        let picked = thing_request(&thing_params(3001, Some("b"), Some(8))).expect("given parts");
+        assert_eq!(
+            (picked.frame, picked.rotation),
+            (Some('B'), 8_u8),
+            "the frame is uppercased"
+        );
+        let odd_frame = thing_request(&thing_params(3001, Some("1"), None)).expect_err("no frame");
+        assert_eq!(code(&odd_frame), "invalid_argument", "frame code");
+        assert!(
+            thing_request(&thing_params(3001, None, Some(0)))
+                .expect_err("rotation 0 is get_sprite's")
+                .to_string()
+                .contains("rotation"),
+            "the message names the parameter"
+        );
+        for rotation in [0_u8, 9_u8] {
+            let error = parse_thing_rotation(Some(rotation)).expect_err("outside the eight views");
+            assert_eq!(code(&error), "invalid_argument", "rotation {rotation} code");
+        }
+        assert_eq!(
+            parse_thing_rotation(None).expect("the default"),
+            1,
+            "rotation 1"
+        );
+    }
+
+    #[test]
+    fn thing_definitions_follow_the_session_game_and_custom_sources() {
+        assert_eq!(
+            session_game(&Session::default()),
+            Game::Doom2,
+            "an unidentified session stands for DOOM II"
+        );
+        let session = fixture();
+        let imp = thing_sprite_def(&session, 3001).expect("the built-in Imp");
+        assert_eq!(
+            (imp.sprite.as_str(), imp.frame, imp.name.as_str()),
+            ("TROO", 'A', "Imp"),
+            "the table row"
+        );
+        let unknown = thing_sprite_def(&session, 999_999).expect_err("no such type");
+        assert_eq!(code(&unknown), "not_found", "unknown type code");
+        assert!(
+            unknown.to_string().contains("no thing type 999999"),
+            "the message names the type: {unknown}"
+        );
+        let mut grown = fixture();
+        grown
+            .edit("decorate", |wad| {
+                wad.lumps.push(Lump::new(
+                    name("DECORATE"),
+                    b"actor LampSprite 20010 {\n States {\n Spawn: PLSM A 10\n }\n}\n\
+                      actor LampPlain 20014 { radius 10 }\n"
+                        .to_vec(),
+                ));
+                Ok(())
+            })
+            .expect("plain append");
+        let custom = thing_sprite_def(&grown, 20_010).expect("the DECORATE type");
+        assert_eq!(
+            (custom.sprite.as_str(), custom.frame, custom.source.as_str()),
+            ("PLSM", 'A', "decorate"),
+            "the session-aware overlay reaches the tool"
+        );
+        let no_sprite = thing_sprite_def(&grown, 20_014).expect_err("no sprite column");
+        assert_eq!(code(&no_sprite), "not_found", "no-sprite code");
+        assert!(
+            no_sprite
+                .to_string()
+                .contains("thing type 20014 has no sprite"),
+            "the message names the type: {no_sprite}"
+        );
+    }
+
+    #[test]
+    fn thing_sprite_prep_reports_definition_lump_and_picture_errors() {
+        let session = fixture();
+        let options = parse_options(&ImageParams::default()).expect("the defaults");
+        let unknown = prepare_thing_sprite(&session, &thing_selection(999_999, None, 1), &options)
+            .err()
+            .expect("no such type");
+        assert_eq!(code(&unknown), "not_found", "unknown type code");
+        let no_lumps = prepare_thing_sprite(&session, &thing_selection(3004, None, 1), &options)
+            .err()
+            .expect("the fixture has no POSS lumps");
+        assert_eq!(code(&no_lumps), "not_found", "missing lumps code");
+        assert!(
+            no_lumps.to_string().contains("POSSA1 / POSSA0"),
+            "the message names the lump pattern: {no_lumps}"
+        );
+        let broken = prepare_thing_sprite(&session, &thing_selection(3001, None, 1), &options)
+            .err()
+            .expect("the fixture's TROOA1 is a bare header");
+        assert_eq!(
+            code(&broken),
+            "format_error",
+            "an undecodable sprite stays a format error"
+        );
+    }
+
+    #[test]
+    fn a_missing_thing_sprite_names_the_expected_lumps() {
+        let error = missing_thing_sprite("TROO", 'A', 1);
+        assert_eq!(code(&error), "not_found", "the helper's code");
+        let message = error.to_string();
+        assert!(
+            message.contains("TROOA1 / TROOA0") && message.contains("list_sprites"),
+            "the message names the lumps and the listing: {message}"
+        );
     }
 }

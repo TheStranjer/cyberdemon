@@ -129,11 +129,13 @@ src/
                   serialization, lookup and atomic I/O, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
                   `MapBlock`s and `LumpKind` type hints, `wad/game.rs`
-                  the pure game signature detection (`detect_game`) and
+                  the pure game signature detection (`detect_game`),
                   `wad/textures.rs` the `PNAMES` and `TEXTURE1`/`TEXTURE2`
                   codecs: patch-name index, texture records with
                   `Doom`/`Strife` layout detection and patch-reference
-                  renumbering.
+                  renumbering, and `wad/udmf.rs` the `UDMF` `TEXTMAP`
+                  grammar: tokenizer, parser and writer over `UdmfDoc`
+                  blocks and key/value pairs (no map model, no MCP).
   wad/map.rs      Map layer root: the `read_map`/`write_map` format
                   dispatcher and the model re-exports.
   wad/map/        Map data (no MCP concerns): `map/model.rs` the

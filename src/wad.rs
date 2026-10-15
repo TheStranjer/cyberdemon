@@ -10,8 +10,9 @@
 //! every lump's namespace, map membership and type hint, and
 //! [`game::detect_game`] names the game a directory of lump names
 //! identifies. [`map`] holds the typed, format-neutral map model and its
-//! binary `Doom` codec. Nothing in this module knows about MCP or sessions;
-//! it is pure data.
+//! binary `Doom` codec, and [`udmf`] the `UDMF` `TEXTMAP` grammar as a
+//! document of blocks and key/value pairs. Nothing in this module knows
+//! about MCP or sessions; it is pure data.
 
 pub mod archive;
 pub mod bytes;
@@ -20,6 +21,7 @@ pub mod game;
 pub mod map;
 pub mod name;
 pub mod textures;
+pub mod udmf;
 
 pub use archive::{Lump, Wad, WadKind};
 pub use classify::{
@@ -30,4 +32,7 @@ pub use name::LumpName;
 pub use textures::{
     PatchRef, TextureDef, TextureLayout, TextureLump, dropped_references, parse_pnames,
     parse_texture_lump, remap_patches, write_pnames, write_texture_lump,
+};
+pub use udmf::{
+    UdmfBlock, UdmfDoc, UdmfValue, decimal_to_rounded_int, has_fraction, parse_udmf, write_udmf,
 };

@@ -90,6 +90,7 @@ mod tests {
             names,
             [
                 "add_lump",
+                "decode_patch",
                 "edit_decorate",
                 "edit_dehacked",
                 "edit_pnames",
@@ -97,12 +98,15 @@ mod tests {
                 "extract_lump",
                 "get_asset_server_info",
                 "get_dehacked",
+                "get_flat",
                 "get_linedef_specials",
                 "get_lump",
                 "get_palette",
+                "get_patch",
                 "get_render_settings",
                 "get_sector_specials",
                 "get_session_info",
+                "get_sprite",
                 "get_thing_types",
                 "get_wad_info",
                 "import_asset",
@@ -184,6 +188,33 @@ mod tests {
             &["name", "scope", "namespace", "occurrence"],
         );
         assert_required(&preview_music, "name");
+    }
+
+    /// Requires a picture tool's schema to flatten the shared `palette`,
+    /// `format` and `scale` options and still require its `name`.
+    fn assert_picture_options(tool: &Tool) {
+        let schema = schema_of(tool);
+        assert_flattens(&schema, &["name", "palette", "format", "scale"]);
+        assert_required(&schema, "name");
+    }
+
+    #[tokio::test]
+    async fn the_picture_tool_schemas_flatten_their_shared_options() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        assert_picture_options(tool_named(&tools, "get_flat"));
+        assert_picture_options(tool_named(&tools, "get_patch"));
+        let sprite = schema_of(tool_named(&tools, "get_sprite"));
+        assert_flattens(
+            &sprite,
+            &[
+                "name", "sprite", "frame", "rotation", "palette", "format", "scale",
+            ],
+        );
+        assert_nothing_required(&sprite);
+        let decoded = schema_of(tool_named(&tools, "decode_patch"));
+        assert_flattens(&decoded, &["name", "source", "palette"]);
+        assert_nothing_required(&decoded);
     }
 
     #[tokio::test]

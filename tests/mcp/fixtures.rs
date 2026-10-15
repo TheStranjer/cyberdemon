@@ -192,7 +192,14 @@ fn colormap() -> Vec<u8> {
 /// than through a graphics tool so the texture fixtures stand on their
 /// own.
 fn patch(width: usize, height: usize, fill: u8) -> Vec<u8> {
-    let column_len = height.checked_add(4_usize).expect("test column fits");
+    patch_with(width, height, fill, (0_i16, 0_i16))
+}
+
+/// The same hand-built `Doom` patch with `offsets` in its header: what
+/// `get_patch` reports and writes into a `grAb` chunk.
+fn patch_with(width: usize, height: usize, fill: u8, offsets: (i16, i16)) -> Vec<u8> {
+    let (left, top) = offsets;
+    let column_len = height.checked_add(5_usize).expect("test column fits");
     let directory_end = 8_usize
         .checked_add(width.checked_mul(4).expect("test width fits"))
         .expect("test directory fits");
@@ -201,10 +208,8 @@ fn patch(width: usize, height: usize, fill: u8) -> Vec<u8> {
         let stored = u16::try_from(field).expect("test patch fields fit");
         bytes.extend_from_slice(&stored.to_le_bytes());
     }
-    for _offset in 0_usize..2 {
-        let zero = 0_i16;
-        bytes.extend_from_slice(&zero.to_le_bytes());
-    }
+    bytes.extend_from_slice(&left.to_le_bytes());
+    bytes.extend_from_slice(&top.to_le_bytes());
     for column in 0..width {
         let step = column.checked_mul(column_len).expect("test offsets fit");
         let offset = directory_end.checked_add(step).expect("test offsets fit");
@@ -220,6 +225,7 @@ fn patch(width: usize, height: usize, fill: u8) -> Vec<u8> {
         bytes.push(post_len);
         bytes.push(0_u8);
         bytes.extend_from_slice(&vec![fill; height]);
+        bytes.push(0_u8);
         bytes.push(0xFF_u8);
     }
     bytes
@@ -249,17 +255,13 @@ fn tile(patch_index: u16, columns: usize, rows: usize, step: (i16, i16)) -> Vec<
 
 /// A 64x64 `RGBA` `PNG`, encoded through the library codec, for the
 /// `PNGFLAT` fixture flat: a flat whose bytes are `PNG` rather than a raw
-/// indexed plane.
+/// indexed plane. Its colour is `PLAYPAL` index 64 of the fixture palette
+/// and every pixel is opaque.
 fn png64() -> Vec<u8> {
     let side = 64_usize;
-    let pixels = vec![
-        0x7F_u8;
-        side.checked_mul(side)
-            .expect("64x64 fits")
-            .checked_mul(4)
-            .expect("png pixels fit")
-    ];
-    let img = RgbaImage::new(64, 64, pixels).expect("64x64 is a valid shape");
+    let pixels: Vec<[u8; 4]> =
+        vec![[64_u8, 191, 64, 255]; side.checked_mul(side).expect("64x64 fits")];
+    let img = RgbaImage::new(64, 64, pixels.concat()).expect("64x64 is a valid shape");
     encode_png(&img, None).expect("the fixture PNG encodes")
 }
 
@@ -339,7 +341,10 @@ fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
     lumps.push(marker("F_END"));
     lumps.push(lump("ENDOOM", vec![b' '; ENDOOM_BYTES]));
     lumps.push(marker("P_START"));
-    lumps.push(lump("WALLP1", patch(16, 16, 0x11_u8)));
+    lumps.push(lump(
+        "WALLP1",
+        patch_with(16, 16, 0x11_u8, (-2_i16, -14_i16)),
+    ));
     lumps.push(lump("STEPP1", patch(16, 8, 0x22_u8)));
     lumps.push(marker("P_END"));
     lumps.extend(sprite_lumps());

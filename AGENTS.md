@@ -118,6 +118,11 @@ src/
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
+                  `tools/graphics/resolve.rs` holds the shared picture
+                  resolvers (flat, patch, sprite rotation) that every tool
+                  reading graphic lumps decodes through: the image tools
+                  now, the renderer and texture compositor next;
+                  `tools/palette.rs`' `load_palette` is its palette side.
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

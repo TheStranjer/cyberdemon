@@ -145,13 +145,15 @@ mod tests {
         let (x1, y1) = from;
         let (x2, y2) = to;
         Partition::from_vertices(
-            Vertex {
+            &Vertex {
                 x: whole(x1),
                 y: whole(y1),
+                ..Default::default()
             },
-            Vertex {
+            &Vertex {
                 x: whole(x2),
                 y: whole(y2),
+                ..Default::default()
             },
             side,
         )

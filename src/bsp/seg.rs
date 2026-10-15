@@ -54,10 +54,10 @@ pub(crate) fn initial_segs(map: &Map) -> Result<Vec<WorkSeg>, CyberError> {
             continue;
         }
         if let Some(sector) = front {
-            segs.push(side_seg(v1, v2, (index, 0, sector)));
+            segs.push(side_seg(&v1, &v2, (index, 0, sector)));
         }
         if let Some(sector) = back {
-            segs.push(side_seg(v1, v2, (index, 1, sector)));
+            segs.push(side_seg(&v1, &v2, (index, 1, sector)));
         }
     }
     Ok(segs)
@@ -67,7 +67,7 @@ pub(crate) fn initial_segs(map: &Map) -> Result<Vec<WorkSeg>, CyberError> {
 fn vertex_at(map: &Map, index: usize, owner: usize, what: &str) -> Result<Vertex, CyberError> {
     map.vertices
         .get(index)
-        .copied()
+        .cloned()
         .ok_or_else(|| dangling(what, index, "linedef", owner))
 }
 
@@ -94,7 +94,7 @@ fn side_sector(
 /// The work seg of one side: its endpoints follow the side's direction,
 /// its partition follows the linedef. `source` bundles
 /// `(linedef, side, sector)`.
-fn side_seg(v1: Vertex, v2: Vertex, source: (usize, u8, usize)) -> WorkSeg {
+fn side_seg(v1: &Vertex, v2: &Vertex, source: (usize, u8, usize)) -> WorkSeg {
     let (linedef, side, sector) = source;
     let (from, to) = if side == 0 { (v1, v2) } else { (v2, v1) };
     WorkSeg {
@@ -129,7 +129,11 @@ mod tests {
     fn vertex(map: &mut Map, x: i64, y: i64) -> usize {
         let vx = i32::try_from(x).unwrap();
         let vy = i32::try_from(y).unwrap();
-        map.vertices.push(Vertex { x: vx, y: vy });
+        map.vertices.push(Vertex {
+            x: vx,
+            y: vy,
+            ..Default::default()
+        });
         map.vertices.len().checked_sub(1).unwrap()
     }
 
@@ -163,9 +167,10 @@ mod tests {
 
     /// A fixed point at whole map units.
     fn point(x: i64, y: i64) -> Point {
-        Point::from_vertex(Vertex {
+        Point::from_vertex(&Vertex {
             x: i32::try_from(x).unwrap(),
             y: i32::try_from(y).unwrap(),
+            ..Default::default()
         })
     }
 

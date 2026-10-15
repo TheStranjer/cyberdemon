@@ -40,7 +40,7 @@ impl Point {
     /// cannot fail.
     #[must_use]
     #[inline]
-    pub fn from_vertex(vertex: Vertex) -> Self {
+    pub fn from_vertex(vertex: &Vertex) -> Self {
         let x = i64::from(vertex.x).checked_shl(crate::fixed::FRACBITS);
         let y = i64::from(vertex.y).checked_shl(crate::fixed::FRACBITS);
         Self {
@@ -71,7 +71,7 @@ impl Partition {
     /// differences saturate at the `i32` extremes.
     #[must_use]
     #[inline]
-    pub const fn from_vertices(v1: Vertex, v2: Vertex, side: u8) -> Self {
+    pub const fn from_vertices(v1: &Vertex, v2: &Vertex, side: u8) -> Self {
         if side == 0 {
             Self {
                 x: v1.x,
@@ -127,7 +127,11 @@ mod tests {
 
     #[test]
     fn point_from_vertex_scales_to_16_16() {
-        let point = Point::from_vertex(Vertex { x: 256, y: -3 });
+        let point = Point::from_vertex(&Vertex {
+            x: 256,
+            y: -3,
+            ..Default::default()
+        });
         assert_eq!(point.x, 256_i64.checked_mul(0x1_0000).unwrap(), "x scaled");
         assert_eq!(point.y, (-3_i64).checked_mul(0x1_0000).unwrap(), "y scaled");
         assert_eq!(Point::default(), Point { x: 0, y: 0 }, "zero point");
@@ -135,10 +139,18 @@ mod tests {
 
     #[test]
     fn partition_side_0_runs_v1_to_v2() {
-        let v1 = Vertex { x: 4, y: 6 };
-        let v2 = Vertex { x: 10, y: 6 };
+        let v1 = Vertex {
+            x: 4,
+            y: 6,
+            ..Default::default()
+        };
+        let v2 = Vertex {
+            x: 10,
+            y: 6,
+            ..Default::default()
+        };
         assert_eq!(
-            Partition::from_vertices(v1, v2, 0),
+            Partition::from_vertices(&v1, &v2, 0),
             Partition {
                 x: 4,
                 y: 6,
@@ -148,7 +160,7 @@ mod tests {
             "front side"
         );
         assert_eq!(
-            Partition::from_vertices(v1, v2, 1),
+            Partition::from_vertices(&v1, &v2, 1),
             Partition {
                 x: 10,
                 y: 6,

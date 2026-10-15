@@ -9,8 +9,9 @@
 //! and write real files. [`classify::analyze`] walks a directory and reports
 //! every lump's namespace, map membership and type hint, and
 //! [`game::detect_game`] names the game a directory of lump names
-//! identifies. [`map`] holds the typed, format-neutral map model and its
-//! binary `Doom` codec, and [`udmf`] the `UDMF` `TEXTMAP` grammar as a
+//! identifies. [`map`] holds the typed, format-neutral map model with its
+//! binary `Doom` and `Hexen` codecs and its `UDMF` mapping, and [`udmf`]
+//! the `UDMF` `TEXTMAP` grammar as a
 //! document of blocks and key/value pairs. Nothing in this module knows
 //! about MCP or sessions; it is pure data.
 

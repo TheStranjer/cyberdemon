@@ -2,15 +2,18 @@
 
 Turning external picture files into lumps: the patch importer
 `import_image_as_patch` (alias `import_png_as_patch`), the flat importer
-`import_image_as_flat` (alias `import_png_as_flat`), and the byte-for-byte
-`import_image_as_raw`. Where the graphics tools (`reference/graphics.md`)
-*publish* session pictures outward, these tools bring pictures *in*, as one
-undoable edit each (`undo` steps them back; `save_wad` writes them out).
+`import_image_as_flat` (alias `import_png_as_flat`), the sprite importer
+`import_image_as_sprite` (alias `import_png_as_sprite`) and the
+byte-for-byte `import_image_as_raw`. Where the graphics tools
+(`reference/graphics.md`) *publish* session pictures outward, these tools
+bring pictures *in*, as one undoable edit each (`undo` steps them back;
+`save_wad` writes them out).
 
 ## Shared parameters
 
-`import_image_as_patch`, `import_png_as_patch`, `import_image_as_flat` and
-`import_png_as_flat` share these:
+`import_image_as_patch`, `import_png_as_patch`, `import_image_as_sprite`,
+`import_png_as_sprite`, `import_image_as_flat` and `import_png_as_flat`
+share these:
 
 - `source` (string, required): the picture to import — absolute path,
   `file://` URI, `http(s)://` URL or this server's asset/upload URL (see
@@ -33,11 +36,13 @@ undoable edit each (`undo` steps them back; `save_wad` writes them out).
   chosen mode are ignored. Flats store no transparency at all, so
   `import_image_as_flat` keeps every pixel opaque and only counts the
   ignored alpha.
-- `offsets` (string or object, optional; patch importers only): the drawing
-  offsets stored in the patch header. `"zero"`, `"grab"`, `"center"`,
-  `"center_bottom"` or an explicit `{ "x": n, "y": n }` pair. Omitted means
-  `"grab"`: a `PNG`'s `grAb` chunk when it carries one, else the tool's own
-  default — for the patch tools that is `"zero"` (wall patches). `center`
+- `offsets` (string or object, optional; patch and sprite importers): the
+  drawing offsets stored in the patch header. `"zero"`, `"grab"`,
+  `"center"`, `"center_bottom"` or an explicit `{ "x": n, "y": n }` pair.
+  Omitted means `"grab"`: a `PNG`'s `grAb` chunk when it carries one, else
+  the tool's own default — `"zero"` for the patch tools (wall patches) and
+  `"center_bottom"` for the sprite tools (a sprite stands on its origin).
+  `center`
   is `(width/2, height/2)` and `center_bottom` is `(width/2, height)` in
   the Doom offset convention: a positive left offset shifts the image left,
   and the top offset is the distance from the image's top edge down to the
@@ -152,6 +157,97 @@ An alias of `import_image_as_flat` for PNG-fluent clients. Despite the
 name it accepts any supported image, not just `PNG`; everything —
 parameters, flats-region placement, undo label and result — is identical.
 
+## `import_image_as_sprite`
+
+- Purpose: quantizes the picture to the session's `PLAYPAL`, stores it in
+  the `Doom` column/post patch format and places it in the working
+  archive's **sprites** region (`S_START`/`S_END` markers created there
+  when missing), as one undoable edit labelled `import_sprite NAME`.
+- Arguments: `source`, `palette`, `transparency`, `offsets` and `replace`
+  as in the shared parameters above (the `offsets` default is
+  `"center_bottom"`: `left = width/2`, `top = height`, which puts the
+  sprite's feet on its origin — a `PNG` `grAb` chunk wins over it), plus
+  the naming below. There is no `PNAMES` listing: sprites are named by
+  their lump name, not by a texture list.
+
+### Sprite naming
+
+Give exactly one of the two forms (both, or neither, is
+`invalid_argument`); unlike the other importers this tool never derives a
+name from the file stem:
+
+- `name` (string): the complete lump name, `PPPPFN` or `PPPPFNFN` — four
+  sprite characters (`ASCII` letters or digits, e.g. `TROO`, `B4R1`), one
+  frame letter (`A`-`Z`, then `[`, `\`, `]`: 29 frames) and one rotation
+  digit `0`-`8`. `0` is the all-angles image: one picture serves every
+  view. A second frame+rotation pair on the end is served by the same
+  image horizontally mirrored, so `TROOA2A8` draws rotation 2 as stored
+  and rotation 8 flipped. Lowercase input is uppercased like any lump
+  name. Anything outside the grammar (`TOOLONG1`, `TROOA9`, `TROOA0A8`)
+  is `invalid_argument`, and the error explains the grammar.
+  Examples: `TROOA1` (view 1 of frame `A`), `PLAYA0` (every view of frame
+  `A`), `POSSA2A8` (views 2 and 8, the second mirrored).
+- `sprite` (string, four characters) with `frame` (default `"A"`),
+  `rotation` (default `0`) and `mirror_rotation` (optional). The tool
+  builds the name: `sprite: "TROO"`, `frame: "A"`, `rotation: 2`,
+  `mirror_rotation: 8` gives `TROOA2A8`. `mirror_rotation` must be one of
+  `1`-`8`, must differ from `rotation`, and needs `rotation` to be a view
+  `1`-`8` too (rotation 0 has no mirror partner); each violation is
+  `invalid_argument`.
+
+- Returns:
+
+  ```json
+  {
+    "name": "TROOA2A8",
+    "lump_index": 3,
+    "sprite": "TROO",
+    "frame": "A",
+    "rotation": 2,
+    "mirror": 8,
+    "warnings": [],
+    "width": 48,
+    "height": 64,
+    "left_offset": 24,
+    "top_offset": 64,
+    "transparent_pixels": 1200,
+    "colors_used": 32,
+    "max_color_error": 18
+  }
+  ```
+
+  `lump_index` is the position in the working archive and `mirror` is the
+  rotation the mirrored image serves (`null` for a six-character name);
+  the rest are the shared picture measurements.
+- `warnings` never stop the import; they report what an engine would trip
+  over in the merged view:
+  - another sprite lump already serves one of the rotations this lump
+    covers, e.g. importing `TROOA2` while `TROOA2A8` exists leaves two
+    images for rotation 2 — remove one lump or import a rotation none
+    covers;
+  - the frame ends up mixing the all-angles rotation `0` with per-view
+    rotations `1`-`8`, which engines resolve differently.
+  A lump named exactly like the import is not an overlap (it is the
+  duplicate rule below, or the copy being replaced).
+- Errors: `invalid_argument` (bad or ungrammatical naming, both forms or
+  neither, bad offsets), `format_error` / `unsupported` (bytes that are no
+  readable image), `not_found` (missing file, missing `PLAYPAL`, bad
+  palette index), `already_exists` (a working sprites lump of this name
+  without `replace`). A name only the `IWAD` or a resource layer holds
+  becomes an override.
+- Check the result with `list_sprites` (the frame appears under its
+  prefix, malformed region names are listed separately in `invalid`) and
+  publish it back with `get_sprite`, which resolves a rotation through the
+  engine's rules: the exact lump, then a mirror-pair lump flipped, then
+  the frame's rotation-`0` image.
+
+## `import_png_as_sprite`
+
+An alias of `import_image_as_sprite` for PNG-fluent clients. Despite the
+name it accepts any supported image, not just `PNG`; everything —
+parameters, naming, sprites-region placement, undo label, `warnings` and
+result — is identical.
+
 ## `import_image_as_raw`
 
 - Purpose: validates that the bytes are a readable image, then inserts
@@ -182,3 +278,6 @@ parameters, flats-region placement, undo label and result — is identical.
   `list_patches` still read it (ports carry such lumps), but vanilla
   engines need `import_image_as_patch` instead. Check the stored bytes with
   `get_lump format=hex` or `extract_lump`.
+- For a vanilla sprite use `import_image_as_sprite` (its name carries the
+  frames and rotations an engine reads); a raw `PNG` in the sprites region
+  only works for ports that read them.

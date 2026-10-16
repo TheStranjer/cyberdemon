@@ -358,6 +358,17 @@ impl Session {
         merge::merge_all(&layers, &self.working)
     }
 
+    /// The merged view of the read-only layers alone: `IWAD` plus resources
+    /// folded in load order, with an empty archive where [`Session::merged`]
+    /// puts the working one. This is what the layers provide before any of
+    /// this session's edits.
+    #[must_use]
+    #[inline]
+    pub fn base_lumps(&self) -> Vec<MergedLump> {
+        let layers: Vec<&Wad> = self.layers().into_iter().map(|layer| &layer.wad).collect();
+        merge::merge_all(&layers, &Wad::default())
+    }
+
     /// The game the session's archives identify: from the `IWAD` layer's
     /// lump names when one is loaded, else from the merged view's names
     /// (see [`crate::wad::game::detect_game`]).
@@ -1113,6 +1124,56 @@ mod tests {
             &expected,
             "the mutable accessor reaches the stored value"
         );
+    }
+
+    #[test]
+    fn base_lumps_are_the_merged_view_without_the_working_archive() {
+        let mut session = loaded();
+        session.replace_working(pwad(vec![payload("PLAYPAL", "working copy")]), None);
+        assert_eq!(
+            tagged(&session.base_lumps()),
+            vec![
+                "PLAYPAL@L0",
+                "GAMEINFO@L1",
+                "F_START@L0",
+                "FLOOR_1@L0",
+                "FLOOR_2@L0",
+                "F_SKY1@L1",
+                "F_END@L0",
+                "MAP01@L0",
+                "THINGS@L0",
+            ],
+            "the layers folded in load order, no working override and no working arrival"
+        );
+        assert_ne!(
+            tagged(&session.merged()),
+            tagged(&session.base_lumps()),
+            "the working archive does change the merged view"
+        );
+        let base_playpal = session
+            .base_lumps()
+            .into_iter()
+            .find(|entry| entry.lump.name == name("PLAYPAL"))
+            .expect("the base has a PLAYPAL");
+        assert_eq!(
+            base_playpal.source,
+            Source::Layer(0),
+            "the base keeps the layer's"
+        );
+        assert_eq!(base_playpal.lump.data.as_ref(), b"PLAYPAL", "and its bytes");
+    }
+
+    #[test]
+    fn base_lumps_of_a_fresh_session_are_empty() {
+        assert!(
+            Session::default().base_lumps().is_empty(),
+            "no layers, no base"
+        );
+    }
+
+    /// A lump named `text` carrying `body`, so copies are tellable.
+    fn payload(text: &str, body: &str) -> Lump {
+        Lump::new(name(text), body.as_bytes().to_vec())
     }
 
     #[test]

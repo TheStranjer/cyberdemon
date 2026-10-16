@@ -10,14 +10,16 @@
 //! every lump's namespace, map membership and type hint, and
 //! [`game::detect_game`] names the game a directory of lump names
 //! identifies. [`map`] holds the typed, format-neutral map model with its
-//! binary `Doom` and `Hexen` codecs and its `UDMF` mapping, and [`udmf`]
-//! the `UDMF` `TEXTMAP` grammar as a
+//! binary `Doom` and `Hexen` codecs and its `UDMF` mapping, [`mod@diff`]
+//! compares two directories lump by lump and map block by map block, and
+//! [`udmf`] the `UDMF` `TEXTMAP` grammar as a
 //! document of blocks and key/value pairs. Nothing in this module knows
 //! about MCP or sessions; it is pure data.
 
 pub mod archive;
 pub mod bytes;
 pub mod classify;
+pub mod diff;
 pub mod game;
 pub mod map;
 pub mod name;
@@ -27,6 +29,9 @@ pub mod udmf;
 pub use archive::{Lump, Wad, WadKind};
 pub use classify::{
     Analysis, LumpInfo, LumpKind, MapBlock, MapFormat, Namespace, analyze, is_doom_patch,
+};
+pub use diff::{
+    Diff, LumpDiff, MapCounts, MapDiff, Mode, Status, Summary, diff, fnv1a64, same_content,
 };
 pub use game::{Game, detect_game};
 pub use name::LumpName;

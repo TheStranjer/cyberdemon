@@ -31,7 +31,9 @@ pub fn flat_shape(len: usize) -> Option<(u32, u32)> {
 }
 
 /// Whether a `width`x`height` image has a supported flat shape.
-fn is_flat_shape(width: u32, height: u32) -> bool {
+#[must_use]
+#[inline]
+pub fn is_flat_shape(width: u32, height: u32) -> bool {
     FLAT_SHAPES
         .into_iter()
         .any(|(_, shape_width, shape_height)| shape_width == width && shape_height == height)
@@ -103,7 +105,7 @@ pub fn encode_flat(img: &IndexedImage) -> Result<(Vec<u8>, usize), CyberError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_flat, encode_flat, flat_shape};
+    use super::{decode_flat, encode_flat, flat_shape, is_flat_shape};
     use crate::error::CyberError;
     use crate::gfx::image::IndexedImage;
 
@@ -125,6 +127,16 @@ mod tests {
         }
         let opaque = vec![true; total];
         IndexedImage::new(width, height, indices, opaque).expect("test flats are valid")
+    }
+
+    #[test]
+    fn the_supported_shapes_are_recognised_by_dimension() {
+        for (width, height) in [(64_u32, 64_u32), (64, 128), (128, 128), (256, 256)] {
+            assert!(is_flat_shape(width, height), "{width}x{height} is a flat");
+        }
+        for (width, height) in [(32_u32, 32_u32), (64, 96), (128, 64), (255, 255)] {
+            assert!(!is_flat_shape(width, height), "{width}x{height} is not");
+        }
     }
 
     #[test]

@@ -6,10 +6,14 @@
 //! `PLAYPAL`, resolve drawing offsets, encode a `Doom` patch - and drops
 //! the result into the working archive's patches region as one undoable
 //! edit, optionally listing the name in `PNAMES` (copy-on-write).
+//! [`Cyberdemon::import_image_as_flat`] (and its alias
+//! [`Cyberdemon::import_png_as_flat`]) reuses the same pieces on the flat
+//! side: decode, opaque quantization, nearest scaling to a supported flat
+//! shape, `encode_flat`, and insertion into the working `flats` region.
 //! [`Cyberdemon::import_image_as_raw`] validates that the bytes are a
 //! readable image and stores them unchanged, for `ZDoom`-family ports
-//! that read `PNG` lumps directly. Flat, sprite and patch-replacement
-//! tools grow on the same pipeline pieces.
+//! that read `PNG` lumps directly. Sprite and patch-replacement tools
+//! grow on the same pipeline pieces.
 
 mod image_pipeline;
 
@@ -21,15 +25,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, format_name};
+use crate::gfx::flat::{encode_flat, is_flat_shape};
+use crate::gfx::image::{RgbaImage, resize_nearest};
+use crate::gfx::quantize::{
+    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize, quantize_stats,
+};
+use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{
-    ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched, build_patch, chosen_name,
-    parse_import, put_lump,
+    DEFAULT_PALETTE, ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched,
+    build_patch, chosen_name, parse_import, put_lump,
 };
 use crate::tools::ok;
+use crate::tools::palette::load_palette;
 use crate::tools::textures::put_global;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
@@ -37,6 +48,10 @@ use crate::wad::textures::{parse_pnames, write_pnames};
 
 /// Raw directory bytes of the patch-name lump.
 const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
+/// Square flat side the import resizes to when `size` is unset.
+const DEFAULT_FLAT_SIZE: u32 = 64_u32;
+/// The square sides `resize: "nearest"` may scale a picture to.
+const FLAT_SIZES: [u32; 3] = [64_u32, 128_u32, 256_u32];
 
 /// Arguments for [`Cyberdemon::import_image_as_patch`] and its alias
 /// [`Cyberdemon::import_png_as_patch`].
@@ -51,6 +66,39 @@ struct ImportPatchParams {
     /// missing (default `true`).
     #[serde(default)]
     add_to_pnames: Option<bool>,
+}
+
+/// Arguments for [`Cyberdemon::import_image_as_flat`] and its alias
+/// [`Cyberdemon::import_png_as_flat`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ImportFlatParams {
+    /// File to import: absolute path, `file://` URI, `http(s)://` URL or
+    /// this server's asset/upload URL.
+    source: String,
+    /// Lump name to store under: 1 to 8 printable `ASCII` characters,
+    /// uppercased. Defaults to the fetched file name's stem uppercased and
+    /// trimmed to 8 characters; when nothing usable remains the call fails
+    /// asking for this name.
+    #[serde(default)]
+    name: Option<String>,
+    /// Which `PLAYPAL` entry the picture is quantized against (default 0:
+    /// the normal palette). Past the entries the lump holds is `not_found`,
+    /// as is a session with no `PLAYPAL`.
+    #[serde(default)]
+    palette: Option<usize>,
+    /// What to do with a picture that is not already a flat shape:
+    /// `"none"` (default) refuses it, `"nearest"` scales it to `size` x
+    /// `size`.
+    #[serde(default)]
+    resize: Option<String>,
+    /// Square side for `resize`: 64 (default), 128 or 256; anything else
+    /// is `invalid_argument`.
+    #[serde(default)]
+    size: Option<u32>,
+    /// Overwrite a working flat of this name in place (default `false`;
+    /// without it such a lump is `already_exists`).
+    #[serde(default)]
+    replace: bool,
 }
 
 /// Arguments for [`Cyberdemon::import_image_as_raw`].
@@ -115,6 +163,75 @@ struct PnamesPlan {
     /// The new `PNAMES` bytes when the list grew, `None` when the name was
     /// already listed and nothing needs writing.
     bytes: Option<Vec<u8>>,
+}
+
+/// The flat import's `resize` choice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResizeChoice {
+    /// Keep the decoded dimensions; a picture in no flat shape refuses.
+    Keep,
+    /// Nearest-neighbour scale to `size` x `size`.
+    Nearest,
+}
+
+/// The validated arguments of one flat import.
+#[derive(Debug)]
+struct ParsedFlat {
+    /// The `source` to fetch.
+    source: String,
+    /// The explicit lump name, `None` when it is derived from the file.
+    name: Option<LumpName>,
+    /// `PLAYPAL` entry to quantize against.
+    palette: usize,
+    /// What to do with a non-flat picture shape.
+    resize: ResizeChoice,
+    /// The square side a resized picture takes.
+    size: u32,
+    /// Whether a same-name working flat may be overwritten.
+    replace: bool,
+}
+
+/// An encoded flat ready for insertion.
+#[derive(Debug)]
+struct FlatImported {
+    /// The lump name: the explicit one or the derived one.
+    name: LumpName,
+    /// The raw `PLAYPAL` index bytes to store.
+    data: Vec<u8>,
+    /// The stored width in pixels.
+    width: u32,
+    /// The stored height in pixels.
+    height: u32,
+    /// Whether the picture was nearest-neighbour scaled.
+    resized: bool,
+    /// Distinct source colours.
+    colors_used: usize,
+    /// Worst squared `RGB` distance to the palette.
+    max_color_error: i32,
+    /// Source pixels that had alpha below the cutoff and stayed opaque.
+    transparent_pixels_ignored: usize,
+}
+
+/// Structured result of [`Cyberdemon::import_image_as_flat`] and its alias.
+#[derive(Serialize)]
+struct FlatReport {
+    /// The name the flat was stored under.
+    name: LumpName,
+    /// Its directory position in the working archive.
+    lump_index: usize,
+    /// The stored width in pixels.
+    width: u32,
+    /// The stored height in pixels.
+    height: u32,
+    /// Whether the picture was nearest-neighbour scaled.
+    resized: bool,
+    /// Distinct source colours among the (fully opaque) pixels.
+    colors_used: usize,
+    /// Worst squared `RGB` distance from a source colour to its palette
+    /// entry.
+    max_color_error: i32,
+    /// Source pixels that had alpha below 128 and were kept opaque.
+    transparent_pixels_ignored: usize,
 }
 
 /// The name to import under: the explicit one, else one derived from the
@@ -302,6 +419,193 @@ fn commit_raw(session: &mut Session, write: &LumpWrite<'_>) -> Result<usize, Cyb
     session.edit(&label, |wad| put_lump(wad, write))
 }
 
+/// Validate the flat-import arguments: name, `resize` word and `size`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a name that does not parse, an
+/// unknown `resize` mode or a `size` outside the three square sides.
+fn parse_flat(args: &ImportFlatParams) -> Result<ParsedFlat, CyberError> {
+    Ok(ParsedFlat {
+        source: args.source.clone(),
+        name: args.name.as_deref().map(LumpName::parse).transpose()?,
+        palette: args.palette.unwrap_or(DEFAULT_PALETTE),
+        resize: parse_resize(args.resize.as_deref())?,
+        size: parse_flat_size(args.size)?,
+        replace: args.replace,
+    })
+}
+
+/// The `resize` word: `"none"` (the default) or `"nearest"`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] listing the accepted words.
+fn parse_resize(text: Option<&str>) -> Result<ResizeChoice, CyberError> {
+    match text {
+        None | Some("none") => Ok(ResizeChoice::Keep),
+        Some("nearest") => Ok(ResizeChoice::Nearest),
+        Some(other) => Err(CyberError::InvalidArgument(format!(
+            "resize {other:?} is unknown: pass \"none\" to keep the picture size or \
+             \"nearest\" to scale it to size x size"
+        ))),
+    }
+}
+
+/// The `size` parameter: one of the three square sides, default 64.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] listing the accepted sides.
+fn parse_flat_size(value: Option<u32>) -> Result<u32, CyberError> {
+    let size = value.unwrap_or(DEFAULT_FLAT_SIZE);
+    if FLAT_SIZES.contains(&size) {
+        return Ok(size);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "size {size} is not a square flat side: pass {}",
+        FLAT_SIZES
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
+
+/// The picture scaled (or kept) to a supported flat shape, with whether
+/// it was scaled.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the four flat shapes and the
+/// `resize` option when an unsupported shape meets `resize: "none"`.
+fn fit_flat_shape(
+    img: &RgbaImage,
+    resize: ResizeChoice,
+    size: u32,
+) -> Result<(RgbaImage, bool), CyberError> {
+    if is_flat_shape(img.width, img.height) {
+        return Ok((img.clone(), false));
+    }
+    match resize {
+        ResizeChoice::Nearest => Ok((resize_nearest(img, size, size), true)),
+        ResizeChoice::Keep => Err(CyberError::InvalidArgument(format!(
+            "flats are 64x64, 64x128, 128x128 or 256x256, got {}x{}: pass resize=\"nearest\" \
+             with size 64, 128 or 256 to scale the picture",
+            img.width, img.height
+        ))),
+    }
+}
+
+/// Source pixels with alpha below [`DEFAULT_ALPHA_THRESHOLD`]: flats store
+/// no transparency, so they are kept opaque and only counted.
+fn transparent_alpha_pixels(img: &RgbaImage) -> usize {
+    img.pixels
+        .chunks_exact(BYTES_PER_PIXEL)
+        .map(to_pixel)
+        .filter(|&[_, _, _, alpha]| alpha < DEFAULT_ALPHA_THRESHOLD)
+        .count()
+}
+
+/// `import_image_as_flat`' work: run the pipeline, then commit the flat as
+/// one undoable edit.
+///
+/// # Errors
+///
+/// [`parse_flat`]' argument errors, [`build_flat`]' source, picture and
+/// palette errors plus [`commit_flat`]' placement and `already_exists`
+/// errors; a refusal leaves the working archive untouched.
+async fn import_flat_run(
+    state: &AppState,
+    args: &ImportFlatParams,
+) -> Result<FlatReport, CyberError> {
+    let import = parse_flat(args)?;
+    let built = build_flat(state, &import).await?;
+    let replace = import.replace;
+    state.with_session(move |session| commit_flat(session, built, replace))
+}
+
+/// Fetch, decode, scale, quantize and encode one flat: the shared pipeline
+/// with [`Transparency::None`], because flats have no holes.
+///
+/// # Errors
+///
+/// [`AppState::fetch_source`]' errors for the `source`,
+/// [`decode_image`]' errors for bytes that are no readable image,
+/// [`CyberError::InvalidArgument`] for an underivable name, an unusable
+/// shape or an image past the flat codec's limits, and [`load_palette`]'
+/// [`CyberError::NotFound`] for the palette.
+async fn build_flat(state: &AppState, import: &ParsedFlat) -> Result<FlatImported, CyberError> {
+    let fetched = state.fetch_source(&import.source).await?;
+    let name = chosen_name(import.name, &fetched.filename)?;
+    let decoded = decode_image(&fetched.bytes)?;
+    let ignored = transparent_alpha_pixels(&decoded);
+    let (picture, resized) = fit_flat_shape(&decoded, import.resize, import.size)?;
+    let options = QuantizeOptions {
+        transparency: Transparency::None,
+        reserved: Vec::new(),
+    };
+    let palette = state.with_session(|session| load_palette(session, import.palette))?;
+    let indexed = quantize(&picture, &palette, &options);
+    let (colors_used, max_color_error) = quantize_stats(&picture, &palette, &options);
+    let (data, _) = encode_flat(&indexed)?;
+    Ok(FlatImported {
+        name,
+        data,
+        width: picture.width,
+        height: picture.height,
+        resized,
+        colors_used,
+        max_color_error,
+        transparent_pixels_ignored: ignored,
+    })
+}
+
+/// The synchronous half of a flat import: one undoable edit placing the
+/// raw indexed bytes in the working archive's flats region.
+///
+/// # Errors
+///
+/// [`put_lump`]' placement and `already_exists` errors.
+fn commit_flat(
+    session: &mut Session,
+    built: FlatImported,
+    replace: bool,
+) -> Result<FlatReport, CyberError> {
+    let label = format!("import_flat {}", built.name);
+    session.edit(&label, move |wad| {
+        let write = LumpWrite {
+            name: built.name,
+            data: &built.data,
+            namespace: Some(Namespace::Flats),
+            replace,
+        };
+        let lump_index = put_lump(wad, &write)?;
+        Ok(FlatReport {
+            name: built.name,
+            lump_index,
+            width: built.width,
+            height: built.height,
+            resized: built.resized,
+            colors_used: built.colors_used,
+            max_color_error: built.max_color_error,
+            transparent_pixels_ignored: built.transparent_pixels_ignored,
+        })
+    })
+}
+
+/// The shared body of [`Cyberdemon::import_image_as_flat`] and
+/// [`Cyberdemon::import_png_as_flat`].
+async fn flat_imported(
+    state: &AppState,
+    args: &ImportFlatParams,
+) -> Result<CallToolResult, ErrorData> {
+    match import_flat_run(state, args).await {
+        Ok(report) => ok(&report),
+        Err(error) => fail(&error),
+    }
+}
+
 /// The shared body of [`Cyberdemon::import_image_as_patch`] and
 /// [`Cyberdemon::import_png_as_patch`].
 async fn patch_imported(
@@ -320,6 +624,13 @@ const PATCH_TOOL_DESCRIPTION: &str = "Imports an image file (PNG, JPEG, GIF or B
 
 /// [`PATCH_TOOL_DESCRIPTION`] with the alias note on the front.
 const ALIASED_PATCH_TOOL_DESCRIPTION: &str = "Alias of import_image_as_patch - it accepts any supported image, not just PNG; the name exists for PNG-fluent clients. Everything else is identical: same parameters, same patches-region placement and PNAMES listing, same undo label and result. See import_image_as_patch for the full documentation.";
+
+/// The full documentation of the flat import, shared by the tool and its
+/// alias; [`ALIASED_FLAT_TOOL_DESCRIPTION`] is the alias's variant.
+const FLAT_TOOL_DESCRIPTION: &str = "Imports an image file (PNG, JPEG, GIF or BMP bytes) as a Doom flat lump: the picture is quantized to the session's PLAYPAL and stored as the raw row-major palette-index plane a flat is in the working archive's flats region (F_START/F_END markers created there when the working archive has none), as one undoable edit labelled \"import_flat NAME\" (save_wad writes the result). source: absolute path, file:// URI, http(s):// URL or this server's asset/upload URL. name defaults to the file stem uppercased and trimmed to 8 characters; an underivable name fails with invalid_argument. palette (default 0) picks the PLAYPAL entry the picture is quantized against: a session without PLAYPAL, or an index it lacks, is not_found. Flats store no transparency: every source pixel stays opaque and alpha is ignored - how many pixels had alpha below 128 is reported as transparent_pixels_ignored. Dimensions: a picture that is already 64x64, 64x128, 128x128 or 256x256 is kept as it is; any other shape is nearest-neighbour scaled to size x size when resize=\"nearest\" (size is 64 (default), 128 or 256; another value is invalid_argument) and otherwise fails with invalid_argument naming the allowed shapes and the resize option. A working flats lump of this name is already_exists unless replace=true overwrites it in place; a flat only the IWAD or a resource layer holds is fine and becomes an override. Returns {name, lump_index, width, height, resized, colors_used, max_color_error, transparent_pixels_ignored}: width and height are the stored flat's dimensions, resized says whether the picture was scaled, colors_used and max_color_error measure the quantization (0 error means the source was palette-exact). list_flats shows the stored flat, get_flat publishes its picture back; import_image_as_patch stores the column/post patch format instead and import_image_as_raw keeps the original bytes.";
+
+/// [`FLAT_TOOL_DESCRIPTION`] with the alias note on the front.
+const ALIASED_FLAT_TOOL_DESCRIPTION: &str = "Alias of import_image_as_flat - it accepts any supported image, not just PNG; the name exists for PNG-fluent clients. Everything else is identical: same parameters, same flats-region placement, same undo label and result. See import_image_as_flat for the full documentation.";
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -345,6 +656,24 @@ impl Cyberdemon {
         patch_imported(self.state(), &args).await
     }
 
+    /// Imports an image file as a Doom flat lump in the flats region.
+    #[tool(description = FLAT_TOOL_DESCRIPTION)]
+    async fn import_image_as_flat(
+        &self,
+        Parameters(args): Parameters<ImportFlatParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        flat_imported(self.state(), &args).await
+    }
+
+    /// Alias of [`Cyberdemon::import_image_as_flat`].
+    #[tool(description = ALIASED_FLAT_TOOL_DESCRIPTION)]
+    async fn import_png_as_flat(
+        &self,
+        Parameters(args): Parameters<ImportFlatParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        flat_imported(self.state(), &args).await
+    }
+
     /// Stores a validated image file's bytes unchanged as a lump.
     #[tool(
         description = "Validates that source bytes are a readable image (PNG, JPEG, GIF or BMP) and inserts them into the working archive exactly as they arrived - no quantization, no re-encoding - as one undoable edit labelled \"import_raw NAME\" (save_wad writes the result). This is how ZDoom-family ports carry graphics: they read PNG and JPEG lumps directly, so the original file reaches the game untouched. source: absolute path, file:// URI, http(s):// URL or this server's asset/upload URL. name defaults to the file stem uppercased and trimmed to 8 characters (an underivable name fails with invalid_argument). namespace is optional: without it the lump is stored loose, in the global area; pass \"patches\", \"sprites\", \"flats\" or another region name to place it inside that region (its markers are created in the working archive when it has none). A working lump of this name in the same region is already_exists unless replace=true overwrites it in place; a same-name lump only a read-only layer holds becomes an override. Bytes that fail the decode check report format_error (or unsupported) and nothing is stored. Returns {name, lump_index, format, width, height}: format is \"png\", \"jpeg\", \"gif\" or \"bmp\" as sniffed from the bytes, width and height come from the decode check, lump_index is the position in the working archive. For a vanilla Doom column/post patch use import_image_as_patch; get_lump and extract_lump read stored lumps back."
@@ -363,10 +692,12 @@ impl Cyberdemon {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImportRawParams, chosen, current_pnames, namespace_names, parse_namespace, pnames_plan,
-        position_of,
+        ImportFlatParams, ImportRawParams, ResizeChoice, chosen, current_pnames, fit_flat_shape,
+        namespace_names, parse_flat, parse_flat_size, parse_namespace, parse_resize, pnames_plan,
+        position_of, transparent_alpha_pixels,
     };
     use crate::error::CyberError;
+    use crate::gfx::image::RgbaImage;
     use crate::session::Session;
     use crate::state::AppState;
     use crate::wad::archive::Lump;
@@ -508,6 +839,140 @@ mod tests {
         }))
         .expect("the wire form");
         assert_eq!(args.namespace.as_deref(), Some("patches"));
+        assert!(args.replace, "the flag carries");
+    }
+
+    /// Flat arguments over `source` with everything else unset.
+    fn flat_params(source: &str) -> ImportFlatParams {
+        ImportFlatParams {
+            source: source.to_owned(),
+            name: None,
+            palette: None,
+            resize: None,
+            size: None,
+            replace: false,
+        }
+    }
+
+    /// A `width` by `height` test image whose every pixel carries `alpha`.
+    fn rgba_image(width: u32, height: u32, alpha: u8) -> RgbaImage {
+        let count = usize::try_from(width)
+            .expect("test width")
+            .checked_mul(usize::try_from(height).expect("test height"))
+            .expect("test pixels fit");
+        let mut pixels: Vec<u8> = Vec::new();
+        for _pixel in 0..count {
+            pixels.extend_from_slice(&[1_u8, 2, 3, alpha]);
+        }
+        RgbaImage::new(width, height, pixels).expect("test shape is valid")
+    }
+
+    #[test]
+    fn parse_flat_applies_defaults_and_validates_the_name() {
+        let parsed = parse_flat(&flat_params("/x/y.png")).expect("a source is enough");
+        assert_eq!(parsed.source, "/x/y.png", "the source carries");
+        assert_eq!(parsed.name, None, "no name was given");
+        assert_eq!(parsed.palette, 0_usize, "the normal palette by default");
+        assert_eq!(parsed.resize, ResizeChoice::Keep, "no resizing by default");
+        assert_eq!(parsed.size, 64_u32, "the vanilla side by default");
+        assert!(!parsed.replace, "no silent overwrite");
+        let mut args = flat_params("/x/y.png");
+        args.name = Some("too long for wad".to_owned());
+        assert_eq!(
+            code(&parse_flat(&args).expect_err("bad name")),
+            "invalid_argument"
+        );
+    }
+
+    #[test]
+    fn resize_words_parse_and_name_the_rejections() {
+        assert_eq!(parse_resize(None).expect("absent"), ResizeChoice::Keep);
+        assert_eq!(
+            parse_resize(Some("none")).expect("keep"),
+            ResizeChoice::Keep
+        );
+        assert_eq!(
+            parse_resize(Some("nearest")).expect("scale"),
+            ResizeChoice::Nearest
+        );
+        let error = parse_resize(Some("linear")).expect_err("not a word");
+        assert_eq!(code(&error), "invalid_argument");
+        assert!(
+            error.to_string().contains("\"nearest\""),
+            "the message lists the words: {error}"
+        );
+    }
+
+    #[test]
+    fn flat_sizes_take_the_three_sides_and_refuse_else() {
+        assert_eq!(parse_flat_size(None).expect("default"), 64_u32);
+        for side in [64_u32, 128, 256] {
+            assert_eq!(parse_flat_size(Some(side)).expect("a square"), side);
+        }
+        let error = parse_flat_size(Some(32_u32)).expect_err("no 32 side");
+        assert_eq!(code(&error), "invalid_argument");
+        assert!(
+            error.to_string().contains("64, 128, 256"),
+            "the message lists the sides: {error}"
+        );
+    }
+
+    #[test]
+    fn fit_flat_shape_keeps_supported_shapes_and_scales_the_rest() {
+        for (width, height) in [(64_u32, 64_u32), (64, 128), (128, 128), (256, 256)] {
+            let picture = rgba_image(width, height, 255_u8);
+            let (kept, resized) =
+                fit_flat_shape(&picture, ResizeChoice::Nearest, 256_u32).expect("a flat shape");
+            assert!(!resized, "{width}x{height} is kept as it is");
+            assert_eq!((kept.width, kept.height), (width, height));
+        }
+        let odd = rgba_image(100_u32, 50_u32, 255_u8);
+        let (scaled, resized) =
+            fit_flat_shape(&odd, ResizeChoice::Nearest, 128_u32).expect("nearest scales");
+        assert!(resized, "the odd shape was scaled");
+        assert_eq!((scaled.width, scaled.height), (128_u32, 128_u32));
+    }
+
+    #[test]
+    fn an_unsupported_shape_without_resize_names_the_way_out() {
+        let odd = rgba_image(100_u32, 50_u32, 255_u8);
+        let error = fit_flat_shape(&odd, ResizeChoice::Keep, 64_u32).expect_err("keep refuses");
+        assert_eq!(code(&error), "invalid_argument");
+        let message = error.to_string();
+        assert!(message.contains("256x256"), "names the shapes: {message}");
+        assert!(
+            message.contains("resize=\"nearest\""),
+            "names the option: {message}"
+        );
+    }
+
+    #[test]
+    fn alpha_pixels_below_the_cutoff_are_counted() {
+        let pixels = vec![1_u8, 2, 3, 0, 1, 2, 3, 128, 1, 2, 3, 127, 1, 2, 3, 255];
+        let img = RgbaImage::new(4_u32, 1_u32, pixels).expect("4x1 is a valid shape");
+        assert_eq!(
+            transparent_alpha_pixels(&img),
+            2_usize,
+            "0 and 127 are below 128, 128 and 255 are not"
+        );
+    }
+
+    /// The flat arguments' wire shape deserializes with the documented flags.
+    #[test]
+    fn flat_arguments_deserialize() {
+        let args: ImportFlatParams = serde_json::from_value(serde_json::json!({
+            "source": "/x/y.png",
+            "name": "FLAT",
+            "palette": 3_u64,
+            "resize": "nearest",
+            "size": 128_u64,
+            "replace": true,
+        }))
+        .expect("the wire form");
+        assert_eq!(args.name.as_deref(), Some("FLAT"));
+        assert_eq!(args.palette, Some(3_usize));
+        assert_eq!(args.resize.as_deref(), Some("nearest"));
+        assert_eq!(args.size, Some(128_u32));
         assert!(args.replace, "the flag carries");
     }
 }

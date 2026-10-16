@@ -3,9 +3,12 @@
 //! `import_png_as_patch` (exact-palette quantization with an alpha hole,
 //! colour-key and opaque transparency, `grAb`/preset/explicit offsets, the
 //! `PNAMES` listing and its opt-out, the duplicate and `replace` rule,
-//! undo, and the refusal catalogue), and `import_image_as_raw` storing
-//! validated bytes byte-for-byte. Test pictures are written with the
-//! library's own `PNG` encoder.
+//! undo, and the refusal catalogue), the flat importer `import_image_as_flat`
+//! with its alias `import_png_as_flat` (exact 64x64 round trips, nearest
+//! resizing to 64 and 128, the `IWAD` override, the duplicate and `replace`
+//! rule, ignored-and-counted alpha, and its refusal catalogue), and
+//! `import_image_as_raw` storing validated bytes byte-for-byte. Test
+//! pictures are written with the library's own `PNG` encoder.
 
 #[cfg(test)]
 mod tests {
@@ -13,7 +16,7 @@ mod tests {
 
     use cyberdemon::gfx::codec::encode_png;
     use cyberdemon::gfx::grab::insert_grab;
-    use cyberdemon::gfx::image::RgbaImage;
+    use cyberdemon::gfx::image::{RgbaImage, resize_nearest};
     use rmcp::RoleClient;
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
@@ -28,10 +31,18 @@ mod tests {
     const SIDE: u32 = 8_u32;
     /// Pixels in the 8x8 test rasters.
     const PIXELS: usize = 64;
+    /// Pixels on a side of the 64x64 test flats.
+    const FLAT_SIDE: u32 = 64_u32;
+    /// Pixels in the 64x64 test flats.
+    const FLAT_PIXELS: usize = 4_096;
+    /// Palette entries the flat test rasters cycle through.
+    const CYCLE: usize = 256_usize;
     /// The pixel index the alpha hole is placed at.
     const HOLE: usize = 9;
     /// Entries in the fixture `IWAD`'s `PNAMES`.
     const FIXTURE_PNAMES: u64 = 2_u64;
+    /// Flats in the fixture `IWAD` (`FLOOR1` and `PNGFLAT`).
+    const FIXTURE_FLATS: u64 = 2_u64;
     /// The cyan the colour key defaults to.
     const CYAN: [u8; 4] = [0_u8, 255, 255, 255];
 
@@ -656,12 +667,11 @@ mod tests {
     /// message-substring)` pair and a debug label.
     type Refusal = (&'static str, Value, &'static str, &'static str);
 
-    /// Assert every `import_image_as_patch` call in `cases` refuses as
-    /// documented.
-    async fn refuse_all(client: &Client, cases: &[Refusal]) {
+    /// Assert every `tool` call in `cases` refuses as documented.
+    async fn refuse_all(client: &Client, tool: &str, cases: &[Refusal]) {
         for case in cases {
             let (label, expect_code, expect_text) = (case.0, case.2, case.3);
-            let (code, message) = call_err(client, "import_image_as_patch", case.1.clone()).await;
+            let (code, message) = call_err(client, tool, case.1.clone()).await;
             assert_eq!(code, expect_code, "{label} code: {message}");
             assert!(
                 message.contains(expect_text),
@@ -721,7 +731,7 @@ mod tests {
                 "absent.png",
             ),
         ];
-        refuse_all(&client, &cases).await;
+        refuse_all(&client, "import_image_as_patch", &cases).await;
         let empty = call(&client, "list_patches", json!({})).await;
         assert_eq!(empty["total"], json!(2_u64), "nothing was stored");
     }
@@ -750,7 +760,7 @@ mod tests {
                 "does not fit",
             ),
         ];
-        refuse_all(&client, &cases).await;
+        refuse_all(&client, "import_image_as_patch", &cases).await;
     }
 
     /// Without a `PLAYPAL` the quantization step has nothing to answer.
@@ -796,6 +806,411 @@ mod tests {
             "the hole survived"
         );
         assert_eq!(patch_rgba(&client, "UPLOADED").await, expected_rgba());
+    }
+
+    /// The palette colour index for flat raster position `p`.
+    fn cycled(p: usize) -> usize {
+        p.checked_rem(CYCLE).expect("non-zero cycle")
+    }
+
+    /// The `width`x`height` fully opaque raster cycling palette colours.
+    fn flat_raster(width: u32, height: u32) -> RgbaImage {
+        let count = usize::try_from(width)
+            .expect("test width")
+            .checked_mul(usize::try_from(height).expect("test height"))
+            .expect("test pixels fit");
+        let pixels: Vec<u8> = (0..count).flat_map(|p| color_pixel(cycled(p))).collect();
+        RgbaImage::new(width, height, pixels).expect("test shapes are valid")
+    }
+
+    /// The `RGBA` of flat raster position `p`: its cycled palette colour,
+    /// fully transparent when `transparent` picks it.
+    fn flat_pixel(p: usize, transparent: &impl Fn(usize) -> bool) -> [u8; 4] {
+        let mut pixel = color_pixel(cycled(p));
+        if transparent(p) {
+            pixel[3] = 0_u8;
+        }
+        pixel
+    }
+
+    /// A palette PNG of `width` by `height` cycling palette colours, with
+    /// alpha `0` where `transparent` picks the pixel.
+    fn flat_png(width: u32, height: u32, transparent: impl Fn(usize) -> bool) -> Vec<u8> {
+        let count = usize::try_from(width)
+            .expect("test width")
+            .checked_mul(usize::try_from(height).expect("test height"))
+            .expect("test pixels fit");
+        let pixels: Vec<u8> = (0..count)
+            .flat_map(|p| flat_pixel(p, &transparent))
+            .collect();
+        let img = RgbaImage::new(width, height, pixels).expect("test shapes are valid");
+        encode_png(&img, None).expect("test PNGs encode")
+    }
+
+    /// The `RGBA` bytes a stored [`flat_png`] answers back through
+    /// `get_flat`: every cycled palette colour, fully opaque.
+    fn flat_expected_rgba(count: usize) -> Vec<u8> {
+        (0..count).flat_map(|p| color_pixel(cycled(p))).collect()
+    }
+
+    /// The `RGBA` bytes of the stored flat `name`, via `get_flat`.
+    async fn flat_rgba(client: &Client, name: &str) -> Vec<u8> {
+        let report = call(
+            client,
+            "get_flat",
+            json!({ "name": name, "format": "rgba" }),
+        )
+        .await;
+        let url = report["asset"]["url"]
+            .as_str()
+            .expect("get_flat publishes an asset");
+        fetch_asset(url).await
+    }
+
+    /// One successful `import_image_as_flat` of `file` with `extra`.
+    async fn flat_import(client: &Client, file: &Path, extra: Value) -> Value {
+        call(client, "import_image_as_flat", source_args(file, extra)).await
+    }
+
+    /// One failing `import_image_as_flat` of `file` with `extra`.
+    async fn flat_import_err(client: &Client, file: &Path, extra: Value) -> (String, String) {
+        call_err(client, "import_image_as_flat", source_args(file, extra)).await
+    }
+
+    /// Assert a flat report stores the given shape and resize verdict.
+    fn assert_flat_shape(report: &Value, width: u64, height: u64, resized: bool) {
+        assert_eq!(report["width"], json!(width), "the stored width");
+        assert_eq!(report["height"], json!(height), "the stored height");
+        assert_eq!(report["resized"], json!(resized), "the resize verdict");
+    }
+
+    /// Assert two flat-import reports agree on every measured field.
+    fn assert_same_flat(main: &Value, alias: &Value) {
+        for field in [
+            "width",
+            "height",
+            "resized",
+            "colors_used",
+            "max_color_error",
+            "transparent_pixels_ignored",
+        ] {
+            assert_eq!(
+                alias[field], main[field],
+                "the alias reports {field} identically"
+            );
+        }
+    }
+
+    /// The 64x64 exact-palette round trip: the flat stores the picture and
+    /// `get_flat` answers the pixels back unchanged.
+    #[tokio::test]
+    async fn an_exact_flat_png_imports_and_reads_back_pixel_perfect() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "MYFLAT.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let report = flat_import(&client, &file, json!({ "name": "MYFLAT" })).await;
+        assert_eq!(report["name"], json!("MYFLAT"), "the name echoes");
+        assert_eq!(
+            report["lump_index"],
+            json!(1_u64),
+            "after the created F_START"
+        );
+        assert_flat_shape(&report, 64_u64, 64_u64, false);
+        assert_eq!(
+            report["colors_used"],
+            json!(256_u64),
+            "every palette colour"
+        );
+        assert_eq!(
+            report["max_color_error"],
+            json!(0_i64),
+            "the palette is exact"
+        );
+        assert_eq!(
+            report["transparent_pixels_ignored"],
+            json!(0_u64),
+            "an opaque source"
+        );
+        assert_eq!(
+            flat_rgba(&client, "MYFLAT").await,
+            flat_expected_rgba(FLAT_PIXELS),
+            "the same pixels back"
+        );
+        let listed = call(&client, "list_flats", json!({ "pattern": "MYFLAT" })).await;
+        assert_eq!(listed["total"], json!(1_u64), "list_flats shows it");
+        assert_eq!(
+            listed["flats"][0]["source"],
+            json!("working"),
+            "in the working archive"
+        );
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(
+            session["undo"],
+            json!(["import_flat MYFLAT"]),
+            "one undoable edit labelled as documented"
+        );
+    }
+
+    /// A 100x50 picture without `resize` refuses, naming the shapes and the
+    /// option, and stores nothing.
+    #[tokio::test]
+    async fn an_odd_sized_picture_without_resize_is_refused() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "ODD.png", &flat_png(100_u32, 50_u32, |_| false));
+        let (code, message) = flat_import_err(&client, &file, json!({ "name": "ODD" })).await;
+        assert_eq!(code, "invalid_argument", "no resize, no flat");
+        assert!(
+            message.contains("64x128"),
+            "the message names the shapes: {message}"
+        );
+        assert!(
+            message.contains("resize"),
+            "the message names the option: {message}"
+        );
+        let listed = call(&client, "list_flats", json!({ "pattern": "ODD" })).await;
+        assert_eq!(listed["total"], json!(0_u64), "nothing was stored");
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(session["undo"], json!([]), "no edit landed");
+    }
+
+    /// `resize: "nearest"` scales to 64x64 by default and to 128x128 when
+    /// asked, storing the nearest samples; a 64x128 picture is kept.
+    #[tokio::test]
+    async fn resizing_nearest_scales_the_picture_to_the_square_size() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "ODD.png", &flat_png(100_u32, 50_u32, |_| false));
+        let small = flat_import(
+            &client,
+            &file,
+            json!({ "name": "SMALL", "resize": "nearest" }),
+        )
+        .await;
+        assert_flat_shape(&small, 64_u64, 64_u64, true);
+        let scaled = resize_nearest(&flat_raster(100_u32, 50_u32), FLAT_SIDE, FLAT_SIDE);
+        assert_eq!(flat_rgba(&client, "SMALL").await, scaled.pixels);
+        let big = flat_import(
+            &client,
+            &file,
+            json!({ "name": "BIG", "resize": "nearest", "size": 128_u64 }),
+        )
+        .await;
+        assert_flat_shape(&big, 128_u64, 128_u64, true);
+        let flats = call(&client, "list_flats", json!({ "pattern": "BIG" })).await;
+        assert_eq!(
+            flats["flats"][0]["size"],
+            json!(0x4000_u64),
+            "the raw 128x128 byte count"
+        );
+        let tall = write_file(
+            dir.path(),
+            "TALL.png",
+            &flat_png(FLAT_SIDE, 128_u32, |_| false),
+        );
+        let kept = flat_import(&client, &tall, json!({ "name": "TALL" })).await;
+        assert_flat_shape(&kept, 64_u64, 128_u64, false);
+    }
+
+    /// A flat only the `IWAD` holds does not clash: the import lands as a
+    /// working override the merged view resolves to.
+    #[tokio::test]
+    async fn a_flat_import_overrides_the_iwad_copy() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "FLOOR1.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let report = flat_import(&client, &file, json!({ "name": "FLOOR1" })).await;
+        assert_eq!(report["name"], json!("FLOOR1"), "the override imports");
+        assert_eq!(report["lump_index"], json!(1_u64), "in the created region");
+        let listed = call(&client, "list_flats", json!({ "pattern": "FLOOR1" })).await;
+        assert_eq!(
+            listed["total"],
+            json!(1_u64),
+            "last wins in the merged view"
+        );
+        assert_eq!(
+            listed["flats"][0]["source"],
+            json!("working"),
+            "the working copy serves"
+        );
+        assert_eq!(
+            flat_rgba(&client, "FLOOR1").await,
+            flat_expected_rgba(FLAT_PIXELS),
+            "the new pixels serve"
+        );
+    }
+
+    /// A same-name working flat refuses until `replace`, which overwrites
+    /// in place.
+    #[tokio::test]
+    async fn a_flat_duplicate_needs_replace_and_overwrites_in_place() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "TWIN.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let first = flat_import(&client, &file, json!({ "name": "TWIN" })).await;
+        let (code, message) = flat_import_err(&client, &file, json!({ "name": "TWIN" })).await;
+        assert_eq!(code, "already_exists", "the twin refuses");
+        assert!(message.contains("flats"), "names the region: {message}");
+        assert!(
+            message.contains("replace=true"),
+            "the message names the way out: {message}"
+        );
+        let replaced =
+            flat_import(&client, &file, json!({ "name": "TWIN", "replace": true })).await;
+        assert_eq!(
+            replaced["lump_index"], first["lump_index"],
+            "replace overwrites in place"
+        );
+        let listed = call(&client, "list_flats", json!({ "pattern": "TWIN" })).await;
+        assert_eq!(listed["total"], json!(1_u64), "one copy stands");
+    }
+
+    /// The alias stores the same flat with the same measurements.
+    #[tokio::test]
+    async fn the_flat_alias_imports_the_same_picture() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "MYFLAT.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let main = flat_import(&client, &file, json!({ "name": "MAIN" })).await;
+        let alias = call(
+            &client,
+            "import_png_as_flat",
+            source_args(&file, json!({ "name": "ALIAS" })),
+        )
+        .await;
+        assert_same_flat(&main, &alias);
+        assert_eq!(
+            flat_rgba(&client, "ALIAS").await,
+            flat_rgba(&client, "MAIN").await,
+            "the stored pixels match"
+        );
+    }
+
+    /// Alpha below 128 is counted, kept opaque, and stored at its colour.
+    #[tokio::test]
+    async fn flat_imports_keep_alpha_pixels_and_count_them() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let picked = |p: usize| p.checked_rem(7_usize).is_some_and(|rest| rest == 0_usize);
+        let expected = (0..FLAT_PIXELS).filter(|p| picked(*p)).count();
+        let file = write_file(
+            dir.path(),
+            "SEMI.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, picked),
+        );
+        let report = flat_import(&client, &file, json!({ "name": "SEMI" })).await;
+        assert_eq!(
+            report["transparent_pixels_ignored"],
+            json!(u64::try_from(expected).expect("test count fits")),
+            "every seventh pixel had alpha below 128"
+        );
+        assert_eq!(
+            report["colors_used"],
+            json!(256_u64),
+            "the alpha carried no colour information away"
+        );
+        assert_eq!(
+            flat_rgba(&client, "SEMI").await,
+            flat_expected_rgba(FLAT_PIXELS),
+            "all pixels stored opaque at their colours"
+        );
+    }
+
+    /// Bad flat sources and parameters each report their code, and nothing
+    /// is stored along the way.
+    #[tokio::test]
+    async fn bad_flat_sources_and_parameters_are_refused() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let good = write_file(
+            dir.path(),
+            "GOOD.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let junk = write_file(dir.path(), "junk.txt", b"this is a text file, not an image");
+        let unnamed = write_file(
+            dir.path(),
+            "###.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let cases: [Refusal; 6] = [
+            (
+                "missing",
+                json!({ "source": dir.path().join("absent.png").display().to_string() }),
+                "not_found",
+                "absent.png",
+            ),
+            (
+                "junk",
+                source_args(&junk, Value::Null),
+                "format_error",
+                "image",
+            ),
+            (
+                "unnamed",
+                source_args(&unnamed, Value::Null),
+                "invalid_argument",
+                "derive",
+            ),
+            (
+                "resize",
+                source_args(&junk, json!({ "name": "X", "resize": "linear" })),
+                "invalid_argument",
+                "\"nearest\"",
+            ),
+            (
+                "size",
+                source_args(
+                    &junk,
+                    json!({ "name": "X", "resize": "nearest", "size": 32_u64 }),
+                ),
+                "invalid_argument",
+                "64, 128, 256",
+            ),
+            (
+                "palette",
+                source_args(&good, json!({ "name": "X", "palette": 99_u64 })),
+                "not_found",
+                "PLAYPAL",
+            ),
+        ];
+        refuse_all(&client, "import_image_as_flat", &cases).await;
+        let flats = call(&client, "list_flats", json!({})).await;
+        assert_eq!(flats["total"], json!(FIXTURE_FLATS), "nothing was stored");
+    }
+
+    /// Without a `PLAYPAL` the quantization step has nothing to answer.
+    #[tokio::test]
+    async fn a_flat_import_without_a_playpal_cannot_quantize() {
+        let client = connect().await;
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let file = write_file(
+            dir.path(),
+            "ART.png",
+            &flat_png(FLAT_SIDE, FLAT_SIDE, |_| false),
+        );
+        let (code, message) = flat_import_err(&client, &file, json!({ "name": "ART" })).await;
+        assert_eq!(code, "not_found", "no palette to quantize against");
+        assert!(
+            message.contains("PLAYPAL"),
+            "the message names it: {message}"
+        );
     }
 
     /// A raw import stores the file's own bytes, loose by default, and

@@ -1,8 +1,9 @@
 # Render tools
 
-Session-level rendering defaults. These three tools set and read the
-settings that `render_view`, `render_topdown` and `render_minimap` use as
-their defaults wherever their own arguments leave a value out.
+Session-level rendering defaults plus the first renderer. Three settings
+tools set and read the defaults every render starts from;
+`render_topdown` draws a whole-map overview as a `PNG` asset, and
+`render_view` and `render_minimap` will join it later.
 
 ## The settings
 
@@ -84,6 +85,98 @@ levels lift mid-tones while black and white stay pinned
   ```json
   {"lighting": "fullbright", "fov": 110, "gamma": 1}
   {"topdown_style": "editor", "show_things": true, "sky": false}
+  ```
+
+## `render_topdown`
+
+- Purpose: render a whole map overview as a `PNG` asset — the 2D line map
+  or an isometric wireframe — to look at after (or while) building.
+- Arguments: all optional.
+  - `map`: as everywhere (`list_maps`/`set_active_map` decide the default).
+  - `width`, `height`: `16..=4096`, default from the settings.
+  - `projection`: `"topdown"` (default) or `"isometric"`.
+  - `bounds`: `{min_x, min_y, max_x, max_y}` in world units; the default
+    is the map's vertex bounds padded by 32 units. Needs
+    `min_x < max_x` and `min_y < max_y`.
+  - `style`: `"editor"` (default) or `"automap"`, the line colours below.
+  - `fill_sectors` (default `false`): paint each sector's polygon with a
+    grey equal to half its light level before the lines.
+  - `show_vertices` (default `false`): a `3x3` `#FFD000` mark per vertex.
+  - `show_things` (default from the settings): thing markers — a circle
+    sized from the definition radius and a facing tick.
+  - `highlight`: `{linedefs: [...], sectors: [...], things: [...],
+    vertices: [...]}` index lists; highlighted linedefs draw red and 3 px
+    wide, sectors get a red tint, things a white outline, vertices turn
+    red. An index past the end of its table fails `not_found`.
+- Returns:
+
+  ```json
+  {"map": "MAP01", "projection": "topdown", "width": 200, "height": 120,
+   "transform": {"scale_num": 88, "scale_den": 320,
+                 "offset_x": 30, "offset_y": 95},
+   "asset": {"url": "http://localhost:PORT/assets/ID/MAP01_topdown.png", ...}}
+  ```
+
+  `asset` is the overview `PNG` (the `gamma` setting is applied to the
+  output); `transform` is `null` for the isometric projection.
+
+### Reading the picture: the colour legend
+
+Editor style (top-down): one-sided lines `#C0C0C0`, two-sided `#707070`,
+lines with a `special` `#6A8CFF`. Automap style reproduces the in-game
+map: one-sided (and `secret`) lines red `#FC0000`, floor-height changes
+brown `#BC7848`, ceiling-height changes yellow `#FCFC00`, flat two-sided
+lines grey `#808080`; lines flagged `dontdraw` are skipped. Filled
+sectors take a grey of half their light (`#505050` for light 160).
+Vertices are `#FFD000` squares. Thing circles are coloured by their
+editor category: Monsters `#E04040`, Player Starts `#40E040`,
+Weapons/Ammunition `#E0A040`, Health And Armour/Powerups `#40A0E0`,
+Keys `#E0E040`, everything else (and unknown types) `#B0B0B0`; the tick
+shows the facing angle. Highlights: `#FF4040` lines and vertices, the
+same colour blended over highlighted sectors, white outlines on things.
+
+### Converting pixels to map coordinates and back
+
+For `projection: "topdown"` the `transform` is an integer, uniform scale
+with north up. With `n = scale_num`, `d = scale_den`:
+
+```
+px = offset_x + floor(x * n / d)     py = offset_y - floor(y * n / d)
+x  = (px - offset_x) * d / n         y  = (offset_y - py) * d / n
+```
+
+(the forward mapping floors; the inverse is integer division). Use the
+inverse to ask "what is at this pixel?" — e.g. after spotting a gap in
+the picture, convert it back and `get_map_summary`/`inspect` the linedefs
+near those coordinates. A world point's own radius scales by `n / d` too.
+
+### The isometric projection
+
+`projection: "isometric"` draws a `2:1` wireframe: a point at
+`x`/`y`/`z` lands on the plane `u = x - y`, `v = (x + y) / 2 - z` before
+the same fit-and-centre step, then the map is drawn as edges: every
+linedef's floor edge at the front sector's floor, the back sector's
+floor edge where it differs, and for one-sided lines the ceiling edge
+plus a vertical post at each vertex. Things are small category-coloured
+dots at their sector's floor. There is no hidden-line removal: it is a
+structure check, not a pretty picture. `transform` is `null` (two
+projections were fitted through one mapping, so pixel math back to world
+coordinates is not offered); `style`, `fill_sectors` and `show_vertices`
+do not apply, `show_things` does.
+
+- Errors: `not_found` for an unknown map or an out-of-range highlight
+  index; `invalid_argument` when an empty map is requested without
+  `bounds`, when `bounds` has `min >= max`, for a size outside the
+  settings' ranges, and for an unknown `projection`/`style` name.
+- Example: a quick editor-style overview at the session's size, then a
+  zoom into one corner:
+
+  ```json
+  {}
+  {"projection": "isometric"}
+  {"bounds": {"min_x": 0, "min_y": 0, "max_x": 512, "max_y": 512},
+   "style": "automap", "fill_sectors": true}
+  {"highlight": {"linedefs": [12, 13], "sectors": [4]}}
   ```
 
 ## Where this fits

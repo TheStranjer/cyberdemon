@@ -609,6 +609,36 @@ pub fn pwad_custom_defs(dir: &Path) -> PathBuf {
     write_wad(dir, "pwad-custom.wad", &wad)
 }
 
+/// A `PWAD` whose only map is a wholly empty `Doom` block: every member
+/// lump present but zero-length, so the map has no vertices for a render
+/// to frame.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn pwad_empty_map(dir: &Path) -> PathBuf {
+    let lumps = vec![
+        marker("MAP01"),
+        marker("THINGS"),
+        marker("LINEDEFS"),
+        marker("SIDEDEFS"),
+        marker("VERTEXES"),
+        marker("SECTORS"),
+        marker("SEGS"),
+        marker("SSECTORS"),
+        marker("NODES"),
+        marker("REJECT"),
+        marker("BLOCKMAP"),
+    ];
+    let wad = Wad {
+        kind: WadKind::Pwad,
+        lumps,
+    };
+    write_wad(dir, "pwad-empty-map.wad", &wad)
+}
+
 /// A file that is not a `WAD` at all, for `format_error` paths.
 ///
 /// # Panics

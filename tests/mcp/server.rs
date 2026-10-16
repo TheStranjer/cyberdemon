@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 56] = [
+    const EXPECTED_TOOLS: [&str; 58] = [
         "add_lump",
         "decode_patch",
         "edit_decorate",
@@ -105,9 +105,11 @@ mod tests {
         "get_wad_info",
         "import_asset",
         "import_file_as_lump",
+        "import_image_as_flat",
         "import_image_as_patch",
         "import_image_as_raw",
         "import_music",
+        "import_png_as_flat",
         "import_png_as_patch",
         "import_sound",
         "list_flats",
@@ -229,8 +231,8 @@ mod tests {
         assert_nothing_required(&decoded);
     }
 
-    /// The image imports flatten their shared pipeline parameters into the
-    /// tool schema, and the alias carries the patch tool's schema exactly.
+    /// The image imports flatten their parameters into the tool schema, and
+    /// each alias carries its tool's schema exactly.
     #[tokio::test]
     async fn the_image_import_schemas_flatten_their_shared_parameters() {
         let client = connect().await;
@@ -253,6 +255,17 @@ mod tests {
             schema_of(tool_named(&tools, "import_png_as_patch")),
             patch,
             "the alias takes the same arguments"
+        );
+        let flat = schema_of(tool_named(&tools, "import_image_as_flat"));
+        assert_flattens(
+            &flat,
+            &["source", "name", "palette", "resize", "size", "replace"],
+        );
+        assert_required(&flat, "source");
+        assert_eq!(
+            schema_of(tool_named(&tools, "import_png_as_flat")),
+            flat,
+            "the flat alias takes the same arguments"
         );
         let raw = schema_of(tool_named(&tools, "import_image_as_raw"));
         assert_flattens(&raw, &["source", "name", "namespace", "replace"]);

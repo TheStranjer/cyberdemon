@@ -1,12 +1,13 @@
-//! The shared image-import pipeline: fetched bytes in, patch lump out.
+//! The shared image-import pipeline: fetched bytes in, picture lump out.
 //!
-//! Every image import (patches now; flats and sprites as their tools
-//! land) flattens [`ImageImportParams`] into its arguments, validates it
-//! with [`parse_import`] and runs [`build_patch`]: fetch the `source`
-//! (never holding the session lock), [`decode_image`] it, quantize against
-//! the session's `PLAYPAL` entry under the call's `transparency` rule,
-//! resolve the drawing `offsets` (a `PNG`'s `grAb` chunk, a preset or an
-//! explicit pair) and [`encode_patch`] the result. [`put_lump`] is the
+//! Every patch import flattens [`ImageImportParams`] into its arguments,
+//! validates it with [`parse_import`] and runs [`build_patch`]: fetch the
+//! `source` (never holding the session lock), [`decode_image`] it, quantize
+//! against the session's `PLAYPAL` entry under the call's `transparency`
+//! rule, resolve the drawing `offsets` (a `PNG`'s `grAb` chunk, a preset or
+//! an explicit pair) and [`encode_patch`] the result. The flat importer
+//! reaches around [`ImageImportParams`] for the same pieces (`source` fetch,
+//! [`decode_image`], quantization, [`chosen_name`]) plus [`put_lump`], the
 //! matching insertion helper: it drops the finished bytes into a namespace
 //! of the working archive through [`crate::tools::lumps::place`], refusing
 //! a same-name twin unless `replace` overwrites it in place.
@@ -34,7 +35,7 @@ use crate::wad::classify::{Namespace, analyze};
 use crate::wad::name::LumpName;
 
 /// Default `PLAYPAL` entry image imports quantize against.
-const DEFAULT_PALETTE: usize = 0_usize;
+pub(super) const DEFAULT_PALETTE: usize = 0_usize;
 /// Default colour-key when `transparency.mode` is `"color"` without a
 /// `color`: the cyan Doom sprite sources are keyed against.
 const DEFAULT_KEY_COLOR: &str = "#00FFFF";

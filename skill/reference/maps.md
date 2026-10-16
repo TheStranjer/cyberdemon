@@ -1,8 +1,9 @@
 # Maps tools
 
 Map-level reading and the session-wide map selection: `list_maps`,
-`get_map_lumps` and `set_active_map`. Later map tools (geometry, building,
-node building) join this group and share its conventions.
+`get_map_lumps`, `get_map_summary` and `set_active_map`. Later map tools
+(geometry, building, node building) join this group and share its
+conventions.
 
 ## How maps are stored
 
@@ -68,6 +69,44 @@ Every tool with an optional `map` parameter resolves it the same way:
 - Errors: `invalid_argument` (unparsable `map`, unknown `scope`, or no map
   resolvable), `not_found` (no such map block in the scope, or the layer
   is not loaded).
+
+## `get_map_summary`
+
+- Purpose: a cheap, compact overview of one map — what it holds, how big
+  it is and whether it is built — before deciding which tools to call on
+  it. The map is decoded, never measured in detail.
+- Arguments (all optional): `map` (see the rule above), `scope` (as in
+  `list_maps`; the `map` default always resolves against the merged view).
+- Returns: `{"name", "format", "udmf_namespace", "source", "counts",
+  "bounds", "lines", "heights", "things_by_type", "player_starts",
+  "textures_used", "flats_used", "nodes}`:
+  - `source`: `"working"` or `{"layer": n}` — where the scope took the
+    block's header from, as in `list_maps`.
+  - `counts`: `{things, vertices, linedefs, sidedefs, sectors}` — how many
+    of each element the map holds.
+  - `bounds`: `{min_x, min_y, max_x, max_y, width, height}` from the
+    vertices, or `null` when the map holds none.
+  - `lines`: `{one_sided, two_sided, with_special}` — `two_sided` counts
+    the linedefs with both sides set, `one_sided` the rest, and
+    `with_special` those with a nonzero special.
+  - `heights`: `{floor_min, floor_max, ceiling_min, ceiling_max}` across
+    the sectors; all `null` when the map has none.
+  - `things_by_type`: at most 50 `{type, count}` rows, most numerous
+    first, ties by ascending type number.
+  - `player_starts`: which of the thing types 1, 2, 3 and 4 are present.
+  - `textures_used` / `flats_used`: the sidedef textures (upper, lower,
+    middle) and sector flats, sorted, deduplicated, `"-"` left out.
+  - `nodes`: `{"present", "segs", "subsectors", "nodes", "reject_bytes",
+    "blockmap_bytes", "znodes", "gl"}` from the block's lump sizes.
+    `present` needs bytes in `NODES` or `ZNODES`; `segs`, `subsectors`
+    and `nodes` are vanilla record counts (`SEGS`/12, `SSECTORS`/4,
+    `NODES`/28). When `NODES` starts with an extended-format magic
+    (`XNOD`, `ZNOD`, `XGLN`, `ZGLN`, ...) those three counts are replaced
+    by `"nodes_format"` carrying the four-letter magic. `znodes` is true
+    when a `ZNODES` lump exists, `gl` when a `GL_` lump does.
+- Errors: `invalid_argument` (unparsable `map`, unknown `scope`, or no map
+  resolvable), `not_found` (no such map block in the scope, or the layer
+  is not loaded), `format_error` (the block does not decode).
 
 ## `set_active_map`
 

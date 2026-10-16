@@ -1,6 +1,7 @@
-//! Map tools: [`Cyberdemon::list_maps`], [`Cyberdemon::get_map_lumps`] and
-//! [`Cyberdemon::set_active_map`], built on the shared resolvers in
-//! [`crate::tools::maps::common`] that every later map tool reuses.
+//! Map tools: [`Cyberdemon::list_maps`], [`Cyberdemon::get_map_lumps`],
+//! [`Cyberdemon::get_map_summary`] and [`Cyberdemon::set_active_map`],
+//! built on the shared resolvers in [`crate::tools::maps::common`] that
+//! every later map tool reuses.
 
 pub(in crate::tools) mod common;
 
@@ -18,7 +19,10 @@ use crate::session::{Scope, Session, Source};
 use crate::state::AppState;
 use crate::tools::maps::common::Directory;
 use crate::tools::{fail, ok};
+use crate::wad::archive::Lump;
 use crate::wad::classify::{LumpKind, MapBlock, MapFormat};
+use crate::wad::map::read_map;
+use crate::wad::map::stats::{MapSummary, summarize};
 use crate::wad::name::LumpName;
 
 /// Asset file extension for published raw map lumps.
@@ -50,6 +54,21 @@ struct GetMapLumpsParams {
     /// `"asset"` to its row (default `false`).
     #[serde(default)]
     urls: bool,
+}
+
+/// Arguments for [`Cyberdemon::get_map_summary`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetMapSummaryParams {
+    /// The map to summarize, e.g. `"MAP01"`. Defaults to the session's
+    /// active map; with none active, the merged view's only map when it
+    /// holds exactly one. Without either the call fails with
+    /// `invalid_argument`.
+    #[serde(default)]
+    map: Option<String>,
+    /// Which archive to read: `"merged"` (the default), `"working"` or
+    /// `"layer:N"`.
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 /// Arguments for [`Cyberdemon::set_active_map`].
@@ -254,6 +273,43 @@ fn deliver(state: &AppState, mut plan: Plan) -> Result<MapLumpsReport, CyberErro
     })
 }
 
+/// Structured result of [`Cyberdemon::get_map_summary`]: the pure summary
+/// of the decoded map with the block's origin added.
+#[derive(Serialize)]
+struct MapSummaryReport {
+    /// The map's statistics, serialized into this object.
+    #[serde(flatten)]
+    summary: MapSummary,
+    /// Where the scope took the block's header from; set for every found
+    /// map.
+    source: Option<Source>,
+}
+
+/// `get_map_summary`' work: resolve the map, decode its block out of
+/// `scope` and summarize it against the block's member lumps (the `GL`
+/// node run included).
+fn summary_run(
+    session: &Session,
+    requested: Option<&str>,
+    scope: Scope,
+) -> Result<MapSummaryReport, CyberError> {
+    let name = common::resolve_map_name(session, requested)?;
+    let dir = common::directory(session, scope)?;
+    let block = dir
+        .find_block(name)
+        .ok_or_else(|| common::missing_map(name, scope))?;
+    let map = read_map(&dir.lumps, block)?;
+    let block_lumps: Vec<Lump> = Directory::block_positions(block)
+        .into_iter()
+        .filter_map(|position| dir.lumps.get(position))
+        .cloned()
+        .collect();
+    Ok(MapSummaryReport {
+        summary: summarize(&map, &block_lumps),
+        source: dir.entries.get(block.header).map(|entry| entry.source),
+    })
+}
+
 /// Structured result of [`Cyberdemon::set_active_map`].
 #[derive(Debug, Serialize)]
 struct ActiveMapReport {
@@ -344,6 +400,24 @@ impl Cyberdemon {
             Err(error) => return fail(&error),
         };
         reported(deliver(self.state(), plan))
+    }
+
+    /// Summarizes one map cheaply: counts, bounds, heights and node state.
+    #[tool(
+        description = "A cheap, compact overview of one map, decoded but never measured in detail. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\", \"layer:N\"). Returns {name, format, udmf_namespace, source (\"working\" or {\"layer\": n}: where the scope took the block's header from), counts {things, vertices, linedefs, sidedefs, sectors}, bounds {min_x, min_y, max_x, max_y, width, height} or null with no vertices, lines {one_sided, two_sided (both sides set), with_special (nonzero special)}, heights {floor_min, floor_max, ceiling_min, ceiling_max across the sectors; nulls with no sectors}, things_by_type (at most 50 {type, count} rows, most numerous first, ties by ascending type), player_starts (which of types 1, 2, 3, 4 are present), textures_used and flats_used (sorted, deduplicated, without \"-\"), nodes {present (bytes in NODES or ZNODES), segs, subsectors, nodes (record counts from SEGS/12, SSECTORS/4, NODES/28 while NODES is vanilla; replaced by nodes_format, e.g. \"XNOD\" or \"ZGLN\", when it starts with such a magic), reject_bytes, blockmap_bytes, znodes (a ZNODES lump exists), gl (a GL_ lump exists)}}. Unknown map is not_found, unparsable map or scope or no resolvable default is invalid_argument, an undecodable block is format_error."
+    )]
+    fn get_map_summary(
+        &self,
+        Parameters(args): Parameters<GetMapSummaryParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let scope = match parse_scope(args.scope.as_deref()) {
+            Ok(scope) => scope,
+            Err(error) => return fail(&error),
+        };
+        reported(
+            self.state()
+                .with_session(|session| summary_run(session, args.map.as_deref(), scope)),
+        )
     }
 
     /// Selects or clears the map the map tools default to.

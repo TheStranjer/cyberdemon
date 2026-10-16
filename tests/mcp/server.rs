@@ -80,9 +80,10 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 67] = [
+    const EXPECTED_TOOLS: [&str; 69] = [
         "add_lump",
         "assemble_map",
+        "build_texture",
         "decode_patch",
         "diff_wads",
         "edit_decorate",
@@ -135,6 +136,7 @@ mod tests {
         "preview_sound",
         "redo",
         "remove_lump",
+        "remove_texture",
         "rename_lump",
         "render_topdown",
         "reorder_lumps",

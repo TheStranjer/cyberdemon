@@ -27,6 +27,8 @@ image: it is a *recipe* of patch images.
 So the tools cannot "add a texture" from an image: you put the patch lump
 in the archive (lump tools), make sure `PNAMES` names it
 (`list_pnames` / `edit_pnames`), and reference it from a texture record.
+`build_texture` writes such a record (appending needed `PNAMES` names
+itself); `remove_texture` drops one.
 
 ## `list_textures`
 
@@ -133,3 +135,78 @@ in the archive (lump tools), make sure `PNAMES` names it
 
   Check the result with `list_pnames` / `list_textures`; read a raw lump
   back with `get_lump`.
+
+## `build_texture`
+
+- Purpose: defines a composite texture — a named rectangle of patch
+  placements — as one undoable edit (`save_wad` writes the result).
+- Arguments:
+  - `name` (string): 1 to 8 printable `ASCII` characters, stored
+    uppercase.
+  - `width`, `height` (numbers): each 1 to 4096. A width that is not a
+    power of two builds but adds a `warnings` entry (vanilla tiling
+    lines up best at powers of two).
+  - `patches` (list, non-empty): `{patch, x, y}` placements drawn in
+    order; `x`/`y` are pixel origins from the texture's top-left. Each
+    patch name is appended to `PNAMES` when not listed yet. A patch with
+    no lump in the merged view (outside flats and sprites) fails with
+    `not_found` unless `allow_missing_patches: true`.
+  - `target` (string, optional): `"TEXTURE1"` or `"TEXTURE2"`; the
+    default is the lump that already defines `name`, else `TEXTURE1`.
+  - `replace` (bool, optional, default false): a target lump that
+    already holds the name fails with `already_exists` unless set;
+    then the record is updated in place (position and raw masked/flags
+    word kept, size and patches replaced).
+- Copy-on-write: only the working archive changes. The target lump —
+  and `PNAMES` when names were appended — is brought in as an override;
+  a target lump no archive holds is created with the Doom layout
+  (existing lumps keep the layout they were read in). All written lumps
+  are ONE undoable edit labelled `build_texture <NAME>`.
+- Returns:
+
+  ```json
+  {"name": "DOOR1", "lump": "TEXTURE1", "created": true,
+   "pnames_added": ["DOORP1"], "warnings": []}
+  ```
+
+  `created` reports whether the working archive gained the target lump
+  (it was absent, or held only by a read-only layer).
+- Errors: `invalid_argument` (bad name, size outside 1..=4096, empty
+  `patches`, unknown `target`); `not_found` (a patch name no lump
+  carries, without `allow_missing_patches`); `already_exists` (taken
+  name in the target, without `replace`); `format_error` (an
+  undecodable texture lump).
+- Examples:
+
+  ```json
+  {"name": "DOOR1", "width": 64, "height": 128,
+   "patches": [{"patch": "DOORP1", "x": 0, "y": 0}]}
+  {"name": "WALLGRID", "width": 128, "height": 128, "target": "TEXTURE2",
+   "patches": [{"patch": "WALLP1", "x": 0, "y": 0},
+               {"patch": "WALLP1", "x": 64, "y": 0}]}
+  ```
+
+  Create the patch lumps first with `import_image_as_patch` or
+  `add_lump` into the `patches` namespace; check the result with
+  `list_textures` and `render_topdown`.
+
+## `remove_texture`
+
+- Purpose: removes one texture definition from whichever `TEXTURE1`/
+  `TEXTURE2` lump of the merged view defines it, as one undoable edit
+  labelled `remove_texture <NAME>`.
+- Arguments: `name` (string) — 1 to 8 printable `ASCII` characters,
+  matched case-insensitively.
+- Copy-on-write: the affected lump is brought into the working archive
+  as an override; the record is stripped from EVERY lump that holds it
+  (so a shadowed copy cannot surface afterwards), the layout and the
+  other textures are kept. `PNAMES` and the patch lumps are not
+  touched.
+- Returns: `{"name": "STEP1", "lump": "TEXTURE1"}` — `lump` names the
+  lump that held the winning (effective) definition.
+- Errors: `invalid_argument` for a bad name; `not_found` when no
+  texture lump defines it.
+- Maps may still reference the removed texture: sidedef texture fields
+  are plain names, so surfaces that used it come out as holes or
+  errors in ports. Use `validate_map` to find the referencing linedef
+  sides.

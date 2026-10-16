@@ -47,6 +47,41 @@ approximation of Doom's gamma curves: level `0` changes nothing, higher
 levels lift mid-tones while black and white stay pinned
 (`out = in + (255 - in) * in * level / (255 * 8)`).
 
+## Lighting
+
+The 3D view shades every pixel through one of the 32 lighting tables of
+the `COLORMAP`. Which table depends on the `lighting` setting, the
+surface's sector light, how far the surface is from the camera (in map
+units) and — for walls — the engine's fake contrast:
+
+```
+fullbright : table 0
+flat       : clamp((255 - light) >> 3,        0, 31)
+doom       : clamp(((255 - light) >> 3) + (depth >> 7) - 4, 0, 31)
+
+then, for walls:  east-west lines (dy = 0) -1, north-south lines (dx = 0) +1,
+                  anything else unchanged; clamp to 0..=31 again
+```
+
+The `doom` rule approximates the game's diminishing light: four tables
+brighter at the camera, one table darker every 128 map units. The final
+colour is `PALETTE[COLORMAP[table][index]]` with the `gamma` curve
+applied to each channel. Tables 32/33 (invulnerability, all-black) are
+not selected by this formula.
+
+How the view gets its pictures: the scene loads every wall texture the
+map names (composited from `TEXTURE1`/`TEXTURE2` definitions, `TEXTURE2`
+winning, or a `TX_`-region patch of that name), every flat the sectors
+name, and a sky chosen by map name — `E#M#` episodes take `SKY1..4`
+(`Heretic`: 1,2,3,1,3), `MAP01`–`MAP11` take `SKY1`, `MAP12`–`MAP20`
+`SKY2`, `MAP21` up `SKY3`, anything else `SKY1`. A merged `COLORMAP` of
+at least 34 full tables is used as-is; otherwise the tables are generated
+from `PLAYPAL` palette 0. Missing textures, flats and skies, and a
+generated `COLORMAP`, are reported as `problems` while the view still
+renders: missing pictures become a 64x64 checkerboard of the palette's
+brightest and darkest colours. `render_view` surfaces all of this once it
+ships.
+
 ## `get_render_settings`
 
 - Purpose: read the settings this connection currently holds. Call it before

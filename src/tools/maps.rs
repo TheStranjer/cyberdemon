@@ -7,7 +7,7 @@
 //! parameter types and validators in [`crate::tools::maps::params`].
 
 mod assemble;
-pub(in crate::tools) mod common;
+pub mod common;
 pub mod params;
 
 use rmcp::handler::server::wrapper::Parameters;

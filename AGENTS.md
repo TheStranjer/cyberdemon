@@ -35,6 +35,9 @@ src/
                   `gfx/codec.rs` PNG/JPEG/GIF/BMP decode and PNG encode,
                   `gfx/grab.rs` the `grAb` PNG chunk, `gfx/palette.rs`
                   PLAYPAL/hex palettes, `gfx/quantize.rs` quantization,
+                  `gfx/colormap.rs` the COLORMAP reader and palette
+                  generator (34 tables), `gfx/composite.rs` texture
+                  patch-stack folding (`compose`, `Composite`),
                   `gfx/patch.rs` the Doom patch codec (incl. tall patches),
                   `gfx/flat.rs` the flat codec,
                   `gfx/sprite_name.rs` the sprite lump name grammar,
@@ -93,7 +96,8 @@ src/
                   the `class` reader on the same scanner and
                   `defs/mapinfo.rs` the `DoomEdNums` block reader.
   render.rs       Rendering core module root: the integer gamma curve
-                  (`gamma_table`) and the settings and canvas re-exports.
+                  (`gamma_table`) and the settings, canvas, lighting and
+                  scene re-exports.
   render/         Rendering building blocks (no MCP concerns):
                   `render/settings.rs` the session-level `RenderSettings`
                   (resolution, lighting, markers, sky, FOV, gamma, top-down
@@ -101,7 +105,12 @@ src/
                   `render/canvas.rs` the integer `Canvas` raster: clipped
                   `i64` drawing (set/blend, Bresenham and thick lines,
                   rects, circles, even-odd polygon fills), gamma at encode
-                  time and the `RGBA8` image out.
+                  time and the `RGBA8` image out, `render/light.rs` the
+                  COLORMAP table choice (`colormap_index`, `WallDir` fake
+                  contrast) and `shade`, `render/scene.rs` the `Scene`
+                  preparation: map, palette, COLORMAP, used textures and
+                  flats, sky selection, checkerboard fallbacks, `problems`
+                  and the camera helpers.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions
@@ -151,9 +160,9 @@ src/
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
                   `tools/graphics/resolve.rs` holds the shared picture
-                  resolvers (flat, patch, sprite rotation) that every tool
-                  reading graphic lumps decodes through: the image tools
-                  now, the renderer and texture compositor next;
+                  resolvers (flat, patch, composite texture, sprite
+                  rotation) that every tool and the renderers decode
+                  graphic lumps through;
                   `tools/maps/common.rs` holds the shared `map`-parameter
                   resolvers (`resolve_map_name`, `load_map`) every map
                   tool builds on, and `tools/maps/params.rs` the shared

@@ -1,7 +1,7 @@
 //! Palette tools: reading the session's `PLAYPAL` and writing it back,
 //! with optional regeneration of the vanilla tints and the `COLORMAP`.
 //!
-//! [`load_palette`] is the shared helper every graphics tool reads the
+//! `load_palette` is the shared helper every graphics tool reads the
 //! current colours through: the last (winning) `PLAYPAL` of the merged
 //! view, one 768-byte entry at a time. `get_palette` returns a palette as
 //! hex plus a published `PNG` swatch; `set_palette` replaces palettes from
@@ -24,9 +24,9 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::fixed::mul_div_round;
 use crate::gfx::codec::{decode_image, encode_png};
+use crate::gfx::colormap;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::palette::Palette;
-use crate::gfx::quantize::nearest_index;
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::server::Cyberdemon;
 use crate::session::{MergedLump, Session};
@@ -46,14 +46,6 @@ const PALETTE_COLORS: usize = 256;
 /// Vanilla `PLAYPAL` palette count: normal, red damage, gold pickup,
 /// green suit.
 const VANILLA_PALETTES: usize = 14;
-/// Brightness tables at the head of a `COLORMAP` (full to darkest).
-const COLORMAP_LEVELS: usize = 32;
-/// Tables in one `COLORMAP`: 32 levels plus invulnerability and all-black.
-const COLORMAP_TABLES: usize = 34;
-/// Bytes (indices) in one `COLORMAP` table.
-const COLORMAP_TABLE_BYTES: usize = 256;
-/// Denominator of the brightness ramp: map `k` scales by `(32 - k)/32`.
-const LIGHT_SCALE: i64 = 32;
 /// First tint index (index 0 is the untinted normal palette).
 const FIRST_TINT: usize = 1;
 /// Last red (damage) tint index.
@@ -72,8 +64,6 @@ const SWATCH_SIDE: u32 = SWATCH_CELL.saturating_mul(SWATCH_CELLS);
 const OPAQUE: u8 = 255;
 /// Channel value `0` as an `i64`, for checked arithmetic.
 const ZERO: i64 = 0;
-/// Channel value `255` as an `i64`, for checked arithmetic.
-const FULL: i64 = 255;
 /// Weight numerator/denominator one, for checked arithmetic.
 const ONE: i64 = 1;
 
@@ -122,10 +112,7 @@ struct LoadedPalette {
 /// [`CyberError::NotFound`] when no loaded archive holds a `PLAYPAL` or
 /// `index` names a palette the lump does not contain.
 #[inline]
-pub(in crate::tools) fn load_palette(
-    session: &Session,
-    index: usize,
-) -> Result<Palette, CyberError> {
+pub(crate) fn load_palette(session: &Session, index: usize) -> Result<Palette, CyberError> {
     Palette::from_playpal(&require_playpal(session)?, index)
 }
 
@@ -438,80 +425,15 @@ fn rebuild_tints(data: &mut Vec<u8>, replaced: &mut BTreeSet<usize>) -> Result<(
     Ok(())
 }
 
-/// The channel value scaled by `num`/`den`, rounded to nearest.
-fn scale_channel(value: u8, num: i64, den: i64) -> u8 {
-    mul_div_round(i64::from(value), num, den)
-        .and_then(|scaled| u8::try_from(scaled).ok())
-        .unwrap_or(value)
-}
-
-/// The colour scaled by `num`/`den`.
-fn scale_color([red, green, blue]: [u8; 3], num: i64, den: i64) -> [u8; 3] {
-    [
-        scale_channel(red, num, den),
-        scale_channel(green, num, den),
-        scale_channel(blue, num, den),
-    ]
-}
-
-/// The greyscale value `(299r + 587g + 114b) / 1000`, truncated.
-fn luminance([red, green, blue]: [u8; 3]) -> u8 {
-    i64::from(red)
-        .checked_mul(299)
-        .unwrap_or(ZERO)
-        .checked_add(i64::from(green).checked_mul(587).unwrap_or(ZERO))
-        .unwrap_or(ZERO)
-        .checked_add(i64::from(blue).checked_mul(114).unwrap_or(ZERO))
-        .unwrap_or(ZERO)
-        .checked_div(1000)
-        .and_then(|value| u8::try_from(value).ok())
-        .unwrap_or(0)
-}
-
-/// The invulnerability-table entry of one palette colour: its inverted
-/// greyscale as a nearest-match index.
-fn inverse_entry(color: [u8; 3], palette: &Palette) -> u8 {
-    let shade = i64::from(luminance(color));
-    let inverse = FULL
-        .checked_sub(shade)
-        .and_then(|value| u8::try_from(value).ok())
-        .unwrap_or(0);
-    nearest_index([inverse, inverse, inverse], palette, &[])
-}
-
-/// The 34-table `COLORMAP` (8704 bytes) derived from palette 0 of `data`:
-/// tables 0..=31 scale colours by `(32 - k)/32` to the nearest palette
-/// entry, table 32 is the inverted greyscale (invulnerability) and table
-/// 33 maps everything to the nearest colour to black.
+/// The regenerated `COLORMAP` bytes for `PLAYPAL` data: its palette 0
+/// expanded by the shared [`colormap`] generator.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] when `data` holds no palette 0 (which the
 /// payload checks rule out).
-fn build_colormap(data: &[u8]) -> Result<Vec<u8>, CyberError> {
-    let palette = Palette::from_playpal(data, 0)?;
-    let capacity = COLORMAP_TABLES.saturating_mul(COLORMAP_TABLE_BYTES);
-    let mut tables = Vec::with_capacity(capacity);
-    for level in 0..COLORMAP_LEVELS {
-        let num = LIGHT_SCALE
-            .checked_sub(i64::try_from(level).unwrap_or(ZERO))
-            .unwrap_or(ZERO);
-        for color in palette.colors() {
-            tables.push(nearest_index(
-                scale_color(*color, num, LIGHT_SCALE),
-                &palette,
-                &[],
-            ));
-        }
-    }
-    for color in palette.colors() {
-        tables.push(inverse_entry(*color, &palette));
-    }
-    let black = nearest_index([0_u8; 3], &palette, &[]);
-    for _entry in 0..COLORMAP_TABLE_BYTES {
-        tables.push(black);
-    }
-    Ok(tables)
+fn regenerate_colormap(data: &[u8]) -> Result<Vec<u8>, CyberError> {
+    Ok(colormap::colormap_bytes(&Palette::from_playpal(data, 0)?))
 }
 
 /// The merged view's winning `PLAYPAL` bytes, empty when no loaded
@@ -578,7 +500,7 @@ fn commit_palette(session: &mut Session, request: Request) -> Result<SetPaletteR
     if tints {
         rebuild_tints(&mut data, &mut replaced)?;
     }
-    let maps = colormap.then(|| build_colormap(&data)).transpose()?;
+    let maps = colormap.then(|| regenerate_colormap(&data)).transpose()?;
     let palettes = data.chunks_exact(PALETTE_BYTES).count();
     session.edit("set_palette", |wad| {
         put_global(wad, LumpName::from_raw(PLAYPAL_RAW), data.clone())?;
@@ -689,8 +611,7 @@ mod tests {
     fn session_with(palettes: usize, with_colormap: bool) -> Session {
         let mut lumps = vec![Lump::new(name("PLAYPAL"), fixture_bytes(palettes))];
         if with_colormap {
-            let size = COLORMAP_TABLES.saturating_mul(COLORMAP_TABLE_BYTES);
-            lumps.push(Lump::new(name("COLORMAP"), vec![0_u8; size]));
+            lumps.push(Lump::new(name("COLORMAP"), vec![0_u8; colormap::MIN_BYTES]));
         }
         let mut session = Session::default();
         session.set_iwad(Layer::new(
@@ -821,55 +742,6 @@ mod tests {
         assert_eq!(tint_channel(255, 0, 8, 9), 28, "255 - 226.7 rounds to 28");
         assert_eq!(tint_channel(128, 0, 1, 2), 64, "an exact half");
         assert_eq!(tint_channel(100, 100, 1, 8), 100, "no delta stays put");
-    }
-
-    #[test]
-    fn luminance_weights_the_channels_as_documented() {
-        assert_eq!(luminance([255_u8, 255_u8, 255_u8]), 255, "white");
-        assert_eq!(luminance([0_u8, 0_u8, 0_u8]), 0, "black");
-        assert_eq!(luminance([255_u8, 0_u8, 0_u8]), 76, "0.299 red");
-        assert_eq!(luminance([0_u8, 255_u8, 0_u8]), 149, "0.587 green");
-        assert_eq!(luminance([0_u8, 0_u8, 255_u8]), 29, "0.114 blue");
-    }
-
-    #[test]
-    fn the_colormap_ramps_from_identity_through_grey_to_black() {
-        let maps = build_colormap(&fixture_bytes(1)).expect("the fixture derives maps");
-        let size = COLORMAP_TABLES.saturating_mul(COLORMAP_TABLE_BYTES);
-        assert_eq!(maps.len(), size, "34 tables of 256");
-        let identity: Vec<u8> = (0_u8..=255).collect();
-        assert_eq!(
-            &maps[..size.min(PALETTE_COLORS)],
-            identity.as_slice(),
-            "map 0 is exact"
-        );
-        let middle = PALETTE_COLORS.checked_mul(16).expect("test offset fits");
-        let level_sixteen = maps.get(middle).copied().expect("map 16 exists");
-        assert!(level_sixteen < 255, "map 16 darkens the top colour");
-        let grey_start = PALETTE_COLORS.checked_mul(32).expect("test offset fits");
-        assert_eq!(
-            maps.get(grey_start).copied().expect("map 32 exists"),
-            120,
-            "index 0 (0,255,0) inverts to 106-grey, nearest at 120"
-        );
-        assert_eq!(
-            maps.get(grey_start.checked_add(255).expect("test offset fits"))
-                .copied()
-                .expect("map 32 has 256 entries"),
-            135,
-            "index 255 (255,0,255) inverts to 150-grey, nearest at 135"
-        );
-        let black_start = PALETTE_COLORS.checked_mul(33).expect("test offset fits");
-        let tail = maps.get(black_start..).expect("map 33 exists");
-        let black = tail.first().copied().expect("map 33 has entries");
-        assert!(
-            tail.iter().all(|&value| value == black),
-            "map 33 is uniform"
-        );
-        assert_eq!(
-            black, 85,
-            "the fixture's nearest colour to black is entry 85"
-        );
     }
 
     #[test]
@@ -1100,7 +972,7 @@ mod tests {
             .expect("the merged view serves it");
         assert_eq!(
             maps.lump.data.len(),
-            COLORMAP_TABLES.saturating_mul(COLORMAP_TABLE_BYTES),
+            colormap::MIN_BYTES,
             "34 tables of 256"
         );
     }

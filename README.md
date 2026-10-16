@@ -33,8 +33,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > served to clients as `http://localhost:<port>` URLs by a lazily started
 > asset server (LRU store + uploads via `/upload/<name>`), so big binaries
 > never cross the stdio channel. An internal graphics core (`src/gfx*`:
-> images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, quantization, pure
-> integer image ops, Doom patch (incl. tall) and flat codecs), an internal
+> images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, `COLORMAP` tables, texture compositing,
+> quantization, pure integer image ops, Doom patch (incl. tall) and flat codecs), an internal
 > audio core (`src/audio*`: interleaved
 > `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, `DP*` PC speaker
 > tone-list synthesis, `symphonia`-backed
@@ -56,9 +56,10 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > rules, a labelled undo/redo history with dirty-state tracking, and the copy-on-write `edit_map` step every map edit wraps) and a definitions registry (`src/defs*`: TSV game tables embedded in the binary,
 > parsed once, selected per game, and overlaid with the session's custom
 > DEHACKED/DECORATE/ZScript/MAPINFO thing definitions) and render defaults (`src/render*`: the
-> validated session-level resolution, lighting, field of view, gamma and style every render tool
-> starts from, the integer gamma curve, and the clipped integer raster canvas (Bresenham lines,
-> even-odd polygon fills) `render_topdown` paints map overviews on) and a
+> validated session-level settings, the integer gamma curve, the 3D-view lighting maths
+> (COLORMAP tables, fake contrast, shading) and scene preparation (textures, flats, sky,
+> fallbacks, `problems`) `render_view` builds on, and the clipped integer raster canvas
+> (Bresenham lines, even-odd polygon fills) `render_topdown` paints map overviews on) and a
 > pure planar geometry engine (`src/geom*`: layered polygons and external
 > segments arranged into non-crossing, side-labelled integer pieces; all
 > drawing goes through `geom::arrange`) and a pure float-free BSP node
@@ -70,9 +71,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > regions grown to wall centrelines then traced, simplified, straightened
 > and welded integer polygons; it measures and never interprets) back the
 > first WAD tools.
-> `AppState::fetch_source` turns client `source` strings (absolute paths,
-> `file://`, `http(s)://` and own-asset URLs, capped at 256 MiB) into bytes
-> for import tools.
+> `AppState::fetch_source` turns client `source` strings (absolute paths, `file://`, `http(s)://`
+> and own-asset URLs, capped at 256 MiB) into bytes for import tools.
 
 ## Build and run
 

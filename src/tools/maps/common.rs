@@ -1,8 +1,10 @@
 //! The shared map helpers behind every tool that acts on a map: name
-//! resolution ([`resolve_map_name`]) and reading one map block out of a
-//! scope ([`load_map`], through the [`Directory`] wrapper around a scope's
-//! classified listing). Every later map tool takes an optional `map`
-//! parameter and starts with these two.
+//! resolution and one map block read.
+//!
+//! `resolve_map_name` picks the map a call works on; `load_map`
+//! decodes one block out of a scope, through the `Directory` wrapper
+//! around a scope's classified listing. Every later map tool takes an
+//! optional `map` parameter and starts with these two.
 
 use crate::error::CyberError;
 use crate::session::{MergedLump, Scope, Session};
@@ -134,11 +136,7 @@ fn no_map_error() -> CyberError {
 /// [`CyberError::NotFound`] when the scope holds no such block,
 /// [`CyberError::Format`] when the block's decoder rejects its members, and
 /// [`Session::lumps_in`]'s errors for an unloaded layer scope.
-pub(in crate::tools) fn load_map(
-    session: &Session,
-    name: LumpName,
-    scope: Scope,
-) -> Result<Map, CyberError> {
+pub(crate) fn load_map(session: &Session, name: LumpName, scope: Scope) -> Result<Map, CyberError> {
     let dir = directory(session, scope)?;
     let Some(block) = dir.find_block(name) else {
         return Err(missing_map(name, scope));

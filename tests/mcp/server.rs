@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 59] = [
+    const EXPECTED_TOOLS: [&str; 61] = [
         "add_lump",
         "decode_patch",
         "edit_decorate",
@@ -109,9 +109,11 @@ mod tests {
         "import_image_as_flat",
         "import_image_as_patch",
         "import_image_as_raw",
+        "import_image_as_sprite",
         "import_music",
         "import_png_as_flat",
         "import_png_as_patch",
+        "import_png_as_sprite",
         "import_sound",
         "list_flats",
         "list_lumps",
@@ -267,6 +269,28 @@ mod tests {
             schema_of(tool_named(&tools, "import_png_as_flat")),
             flat,
             "the flat alias takes the same arguments"
+        );
+        let sprite = schema_of(tool_named(&tools, "import_image_as_sprite"));
+        assert_flattens(
+            &sprite,
+            &[
+                "source",
+                "name",
+                "palette",
+                "transparency",
+                "offsets",
+                "replace",
+                "sprite",
+                "frame",
+                "rotation",
+                "mirror_rotation",
+            ],
+        );
+        assert_required(&sprite, "source");
+        assert_eq!(
+            schema_of(tool_named(&tools, "import_png_as_sprite")),
+            sprite,
+            "the sprite alias takes the same arguments"
         );
         let raw = schema_of(tool_named(&tools, "import_image_as_raw"));
         assert_flattens(&raw, &["source", "name", "namespace", "replace"]);

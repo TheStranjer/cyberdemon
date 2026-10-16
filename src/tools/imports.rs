@@ -12,10 +12,16 @@
 //! shape, `encode_flat`, and insertion into the working `flats` region.
 //! [`Cyberdemon::import_image_as_raw`] validates that the bytes are a
 //! readable image and stores them unchanged, for `ZDoom`-family ports
-//! that read `PNG` lumps directly. Sprite and patch-replacement tools
-//! grow on the same pipeline pieces.
+//! that read `PNG` lumps directly.
+//! [`Cyberdemon::import_image_as_sprite`] (and its alias
+//! [`Cyberdemon::import_png_as_sprite`]) runs the same pipeline on the
+//! sprite side: [`sprite`] names the lump through the sprite
+//! grammar of [`crate::gfx::sprite_name::parse_sprite_name`], anchors the
+//! picture on its feet and reports the rotations the session's sprites
+//! region already serves. Patch-replacement tools grow on the same pieces.
 
 mod image_pipeline;
+mod sprite;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -38,6 +44,9 @@ use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{
     DEFAULT_PALETTE, ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched,
     build_patch, chosen_name, parse_import, put_lump,
+};
+use crate::tools::imports::sprite::{
+    ALIASED_SPRITE_TOOL_DESCRIPTION, ImportSpriteParams, SPRITE_TOOL_DESCRIPTION, sprite_imported,
 };
 use crate::tools::ok;
 use crate::tools::palette::load_palette;
@@ -672,6 +681,24 @@ impl Cyberdemon {
         Parameters(args): Parameters<ImportFlatParams>,
     ) -> Result<CallToolResult, ErrorData> {
         flat_imported(self.state(), &args).await
+    }
+
+    /// Imports an image file as a named sprite lump in the sprites region.
+    #[tool(description = SPRITE_TOOL_DESCRIPTION)]
+    async fn import_image_as_sprite(
+        &self,
+        Parameters(args): Parameters<ImportSpriteParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sprite_imported(self.state(), &args).await
+    }
+
+    /// Alias of [`Cyberdemon::import_image_as_sprite`].
+    #[tool(description = ALIASED_SPRITE_TOOL_DESCRIPTION)]
+    async fn import_png_as_sprite(
+        &self,
+        Parameters(args): Parameters<ImportSpriteParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sprite_imported(self.state(), &args).await
     }
 
     /// Stores a validated image file's bytes unchanged as a lump.

@@ -11,11 +11,18 @@
 //! tools: it reports dependents, expands a cascade and renumbers the
 //! references of what survives. [`stats`] folds a decoded map plus its
 //! block's lump sizes into the compact summary the overview tool reports.
+//! [`nodes`], [`reject`] and [`blockmap`] type the node-builder output:
+//! the `SEGS`/`SSECTORS`/`NODES` tree in its vanilla and `ZDoom` extended
+//! layouts, the `REJECT` visibility matrix and the `BLOCKMAP` spatial
+//! index.
 
+pub mod blockmap;
 pub mod doom;
 pub mod flags;
 pub mod hexen;
 pub mod model;
+pub mod nodes;
+pub mod reject;
 pub mod remove;
 pub mod stats;
 pub mod udmf_map;
@@ -23,8 +30,14 @@ pub mod udmf_map;
 mod common;
 
 pub use crate::wad::classify::MapFormat;
+pub use blockmap::Blockmap;
 pub use flags::{FlagFamily, FlagKind};
 pub use model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
+pub use nodes::{
+    BoundingBox, Child, Node, NodeSet, NodesFormat, Seg, Subsector, lump_format,
+    parse_extended_nodes, parse_vanilla_nodes,
+};
+pub use reject::Reject;
 pub use remove::{
     CascadeOptions, Dependents, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };

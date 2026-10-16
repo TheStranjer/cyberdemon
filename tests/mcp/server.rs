@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 62] = [
+    const EXPECTED_TOOLS: [&str; 65] = [
         "add_lump",
         "decode_patch",
         "diff_wads",
@@ -90,14 +90,17 @@ mod tests {
         "edit_zscript",
         "extract_lump",
         "get_asset_server_info",
+        "get_blockmap",
         "get_dehacked",
         "get_flat",
         "get_linedef_specials",
         "get_lump",
         "get_map_lumps",
         "get_map_summary",
+        "get_nodes",
         "get_palette",
         "get_patch",
+        "get_reject",
         "get_render_settings",
         "get_sector_specials",
         "get_session_info",
@@ -146,7 +149,7 @@ mod tests {
     ];
 
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_defs_graphics_imports_inspect_lumps_maps_music_palette_render_scripts_session_and_textures_tools()
+    async fn lists_the_meta_assets_audio_defs_graphics_imports_inspect_lumps_maps_music_nodes_palette_render_scripts_session_and_textures_tools()
      {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");

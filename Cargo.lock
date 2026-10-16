@@ -206,6 +206,7 @@ dependencies = [
  "axum",
  "crc32fast",
  "fastrand",
+ "flate2",
  "image",
  "reqwest",
  "rmcp",

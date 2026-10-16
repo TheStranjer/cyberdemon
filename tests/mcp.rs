@@ -9,6 +9,7 @@
 //! the imports-group tests in `imports`, the
 //! inspect-group tests in `inspect`, the
 //! music-group tests in `music`, the
+//! nodes-group tests in `nodes`, the
 //! palette-group tests in `palette`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
 //! the textures-group tests in `textures`, and the documentation-layout
@@ -21,6 +22,7 @@ use anyhow as _;
 use axum as _;
 use crc32fast as _;
 use fastrand as _;
+use flate2 as _;
 use image as _;
 use reqwest as _;
 use symphonia as _;
@@ -64,6 +66,9 @@ mod maps;
 #[cfg(test)]
 #[path = "mcp/music.rs"]
 mod music;
+#[cfg(test)]
+#[path = "mcp/nodes.rs"]
+mod nodes;
 #[cfg(test)]
 #[path = "mcp/palette.rs"]
 mod palette;

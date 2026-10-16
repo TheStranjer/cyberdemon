@@ -11,6 +11,7 @@ anyhow = "1.0.104"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 crc32fast = "1.5.2"
 fastrand = "2.5.0"
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 rmcp = { version = "3.5.1", features = ["server", "transport-io"] }

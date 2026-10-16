@@ -21,9 +21,9 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group
 > (`list_maps`, `get_map_lumps`, `get_map_summary`, `set_active_map`), an
 > `audio` group (`import_sound`, `preview_sound`), a `music` group
-> (`import_music`, `preview_music`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
-> `edit_decorate`, `edit_zscript`),
-> a `session` group
+> (`import_music`, `preview_music`), a `nodes` group (`get_nodes`, `get_reject`,
+> `get_blockmap`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
+> `edit_decorate`, `edit_zscript`), a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
 > (`set_render_resolution`, `set_render_options`, `get_render_settings`),
@@ -50,7 +50,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
 > detection and patch-reference renumbering, and a `UDMF` `TEXTMAP`
 > tokenizer, parser and writer over documents of blocks and key/value
-> pairs) and a session
+> pairs, and typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom` `XNOD`/`ZNOD`) and `REJECT`/`BLOCKMAP` parsers) and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, and a labelled undo/redo history with dirty-state tracking) and a

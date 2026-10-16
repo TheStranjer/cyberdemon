@@ -17,6 +17,7 @@ pub(crate) mod lumps;
 pub(crate) mod maps;
 pub(crate) mod meta;
 pub(crate) mod music;
+pub(crate) mod nodes;
 pub(crate) mod palette;
 pub(crate) mod render;
 pub(crate) mod scripts;

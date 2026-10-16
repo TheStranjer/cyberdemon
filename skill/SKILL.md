@@ -140,6 +140,9 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `preview_sound`          | `reference/audio.md`    |
 | `import_music`           | `reference/music.md`    |
 | `preview_music`          | `reference/music.md`    |
+| `get_nodes`              | `reference/nodes.md`    |
+| `get_reject`             | `reference/nodes.md`    |
+| `get_blockmap`           | `reference/nodes.md`    |
 | `get_palette`            | `reference/palette.md`  |
 | `set_palette`            | `reference/palette.md`  |
 | `open_iwad`              | `reference/session.md`  |

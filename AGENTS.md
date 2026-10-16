@@ -181,7 +181,13 @@ src/
                   format-neutral `Map` model (`Thing`, `Vertex`,
                   `Linedef`, `Sidedef`, `Sector`, `extra` side-bags),
                   `map/doom.rs` the binary Doom map reader/writer
-                  (`read_doom_map`/`write_doom_map`).
+                  (`read_doom_map`/`write_doom_map`),
+                  `map/nodes.rs` typed SEGS/SSECTORS/NODES parsing in the
+                  vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
+                  `Seg`, `Subsector`, `Node`, `Child`, magic detection),
+                  `map/reject.rs` the REJECT visibility bit-matrix and
+                  `map/blockmap.rs` the BLOCKMAP grid (offset table and
+                  blocklist validation).
 data/
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by

@@ -124,6 +124,9 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `add_thing`              | `reference/things.md`   |
 | `edit_thing`             | `reference/things.md`   |
 | `remove_thing`           | `reference/things.md`   |
+| `add_sidedef`            | `reference/sidedefs.md` |
+| `edit_sidedef`           | `reference/sidedefs.md` |
+| `remove_sidedef`         | `reference/sidedefs.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |

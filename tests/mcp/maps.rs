@@ -1,8 +1,8 @@
 //! The `maps` tool group as seen by a real MCP client: listing the map
 //! blocks of every scope with formats, namespaces and node presence,
-//! reading one block's raw lump set (with optionally published bytes), and
-//! the active-map selection the map tools' optional `map` parameter
-//! defaults to.
+//! reading one block's raw lump set (with optionally published bytes),
+//! the cheap per-map overview, and the active-map selection the map
+//! tools' optional `map` parameter defaults to.
 
 #[cfg(test)]
 mod tests {
@@ -362,6 +362,156 @@ mod tests {
         );
         let (scope_code, _) = call_err(&client, "get_map_lumps", json!({ "scope": "nope" })).await;
         assert_eq!(scope_code, "invalid_argument", "unknown scope");
+    }
+
+    /// The whole `get_map_summary` result for the two-room fixture map
+    /// under the given `source` value.
+    fn summary_json(source: &Value) -> Value {
+        json!({
+            "name": "MAP01", "format": "doom", "udmf_namespace": null, "source": source,
+            "counts": {"things": 2_u64, "vertices": 6_u64, "linedefs": 7_u64, "sidedefs": 8_u64, "sectors": 2_u64},
+            "bounds": {"min_x": 0_i64, "min_y": 0_i64, "max_x": 512_i64, "max_y": 256_i64, "width": 512_i64, "height": 256_i64},
+            "lines": {"one_sided": 6_u64, "two_sided": 1_u64, "with_special": 0_u64},
+            "heights": {"floor_min": 0_i64, "floor_max": 32_i64, "ceiling_min": 128_i64, "ceiling_max": 128_i64},
+            "things_by_type": [{"type": 1_i64, "count": 1_u64}, {"type": 3001_i64, "count": 1_u64}],
+            "player_starts": [1_i64],
+            "textures_used": ["STEP1", "WALL1"], "flats_used": ["FLOOR1"],
+            "nodes": {
+                "present": false, "segs": 0_u64, "subsectors": 0_u64, "nodes": 0_u64,
+                "reject_bytes": 0_u64, "blockmap_bytes": 0_u64, "znodes": false, "gl": false,
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn get_map_summary_reports_the_fixture_map_then_the_working_copy() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let base = iwad(dir.path());
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        let report = call(&client, "get_map_summary", json!({})).await;
+        assert_eq!(
+            report,
+            summary_json(&json!({ "layer": 0_u64 })),
+            "the whole summary of the only map, resolved without a name",
+        );
+        call(
+            &client,
+            "replace_lump",
+            json!({ "name": "REJECT", "hex": "AA BB" }),
+        )
+        .await;
+        let working = call(&client, "get_map_summary", json!({ "map": "MAP01" })).await;
+        assert_eq!(
+            working["source"],
+            json!("working"),
+            "the copied block reads from the working archive",
+        );
+        assert_eq!(
+            working["nodes"]["reject_bytes"],
+            json!(2_u64),
+            "the new REJECT",
+        );
+        assert_eq!(
+            working["nodes"]["present"],
+            json!(false),
+            "REJECT bytes alone are no node data",
+        );
+        assert_eq!(
+            working["counts"]["things"],
+            json!(2_u64),
+            "the map itself is unchanged",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_map_summary_covers_the_udmf_and_hexen_node_shapes() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = formats_loaded(dir.path()).await;
+        let udmf = call(&client, "get_map_summary", json!({ "map": "MAP03" })).await;
+        assert_eq!(udmf["format"], json!("udmf"), "the TEXTMAP block");
+        assert_eq!(
+            udmf["udmf_namespace"],
+            json!("zdoom"),
+            "the namespace rides along",
+        );
+        assert_eq!(
+            udmf["bounds"]["width"],
+            json!(512_i64),
+            "the decoded map bounds",
+        );
+        assert_eq!(
+            udmf["nodes"],
+            json!({
+                "present": true, "segs": 0_u64, "subsectors": 0_u64, "nodes": 0_u64,
+                "reject_bytes": 0_u64, "blockmap_bytes": 0_u64, "znodes": true, "gl": true,
+            }),
+            "bytes in ZNODES and an attached GL run",
+        );
+        let hexen = call(&client, "get_map_summary", json!({ "map": "MAP04" })).await;
+        assert_eq!(hexen["format"], json!("hexen"), "the BEHAVIOR marks it");
+        assert_eq!(
+            hexen["udmf_namespace"],
+            Value::Null,
+            "binary has no namespace",
+        );
+        assert_eq!(
+            hexen["nodes"],
+            json!({
+                "present": true, "segs": 0_u64, "subsectors": 0_u64, "nodes": 0_u64,
+                "reject_bytes": 0_u64, "blockmap_bytes": 0_u64, "znodes": false, "gl": false,
+            }),
+            "8 NODES bytes are present but hold no whole vanilla record",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_map_summary_reports_unknown_maps_and_missing_defaults() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_plus_pwad(dir.path()).await;
+        let (code, message) = call_err(&client, "get_map_summary", json!({ "map": "MAP99" })).await;
+        assert_eq!(code, "not_found", "no such map");
+        assert!(
+            message.contains("MAP99") && message.contains("list_maps"),
+            "the message names the map and the way out: {message}",
+        );
+        let (default_code, default_message) = call_err(&client, "get_map_summary", json!({})).await;
+        assert_eq!(default_code, "invalid_argument", "two maps, no default");
+        assert!(
+            default_message.contains("pass map or call set_active_map"),
+            "the error names the fixes: {default_message}",
+        );
+        let (layer_code, _) = call_err(
+            &client,
+            "get_map_summary",
+            json!({ "map": "MAP02", "scope": "layer:0" }),
+        )
+        .await;
+        assert_eq!(layer_code, "not_found", "MAP02 is not in layer 0");
+        let (scope_code, _) = call_err(
+            &client,
+            "get_map_summary",
+            json!({ "map": "MAP02", "scope": "nope" }),
+        )
+        .await;
+        assert_eq!(scope_code, "invalid_argument", "unknown scope");
+        let (name_code, _) =
+            call_err(&client, "get_map_summary", json!({ "map": "BAD NAME" })).await;
+        assert_eq!(
+            name_code, "invalid_argument",
+            "spaces are not allowed in names"
+        );
+        let empty = connect().await;
+        let (empty_code, _) = call_err(&empty, "get_map_summary", json!({ "map": "MAP01" })).await;
+        assert_eq!(
+            empty_code, "not_found",
+            "nothing is loaded, MAP01 is nowhere"
+        );
     }
 
     #[tokio::test]

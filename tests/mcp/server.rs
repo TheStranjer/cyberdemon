@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 58] = [
+    const EXPECTED_TOOLS: [&str; 59] = [
         "add_lump",
         "decode_patch",
         "edit_decorate",
@@ -94,6 +94,7 @@ mod tests {
         "get_linedef_specials",
         "get_lump",
         "get_map_lumps",
+        "get_map_summary",
         "get_palette",
         "get_patch",
         "get_render_settings",

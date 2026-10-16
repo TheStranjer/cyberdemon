@@ -9,13 +9,15 @@
 //! [`read_map`] and [`write_map`] dispatch on a block's [`MapFormat`].
 //! [`remove`] is the pure deletion engine behind the element-removal
 //! tools: it reports dependents, expands a cascade and renumbers the
-//! references of what survives.
+//! references of what survives. [`stats`] folds a decoded map plus its
+//! block's lump sizes into the compact summary the overview tool reports.
 
 pub mod doom;
 pub mod flags;
 pub mod hexen;
 pub mod model;
 pub mod remove;
+pub mod stats;
 pub mod udmf_map;
 
 mod common;

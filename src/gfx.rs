@@ -3,14 +3,17 @@
 //! Pure data processing on owned buffers: [`image`] types with validated
 //! constructors, [`codec`] decode/encode for `PNG`, `JPEG`, `GIF` and `BMP`,
 //! the private [`grab`] `grAb` `PNG` chunk, [`palette`] handling,
-//! [`quantize`] colour mapping, the [`ops`] image-operation framework and
-//! the `Doom` lump codecs [`patch`] (columns, posts and `DeePsea` tall
-//! patches) and [`flat`] (raw indexed planes), plus the sprite lump name
-//! grammar [`sprite_name`] and the engine's sprite rotation bucketing
-//! [`sprite_rotation`]. Nothing here knows about MCP or the
-//! filesystem; later sprite and texture tools compose these pieces.
+//! [`colormap`] the `COLORMAP` reader and generator, [`quantize`] colour
+//! mapping, [`composite`] texture patch-stack folding, the [`ops`]
+//! image-operation framework and the `Doom` lump codecs [`patch`] (columns,
+//! posts and `DeePsea` tall patches) and [`flat`] (raw indexed planes), plus
+//! the sprite lump name grammar [`sprite_name`] and the engine's sprite
+//! rotation bucketing [`sprite_rotation`]. Nothing here knows about MCP or
+//! the filesystem; later sprite and texture tools compose these pieces.
 
 pub mod codec;
+pub mod colormap;
+pub mod composite;
 pub mod flat;
 pub mod grab;
 pub mod image;

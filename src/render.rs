@@ -6,15 +6,23 @@
 //! `render_view`, `render_topdown` and `render_minimap` start from, and
 //! [`canvas`] the integer raster they all draw onto. This module root adds
 //! the one piece of maths every renderer needs and none of the settings
-//! themselves: [`gamma_table`]. Nothing here knows about MCP; the `render`
-//! tool group is the only caller that talks to clients.
+//! themselves: [`gamma_table`]. [`scene`] prepares a [`Scene`] (map,
+//! palette, `COLORMAP` tables, textures, flats, sky) from a session and
+//! [`light`] turns sector lights, depths and wall orientations into
+//! `COLORMAP` tables and shaded pixels for the 3D view. Nothing here
+//! knows about MCP; the `render` tool group is the only caller that talks
+//! to clients.
 
 pub mod canvas;
+pub mod light;
+pub mod scene;
 pub mod settings;
 
 use crate::render::settings::MAX_GAMMA;
 
 pub use canvas::{Canvas, Edge, Pt, Rgba, Stroke};
+pub use light::{WallDir, colormap_index, shade};
+pub use scene::{Scene, build_scene, camera_sector, default_eye_z};
 pub use settings::{Lighting, RenderSettings, Switch, TopdownStyle};
 
 /// The brightest input value of an 8-bit channel.

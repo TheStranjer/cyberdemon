@@ -11,7 +11,7 @@
 pub(crate) mod assets;
 pub(crate) mod audio;
 pub(crate) mod defs;
-pub(crate) mod graphics;
+pub mod graphics;
 pub(crate) mod imports;
 pub(crate) mod inspect;
 pub(crate) mod lumps;
@@ -19,7 +19,7 @@ pub mod maps;
 pub(crate) mod meta;
 pub(crate) mod music;
 pub(crate) mod nodes;
-pub(crate) mod palette;
+pub mod palette;
 pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;

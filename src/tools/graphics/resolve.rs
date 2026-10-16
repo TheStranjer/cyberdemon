@@ -1,21 +1,24 @@
 //! The shared graphic-resource resolvers: a lump name in, decoded pixels
 //! out.
 //!
-//! [`load_flat`], [`load_patch`], [`load_sprite`] and [`load_sprite_lump`]
-//! implement how an engine finds one picture in the merged view - the
-//! flats region first for a flat, the patches region then any loose lump
-//! for a patch (a `PNAMES` component may sit anywhere), the sprite regions
+//! `load_flat`, `load_patch`, `load_texture`, `load_sprite` and
+//! `load_sprite_lump` implement how an engine finds one picture in the
+//! merged view - the flats region first for a flat, the patches region
+//! then any loose lump for a patch (a `PNAMES` component may sit
+//! anywhere), the `TEXTURE2` then `TEXTURE1` definition (with a `TX_`
+//! patch as fallback) for a composite texture, the sprite regions
 //! plus the name grammar for a sprite rotation - and decode what they
 //! find: raw `Doom` flats and column/post patches, or the `PNG` form ports
 //! also carry, quantized against `PLAYPAL` entry 0 with alpha transparency
-//! and with the drawing offsets taken from a `grAb` chunk. [`lump_bytes`]
+//! and with the drawing offsets taken from a `grAb` chunk. `lump_bytes`
 //! is the same name lookup for a tool that reads a lump of any kind. The
-//! image tools of [`crate::tools::graphics`] publish through these; the
-//! renderer and the texture compositor read pictures through them too, so
-//! name resolution is written once.
+//! image tools of [`crate::tools::graphics`] publish through these and
+//! [`crate::render::scene`] builds its scenes through them, so name
+//! resolution is written once.
 
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, is_png};
+use crate::gfx::composite::{Component, Composite, compose};
 use crate::gfx::flat::decode_flat;
 use crate::gfx::grab::{GrabOffsets, read_grab};
 use crate::gfx::image::{IndexedImage, flip_horizontal};
@@ -26,8 +29,10 @@ use crate::gfx::sprite_name::parse_sprite_name;
 use crate::session::{Scope, Session};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::palette::load_palette;
+use crate::tools::textures::TextureSet;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
+use crate::wad::textures::{TextureDef, parse_pnames};
 
 /// The `PLAYPAL` entry `PNG` graphics are quantized to: ports store such
 /// a picture's colours in the normal palette, and a call's own `palette`
@@ -177,10 +182,7 @@ fn not_found(kind: &str, lister: &str, name: LumpName) -> CyberError {
 /// [`CyberError::Format`] when the bytes are neither a raw flat of a
 /// supported size nor a readable `PNG`; [`load_palette`]' errors when a
 /// `PNG` flat has no `PLAYPAL` to quantize against.
-pub(in crate::tools) fn load_flat(
-    session: &Session,
-    name: LumpName,
-) -> Result<IndexedImage, CyberError> {
+pub(crate) fn load_flat(session: &Session, name: LumpName) -> Result<IndexedImage, CyberError> {
     let row = locate(&merged_rows(session)?, name, &FLAT_PLACES)
         .ok_or_else(|| not_found("flat", "list_flats", name))?;
     decode_flat_bytes(session, &row.lump.data)
@@ -200,6 +202,99 @@ pub(in crate::tools) fn load_patch(session: &Session, name: LumpName) -> Result<
     let row = locate(&merged_rows(session)?, name, &PATCH_PLACES)
         .ok_or_else(|| not_found("patch", "list_patches", name))?;
     decode_patch_bytes(session, &row.lump.data)
+}
+
+/// The composed pixels of the wall texture `name`: the merged view's
+/// `TEXTURE2` definition, else its `TEXTURE1` one, else a patch lump of
+/// that name inside the `TX_` region (what ports store already-composed
+/// textures as). A definition composites through
+/// [`crate::gfx::composite`]: present patches draw in record order,
+/// absent ones leave holes and land in [`Composite::missing`] and
+/// [`Composite::problems`].
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] when neither texture lump defines `name` and
+/// no `TX_` patch carries it; [`TextureSet::load`]' and
+/// [`decode_patch_bytes`]' format errors for lumps that do not decode; a
+/// `TX_` fallback that is not a decodable patch fails the same way.
+pub(crate) fn load_texture(session: &Session, name: LumpName) -> Result<Composite, CyberError> {
+    let set = TextureSet::load(session)?;
+    let text = name.to_string();
+    if let Some((def, _lump)) = set.find(&text) {
+        return compose_texture(session, &text, def);
+    }
+    let row = locate(
+        &merged_rows(session)?,
+        name,
+        &[Place::In(Namespace::Textures)],
+    )
+    .ok_or_else(|| not_found("texture", "list_textures", name))?;
+    let patch = decode_patch_bytes(session, &row.lump.data)?;
+    Ok(Composite {
+        image: patch.image,
+        missing: Vec::new(),
+        problems: Vec::new(),
+    })
+}
+
+/// The merged view's `PNAMES` list: the winning `PNAMES` lump parsed, or
+/// empty when none exists or it does not decode (a texture component
+/// index then has no name to resolve).
+fn patch_name_list(session: &Session) -> Vec<String> {
+    lump_bytes(session, LumpName::from_raw(*b"PNAMES\0\0"))
+        .ok()
+        .and_then(|bytes| parse_pnames(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// The pixels of the patch lump `name`, `None` when the name is no lump
+/// name or no patches-region or loose lump of it decodes.
+fn patch_pixels(session: &Session, name: &str) -> Option<IndexedImage> {
+    let lump = LumpName::parse(name).ok()?;
+    load_patch(session, lump).ok().map(|patch| patch.image)
+}
+
+/// Composite one texture definition: its `PNAMES`-resolved components
+/// (or a placeholder naming the raw index when `PNAMES` cannot answer),
+/// drawn at their offsets in record order.
+fn compose_texture(
+    session: &Session,
+    name: &str,
+    def: &TextureDef,
+) -> Result<Composite, CyberError> {
+    let pnames = patch_name_list(session);
+    let labels: Vec<String> = def
+        .patches
+        .iter()
+        .map(|place| {
+            pnames
+                .get(usize::from(place.patch))
+                .cloned()
+                .unwrap_or_else(|| format!("PNAMES index {}", place.patch))
+        })
+        .collect();
+    let images: Vec<Option<IndexedImage>> = labels
+        .iter()
+        .map(|label| patch_pixels(session, label))
+        .collect();
+    let components: Vec<Component<'_>> = def
+        .patches
+        .iter()
+        .zip(labels.iter().zip(images.iter()))
+        .map(|(place, (label, image))| Component {
+            name: label,
+            image: image.as_ref(),
+            x: i32::from(place.x),
+            y: i32::from(place.y),
+        })
+        .collect();
+    compose(
+        name,
+        u32::from(def.width),
+        u32::from(def.height),
+        &components,
+    )
 }
 
 /// The sprite image for one rotation: `sprite` is the four-character
@@ -441,8 +536,8 @@ mod tests {
 
     use super::{
         Place, Request, Serving, clamp_offset, decode_patch_bytes, find_rotation, load_flat,
-        load_patch, load_sprite, load_sprite_lump, locate, lump_bytes, merged_rows, mirror_patch,
-        not_found, sprite_rows,
+        load_patch, load_sprite, load_sprite_lump, load_texture, locate, lump_bytes, merged_rows,
+        mirror_patch, not_found, sprite_rows,
     };
     use crate::error::CyberError;
     use crate::gfx::codec::encode_png;
@@ -453,6 +548,9 @@ mod tests {
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
     use crate::wad::name::LumpName;
+    use crate::wad::textures::{
+        PatchRef, TextureDef, TextureLayout, TextureLump, write_pnames, write_texture_lump,
+    };
 
     /// A parsed fixture name.
     fn name(text: &str) -> LumpName {
@@ -848,5 +946,157 @@ mod tests {
             missing.to_string().contains("list_sprites"),
             "the message names the listing: {missing}"
         );
+    }
+
+    /// A `Doom`-layout `TEXTURE1`/`TEXTURE2` lump holding `textures`.
+    fn texture_bytes(textures: Vec<TextureDef>) -> Vec<u8> {
+        write_texture_lump(&TextureLump {
+            layout: TextureLayout::Doom,
+            textures,
+        })
+        .expect("test texture lumps serialize")
+    }
+
+    /// A texture definition named `text` placing `patches`.
+    fn definition(text: &str, width: u16, height: u16, patches: Vec<PatchRef>) -> TextureDef {
+        TextureDef {
+            name: text.to_owned(),
+            flags_raw: 0,
+            width,
+            height,
+            patches,
+        }
+    }
+
+    /// A patch placement at `x`/`y`.
+    fn place(patch: u16, x: i16, y: i16) -> PatchRef {
+        PatchRef { patch, x, y }
+    }
+
+    /// A `PNAMES` lump naming `texts`, in index order.
+    fn pnames_lump(texts: &[&str]) -> Lump {
+        let names: Vec<String> = texts.iter().map(|text| (*text).to_owned()).collect();
+        lump(
+            "PNAMES",
+            write_pnames(&names).expect("test patch names are valid"),
+        )
+    }
+
+    #[test]
+    fn textures_composite_definitions_and_report_missing_patches() {
+        let texture1 = texture_bytes(vec![definition(
+            "TWALL",
+            8,
+            4,
+            vec![place(0, 0, 0), place(1, 4, 0)],
+        )]);
+        let session = with_extra(vec![
+            pnames_lump(&["WALLP1", "GONE"]),
+            lump("TEXTURE1", texture1),
+        ]);
+        let composite = load_texture(&session, name("TWALL")).expect("TWALL composes");
+        assert_eq!(
+            (composite.image.width, composite.image.height),
+            (8, 4),
+            "the record's size"
+        );
+        assert_eq!(
+            composite.image.get(3, 3),
+            Some((0x11, true)),
+            "the present patch drew"
+        );
+        assert_eq!(
+            composite.image.get(5, 1),
+            Some((0, false)),
+            "the missing patch leaves a hole"
+        );
+        assert_eq!(composite.missing, ["GONE"], "the hole is named");
+        assert_eq!(
+            composite.problems,
+            ["texture TWALL is missing patch GONE".to_owned()],
+            "the problem names the texture"
+        );
+    }
+
+    #[test]
+    fn texture2_definitions_win_over_their_texture1_namesakes() {
+        let step = doom_patch(2, 2, (0, 0), 0x22);
+        let texture1 = texture_bytes(vec![definition("AWIN", 4, 4, vec![place(0, 0, 0)])]);
+        let texture2 = texture_bytes(vec![definition("AWIN", 2, 2, vec![place(1, 0, 0)])]);
+        let session = with_extra(vec![
+            pnames_lump(&["WALLP1", "STEPP1"]),
+            lump("STEPP1", step),
+            lump("TEXTURE1", texture1),
+            lump("TEXTURE2", texture2),
+        ]);
+        let composite = load_texture(&session, name("AWIN")).expect("AWIN composes");
+        assert_eq!(
+            (composite.image.width, composite.image.height),
+            (2, 2),
+            "the TEXTURE2 record's size"
+        );
+        assert_eq!(
+            composite.image.get(0, 0),
+            Some((0x22, true)),
+            "the TEXTURE2 component drew"
+        );
+        assert!(
+            composite.missing.is_empty() && composite.problems.is_empty(),
+            "a full composite reports nothing"
+        );
+    }
+
+    #[test]
+    fn without_a_pnames_lump_indices_stay_unnamed_and_missing() {
+        let texture1 = texture_bytes(vec![definition("TPTR", 2, 2, vec![place(0, 0, 0)])]);
+        let session = with_extra(vec![lump("TEXTURE1", texture1)]);
+        let composite = load_texture(&session, name("TPTR")).expect("TPTR composes");
+        assert_eq!(
+            composite.missing,
+            ["PNAMES index 0"],
+            "the raw index names the hole"
+        );
+        assert_eq!(
+            composite.image.get(1, 1),
+            Some((0, false)),
+            "the whole texture is a hole"
+        );
+    }
+
+    #[test]
+    fn a_tx_region_patch_serves_a_texture_without_definitions() {
+        let session = with_extra(vec![
+            Lump::marker(name("TX_START")),
+            lump("TXONE", doom_patch(3, 5, (0, 0), 0x33)),
+            Lump::marker(name("TX_END")),
+        ]);
+        let composite = load_texture(&session, name("TXONE")).expect("the TX patch answers");
+        assert_eq!(
+            (composite.image.width, composite.image.height),
+            (3, 5),
+            "stored as a patch"
+        );
+        assert_eq!(composite.image.get(0, 0), Some((0x33, true)));
+        assert!(
+            composite.missing.is_empty() && composite.problems.is_empty(),
+            "a plain patch has nothing missing"
+        );
+    }
+
+    #[test]
+    fn unknown_texture_names_are_not_found_and_broken_lumps_are_format_errors() {
+        let session = session();
+        let missing = load_texture(&session, name("NOPE")).expect_err("no such texture");
+        assert_eq!(code(&missing), "not_found", "missing texture code");
+        assert!(
+            missing.to_string().contains("list_textures"),
+            "the message names the listing: {missing}"
+        );
+        let broken = with_extra(vec![
+            pnames_lump(&["WALLP1"]),
+            lump("TEXTURE1", vec![b'?'; 40]),
+        ]);
+        let error = load_texture(&broken, name("ANY")).expect_err("junk is no texture lump");
+        assert_eq!(code(&error), "format_error", "undecodable lump code");
     }
 }

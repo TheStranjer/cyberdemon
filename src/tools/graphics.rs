@@ -2,7 +2,7 @@
 //! and the image tools that publish one picture as an asset.
 //!
 //! Every tool reads [`crate::session::Scope::Merged`] through the shared
-//! rows in [`crate::tools::lumps::rows`]: the lumps of one namespace, last
+//! rows in `crate::tools::lumps::rows`: the lumps of one namespace, last
 //! lump with a name wins. `list_flats` describes the floor and ceiling
 //! planes of the `F_START` region, `list_patches` the texture components
 //! of the `P_START` region (plus any lump `PNAMES` names from outside the
@@ -19,7 +19,7 @@
 //! type number and reads its sprite through the session-aware definitions
 //! of [`crate::defs::session_definitions`].
 
-pub(in crate::tools) mod resolve;
+pub mod resolve;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 

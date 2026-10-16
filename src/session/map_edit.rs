@@ -159,6 +159,51 @@ where
     ))
 }
 
+/// Runs one map edit that rewrites the block's *format*:
+/// [`edit_in_place`]'s steps, then the block's `GL` node run goes as well.
+///
+/// A format change leaves the geometry signature alone, so
+/// [`edit_in_place`]'s own invalidation would not fire and a `GL` run built
+/// by the old format would survive the rewrite. Node data is written in the
+/// map's own format, so a converted block can carry none of it: the edit
+/// closure drops the node lumps the model sees (see
+/// [`crate::wad::map::convert`]) and this step drops the `GL` run the model
+/// does not, reporting the block's node data as invalidated either way.
+///
+/// # Errors
+///
+/// [`edit_in_place`]'s errors; `wad` is left as it was behind every one.
+pub(crate) fn rewrite_in_place<T, F>(
+    wad: &mut Wad,
+    merged: &[MergedLump],
+    map: LumpName,
+    edit: F,
+) -> Result<(T, MapEditReport), CyberError>
+where
+    F: FnOnce(&mut Map) -> Result<T, CyberError>,
+{
+    let (value, report) = edit_in_place(wad, merged, map, edit)?;
+    drop_gl_run(wad, map);
+    Ok((
+        value,
+        MapEditReport {
+            nodes_invalidated: true,
+            ..report
+        },
+    ))
+}
+
+/// Removes the `GL` node run attached to `wad`'s block named `map`, if it
+/// still has one. The block has just been re-encoded in place, so the run is
+/// located in the directory as it now stands.
+fn drop_gl_run(wad: &mut Wad, map: LumpName) {
+    let analysis = analyze(&wad.lumps);
+    let Some((start, stop)) = locate(&analysis, map).ok().and_then(|block| block.gl) else {
+        return;
+    };
+    wad.lumps.drain(start..stop);
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -341,6 +386,22 @@ mod tests {
     /// The error code of a [`CyberError`], for compact asserts.
     fn code(error: &CyberError) -> &str {
         error.code()
+    }
+
+    /// The edit closure of a format rewrite: it removes the node lumps the
+    /// way [`crate::wad::map::convert`] does and changes no geometry, so the
+    /// signature comparison alone would never invalidate the block. Fails on
+    /// a fixture that carries no node lumps, which would make the test below
+    /// check nothing.
+    fn strip_nodes(map: &mut Map) -> Result<(), CyberError> {
+        let is_node = |lump: &Lump| crate::wad::map::convert::is_node_lump(lump.name.as_bytes());
+        if !map.other.iter().any(is_node) {
+            return Err(CyberError::InvalidArgument(
+                "the fixture carries no node lump to strip".to_owned(),
+            ));
+        }
+        map.other.retain(|lump| !is_node(lump));
+        Ok(())
     }
 
     /// An edit closure that raises sector 0's floor to 48, or refuses when
@@ -585,5 +646,102 @@ mod tests {
             11_usize.saturating_add(gl_run().len()),
             "header and ten members, plus the GL run, copied in"
         );
+    }
+
+    #[test]
+    fn a_rewrite_copies_in_drops_the_gl_run_and_invalidates_the_block() {
+        let mut session = base_session(iwad_lumps(MapFormat::Doom));
+        let ((), report) = session
+            .convert_map(name("MAP01"), "convert to UDMF", strip_nodes)
+            .expect("the rewrite lands");
+        assert!(
+            report.copied_to_working,
+            "the layer's block was copied in first"
+        );
+        assert!(
+            report.nodes_invalidated,
+            "a format change invalidates the node data whatever the geometry says"
+        );
+        let (map, gl) = working_block(&session, "MAP01");
+        assert_eq!(gl, None, "the GL run left the archive");
+        for lump in names(session.working()) {
+            assert!(!lump.starts_with("GL_"), "no GL lump survived: {lump}");
+        }
+        for member in ["SEGS", "SSECTORS", "NODES", "REJECT", "BLOCKMAP"] {
+            assert_eq!(
+                size_of(session.working(), member),
+                0_usize,
+                "{member} came back as the encoder's empty placeholder"
+            );
+        }
+        assert_eq!(
+            session.undo_labels(),
+            vec!["convert to UDMF"],
+            "copy and rewrite are one undo step"
+        );
+        assert_eq!(map.vertices.len(), 4, "the geometry came along");
+        session.undo().expect("undo the rewrite");
+        assert!(
+            session.working().is_empty(),
+            "copy, block and run rolled back"
+        );
+    }
+
+    #[test]
+    fn edit_map_keeps_the_gl_run_a_rewrite_drops() {
+        let mut plain = base_session(iwad_lumps(MapFormat::Udmf));
+        let ((), kept) = plain
+            .edit_map(name("MAP01"), "strip only", strip_nodes)
+            .expect("a plain edit lands");
+        assert!(
+            !kept.nodes_invalidated,
+            "no geometry changed, so the signature alone invalidates nothing"
+        );
+        let (_, gl) = working_block(&plain, "MAP01");
+        assert!(gl.is_some(), "the plain edit leaves the GL run in place");
+        let mut rewritten = base_session(iwad_lumps(MapFormat::Udmf));
+        let ((), forced) = rewritten
+            .convert_map(name("MAP01"), "convert to Doom", strip_nodes)
+            .expect("a rewrite lands");
+        assert!(forced.nodes_invalidated, "a rewrite always invalidates");
+        let (map, rewritten_gl) = working_block(&rewritten, "MAP01");
+        assert_eq!(rewritten_gl, None, "and the GL run goes with it");
+        assert!(
+            !map.other
+                .iter()
+                .any(|lump| lump.name.as_bytes() == b"ZNODES"),
+            "the closure's node removal survived the re-encode"
+        );
+    }
+
+    #[test]
+    fn a_rewrite_of_a_block_without_a_gl_run_changes_only_the_block() {
+        let lumps = write_map(&demo_map("MAP01", MapFormat::Doom)).expect("the fixture encodes");
+        let mut session = base_session(lumps);
+        let ((), report) = session
+            .convert_map(name("MAP01"), "convert to UDMF", strip_nodes)
+            .expect("a rewrite without a GL run lands");
+        assert!(
+            report.nodes_invalidated,
+            "the report still says the nodes went"
+        );
+        let (_, gl) = working_block(&session, "MAP01");
+        assert_eq!(gl, None, "and there was no run to drop");
+        assert_eq!(
+            size_of(session.working(), "NODES"),
+            0_usize,
+            "the vanilla placeholder is empty"
+        );
+    }
+
+    #[test]
+    fn a_failing_rewrite_changes_the_archive_and_history_nothing() {
+        let mut session = base_session(iwad_lumps(MapFormat::Doom));
+        let error = session
+            .convert_map(name("MAP01"), "broken", failing)
+            .expect_err("the closure refuses");
+        assert_eq!(code(&error), "invalid_argument", "the error passes through");
+        assert!(session.working().is_empty(), "not even the copy landed");
+        assert!(session.undo_labels().is_empty(), "no history entry");
     }
 }

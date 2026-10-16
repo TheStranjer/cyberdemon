@@ -806,3 +806,93 @@ pub fn pwad_nodes(dir: &Path) -> PathBuf {
     };
     write_wad(dir, "pwad-nodes.wad", &wad)
 }
+
+/// The `MAP05` of the conversion fixture: a `Doom` family `UDMF` block whose
+/// `TEXTMAP` carries fractional coordinates, unmodelled fields and a
+/// `BEHAVIOR` lump — everything a binary `Doom` record cannot store.
+fn lossy_udmf_map05() -> Vec<Lump> {
+    let text = concat!(
+        "namespace = \"doom\";",
+        "vertex { x = 0.4; y = 0; }",
+        "vertex { x = 128.5; y = 0; }",
+        "vertex { x = 128; y = 128.25; }",
+        "vertex { x = 0; y = 128; }",
+        "sidedef { sector = 0; offsetx = 4.5; scalex_top = 2; }",
+        "sector { texturefloor = \"FLOOR1\"; textureceiling = \"CEIL1\";",
+        " heightceiling = 128.5; lightlevel = 180.5; }",
+        "linedef { v1 = 0; v2 = 1; sidefront = 0; alpha = 0.5; }",
+        "linedef { v1 = 1; v2 = 2; sidefront = 0; }",
+        "linedef { v1 = 2; v2 = 3; sidefront = 0; }",
+        "linedef { v1 = 3; v2 = 0; sidefront = 0; }",
+        "thing { x = 64.5; y = 64; type = 1; height = 8.5; comment = \"start\"; }",
+    );
+    vec![
+        marker("MAP05"),
+        lump("TEXTMAP", text.as_bytes().to_vec()),
+        lump("BEHAVIOR", b"ACS\0x".to_vec()),
+        marker("ENDMAP"),
+    ]
+}
+
+/// The `MAP06` of the conversion fixture: a small binary `Hexen` block with
+/// one `Line_SetIdentification` line (special 121 carrying id 7 in `args[0]`).
+fn hexen_identification_map06() -> Vec<Lump> {
+    let mut line = Linedef {
+        v1: 0,
+        v2: 1,
+        flags: 1,
+        front: Some(0),
+        ..Default::default()
+    };
+    line.special = 121_i32;
+    line.args = [7_i32, 0_i32, 0_i32, 0_i32, 0_i32];
+    let map = Map {
+        name: parsed("MAP06"),
+        format: MapFormat::Hexen,
+        udmf_namespace: None,
+        things: vec![spawn(1, 0, 0, 0)],
+        vertices: vec![vertex(0, 0), vertex(128, 0), vertex(128, 128)],
+        linedefs: vec![
+            line,
+            Linedef {
+                v1: 1,
+                v2: 2,
+                flags: 1,
+                front: Some(0),
+                ..Default::default()
+            },
+            Linedef {
+                v1: 2,
+                v2: 0,
+                flags: 1,
+                front: Some(0),
+                ..Default::default()
+            },
+        ],
+        sidedefs: vec![side("-", "-", "WALL1", 0)],
+        sectors: vec![room(0, 128, 160, 0)],
+        other: Vec::new(),
+    };
+    write_map(&map).expect("the Hexen conversion fixture serializes")
+}
+
+/// A `PWAD` carrying the lossy-conversion fixtures.
+///
+/// The `UDMF` `Doom` family `MAP05` (fractional coordinates, unmodelled
+/// fields, a `BEHAVIOR` lump) and the binary `Hexen` `MAP06` (one
+/// `Line_SetIdentification` line, a generated `BEHAVIOR`).
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn pwad_conversions(dir: &Path) -> PathBuf {
+    let mut lumps = lossy_udmf_map05();
+    lumps.extend(hexen_identification_map06());
+    let wad = Wad {
+        kind: WadKind::Pwad,
+        lumps,
+    };
+    write_wad(dir, "pwad-conversions.wad", &wad)
+}

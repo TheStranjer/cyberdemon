@@ -125,6 +125,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `copy_map`               | `reference/maps.md`     |
 | `rename_map`             | `reference/maps.md`     |
 | `remove_map`             | `reference/maps.md`     |
+| `convert_map_format`     | `reference/convert.md`  |
 | `add_thing`              | `reference/things.md`   |
 | `edit_thing`             | `reference/things.md`   |
 | `remove_thing`           | `reference/things.md`   |

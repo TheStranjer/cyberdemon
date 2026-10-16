@@ -7,6 +7,7 @@
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
 //! `map_edit`, the maps-group tests in `maps`, the
 //! `edit_sidedefs`-group tests in `edit_sidedefs`, the
+//! `edit_sectors`-group tests in `edit_sectors`, the
 //! `edit_things`-group tests in `edit_things`, the
 //! graphics-group tests in `graphics`,
 //! the imports-group tests in `imports`, the
@@ -48,6 +49,9 @@ mod defs;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;
+#[cfg(test)]
+#[path = "mcp/edit_sectors.rs"]
+mod edit_sectors;
 #[cfg(test)]
 #[path = "mcp/edit_sidedefs.rs"]
 mod edit_sidedefs;

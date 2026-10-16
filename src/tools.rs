@@ -13,6 +13,7 @@ pub(crate) mod defs;
 pub(crate) mod graphics;
 pub(crate) mod imports;
 pub(crate) mod lumps;
+pub(crate) mod maps;
 pub(crate) mod meta;
 pub(crate) mod music;
 pub(crate) mod palette;

@@ -116,6 +116,9 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `remove_lump`           | `reference/lumps.md`    |
 | `rename_lump`           | `reference/lumps.md`    |
 | `reorder_lumps`         | `reference/lumps.md`    |
+| `list_maps`             | `reference/maps.md`     |
+| `get_map_lumps`         | `reference/maps.md`     |
+| `set_active_map`        | `reference/maps.md`     |
 | `list_flats`            | `reference/graphics.md` |
 | `list_patches`          | `reference/graphics.md` |
 | `list_sprites`          | `reference/graphics.md` |

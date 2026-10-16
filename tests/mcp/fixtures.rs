@@ -11,6 +11,7 @@ use cyberdemon::gfx::codec::encode_png;
 use cyberdemon::gfx::image::RgbaImage;
 use cyberdemon::wad::archive::write_file_atomic;
 use cyberdemon::wad::map::doom::write_doom_map;
+use cyberdemon::wad::map::write_map;
 use cyberdemon::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 use cyberdemon::wad::textures::{
     PatchRef, TextureDef, TextureLayout, TextureLump, write_pnames, write_texture_lump,
@@ -470,6 +471,68 @@ pub fn pwad(dir: &Path) -> PathBuf {
         lumps,
     };
     write_wad(dir, "pwad-extra.wad", &wad)
+}
+
+/// The two-room map written through the model dispatcher in `format` under
+/// the header `text`, carrying `other` in place of the Doom node lumps.
+fn map_block_in(text: &str, format: MapFormat, other: Vec<Lump>) -> Vec<Lump> {
+    let mut map = two_room_map();
+    map.name = parsed(text);
+    map.format = format;
+    map.udmf_namespace = (format == MapFormat::Udmf).then(|| "zdoom".to_owned());
+    map.other = other;
+    write_map(&map).expect("the fixture map serializes")
+}
+
+/// The map-format fixture's `MAP03`: the two-room map as `UDMF` in the
+/// `zdoom` namespace, a non-empty `ZNODES` in place of the binary nodes,
+/// followed by its `GL` node run.
+fn udmf_map03() -> Vec<Lump> {
+    let mut lumps = map_block_in(
+        "MAP03",
+        MapFormat::Udmf,
+        vec![lump("ZNODES", vec![9_u8; 8])],
+    );
+    lumps.push(marker("GL_MAP03"));
+    lumps.push(lump("GL_VERT", vec![1_u8; 8]));
+    lumps.push(lump("GL_NODES", vec![2_u8; 8]));
+    lumps
+}
+
+/// The map-format fixture's `MAP04`: the two-room map as binary `Hexen`
+/// with a non-empty `NODES` (the writer adds the `BEHAVIOR` that makes the
+/// block Hexen).
+fn hexen_map04() -> Vec<Lump> {
+    map_block_in(
+        "MAP04",
+        MapFormat::Hexen,
+        vec![
+            marker("SEGS"),
+            marker("SSECTORS"),
+            lump("NODES", vec![3_u8; 8]),
+            marker("REJECT"),
+            marker("BLOCKMAP"),
+        ],
+    )
+}
+
+/// A `PWAD` carrying the map-format fixtures: a `UDMF` `MAP03` (`zdoom`
+/// namespace, non-empty `ZNODES`, attached `GL_MAP03` run) and a binary
+/// `Hexen` `MAP04` (non-empty `NODES`, generated empty `BEHAVIOR`).
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn pwad_map_formats(dir: &Path) -> PathBuf {
+    let mut lumps = udmf_map03();
+    lumps.extend(hexen_map04());
+    let wad = Wad {
+        kind: WadKind::Pwad,
+        lumps,
+    };
+    write_wad(dir, "pwad-formats.wad", &wad)
 }
 
 /// The DEHACKED text of the custom-definitions fixture: the Imp (mobj 12)

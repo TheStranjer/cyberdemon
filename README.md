@@ -18,7 +18,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `import_png_as_patch`, `import_image_as_raw`), a
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
-> `remove_lump`, `rename_lump`, `reorder_lumps`), an `audio` group
+> `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group
+> (`list_maps`, `get_map_lumps`, `set_active_map`), an `audio` group
 > (`import_sound`, `preview_sound`), a `music` group (`import_music`,
 > `preview_music`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
 > `edit_decorate`, `edit_zscript`),

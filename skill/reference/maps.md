@@ -1,0 +1,84 @@
+# Maps tools
+
+Map-level reading and the session-wide map selection: `list_maps`,
+`get_map_lumps` and `set_active_map`. Later map tools (geometry, building,
+node building) join this group and share its conventions.
+
+## How maps are stored
+
+A map is a block in the lump directory: a zero-size **header lump** carrying
+the map's name (`MAP01`, `E2M7`, ...) followed by its **member lumps**.
+The members present decide the format:
+
+- `doom` — the vanilla binary set: `THINGS`, `LINEDEFS`, `SIDEDEFS`,
+  `VERTEXES`, then usually `SEGS`, `SSECTORS`, `NODES`, `SECTORS`, `REJECT`,
+  `BLOCKMAP`.
+- `hexen` — the binary set with wider records plus a `BEHAVIOR` lump; the
+  `BEHAVIOR` is what identifies the block as Hexen.
+- `udmf` — a text block running from `TEXTMAP` to `ENDMAP`; the `TEXTMAP`
+  begins with a namespace declaration (`zdoom`, `glbdoom`, `doom`, ...) and
+  the block may carry `BEHAVIOR` and `ZNODES` members.
+
+Optionally a **GL node block** sits right after the map: a header named
+`GL_<mapname>` (or `GL_LEVEL`) with `GL_VERT`, `GL_SEGS`, `GL_SSECT`,
+`GL_NODES` and `GL_PVS`. A block "has nodes" when its `NODES` lump carries
+bytes or a `ZNODES` lump is present; tools that rebuild nodes overwrite
+them. The merged view applies last-archive-wins to whole map blocks: a
+`PWAD` holding `MAP01` replaces the `IWAD`'s block entirely.
+
+## The `map` parameter
+
+Every tool with an optional `map` parameter resolves it the same way:
+
+1. an explicit `map` (1 to 8 printable `ASCII` characters, any case) is
+   used as given;
+2. else the session's **active map**, chosen with `set_active_map`;
+3. else the merged view's only map, when it holds exactly one;
+4. else the call fails `invalid_argument` — pass `map` or call
+   `set_active_map`.
+
+## `list_maps`
+
+- Purpose: survey which maps a scope holds, in what format and from which
+  archive, before touching any of them.
+- Arguments (all optional): `scope` — `"merged"` (the default),
+  `"working"` or `"layer:N"` (0 is the `IWAD`).
+- Returns: `{"maps": [{name, format, udmf_namespace, source, lumps,
+  has_nodes, has_gl_nodes}]}` in directory order. `udmf_namespace` is the
+  namespace a `UDMF` `TEXTMAP` declares (`null` for binary blocks and for
+  blocks that do not decode); `source` is `"working"` or `{"layer": n}`
+  like `list_lumps` rows; `lumps` lists the member lump names in directory
+  order, an attached GL run included, without the map header itself.
+- Errors: `invalid_argument` (unknown `scope` name), `not_found`
+  (`layer:N` not loaded).
+
+## `get_map_lumps`
+
+- Purpose: the raw lump set of one map block — what `build_nodes` or a
+  node copy would replace — with sizes and `list_lumps` type hints.
+- Arguments (all optional): `map` (see the rule above), `scope` (as in
+  `list_maps`; the `map` default always resolves against the merged view,
+  so pass `map` explicitly with a `working`/`layer:N` scope), `urls`
+  (boolean, default `false`).
+- Returns: `{"map", "format", "lumps": [{name, size, kind}]}` in directory
+  order, the GL run included. With `urls` true every non-empty lump's raw
+  bytes are published as an asset named `<MAP>_<LUMP>.lmp` and the row also
+  carries `"asset": {url, filename, mime, size}`; zero-size marker lumps
+  get none. Fetch the URLs with any HTTP client.
+- Errors: `invalid_argument` (unparsable `map`, unknown `scope`, or no map
+  resolvable), `not_found` (no such map block in the scope, or the layer
+  is not loaded).
+
+## `set_active_map`
+
+- Purpose: choose the map the `map` parameter defaults to for the whole
+  connection, so later calls can omit it.
+- Arguments: `map` (string or `null`) — the map must be a block in the
+  merged view; `null` or an omitted argument clears the selection.
+- Returns: `{"active_map": name|null}` — what is selected now (also shown
+  by `get_session_info`).
+- Errors: `invalid_argument` (unparsable name), `not_found` (no such map
+  block; the previous selection stands).
+- This is a session setting, not an undoable edit: `undo`/`redo` never
+  record it, and `undo` only clears it as a side effect when the stepped-
+  back working archive removes the map from the merged view.

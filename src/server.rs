@@ -45,6 +45,7 @@ impl Cyberdemon {
         router.merge(Self::graphics_router());
         router.merge(Self::imports_router());
         router.merge(Self::lumps_router());
+        router.merge(Self::maps_router());
         router.merge(Self::music_router());
         router.merge(Self::palette_router());
         router.merge(Self::render_router());

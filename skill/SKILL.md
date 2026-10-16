@@ -121,6 +121,9 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `get_map_summary`        | `reference/maps.md`     |
 | `assemble_map`           | `reference/maps.md`     |
 | `set_active_map`         | `reference/maps.md`     |
+| `add_thing`              | `reference/things.md`   |
+| `edit_thing`             | `reference/things.md`   |
+| `remove_thing`           | `reference/things.md`   |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |

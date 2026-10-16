@@ -6,6 +6,7 @@
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
 //! `map_edit`, the maps-group tests in `maps`, the
+//! `edit_things`-group tests in `edit_things`, the
 //! graphics-group tests in `graphics`,
 //! the imports-group tests in `imports`, the
 //! inspect-group tests in `inspect`, the
@@ -46,6 +47,9 @@ mod defs;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;
+#[cfg(test)]
+#[path = "mcp/edit_things.rs"]
+mod edit_things;
 #[cfg(test)]
 #[path = "mcp/fixtures.rs"]
 pub mod fixtures;

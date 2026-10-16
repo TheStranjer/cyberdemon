@@ -155,6 +155,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `redo`                   | `reference/session.md`  |
 | `get_session_info`       | `reference/session.md`  |
 | `get_wad_info`           | `reference/session.md`  |
+| `render_topdown`         | `reference/render.md`   |
 | `set_render_resolution`  | `reference/render.md`   |
 | `set_render_options`     | `reference/render.md`   |
 | `get_render_settings`    | `reference/render.md`   |
@@ -174,7 +175,8 @@ shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Editing a lump the `IWAD` or a resource
 layer owns creates an override in the working archive instead of failing
 (`replace_lump` reports it); such a lump cannot be deleted, renamed or moved
-(`reference/lumps.md`). `set_render_resolution` and
+(`reference/lumps.md`). `render_topdown` draws the map so you can look at
+it (`reference/render.md`); `set_render_resolution` and
 `set_render_options` tune the picture for the whole connection (they are not
 part of a WAD and survive every archive change); `get_render_settings` reads
 them back.

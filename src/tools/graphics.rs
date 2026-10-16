@@ -1232,7 +1232,7 @@ fn parse_thing_rotation(value: Option<u8>) -> Result<u8, CyberError> {
 /// The game whose definition tables the session selects: the detected
 /// game, and DOOM II for an unidentified session, as `get_thing_types`
 /// defaults.
-fn session_game(session: &Session) -> Game {
+pub(in crate::tools) fn session_game(session: &Session) -> Game {
     let detected = session.game();
     if detected == Game::Unknown {
         Game::Doom2

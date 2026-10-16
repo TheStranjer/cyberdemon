@@ -93,11 +93,15 @@ src/
                   the `class` reader on the same scanner and
                   `defs/mapinfo.rs` the `DoomEdNums` block reader.
   render.rs       Rendering core module root: the integer gamma curve
-                  (`gamma_table`) and the settings re-exports.
+                  (`gamma_table`) and the settings and canvas re-exports.
   render/         Rendering building blocks (no MCP concerns):
                   `render/settings.rs` the session-level `RenderSettings`
                   (resolution, lighting, markers, sky, FOV, gamma, top-down
-                  style, background), their ranges and validating setters.
+                  style, background), their ranges and validating setters,
+                  `render/canvas.rs` the integer `Canvas` raster: clipped
+                  `i64` drawing (set/blend, Bresenham and thick lines,
+                  rects, circles, even-odd polygon fills), gamma at encode
+                  time and the `RGBA8` image out.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions

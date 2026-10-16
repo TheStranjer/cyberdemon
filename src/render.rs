@@ -3,15 +3,18 @@
 //!
 //! [`settings`] holds [`RenderSettings`], the validated, session-level
 //! defaults (`640x400`, `Doom` lighting, a 90 degree field of view) that
-//! `render_view`, `render_topdown` and `render_minimap` start from. This
-//! module root adds the one piece of maths every renderer needs and none of
-//! the settings themselves: [`gamma_table`]. Nothing here knows about MCP;
-//! the `render` tool group is the only caller that talks to clients.
+//! `render_view`, `render_topdown` and `render_minimap` start from, and
+//! [`canvas`] the integer raster they all draw onto. This module root adds
+//! the one piece of maths every renderer needs and none of the settings
+//! themselves: [`gamma_table`]. Nothing here knows about MCP; the `render`
+//! tool group is the only caller that talks to clients.
 
+pub mod canvas;
 pub mod settings;
 
 use crate::render::settings::MAX_GAMMA;
 
+pub use canvas::{Canvas, Edge, Pt, Rgba, Stroke};
 pub use settings::{Lighting, RenderSettings, Switch, TopdownStyle};
 
 /// The brightest input value of an 8-bit channel.

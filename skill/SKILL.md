@@ -119,6 +119,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `list_maps`              | `reference/maps.md`     |
 | `get_map_lumps`          | `reference/maps.md`     |
 | `get_map_summary`        | `reference/maps.md`     |
+| `assemble_map`           | `reference/maps.md`     |
 | `set_active_map`         | `reference/maps.md`     |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |

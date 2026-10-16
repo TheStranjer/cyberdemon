@@ -149,7 +149,10 @@ src/
                   now, the renderer and texture compositor next;
                   `tools/maps/common.rs` holds the shared `map`-parameter
                   resolvers (`resolve_map_name`, `load_map`) every map
-                  tool builds on;
+                  tool builds on; `tools/maps/assemble.rs` builds
+                  `assemble_map`'s typed graph (resolved references,
+                  dangling ones reported as `problems`, published as a
+                  JSON asset past the inline limit);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`;
@@ -185,9 +188,11 @@ src/
                   `map/nodes.rs` typed SEGS/SSECTORS/NODES parsing in the
                   vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
                   `Seg`, `Subsector`, `Node`, `Child`, magic detection),
-                  `map/reject.rs` the REJECT visibility bit-matrix and
+                  `map/reject.rs` the REJECT visibility bit-matrix,
                   `map/blockmap.rs` the BLOCKMAP grid (offset table and
-                  blocklist validation).
+                  blocklist validation) and `map/geometry.rs` pure integer
+                  map geometry (sector boundaries, point-in-sector,
+                  bounding boxes, line lengths and sector adjacency).
 data/
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by

@@ -451,9 +451,30 @@ pub fn iwad_hexen(dir: &Path) -> PathBuf {
     write_iwad(dir, "iwad-hexen.wad", hexen_lumps())
 }
 
-/// A `PWAD` overriding `FLOOR1`, adding a `DEHACKED` global and a two-room
-/// `MAP02` block.
+/// An `IWAD` whose only map is [`two_room_map`] with sidedef 4's sector
+/// index broken to 99: a dangling reference the map assembler must report
+/// as a problem instead of failing on.
 ///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn iwad_broken_map(dir: &Path) -> PathBuf {
+    let mut map = two_room_map();
+    map.sidedefs
+        .get_mut(4)
+        .expect("the fixture map has a sidedef 4")
+        .sector = 99;
+    let wad = Wad {
+        kind: WadKind::Iwad,
+        lumps: write_doom_map(&map).expect("the fixture map serializes"),
+    };
+    write_wad(dir, "iwad-broken.wad", &wad)
+}
+
+/// A `PWAD` overriding `FLOOR1`, adding a `DEHACKED` global and a two-room
+/// `MAP02` block.///
 /// # Panics
 ///
 /// Panics if the fixture cannot be serialized or written.

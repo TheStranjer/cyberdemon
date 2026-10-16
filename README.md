@@ -19,7 +19,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group
-> (`list_maps`, `get_map_lumps`, `get_map_summary`, `set_active_map`), an
+> (`list_maps`, `get_map_lumps`, `get_map_summary`, `assemble_map`, `set_active_map`), an
 > `audio` group (`import_sound`, `preview_sound`), a `music` group
 > (`import_music`, `preview_music`), a `nodes` group (`get_nodes`, `get_reject`,
 > `get_blockmap`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
@@ -50,7 +50,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
 > detection and patch-reference renumbering, and a `UDMF` `TEXTMAP`
 > tokenizer, parser and writer over documents of blocks and key/value
-> pairs, and typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom` `XNOD`/`ZNOD`) and `REJECT`/`BLOCKMAP` parsers) and a session
+> pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers and pure integer map geometry), and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, and a labelled undo/redo history with dirty-state tracking) and a

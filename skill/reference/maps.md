@@ -1,9 +1,9 @@
 # Maps tools
 
 Map-level reading and the session-wide map selection: `list_maps`,
-`get_map_lumps`, `get_map_summary` and `set_active_map`. Later map tools
-(geometry, building, node building) join this group and share its
-conventions.
+`get_map_lumps`, `get_map_summary`, `assemble_map` and `set_active_map`.
+Later map tools (geometry, building, node building) join this group and
+share its conventions.
 
 ## How maps are stored
 
@@ -107,6 +107,54 @@ Every tool with an optional `map` parameter resolves it the same way:
 - Errors: `invalid_argument` (unparsable `map`, unknown `scope`, or no map
   resolvable), `not_found` (no such map block in the scope, or the layer
   is not loaded), `format_error` (the block does not decode).
+
+## `assemble_map`
+
+- Purpose: the whole map as one typed graph with every reference already
+  resolved — vertices looked up, linedef sides mapped to sectors, sidedefs
+  back-referenced, things placed into sectors, sectors given boundary,
+  neighbour and occupant lists — so the map can be reasoned about without
+  chasing indices.
+- Arguments (all optional): `map` (see the rule above), `scope` (as in
+  `list_maps`), `include` — a subset of `"vertices"`, `"linedefs"`,
+  `"sidedefs"`, `"sectors"`, `"things"` (default all five; an unknown name
+  is `invalid_argument`), `inline_limit` — the element count up to which
+  the graph is returned in full (default 2000, maximum 20000; `0` or
+  above the maximum is `invalid_argument`).
+- Returns, while the included arrays hold at most `inline_limit` elements,
+  `{map, problems}` plus one array per included kind:
+  - `vertices`: `{index, x, y, linedefs: [indices]}`.
+  - `linedefs`: `{index, v1: {index, x, y}|null, v2: ..., length (map
+    units, floor-rounded)|null, flags, flag_names (named with the map's
+    own flag family), special, tag, args, front|back: {sidedef, sector,
+    upper, middle, lower, x_offset, y_offset}|null}` — `front` is the
+    `Doom` right side, `back` the left; absent sides are `null`.
+  - `sidedefs`: `{index, sector, linedef|null, side:
+    "front"|"back"|null, upper, middle, lower, x_offset, y_offset}` —
+    `linedef`/`side` name the first line using the sidedef (`null` for
+    orphans).
+  - `sectors`: `{index, floor_height, ceiling_height, floor_flat,
+    ceiling_flat, light, special, tag, linedefs (boundary lines),
+    sidedefs, neighbors (sectors across two-sided lines), things
+    (occupants by point-in-sector), bbox [min_x, min_y, max_x, max_y]
+    |null}`.
+  - `things`: `{index, type, x, y, z, angle, flags, flag_names, tid,
+    special, args, sector|null}` — `sector` is `null` when the point sits
+    outside every sector; a point exactly on a line counts as inside the
+    sector on that line's front side, nested sectors resolve to the
+    smallest bounding box.
+  - `problems`: strings naming every dangling vertex/sidedef/sector
+    reference found while resolving. Broken references never fail the
+    call; the unresolvable part reads `null`.
+- Above `inline_limit` the arrays are not inlined: the full JSON is
+  published as `<MAP>_graph.json` (`application/json`) and the result is
+  `{map, counts: {vertices, linedefs, sidedefs, sectors, things,
+  problems}, asset: {url, filename, mime, size}}`. Fetch the URL with any
+  HTTP client for the same document.
+- Errors: like `get_map_summary` (`not_found` unknown map,
+  `invalid_argument` unparsable name/scope, no resolvable default, unknown
+  `include` name, or `inline_limit` `0`/above 20000, `format_error`
+  undecodable block).
 
 ## `set_active_map`
 

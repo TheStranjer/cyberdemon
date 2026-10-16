@@ -121,6 +121,10 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `get_map_summary`        | `reference/maps.md`     |
 | `assemble_map`           | `reference/maps.md`     |
 | `set_active_map`         | `reference/maps.md`     |
+| `create_map`             | `reference/maps.md`     |
+| `copy_map`               | `reference/maps.md`     |
+| `rename_map`             | `reference/maps.md`     |
+| `remove_map`             | `reference/maps.md`     |
 | `add_thing`              | `reference/things.md`   |
 | `edit_thing`             | `reference/things.md`   |
 | `remove_thing`           | `reference/things.md`   |
@@ -183,11 +187,14 @@ comes back `404`; regenerate it rather than retrying the old URL.
 `open_iwad` the game archive → `open_wad` your project WAD or `new_wad`
 for a fresh one → edit the working archive → `save_wad`. `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
-merged view an engine would see. Editing a lump the `IWAD` or a resource
-layer owns creates an override in the working archive instead of failing
-(`replace_lump` reports it); such a lump cannot be deleted, renamed or moved
-(`reference/lumps.md`). `render_topdown` draws the map so you can look at
-it (`reference/render.md`); `set_render_resolution` and
+merged view an engine would see. Building a level starts with `create_map`
+(an empty map block in the working archive; `copy_map` clones an existing
+one); `reference/maps.md` covers the block management tools. Editing a lump
+the `IWAD` or a resource layer owns creates an override in the working
+archive instead of failing (`replace_lump` reports it); such a lump cannot
+be deleted, renamed or moved (`reference/lumps.md`). `render_topdown` draws
+the map so you can look at it (`reference/render.md`);
+`set_render_resolution` and
 `set_render_options` tune the picture for the whole connection (they are not
 part of a WAD and survive every archive change); `get_render_settings` reads
 them back.

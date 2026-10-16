@@ -1,13 +1,19 @@
-//! Map tools: `list_maps`, `get_map_lumps`, `get_map_summary`,
-//! `assemble_map` and `set_active_map` (see the `maps` router methods on
-//! [`crate::server::Cyberdemon`]).
+//! Map tools: reading, selection and management of map blocks (see the
+//! `maps` router methods on [`crate::server::Cyberdemon`]).
 //!
-//! Everything reads through the shared resolvers in `common` that every
+//! The readers are `list_maps`, `get_map_lumps`, `get_map_summary` and
+//! `assemble_map`; `set_active_map` picks the map the other tools default
+//! to; `create_map`, `copy_map`, `rename_map` and `remove_map` manage
+//! whole blocks of the working archive. Everything reads through the
+//! shared resolvers in `common` that every
 //! later map tool reuses, and the element-editing tools will reuse the
-//! parameter types and validators in [`crate::tools::maps::params`].
+//! parameter types and validators in [`crate::tools::maps::params`]. The
+//! management machinery (block append, copy, rename and removal over the
+//! working archive) lives in the private `manage` module.
 
 mod assemble;
 pub mod common;
+mod manage;
 pub mod params;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -109,6 +115,62 @@ struct SetActiveMapParams {
     /// case-insensitive); `null` - or omitted - clears the selection.
     #[serde(default)]
     map: Option<String>,
+}
+
+/// Arguments for [`Cyberdemon::create_map`].
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct CreateMapParams {
+    /// The new map's header name (1 to 8 printable ASCII characters,
+    /// case-insensitive). Anything but `ExMy`/`MAPxx` succeeds with a
+    /// warning: engines only load those two forms unless MAPINFO defines
+    /// the name.
+    pub(crate) name: String,
+    /// The layout of the empty block: `"doom"` (the default), `"hexen"`
+    /// or `"udmf"`.
+    #[serde(default)]
+    pub(crate) format: Option<String>,
+    /// The namespace the `UDMF` `TEXTMAP` declares (default `"zdoom"`);
+    /// only valid with `format` `"udmf"`.
+    #[serde(default)]
+    pub(crate) namespace: Option<String>,
+    /// Discard the working archive's block of this name (and its GL run)
+    /// before creating (default `false`; a map only lower layers hold is
+    /// always overridable and needs no replace).
+    #[serde(default)]
+    pub(crate) replace: bool,
+}
+
+/// Arguments for [`Cyberdemon::copy_map`].
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct CopyMapParams {
+    /// The map to read, e.g. `"MAP01"`.
+    pub(crate) from: String,
+    /// The name the copy gets in the working archive.
+    pub(crate) to: String,
+    /// Which archive to read the source from: `"merged"` (the default),
+    /// `"working"` or `"layer:N"`.
+    #[serde(default)]
+    pub(crate) scope: Option<String>,
+    /// Discard the working archive's block named `to` (and its GL run)
+    /// before copying (default `false`).
+    #[serde(default)]
+    pub(crate) replace: bool,
+}
+
+/// Arguments for [`Cyberdemon::rename_map`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RenameMapParams {
+    /// The working archive's map to rename (its copy-on-write copy included).
+    pub(crate) from: String,
+    /// The new name (1 to 8 printable ASCII characters, case-insensitive).
+    pub(crate) to: String,
+}
+
+/// Arguments for [`Cyberdemon::remove_map`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RemoveMapParams {
+    /// The working archive's map block to remove, GL node run included.
+    pub(crate) name: String,
 }
 
 /// The accepted `scope` text, the merged view being the default.
@@ -494,6 +556,72 @@ impl Cyberdemon {
             self.state()
                 .with_session(|session| set_active_run(session, args.map.as_deref())),
         )
+    }
+
+    /// Appends an empty map block to the working archive.
+    #[tool(
+        description = "Creates a level: appends an empty map block to the working archive as one undoable edit - the first step of building a map, since every editing tool needs an existing one. name (1 to 8 printable ASCII characters, case-insensitive) becomes the header lump; a name that is neither ExMy nor MAPxx comes back as a warning (\"engines only load ExMy/MAPxx unless MAPINFO defines it\"), not an error. format: \"doom\" (the default: header plus the ten empty vanilla members THINGS..BLOCKMAP), \"hexen\" (the same plus a minimal empty BEHAVIOR) or \"udmf\" (header plus a TEXTMAP that declares only the namespace, plus ENDMAP). namespace (default \"zdoom\"; 1 to 32 ASCII letters, digits or underscores, lowercased) is UDMF-only: passing it with a binary format is invalid_argument. A map block of this name already in the working archive is already_exists unless replace is true, which discards the old block and its GL run first; a map only a read-only layer holds is simply overridden. When no active map is set, the new map becomes it (set_active_map; the adoption is not undone by undo). Returns {map, format, namespace (null for binary formats), warnings, active_map}. The undo label is \"create_map NAME\"."
+    )]
+    fn create_map(
+        &self,
+        Parameters(args): Parameters<CreateMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let plan = match manage::plan_create(&args) {
+            Ok(plan) => plan,
+            Err(error) => return fail(&error),
+        };
+        reported(
+            self.state()
+                .with_session(|session| manage::create_run(session, plan)),
+        )
+    }
+
+    /// Copies a scope's map block into the working archive under a new name.
+    #[tool(
+        description = "Copies a whole map block (and its GL node run) from a scope into the working archive under a new header name, as one undoable edit. from is the map to read, to the name the copy gets; scope picks the source archive (\"merged\" default, \"working\", \"layer:N\"). The GL marker is renamed GL_<from> -> GL_<to>; a GL_LEVEL marker stays as-is (it attaches to the copied block above it), and a GL run whose new marker would not fit eight bytes (to longer than 5 characters) is dropped instead of copied. A block named to already in the working archive is already_exists unless replace is true, which discards it (and its GL run) first; from missing from the scope is not_found. Returns {from, to, lumps} with lumps the count appended (header, members, kept GL run). The undo label is \"copy_map FROM -> TO\"."
+    )]
+    fn copy_map(
+        &self,
+        Parameters(args): Parameters<CopyMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let plan = match manage::plan_copy(&args) {
+            Ok(plan) => plan,
+            Err(error) => return fail(&error),
+        };
+        reported(
+            self.state()
+                .with_session(|session| manage::copy_run(session, &plan)),
+        )
+    }
+
+    /// Renames a working-archive map block in place.
+    #[tool(
+        description = "Renames a map block of the working archive as one undoable edit: the header lump and its attached GL_<from> marker follow the new name (a GL_LEVEL marker needs no rename and stays; a GL run whose new marker would not fit eight bytes is dropped). from must be a block the working archive holds - one only the read-only IWAD or a resource layer holds fails not_found with a hint to use copy_map instead; to already in the working archive is already_exists; renaming a map onto itself is invalid_argument. The active map follows from to to. Returns {from, to}. The undo label is \"rename_map FROM -> TO\"."
+    )]
+    fn rename_map(
+        &self,
+        Parameters(args): Parameters<RenameMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let outcome = self.state().with_session(|session| {
+            let from = LumpName::parse(&args.from)?;
+            let to = LumpName::parse(&args.to)?;
+            manage::rename_run(session, from, to)
+        });
+        reported(outcome)
+    }
+
+    /// Removes a map block (and its GL run) from the working archive.
+    #[tool(
+        description = "Removes a map block and its GL node run from the working archive as one undoable edit. name must be a block the working archive holds: a map only the read-only IWAD or a resource layer owns fails not_found (layers never lose maps; keep the override out of your archive instead), and clearing the active map follows when it pointed at the removed map (the clear is not undone by undo). Returns {map, lumps_removed}. The undo label is \"remove_map NAME\"."
+    )]
+    fn remove_map(
+        &self,
+        Parameters(args): Parameters<RemoveMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(self.state().with_session(|session| {
+            let name = LumpName::parse(&args.name)?;
+            manage::remove_run(session, name)
+        }))
     }
 }
 

@@ -1,7 +1,8 @@
 # Maps tools
 
-Map-level reading and the session-wide map selection: `list_maps`,
-`get_map_lumps`, `get_map_summary`, `assemble_map` and `set_active_map`.
+Map-level reading, management and the session-wide map selection:
+`list_maps`, `get_map_lumps`, `get_map_summary`, `assemble_map`,
+`set_active_map`, `create_map`, `copy_map`, `rename_map` and `remove_map`.
 Later map tools (geometry, building, node building) join this group and
 share its conventions, which the **Editing maps** section below states.
 
@@ -223,3 +224,76 @@ all share one contract, and each result carries the fragment
 - This is a session setting, not an undoable edit: `undo`/`redo` never
   record it, and `undo` only clears it as a side effect when the stepped-
   back working archive removes the map from the merged view.
+
+## Managing map blocks
+
+`create_map`, `copy_map`, `rename_map` and `remove_map` change whole
+blocks of the working archive. Each is one undoable edit (labels
+`create_map NAME`, `copy_map FROM -> TO`, `rename_map FROM -> TO`,
+`remove_map NAME`); a failed call changes nothing. They never use the
+`{map, nodes_invalidated, copied_to_working}` fragment — they are not
+element edits — and the read-only layers are never touched: a name only a
+layer holds is simply overridden. The active map follows management
+outside the history: `create_map` adopts it when none was set,
+`rename_map` moves it, `remove_map` clears it; `undo` never replays that.
+
+## `create_map`
+
+- Purpose: build a level from scratch — every editing tool needs an
+  existing map, so this is the first step.
+- Arguments: `name` (required; 1 to 8 printable `ASCII` characters, any
+  case); `format` — `"doom"` (default), `"hexen"` or `"udmf"`;
+  `namespace` — the `UDMF` namespace to declare (default `"zdoom"`,
+  lowercased; 1 to 32 `ASCII` letters, digits or underscores; `UDMF`
+  only, passing it with a binary format is `invalid_argument`);
+  `replace` (default `false`).
+- Returns: `{"map", "format", "namespace" (null for binary), "warnings",
+  "active_map"}`. The block is appended empty: `doom` gets the ten vanilla
+  members (`THINGS` .. `BLOCKMAP`), `hexen` additionally a minimal empty
+  `BEHAVIOR`, `udmf` a `TEXTMAP` declaring only the namespace plus
+  `ENDMAP`. A name that is neither `ExMy` nor `MAPxx` succeeds with the
+  warning "engines only load ExMy/MAPxx unless MAPINFO defines it".
+- Errors: `invalid_argument` (unparsable name, unknown `format`, bad
+  `namespace`), `already_exists` for a working block of that name without
+  `replace` — with it, the old block and its `GL` run are discarded first.
+  A map only a lower layer holds is overridden without `replace`.
+
+## `copy_map`
+
+- Purpose: clone a whole map block — another map, or a layer's copy to
+  rebuild or replace — under a new name in the working archive.
+- Arguments: `from`, `to` (both required), `scope` (source archive:
+  `"merged"` default, `"working"`, `"layer:N"`) and `replace` (default
+  `false`).
+- Returns: `{"from", "to", "lumps"}` — `lumps` counts what was appended
+  (header, members, kept `GL` run). The `GL` marker is renamed
+  `GL_<from>` → `GL_<to>`; a `GL_LEVEL` marker stays as-is (it attaches
+  to the copied block above it); a `GL` run whose new marker would not
+  fit eight bytes (`to` longer than 5 characters) is dropped.
+- Errors: `not_found` (`from` missing from the scope), `already_exists`
+  (`to` in the working archive without `replace`), `invalid_argument`
+  (unparsable names or scope).
+
+## `rename_map`
+
+- Purpose: rename a working-archive block in place, header and `GL`
+  marker together.
+- Arguments: `from`, `to` (both required).
+- Returns: `{"from", "to"}`. A `GL_<from>` marker follows the new name
+  (or its run is dropped when the new marker would not fit eight bytes);
+  a `GL_LEVEL` marker needs no rename and stays. When the active map
+  pointed at `from` it now points at `to`.
+- Errors: `not_found` (`from` is not a working block — the layers are
+  read-only, the message says to use `copy_map`), `already_exists` (`to`
+  is already a working block), `invalid_argument` (`from` equals `to`, or
+  unparsable names).
+
+## `remove_map`
+
+- Purpose: delete a working-archive block and its `GL` run; `undo` brings
+  both back.
+- Arguments: `name` (required).
+- Returns: `{"map", "lumps_removed"}`. When the active map pointed at the
+  removed map it is cleared.
+- Errors: `not_found` (the working archive holds no such block; layers
+  never lose maps), `invalid_argument` (unparsable name).

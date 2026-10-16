@@ -11,6 +11,7 @@
 pub(crate) mod assets;
 pub(crate) mod audio;
 pub(crate) mod defs;
+pub(crate) mod edit_sectors;
 pub(crate) mod edit_sidedefs;
 pub(crate) mod edit_things;
 pub mod graphics;

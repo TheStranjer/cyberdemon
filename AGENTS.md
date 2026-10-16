@@ -146,6 +146,9 @@ src/
                   resolvers (flat, patch, sprite rotation) that every tool
                   reading graphic lumps decodes through: the image tools
                   now, the renderer and texture compositor next;
+                  `tools/maps/common.rs` holds the shared `map`-parameter
+                  resolvers (`resolve_map_name`, `load_map`) every map
+                  tool builds on;
                   `tools/palette.rs`' `load_palette` is its palette side.
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture

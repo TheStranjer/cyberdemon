@@ -53,8 +53,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers and pure integer map geometry), and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
-> rules, and a labelled undo/redo history with dirty-state tracking) and a
-> definitions registry (`src/defs*`: TSV game tables embedded in the binary,
+> rules, a labelled undo/redo history with dirty-state tracking, and the copy-on-write `edit_map` step every map edit wraps) and a definitions registry (`src/defs*`: TSV game tables embedded in the binary,
 > parsed once, selected per game, and overlaid with the session's custom
 > DEHACKED/DECORATE/ZScript/MAPINFO thing definitions) and render defaults (`src/render*`: the
 > validated session-level resolution, lighting, field of view, gamma and

@@ -3,7 +3,7 @@
 Map-level reading and the session-wide map selection: `list_maps`,
 `get_map_lumps`, `get_map_summary`, `assemble_map` and `set_active_map`.
 Later map tools (geometry, building, node building) join this group and
-share its conventions.
+share its conventions, which the **Editing maps** section below states.
 
 ## How maps are stored
 
@@ -37,6 +37,60 @@ Every tool with an optional `map` parameter resolves it the same way:
 3. else the merged view's only map, when it holds exactly one;
 4. else the call fails `invalid_argument` — pass `map` or call
    `set_active_map`.
+
+## Editing maps
+
+The map editing tools (vertices, linedefs, sidedefs, sectors, things, ...)
+all share one contract, and each result carries the fragment
+`{"map", "nodes_invalidated", "copied_to_working"}`:
+
+- Edits go to the **working archive**: a map the `IWAD` or a resource
+  layer owns is copied into the working archive on its first edit
+  (`copied_to_working` says whether that happened). Layers, and every
+  file they were read from, are never modified.
+- Every call is **one undo step**. `undo` takes back a single edit (the
+  first-edit copy included) and a call that fails — bad argument, broken
+  map — changes nothing at all.
+- **Geometry edits invalidate nodes.** When an edit changes the vertex
+  list, a linedef's `(v1, v2, front, back)` references, a sidedef's
+  sector or the sector count, the generated node data is dropped:
+  `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` are emptied but
+  kept in place, `ZNODES` is removed and the map's `GL_` node run is
+  deleted. The result says `nodes_invalidated: true`; run
+  `build_all_nodes` before playing the map in vanilla `Doom` —
+  `ZDoom`-family ports rebuild missing node data themselves and play
+  fine. Property-only edits (textures, heights, light levels, flags,
+  specials, things) leave the node lumps untouched.
+- A `flags` parameter accepts **an integer** (the raw bits as the format
+  stores them) **or a list of names**; names combine, and an unknown
+  name fails `invalid_argument` listing the valid ones. The name
+  depends on the map's flag family (`Doom` family: binary `Doom` maps
+  and the `UDMF` namespaces `doom`, `heretic`, `strife`; `Hexen`
+  family: binary `Hexen` maps and every other namespace, e.g. `zdoom`)
+  and on the element kind:
+  - `linedef`, `Doom` family: `blocking`, `blockmonsters`, `twosided`,
+    `dontpegtop`, `dontpegbottom`, `secret`, `blocksound`, `dontdraw`,
+    `mapped`, `passuse`;
+  - `linedef`, `Hexen` family: `blocking`, `blockmonsters`, `twosided`,
+    `dontpegtop`, `dontpegbottom`, `secret`, `blocksound`, `dontdraw`,
+    `mapped`, `repeatspecial`, `playercross`, `playeruse`,
+    `monstercross`, `impact`, `playerpush`, `missilecross`,
+    `monsteractivate`, `blockplayers`, `blockeverything` — the six
+    activation names from `playercross` to `missilecross` write the
+    trigger field rather than a bit, and a later one replaces an
+    earlier one;
+  - `thing`, `Doom` family: `easy`, `medium`, `hard`, `ambush`,
+    `notsingle`, `notdm`, `notcoop`, `friend`;
+  - `thing`, `Hexen` family: `easy`, `medium`, `hard`, `ambush`,
+    `dormant`, `class1`, `class2`, `class3`, `single`, `coop`, `dm`,
+    `translucent`, `invisible`, `friend`, `standing`.
+- Index parameters accept a single integer or a list of integers (sorted
+  and deduplicated; an empty list is `invalid_argument`). An index at or
+  past the element count fails `not_found`, e.g. `"linedef 12 does not
+  exist (map has 7 linedefs)"`.
+- Texture and flat names are uppercased; `-` means no texture. Binary
+  maps cap names at 8 characters, `UDMF` at 64; longer names or
+  characters outside printable `ASCII` are `invalid_argument`.
 
 ## `list_maps`
 

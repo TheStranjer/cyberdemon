@@ -31,10 +31,14 @@
 //!
 //! Read-only content reaches the working archive through [`cow`]:
 //! [`Session::copy_map_to_working`] copies one whole map block out of the
-//! merged view so the map tools can edit a map the `IWAD` owns.
+//! merged view so the map tools can edit a map the `IWAD` owns, and
+//! [`map_edit`] wraps that copy, the typed edit and the node invalidation
+//! into the single undoable [`Session::edit_map`] step every map editing
+//! tool builds on.
 
 pub mod cow;
 pub mod history;
+pub mod map_edit;
 pub mod merge;
 
 use std::path::{Path, PathBuf};
@@ -44,9 +48,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::CyberError;
 use crate::render::RenderSettings;
 use crate::session::history::History;
+use crate::session::map_edit::MapEditReport;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, Namespace};
 use crate::wad::game::{Game, detect_game};
+use crate::wad::map::Map;
 use crate::wad::name::LumpName;
 
 /// What a read-only archive in the layer stack is to.
@@ -443,6 +449,54 @@ impl Session {
         let merged = self.merged();
         self.edit(&format!("copy_map {map}"), |wad| {
             cow::copy_map_block(wad, &merged, map)
+        })
+    }
+
+    /// Runs one undoable edit of the map block named `map`, the step every
+    /// map editing tool is a thin wrapper around.
+    ///
+    /// This is a single [`Session::edit`]: one history entry under `label`,
+    /// and any error — including the copy below — rolls everything back.
+    /// The step proper lives in [`map_edit`]:
+    ///
+    /// 1. copies the block from the merged view into the working archive
+    ///    when the working archive does not hold it yet
+    ///    (see [`cow::copy_map_block`]), reporting `copied_to_working`;
+    /// 2. decodes the block with [`crate::wad::map::read_map`] and hands
+    ///    the typed [`Map`] to `f`;
+    /// 3. when `f` changed geometry (the vertex list, a linedef's
+    ///    `(v1, v2, front, back)`, a sidedef's sector or the sector count),
+    ///    empties `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` in
+    ///    place, drops `ZNODES` and removes the block's `GL` node run from
+    ///    the working archive, reporting `nodes_invalidated`;
+    /// 4. writes the map back with [`crate::wad::map::write_map`] and
+    ///    splices the new lumps over the old block range, at the same
+    ///    directory position.
+    ///
+    /// The emptied node lumps mean vanilla `Doom` cannot play the map
+    /// until `build_all_nodes` rebuilds them; `ZDoom`-family ports rebuild
+    /// missing node data themselves and play fine. Property-only edits keep
+    /// the node lumps.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::NotFound`] when no loaded archive holds a block named
+    /// `map`, [`CyberError::Format`] when the block does not decode, the
+    /// encoder's refusals for unrepresentable values, and whatever `f`
+    /// reports; the session is unchanged in every one of those cases.
+    #[inline]
+    pub fn edit_map<T, F>(
+        &mut self,
+        map: LumpName,
+        label: &str,
+        f: F,
+    ) -> Result<(T, MapEditReport), CyberError>
+    where
+        F: FnOnce(&mut Map) -> Result<T, CyberError>,
+    {
+        let merged = self.merged();
+        self.edit(label, move |wad| {
+            map_edit::edit_in_place(wad, &merged, map, f)
         })
     }
 }

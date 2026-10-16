@@ -4,7 +4,8 @@
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! audio-group tests in `audio`, the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
-//! `lumps`-group tests in `lumps`, the maps-group tests in `maps`, the
+//! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
+//! `map_edit`, the maps-group tests in `maps`, the
 //! graphics-group tests in `graphics`,
 //! the imports-group tests in `imports`, the
 //! inspect-group tests in `inspect`, the
@@ -60,6 +61,9 @@ mod inspect;
 #[cfg(test)]
 #[path = "mcp/lumps.rs"]
 mod lumps;
+#[cfg(test)]
+#[path = "mcp/map_edit.rs"]
+mod map_edit;
 #[cfg(test)]
 #[path = "mcp/maps.rs"]
 mod maps;

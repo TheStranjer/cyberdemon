@@ -1,10 +1,14 @@
-//! Map tools: [`Cyberdemon::list_maps`], [`Cyberdemon::get_map_lumps`],
-//! [`Cyberdemon::get_map_summary`], [`Cyberdemon::assemble_map`] and
-//! [`Cyberdemon::set_active_map`], built on the shared resolvers in
-//! [`crate::tools::maps::common`] that every later map tool reuses.
+//! Map tools: `list_maps`, `get_map_lumps`, `get_map_summary`,
+//! `assemble_map` and `set_active_map` (see the `maps` router methods on
+//! [`crate::server::Cyberdemon`]).
+//!
+//! Everything reads through the shared resolvers in `common` that every
+//! later map tool reuses, and the element-editing tools will reuse the
+//! parameter types and validators in [`crate::tools::maps::params`].
 
 mod assemble;
 pub(in crate::tools) mod common;
+pub mod params;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;

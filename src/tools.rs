@@ -5,7 +5,8 @@
 //! this library) can build results with them; the tool group modules
 //! themselves stay crate-private, except `textures`, whose session-level
 //! [`textures::TextureSet`] loader is public API texture editing will grow
-//! around.
+//! around, and `maps`, whose [`maps::params`] wire types and validators the
+//! element-editing tools are built from.
 
 pub(crate) mod assets;
 pub(crate) mod audio;
@@ -14,7 +15,7 @@ pub(crate) mod graphics;
 pub(crate) mod imports;
 pub(crate) mod inspect;
 pub(crate) mod lumps;
-pub(crate) mod maps;
+pub mod maps;
 pub(crate) mod meta;
 pub(crate) mod music;
 pub(crate) mod nodes;

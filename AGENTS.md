@@ -136,7 +136,10 @@ src/
                   revision bookkeeping behind dirty state, and
                   `session/cow.rs` the copy-on-write step that brings one map
                   block from the merged view into the working archive
-                  (`copy_map_block`, `Session::copy_map_to_working`).
+                  (`copy_map_block`, `Session::copy_map_to_working`), and
+                  `session/map_edit.rs` the single undoable step behind every
+                  map edit tool (`Session::edit_map`: copy, typed edit, node
+                  invalidation on geometry change, in-place block rewrite).
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.
@@ -149,7 +152,10 @@ src/
                   now, the renderer and texture compositor next;
                   `tools/maps/common.rs` holds the shared `map`-parameter
                   resolvers (`resolve_map_name`, `load_map`) every map
-                  tool builds on; `tools/maps/assemble.rs` builds
+                  tool builds on, and `tools/maps/params.rs` the shared
+                  editing parameter types (`FlagsInput`, `IndexSelector`,
+                  `check_index`, `validate_texture_name`, `edit_result_fragment`)
+                  every map edit tool builds on; `tools/maps/assemble.rs` builds
                   `assemble_map`'s typed graph (resolved references,
                   dangling ones reported as `problems`, published as a
                   JSON asset past the inline limit);

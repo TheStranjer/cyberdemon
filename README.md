@@ -15,7 +15,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `graphics` group (`list_flats`, `list_patches`, `list_sprites`, `get_flat`,
 > `get_patch`, `get_sprite`, `get_thing_sprite`, `decode_patch`), an
 > `imports` group (`import_image_as_patch`/`import_png_as_patch`,
-> `import_image_as_flat`/`import_png_as_flat`, `import_image_as_sprite`/`import_png_as_sprite`, `import_image_as_raw`), a
+> `import_image_as_flat`/`import_png_as_flat`, `import_image_as_sprite`/`import_png_as_sprite`, `import_image_as_raw`), an `inspect` group (`diff_wads`), a
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group
@@ -46,7 +46,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
 > bounds-checked little-endian reader/writer, an in-memory `Wad` archive
 > with parsing, serialization, name lookup and atomic file I/O, a lump
-> classifier reporting namespaces, map blocks and type hints, a
+> classifier reporting namespaces, map blocks and type hints, a pure two-directory diff over lump namespaces, map units and element counts, a
 > `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
 > detection and patch-reference renumbering, and a `UDMF` `TEXTMAP`
 > tokenizer, parser and writer over documents of blocks and key/value

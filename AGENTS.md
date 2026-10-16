@@ -126,7 +126,8 @@ src/
                   (`assets/fetch.rs`: `Fetched`, `derive_lump_name`).
   session.rs      The per-connection editing session: an optional IWAD layer and
                   read-only resource layers under one editable working archive,
-                  the merged view, `Scope` reads and `Session::edit`.
+                  the merged view, the layer-only `base_lumps` view, `Scope`
+                  reads and `Session::edit`.
   session/        Session building blocks (no MCP concerns):
                   `session/merge.rs` folds one archive over another with vanilla
                   override rules (map blocks, namespaces, globals, last wins;
@@ -149,6 +150,9 @@ src/
                   `tools/maps/common.rs` holds the shared `map`-parameter
                   resolvers (`resolve_map_name`, `load_map`) every map
                   tool builds on;
+                  `tools/inspect.rs`' `diff_wads` resolves side strings
+                  ("working", "merged", "base", "layer:N" or an absolute
+                  WAD path) onto `crate::wad::diff`;
                   `tools/palette.rs`' `load_palette` is its palette side.
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
@@ -160,7 +164,10 @@ src/
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization, lookup and atomic I/O, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
-                  `MapBlock`s and `LumpKind` type hints, `wad/game.rs`
+                  `MapBlock`s and `LumpKind` type hints, `wad/diff.rs` the
+                  pure two-directory comparison: map blocks as units, lumps
+                  keyed by namespace, name and occurrence and the
+                  length/`FNV`-1a/bytes content rule, `wad/game.rs`
                   the pure game signature detection (`detect_game`),
                   `wad/textures.rs` the `PNAMES` and `TEXTURE1`/`TEXTURE2`
                   codecs: patch-name index, texture records with

@@ -7,6 +7,7 @@
 //! `lumps`-group tests in `lumps`, the maps-group tests in `maps`, the
 //! graphics-group tests in `graphics`,
 //! the imports-group tests in `imports`, the
+//! inspect-group tests in `inspect`, the
 //! music-group tests in `music`, the
 //! palette-group tests in `palette`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
@@ -51,6 +52,9 @@ mod graphics;
 #[cfg(test)]
 #[path = "mcp/imports.rs"]
 mod imports;
+#[cfg(test)]
+#[path = "mcp/inspect.rs"]
+mod inspect;
 #[cfg(test)]
 #[path = "mcp/lumps.rs"]
 mod lumps;

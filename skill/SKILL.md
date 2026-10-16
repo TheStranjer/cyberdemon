@@ -135,6 +135,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `import_image_as_sprite` | `reference/imports.md`  |
 | `import_png_as_sprite`   | `reference/imports.md`  |
 | `import_image_as_raw`    | `reference/imports.md`  |
+| `diff_wads`              | `reference/inspect.md`  |
 | `import_sound`           | `reference/audio.md`    |
 | `preview_sound`          | `reference/audio.md`    |
 | `import_music`           | `reference/music.md`    |

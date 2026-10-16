@@ -1,8 +1,9 @@
 //! Map tools: [`Cyberdemon::list_maps`], [`Cyberdemon::get_map_lumps`],
-//! [`Cyberdemon::get_map_summary`] and [`Cyberdemon::set_active_map`],
-//! built on the shared resolvers in [`crate::tools::maps::common`] that
-//! every later map tool reuses.
+//! [`Cyberdemon::get_map_summary`], [`Cyberdemon::assemble_map`] and
+//! [`Cyberdemon::set_active_map`], built on the shared resolvers in
+//! [`crate::tools::maps::common`] that every later map tool reuses.
 
+mod assemble;
 pub(in crate::tools) mod common;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -69,6 +70,32 @@ struct GetMapSummaryParams {
     /// `"layer:N"`.
     #[serde(default)]
     scope: Option<String>,
+}
+
+/// Arguments for [`Cyberdemon::assemble_map`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AssembleMapParams {
+    /// The map to assemble, e.g. `"MAP01"`. Defaults to the session's
+    /// active map; with none active, the merged view's only map when it
+    /// holds exactly one. Without either the call fails with
+    /// `invalid_argument`.
+    #[serde(default)]
+    map: Option<String>,
+    /// Which archive to read: `"merged"` (the default), `"working"` or
+    /// `"layer:N"`.
+    #[serde(default)]
+    scope: Option<String>,
+    /// Which element arrays to return: a subset of `"vertices"`,
+    /// `"linedefs"`, `"sidedefs"`, `"sectors"`, `"things"`. Defaults to
+    /// all five; an unknown name fails with `invalid_argument`.
+    #[serde(default)]
+    include: Option<Vec<String>>,
+    /// Inline the whole graph when its total element count is at most this
+    /// (default 2000, maximum 20000); above it the JSON is published as an
+    /// asset and only a summary is returned. `0` or a value above the
+    /// maximum fail with `invalid_argument`.
+    #[serde(default)]
+    inline_limit: Option<usize>,
 }
 
 /// Arguments for [`Cyberdemon::set_active_map`].
@@ -418,6 +445,37 @@ impl Cyberdemon {
             self.state()
                 .with_session(|session| summary_run(session, args.map.as_deref(), scope)),
         )
+    }
+
+    /// Returns the whole map as one typed graph with resolved references.
+    #[tool(
+        description = "Returns a whole map as one typed graph whose references are already resolved, so the map can be reasoned about without chasing indices. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\", \"layer:N\"). include selects the arrays to return - any subset of \"vertices\", \"linedefs\", \"sidedefs\", \"sectors\", \"things\" (default all five); an unknown name is invalid_argument. Inline rows: vertices {index, x, y, linedefs}; linedefs {index, v1: {index,x,y}|null, v2: ..., length (floor-rounded map units)|null, flags, flag_names (named by the map's flag family), special, tag, args, front|back: {sidedef, sector|null, upper, middle, lower, x_offset, y_offset}|null}; sidedefs {index, sector|null, linedef|null, side: \"front\"|\"back\"|null (the first line using it), upper, middle, lower, x_offset, y_offset}; sectors {index, floor_height, ceiling_height, floor_flat, ceiling_flat, light, special, tag, linedefs (boundary line indices), sidedefs, neighbors (sectors across two-sided lines), things (indices of things standing in it, point-in-sector), bbox [min_x,min_y,max_x,max_y]|null}; things {index, type, x, y, z, angle, flags, flag_names, tid, special, args, sector|null}. problems lists every dangling vertex/sidedef/sector reference found; broken references never fail the call, the unresolvable part is null. While the included arrays hold at most inline_limit elements (default 2000, maximum 20000; 0 or above the maximum are invalid_argument) the whole graph is returned; above it the result is instead {map, counts, asset} with the full JSON published as <MAP>_graph.json (application/json). Unknown map is not_found, unparsable map or scope or no resolvable default is invalid_argument, an undecodable block is format_error."
+    )]
+    fn assemble_map(
+        &self,
+        Parameters(args): Parameters<AssembleMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let scope = match parse_scope(args.scope.as_deref()) {
+            Ok(scope) => scope,
+            Err(error) => return fail(&error),
+        };
+        let include = match assemble::parse_include(args.include) {
+            Ok(include) => include,
+            Err(error) => return fail(&error),
+        };
+        let limit = match assemble::parse_inline_limit(args.inline_limit) {
+            Ok(limit) => limit,
+            Err(error) => return fail(&error),
+        };
+        let plan = match self.state().with_session(|session| {
+            let name = common::resolve_map_name(session, args.map.as_deref())?;
+            let map = common::load_map(session, name, scope)?;
+            Ok(assemble::assemble(name, &map, &include))
+        }) {
+            Ok(plan) => plan,
+            Err(error) => return fail(&error),
+        };
+        reported(plan.finish(self.state(), limit))
     }
 
     /// Selects or clears the map the map tools default to.

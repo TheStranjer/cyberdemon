@@ -14,11 +14,14 @@
 //! [`nodes`], [`reject`] and [`blockmap`] type the node-builder output:
 //! the `SEGS`/`SSECTORS`/`NODES` tree in its vanilla and `ZDoom` extended
 //! layouts, the `REJECT` visibility matrix and the `BLOCKMAP` spatial
-//! index.
+//! index. [`geometry`] answers the pure integer shape questions over a
+//! decoded map: sector boundaries, point containment, bounding boxes,
+//! line lengths and sector adjacency.
 
 pub mod blockmap;
 pub mod doom;
 pub mod flags;
+pub mod geometry;
 pub mod hexen;
 pub mod model;
 pub mod nodes;

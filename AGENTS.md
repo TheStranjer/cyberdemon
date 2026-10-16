@@ -168,7 +168,10 @@ src/
                   tool builds on, and `tools/maps/params.rs` the shared
                   editing parameter types (`FlagsInput`, `IndexSelector`,
                   `check_index`, `validate_texture_name`, `edit_result_fragment`)
-                  every map edit tool builds on; `tools/maps/assemble.rs` builds
+                  every map edit tool builds on; `tools/maps/manage.rs`
+                  the block-level machinery behind `create_map`,
+                  `copy_map`, `rename_map` and `remove_map`;
+                  `tools/maps/assemble.rs` builds
                   `assemble_map`'s typed graph (resolved references,
                   dangling ones reported as `problems`, published as a
                   JSON asset past the inline limit);

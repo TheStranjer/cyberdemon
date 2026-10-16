@@ -152,7 +152,10 @@ src/
                   (`copy_map_block`, `Session::copy_map_to_working`), and
                   `session/map_edit.rs` the single undoable step behind every
                   map edit tool (`Session::edit_map`: copy, typed edit, node
-                  invalidation on geometry change, in-place block rewrite).
+                  invalidation on geometry change, in-place block rewrite)
+                  and its format-rewriting sibling `Session::convert_map`
+                  (`rewrite_in_place`: the same step, always dropping the
+                  block's node data and `GL` run).
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.
@@ -175,6 +178,10 @@ src/
                   `assemble_map`'s typed graph (resolved references,
                   dangling ones reported as `problems`, published as a
                   JSON asset past the inline limit);
+                  `tools/convert.rs` is the thin `convert_map_format` group:
+                  it turns the parameters into a `wad::map::convert::Target`
+                  and runs the pure conversion as one `Session::convert_map`
+                  step (`dry_run` converts a copy and only reports);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`;
@@ -212,9 +219,12 @@ src/
                   `Seg`, `Subsector`, `Node`, `Child`, magic detection),
                   `map/reject.rs` the REJECT visibility bit-matrix,
                   `map/blockmap.rs` the BLOCKMAP grid (offset table and
-                  blocklist validation) and `map/geometry.rs` pure integer
+                  blocklist validation), `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
-                  bounding boxes, line lengths and sector adjacency).
+                  bounding boxes, line lengths and sector adjacency) and
+                  `map/convert.rs` the pure within-flag-family format
+                  conversion (`Target`, `convert_map`, `Conversion`) behind
+                  `convert_map_format`.
 data/
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by

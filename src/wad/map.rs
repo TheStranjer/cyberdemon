@@ -16,9 +16,12 @@
 //! layouts, the `REJECT` visibility matrix and the `BLOCKMAP` spatial
 //! index. [`geometry`] answers the pure integer shape questions over a
 //! decoded map: sector boundaries, point containment, bounding boxes,
-//! line lengths and sector adjacency.
+//! line lengths and sector adjacency. [`convert`] rewrites a decoded map in
+//! another layout inside one flag family, the pure step behind
+//! `convert_map_format`.
 
 pub mod blockmap;
+pub mod convert;
 pub mod doom;
 pub mod flags;
 pub mod geometry;

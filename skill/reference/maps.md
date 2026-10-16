@@ -62,6 +62,10 @@ all share one contract, and each result carries the fragment
   `ZDoom`-family ports rebuild missing node data themselves and play
   fine. Property-only edits (textures, heights, light levels, flags,
   specials, things) leave the node lumps untouched.
+- **Changing a map's format is its own tool.** `convert_map_format`
+  rewrites a block as binary `Doom`, binary `Hexen` or `UDMF` inside one
+  flag family, and node data is tied to the format, so it always goes
+  (`nodes_removed: true`) — see `reference/convert.md`.
 - A `flags` parameter accepts **an integer** (the raw bits as the format
   stores them) **or a list of names**; names combine, and an unknown
   name fails `invalid_argument` listing the valid ones. The name

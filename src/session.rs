@@ -499,6 +499,38 @@ impl Session {
             map_edit::edit_in_place(wad, &merged, map, f)
         })
     }
+
+    /// Runs one undoable edit that rewrites a map block's *format*, the step
+    /// `convert_map_format` is a thin wrapper around.
+    ///
+    /// Exactly [`Session::edit_map`]'s contract — the copy-on-write step, the
+    /// typed [`Map`] handed to `f`, the re-encode over the block's own
+    /// directory range, one history entry under `label`, nothing changing on
+    /// any error — plus one difference: node data cannot survive a format
+    /// change, so the block's `GL` node run is removed and the report says
+    /// `nodes_invalidated` even when the geometry signature is untouched
+    /// (which a conversion always leaves it). `f` owns the node lumps inside
+    /// [`Map::other`]; see [`crate::wad::map::convert`].
+    ///
+    /// # Errors
+    ///
+    /// [`Session::edit_map`]'s errors, including the target encoder's refusal
+    /// for a value the new format cannot store.
+    #[inline]
+    pub fn convert_map<T, F>(
+        &mut self,
+        map: LumpName,
+        label: &str,
+        f: F,
+    ) -> Result<(T, MapEditReport), CyberError>
+    where
+        F: FnOnce(&mut Map) -> Result<T, CyberError>,
+    {
+        let merged = self.merged();
+        self.edit(label, move |wad| {
+            map_edit::rewrite_in_place(wad, &merged, map, f)
+        })
+    }
 }
 
 /// The directory of layer `index`, tagged with that layer as its source.

@@ -65,7 +65,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > drawing goes through `geom::arrange`) and a pure float-free BSP node
 > builder (`src/bsp*`: segs from linedef sides, 16.16/i128 side tests,
 > splitting and cost-chosen partition lines, a tree of convex subsectors
-> with integer bounding boxes, and the vanilla SEGS/SSECTORS/NODES writer behind `build_nodes`) and a pure raster sketch measurer
+> with integer boxes, and the vanilla and ZDoom extended node writers behind `build_nodes`) and a pure raster sketch measurer
 > (`src/sketch*`: ink mask, stroke width, morphological closing,
 > deterministic components, enclosed regions, marks and wall gaps, and
 > regions grown to wall centrelines then traced, simplified, straightened

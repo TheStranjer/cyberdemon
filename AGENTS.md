@@ -65,7 +65,8 @@ src/
                   `Partition`, `BuildOptions` and the `build_tree` entry
                   point; `bsp::vanilla::to_vanilla` renders a finished
                   tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record
-                  bytes. No archive I/O, no tools.
+                  bytes and `bsp::extended::to_extended` as one ZDoom
+                  `XNOD`/`ZNOD` extended lump. No archive I/O, no tools.
   bsp/            Builder internals (no MCP concerns): `bsp/seg.rs`
                   linedef sides to `BuildSeg`s with index validation,
                   `bsp/side.rs` `R_PointOnSide` tests and the tolerant
@@ -75,7 +76,10 @@ src/
                   recursion, convexity, bounding boxes, guards and
                   `BspTree`, `bsp/vanilla.rs` the vanilla serialization:
                   rounded split-vertex reuse/append, the three record
-                  writers and the i16/u16 limit refusals.
+                  writers and the i16/u16 limit refusals, and
+                  `bsp/extended.rs` the extended serialization: the
+                  fraction-precise vertex table, the four record
+                  sections, the zlib wrap and the limit refusals.
   music.rs        Music core module root: re-exports the converter and writer.
   music/          Music building blocks (no MCP concerns): `music/midi_write.rs`
                   the type-0 SMF writer (`MidiWriter`, big-endian chunks,

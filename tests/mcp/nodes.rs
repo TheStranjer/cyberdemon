@@ -6,8 +6,10 @@
 //! the `JSON` assets the `full` detail publishes, plus the three builders
 //! (`build_blockmap`, `build_reject`, `build_nodes`) whose written lumps
 //! the inspection tools then read back — `build_nodes` writing the whole
-//! vanilla tree, its split vertices appended to `VERTEXES` and stripped
-//! again by the next geometry edit.
+//! tree either as the vanilla run (its split vertices appended to
+//! `VERTEXES` and stripped again by the next geometry edit) or as one
+//! `ZDoom` extended lump in `NODES`/`ZNODES` with the splits kept inside
+//! the lump.
 
 #[cfg(test)]
 mod tests {
@@ -79,6 +81,21 @@ mod tests {
         body
     }
 
+    /// Requires `get_nodes` to read `MAP01`'s fresh extended lump back:
+    /// the given format, every count of the build report and the lump
+    /// size it echoes.
+    async fn assert_extended_read(client: &Client, built: &Value, format: &str) {
+        let read = call(client, "get_nodes", json!({ "map": "MAP01" })).await;
+        assert_eq!(read["format"], json!(format), "NODES carries the run");
+        assert_eq!(read["segs"], built["segs"], "the reader agrees on segs");
+        assert_eq!(read["subsectors"], built["subsectors"], "and subsectors");
+        assert_eq!(read["nodes"], built["nodes"], "and nodes");
+        assert_eq!(read["extra_vertices"], json!(0_u64), "nothing added here");
+        assert_eq!(read["bytes"], built["bytes"], "the same lump");
+        assert_eq!(read["root"], json!(0_u64), "the only node is the root");
+        assert_eq!(read["depth"], json!(1_u64), "one level deep");
+    }
+
     /// The `asset.url` of a full-detail report, as a parsed value plus
     /// the fetched `JSON` body.
     async fn fetch_json(report: &Value) -> Value {
@@ -103,11 +120,9 @@ mod tests {
         );
     }
 
-    /// Both not-yet-implemented layouts refuse with `unsupported`.
+    /// The one not-yet-implemented layout refuses with `unsupported`.
     async fn refuse_unbuilt_variants(client: &Client) {
-        for variant in ["gl", "extended"] {
-            refuse_variant(client, variant, "unsupported").await;
-        }
+        refuse_variant(client, "gl", "unsupported").await;
     }
 
     #[tokio::test]
@@ -682,6 +697,167 @@ mod tests {
         )
         .await;
         assert_eq!(scope_code, "not_found", "the refusal wrote nothing");
+    }
+
+    #[tokio::test]
+    async fn build_nodes_extended_writes_a_znod_lump_the_reader_confirms() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        let built = call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "EXTENDED" }),
+        )
+        .await;
+        assert_eq!(built["variant"], json!("extended"), "the echo");
+        assert_eq!(built["format"], json!("ZNOD"), "compressed by default");
+        assert_eq!(
+            built["segs"],
+            json!(8_u64),
+            "seven fronts and the shared back"
+        );
+        assert_eq!(built["subsectors"], json!(2_u64), "one leaf per room");
+        assert_eq!(built["nodes"], json!(1_u64), "the shared line cuts once");
+        assert_eq!(built["new_vertices"], json!(0_u64), "flush corners");
+        assert_eq!(built["warnings"], json!([]), "each leaf bounds one sector");
+        assert_eq!(built["map"], json!("MAP01"), "the fragment");
+        assert_eq!(
+            built["nodes_invalidated"],
+            json!(false),
+            "a build is a product, not a geometry change"
+        );
+        assert_eq!(
+            built["copied_to_working"],
+            json!(true),
+            "the map came in to edit"
+        );
+        assert!(
+            built.get("split_vertices").is_none(),
+            "the classic-only key stays out of the extended result: {built}"
+        );
+        let bytes = built["bytes"].as_u64().expect("a lump size");
+        assert!(bytes > 4, "magic plus a payload: {bytes}");
+        assert_extended_read(&client, &built, "znod").await;
+        let summary = call(&client, "get_map_summary", json!({ "map": "MAP01" })).await;
+        assert_eq!(
+            summary["counts"]["vertices"],
+            json!(6_u64),
+            "an extended build never touches VERTEXES"
+        );
+        assert_eq!(summary["nodes"]["present"], json!(true), "nodes are there");
+        assert_eq!(
+            summary["nodes"]["nodes_format"],
+            json!("ZNOD"),
+            "the summary reports the magic",
+        );
+        assert!(
+            summary["nodes"].get("segs").is_none(),
+            "the vanilla counts give way to it: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extended_compression_only_changes_the_lump_not_the_records() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "extended" }),
+        )
+        .await;
+        let packed = call(
+            &client,
+            "get_nodes",
+            json!({ "map": "MAP01", "detail": "full" }),
+        )
+        .await;
+        assert_eq!(packed["format"], json!("znod"), "the compressed lump");
+        let packed_body = fetch_json(&packed).await;
+        let raw = call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "extended", "compress": false }),
+        )
+        .await;
+        assert_eq!(raw["format"], json!("XNOD"), "compress false stores raw");
+        assert_eq!(
+            raw["copied_to_working"],
+            json!(false),
+            "already in the working copy"
+        );
+        let open = call(
+            &client,
+            "get_nodes",
+            json!({ "map": "MAP01", "detail": "full" }),
+        )
+        .await;
+        assert_eq!(open["format"], json!("xnod"), "the raw magic reads back");
+        let open_body = fetch_json(&open).await;
+        assert_eq!(open_body["format"], json!("xnod"), "the asset layout");
+        assert_eq!(
+            packed_body["format"],
+            json!("znod"),
+            "and its compressed twin"
+        );
+        assert!(
+            ["extra_vertices", "segs", "subsectors", "nodes"]
+                .iter()
+                .all(|field| open_body[*field] == packed_body[*field]),
+            "compressed and uncompressed decode to the same records"
+        );
+    }
+
+    #[tokio::test]
+    async fn extended_build_on_udmf_writes_znodes_and_classic_refuses_there() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = nodes_loaded(dir.path()).await;
+        let built = call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP07", "variant": "extended" }),
+        )
+        .await;
+        assert_eq!(built["variant"], json!("extended"), "the echo");
+        assert_eq!(built["format"], json!("ZNOD"), "compressed by default");
+        assert_eq!(built["segs"], json!(8_u64), "the two-room map splits once");
+        assert_eq!(built["subsectors"], json!(2_u64), "one leaf per room");
+        assert_eq!(built["new_vertices"], json!(0_u64), "flush corners");
+        let working = call(
+            &client,
+            "get_nodes",
+            json!({ "map": "MAP07", "scope": "working" }),
+        )
+        .await;
+        assert_eq!(
+            working["format"],
+            json!("znod"),
+            "ZNODES holds the fresh run"
+        );
+        assert_eq!(working["segs"], built["segs"], "the reader agrees");
+        assert_eq!(
+            working["bytes"], built["bytes"],
+            "the block's ZNODES replaced the fixture's XNOD"
+        );
+        let merged = call(&client, "get_nodes", json!({ "map": "MAP07" })).await;
+        assert_eq!(
+            merged["format"],
+            json!("znod"),
+            "the merged view shows the build"
+        );
+        let (code, message) = call_err(&client, "build_nodes", json!({ "map": "MAP07" })).await;
+        assert_eq!(code, "invalid_argument", "classic has no place in UDMF");
+        assert!(
+            message.contains("UDMF maps use extended nodes"),
+            "the message names the rule: {message}"
+        );
+        let after = call(
+            &client,
+            "get_nodes",
+            json!({ "map": "MAP07", "scope": "working" }),
+        )
+        .await;
+        assert_eq!(after["format"], json!("znod"), "the refusal wrote nothing");
     }
 
     #[tokio::test]

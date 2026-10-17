@@ -80,11 +80,12 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 92] = [
+    const EXPECTED_TOOLS: [&str; 95] = [
         "add_lump",
         "add_sector",
         "add_sidedef",
         "add_thing",
+        "add_vertex",
         "align_textures",
         "assemble_map",
         "auto_texture",
@@ -144,6 +145,7 @@ mod tests {
         "list_sprites",
         "list_textures",
         "merge_wad",
+        "move_vertex",
         "new_wad",
         "open_iwad",
         "open_wad",
@@ -156,6 +158,7 @@ mod tests {
         "remove_sidedef",
         "remove_texture",
         "remove_thing",
+        "remove_vertex",
         "rename_lump",
         "rename_map",
         "render_minimap",

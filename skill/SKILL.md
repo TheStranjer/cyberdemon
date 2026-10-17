@@ -141,6 +141,9 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `add_sector`             | `reference/sectors.md`  |
 | `edit_sector`            | `reference/sectors.md`  |
 | `remove_sector`          | `reference/sectors.md`  |
+| `add_vertex`             | `reference/vertices.md` |
+| `move_vertex`            | `reference/vertices.md` |
+| `remove_vertex`          | `reference/vertices.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |

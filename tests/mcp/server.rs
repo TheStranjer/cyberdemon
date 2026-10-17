@@ -80,12 +80,14 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 83] = [
+    const EXPECTED_TOOLS: [&str; 87] = [
         "add_lump",
         "add_sector",
         "add_sidedef",
         "add_thing",
+        "align_textures",
         "assemble_map",
+        "auto_texture",
         "build_texture",
         "convert_map_format",
         "copy_map",
@@ -116,6 +118,7 @@ mod tests {
         "get_sector_specials",
         "get_session_info",
         "get_sprite",
+        "get_texture_theme",
         "get_thing_sprite",
         "get_thing_types",
         "get_wad_info",
@@ -162,13 +165,13 @@ mod tests {
         "set_palette",
         "set_render_options",
         "set_render_resolution",
+        "set_texture_theme",
         "undo",
         "version",
     ];
 
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_convert_defs_edit_sectors_edit_sidedefs_edit_things_graphics_imports_inspect_lumps_maps_music_nodes_palette_render_scripts_session_and_textures_tools()
-     {
+    async fn lists_the_grouped_tools_of_every_router() {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();

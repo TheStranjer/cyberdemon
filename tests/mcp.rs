@@ -17,7 +17,8 @@
 //! nodes-group tests in `nodes`, the
 //! palette-group tests in `palette`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
-//! the textures-group tests in `textures`, and the documentation-layout
+//! the textures-group tests in `textures`, the themes-group tests in
+//! `themes`, and the documentation-layout
 //! checks in `docs`; every helper is exercised by a test in `server`, and
 //! the real result/error contract is checked end to end through a small
 //! probe server.
@@ -113,3 +114,6 @@ pub mod support;
 #[cfg(test)]
 #[path = "mcp/textures.rs"]
 mod textures;
+#[cfg(test)]
+#[path = "mcp/themes.rs"]
+mod themes;

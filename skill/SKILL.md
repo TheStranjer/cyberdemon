@@ -182,6 +182,10 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `edit_pnames`            | `reference/textures.md` |
 | `build_texture`          | `reference/textures.md` |
 | `remove_texture`         | `reference/textures.md` |
+| `get_texture_theme`      | `reference/themes.md`   |
+| `set_texture_theme`      | `reference/themes.md`   |
+| `auto_texture`           | `reference/themes.md`   |
+| `align_textures`         | `reference/themes.md`   |
 
 ## Typical workflow
 

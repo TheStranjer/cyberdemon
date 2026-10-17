@@ -10,6 +10,7 @@
 
 pub(crate) mod assets;
 pub(crate) mod audio;
+pub(crate) mod batch;
 pub(crate) mod convert;
 pub(crate) mod defs;
 pub(crate) mod edit_sectors;

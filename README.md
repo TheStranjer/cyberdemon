@@ -10,7 +10,8 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 
 > Status: foundation plus the first WAD and audio tools. The server starts per-connection with shared session
 > state, exposes a `version` tool, an `assets` group
-> (`get_asset_server_info`, `get_asset_url`, `set_asset_capacity`), a `defs` group
+> (`get_asset_server_info`, `get_asset_url`, `set_asset_capacity`), a `batch` group
+> (`run_batch`), a `defs` group
 > (`get_thing_types`, `get_linedef_specials`, `get_sector_specials`), a
 > `graphics` group (`list_flats`, `list_patches`, `list_sprites`, `get_flat`,
 > `get_patch`, `get_sprite`, `get_thing_sprite`, `decode_patch`), an

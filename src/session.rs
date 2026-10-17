@@ -328,6 +328,34 @@ impl Session {
         self.history.undo(&mut self.working)
     }
 
+    /// How many undo entries the history currently holds. The batch tool
+    /// marks the depth before its first step with this and hands it to
+    /// [`Session::rollback_to`] or [`Session::squash_since`] afterwards.
+    #[must_use]
+    #[inline]
+    pub fn undo_depth(&self) -> usize {
+        self.history.undo_depth()
+    }
+
+    /// Undoes every edit recorded above [`Session::undo_depth`] mark
+    /// `depth`, restoring the working archive, and discards those entries
+    /// (see [`History::rollback_to`]): the rolled-back steps are not
+    /// redoable. Returns the number of entries undone.
+    #[inline]
+    pub fn rollback_to(&mut self, depth: usize) -> usize {
+        self.history.rollback_to(&mut self.working, depth)
+    }
+
+    /// Collapses every edit recorded above [`Session::undo_depth`] mark
+    /// `depth` into a single undo entry labelled `label` (see
+    /// [`History::squash_since`]), so one [`Session::undo`] steps back over
+    /// a whole batch. A no-op when nothing was recorded above `depth`.
+    /// Returns whether an entry was replaced.
+    #[inline]
+    pub fn squash_since(&mut self, depth: usize, label: &str) -> bool {
+        self.history.squash_since(depth, label)
+    }
+
     /// Re-applies the most recently undone edit and returns its label.
     ///
     /// # Errors
@@ -1153,6 +1181,66 @@ mod tests {
             "the selection is not part of the history"
         );
         assert_eq!(session.layers().len(), 2, "the layers never changed");
+    }
+
+    #[test]
+    fn undo_depth_marks_a_batch_and_rollback_restores_the_pre_batch_archive() {
+        let mut session = loaded();
+        add_marker(&mut session, "KEEP").expect("an edit before the batch");
+        let depth = session.undo_depth();
+        assert_eq!(depth, 1, "one entry stands before the batch");
+        add_marker(&mut session, "B1").expect("batch step 1");
+        add_marker(&mut session, "B2").expect("batch step 2");
+        assert_eq!(session.undo_depth(), 3, "the batch recorded two more");
+        assert_eq!(
+            session.rollback_to(depth),
+            2,
+            "both batch entries roll back at once"
+        );
+        assert_eq!(session.undo_depth(), depth, "the mark holds");
+        assert_eq!(
+            session.working().len(),
+            1,
+            "only the pre-batch lump is left"
+        );
+        assert!(
+            session.redo_labels().is_empty(),
+            "the rolled-back steps cannot be redone"
+        );
+    }
+
+    #[test]
+    fn squash_since_makes_a_batch_one_undo_step_and_noops_on_an_empty_suffix() {
+        let mut session = loaded();
+        add_marker(&mut session, "KEEP").expect("an edit before the batch");
+        let depth = session.undo_depth();
+        add_marker(&mut session, "B1").expect("batch step 1");
+        add_marker(&mut session, "B2").expect("batch step 2");
+        assert!(
+            session.squash_since(depth, "batch: two steps"),
+            "two entries stand above the mark"
+        );
+        assert_eq!(session.undo_depth(), 2, "the two batch entries became one");
+        assert_eq!(
+            session.undo().expect("one undo steps back over the batch"),
+            "batch: two steps",
+            "the squashed label is what undo reports"
+        );
+        assert_eq!(
+            session.working().len(),
+            1,
+            "both batch edits are gone at once"
+        );
+        let top = session.undo_depth();
+        assert!(
+            !session.squash_since(top, "nothing above"),
+            "a squash above the newest entry records nothing"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["add KEEP"],
+            "a squash above the newest entry records nothing and changes nothing"
+        );
     }
 
     #[test]

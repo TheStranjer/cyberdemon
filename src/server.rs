@@ -40,6 +40,7 @@ impl Cyberdemon {
     fn router() -> ToolRouter<Self> {
         let mut router = Self::meta_router();
         router.merge(Self::assets_router());
+        router.merge(Self::batch_router());
         router.merge(Self::audio_router());
         router.merge(Self::convert_router());
         router.merge(Self::defs_router());
@@ -70,6 +71,14 @@ impl Cyberdemon {
     #[inline]
     pub fn state(&self) -> &AppState {
         &self.state
+    }
+
+    /// The composed tool router, for the one tool that runs the others
+    /// (`run_batch`).
+    #[must_use]
+    #[inline]
+    pub(crate) const fn tool_router(&self) -> &ToolRouter<Self> {
+        &self.tool_router
     }
 }
 

@@ -8,11 +8,13 @@
 //! plus the name grammar for a sprite rotation - and decode what they
 //! find: raw `Doom` flats and column/post patches, or the `PNG` form ports
 //! also carry, quantized against `PLAYPAL` entry 0 with alpha transparency
-//! and with the drawing offsets taken from a `grAb` chunk. [`lump_bytes`]
-//! is the same name lookup for a tool that reads a lump of any kind. The
-//! image tools of [`crate::tools::graphics`] publish through these; the
-//! renderer and the texture compositor read pictures through them too, so
-//! name resolution is written once.
+//! and with the drawing offsets taken from a `grAb` chunk. [`load_texture`]
+//! composites a `TEXTURE1`/`TEXTURE2` record out of those patches the way
+//! the engine's column cache does. [`lump_bytes`] is the same name lookup
+//! for a tool that reads a lump of any kind. The image tools of
+//! [`crate::tools::graphics`] publish through these, and
+//! [`crate::tools::assets`] dispatches to all of them, so name resolution
+//! is written once.
 
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, is_png};
@@ -26,8 +28,10 @@ use crate::gfx::sprite_name::parse_sprite_name;
 use crate::session::{Scope, Session};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::palette::load_palette;
+use crate::tools::textures::TextureSet;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
+use crate::wad::textures::{PatchRef, TextureDef};
 
 /// The `PLAYPAL` entry `PNG` graphics are quantized to: ports store such
 /// a picture's colours in the normal palette, and a call's own `palette`
@@ -37,6 +41,9 @@ const PNG_PALETTE: usize = 0_usize;
 const NO_OFFSETS: GrabOffsets = (0_i32, 0_i32);
 /// The sprite rotation every frame's single all-angles image serves.
 const ALL_ANGLES: u8 = 0_u8;
+/// Longest texture edge [`load_texture`] composites, matching the patch
+/// dimensions [`crate::wad::classify`] accepts as plausible.
+const MAX_TEXTURE_DIM: u32 = 4096_u32;
 /// Where [`load_patch`] looks: the patches region first, then any loose
 /// lump outside the flats and sprites regions.
 const PATCH_PLACES: [Place; 2] = [Place::In(Namespace::Patches), Place::Loose];
@@ -246,6 +253,145 @@ pub(in crate::tools) fn load_sprite_lump(
     decode_patch_bytes(session, &row.lump.data)
 }
 
+/// The indexed pixels of the composite texture `name`: the patches of its
+/// `TEXTURE1` or `TEXTURE2` record, in record order, drawn onto a canvas of
+/// the record's size.
+///
+/// Mappatch origins follow [`PatchRef`]: `x` from the texture's left edge,
+/// wrapped modulo its width so a patch hanging off one side reappears on the
+/// other, and `y` from its top edge, clipped at both ends. Later mappatches
+/// paint over earlier ones and only their opaque pixels are drawn, exactly
+/// as the engine's texture column cache does; each component is read with
+/// [`load_patch`]'s lookup rules. A texture record has no drawing offsets of
+/// its own, so the result carries none either.
+///
+/// # Errors
+///
+/// [`TextureSet::load`]' errors for a malformed `PNAMES` or texture lump;
+/// [`CyberError::NotFound`] when no definition carries `name`, when a
+/// mappatch refers to a `PNAMES` entry that does not exist, or when that
+/// entry names no lump; [`decode_patch_bytes`]' errors for a component that
+/// is not a picture; [`CyberError::LimitExceeded`] for a record with an
+/// implausible edge and [`IndexedImage::new`]' errors for a size that cannot
+/// be represented.
+pub(in crate::tools) fn load_texture(
+    session: &Session,
+    name: LumpName,
+) -> Result<IndexedImage, CyberError> {
+    let set = TextureSet::load(session)?;
+    let text = name.to_string();
+    let (def, _lump) = set
+        .find(&text)
+        .ok_or_else(|| not_found("texture", "list_textures", name))?;
+    let mut canvas = blank_canvas(def)?;
+    for reference in &def.patches {
+        let component = component_patch(session, &set, *reference)?;
+        stamp(&mut canvas, &component.image, (reference.x, reference.y));
+    }
+    Ok(canvas)
+}
+
+/// The empty canvas one texture record describes: every pixel a hole, so a
+/// texture whose patches leave gaps stays transparent there.
+///
+/// # Errors
+///
+/// [`CyberError::LimitExceeded`] for a record edge outside
+/// `1..=MAX_TEXTURE_DIM`; [`IndexedImage::new`]' errors for a size it
+/// cannot hold.
+fn blank_canvas(def: &TextureDef) -> Result<IndexedImage, CyberError> {
+    let (width, height) = (u32::from(def.width), u32::from(def.height));
+    let edges = 1_u32..=MAX_TEXTURE_DIM;
+    if !(edges.contains(&width) && edges.contains(&height)) {
+        return Err(CyberError::LimitExceeded(format!(
+            "texture {} is {width}x{height}, and an edge outside 1..={MAX_TEXTURE_DIM} is not \
+             composited",
+            def.name
+        )));
+    }
+    let pixels = usize::try_from(width)
+        .unwrap_or(0_usize)
+        .checked_mul(usize::try_from(height).unwrap_or(0_usize))
+        .unwrap_or(0_usize);
+    IndexedImage::new(width, height, vec![0_u8; pixels], vec![false; pixels])
+}
+
+/// The picture one mappatch points at: its `PNAMES` entry, resolved as a
+/// patch.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] when `PNAMES` has no such index or its name is
+/// not a usable lump name; [`load_patch`]' errors when no lump of that name
+/// holds a picture.
+fn component_patch(
+    session: &Session,
+    set: &TextureSet,
+    reference: PatchRef,
+) -> Result<Patch, CyberError> {
+    let index = usize::from(reference.patch);
+    let text = set.pnames().get(index).ok_or_else(|| unnamed(index))?;
+    let named = LumpName::parse(text)?;
+    load_patch(session, named)
+}
+
+/// The error for a mappatch index the merged `PNAMES` does not hold.
+fn unnamed(index: usize) -> CyberError {
+    CyberError::NotFound(format!(
+        "a texture mappatch refers to PNAMES index {index}, which the merged PNAMES has no entry \
+         for; list_pnames shows the index and edit_pnames adds names"
+    ))
+}
+
+/// Paints `patch` onto `target` with its top-left corner at `origin`:
+/// opaque pixels only, `x` wrapped into the target's width and rows outside
+/// it dropped.
+fn stamp(target: &mut IndexedImage, patch: &IndexedImage, origin: (i16, i16)) {
+    for row in 0..patch.height {
+        stamp_row(target, patch, origin, row);
+    }
+}
+
+/// Paints source `row` of `patch` onto `target` one place over: a row that
+/// falls outside the target's height is dropped, a `None` from
+/// [`IndexedImage::set`] is the same happening to a column.
+fn stamp_row(target: &mut IndexedImage, patch: &IndexedImage, origin: (i16, i16), row: u32) {
+    let Some(y) = shifted(row, origin.1) else {
+        return;
+    };
+    for column in 0..patch.width {
+        let painted = patch.get(column, row).filter(|pair| pair.1);
+        let Some((index, true)) = painted else {
+            continue;
+        };
+        let x = wrapped(column, origin.0, target.width);
+        target.set(x, y, (index, true));
+    }
+}
+
+/// The target row of source row `row` placed at `offset`, or `None` when it
+/// falls outside every image.
+fn shifted(row: u32, offset: i16) -> Option<u32> {
+    let placed = i32::try_from(row).ok()?.checked_add(i32::from(offset))?;
+    u32::try_from(placed).ok()
+}
+
+/// The target column of source column `column` placed at `offset` and
+/// wrapped into `0..width`; `0` for a width nothing can wrap by, which
+/// [`IndexedImage::set`] then drops as out of bounds.
+fn wrapped(column: u32, offset: i16, width: u32) -> u32 {
+    let Some(edge) = i32::try_from(width).ok().filter(|wide| *wide > 0_i32) else {
+        return 0_u32;
+    };
+    let step = i32::try_from(column)
+        .ok()
+        .and_then(|low| low.checked_add(i32::from(offset)));
+    let Some(placed) = step else {
+        return 0_u32;
+    };
+    u32::try_from(placed.rem_euclid(edge)).unwrap_or(0_u32)
+}
+
 /// One resolved sprite image.
 #[derive(Debug)]
 pub(in crate::tools) struct Sprite {
@@ -363,7 +509,10 @@ fn clamp_offset(value: i32) -> i16 {
 ///
 /// [`decode_flat`]' [`CyberError::Format`] for a raw lump of an
 /// unsupported size; [`quantize_png`]' errors for a `PNG`.
-fn decode_flat_bytes(session: &Session, data: &[u8]) -> Result<IndexedImage, CyberError> {
+pub(in crate::tools) fn decode_flat_bytes(
+    session: &Session,
+    data: &[u8],
+) -> Result<IndexedImage, CyberError> {
     if is_png(data) {
         return quantize_png(session, data);
     }
@@ -379,7 +528,10 @@ fn decode_flat_bytes(session: &Session, data: &[u8]) -> Result<IndexedImage, Cyb
 /// [`decode_patch`]' [`CyberError::Format`] for `Doom` bytes that are
 /// corrupt; [`quantize_png`]' errors for a `PNG`; [`read_grab`]'
 /// [`CyberError::Format`] for a chunk stream that does not parse.
-fn decode_patch_bytes(session: &Session, data: &[u8]) -> Result<Patch, CyberError> {
+pub(in crate::tools) fn decode_patch_bytes(
+    session: &Session,
+    data: &[u8],
+) -> Result<Patch, CyberError> {
     if !is_png(data) {
         return decode_patch(data);
     }
@@ -441,8 +593,8 @@ mod tests {
 
     use super::{
         Place, Request, Serving, clamp_offset, decode_patch_bytes, find_rotation, load_flat,
-        load_patch, load_sprite, load_sprite_lump, locate, lump_bytes, merged_rows, mirror_patch,
-        not_found, sprite_rows,
+        load_patch, load_sprite, load_sprite_lump, load_texture, locate, lump_bytes, merged_rows,
+        mirror_patch, not_found, sprite_rows,
     };
     use crate::error::CyberError;
     use crate::gfx::codec::encode_png;
@@ -453,6 +605,9 @@ mod tests {
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
     use crate::wad::name::LumpName;
+    use crate::wad::textures::{
+        PatchRef, TextureDef, TextureLayout, TextureLump, write_pnames, write_texture_lump,
+    };
 
     /// A parsed fixture name.
     fn name(text: &str) -> LumpName {
@@ -848,5 +1003,125 @@ mod tests {
             missing.to_string().contains("list_sprites"),
             "the message names the listing: {missing}"
         );
+    }
+
+    /// One mappatch of the fixture texture.
+    fn mappatch(patch: u16, x: i16, y: i16) -> PatchRef {
+        PatchRef { patch, x, y }
+    }
+
+    /// A `WALL1` record of a shape whose mappatches are `patches`.
+    fn record(width: u16, height: u16, patches: Vec<PatchRef>) -> TextureDef {
+        TextureDef {
+            name: "WALL1".to_owned(),
+            flags_raw: 0,
+            width,
+            height,
+            patches,
+        }
+    }
+
+    /// The fixture session plus `PNAMES` over `names`, one `TEXTURE1` record
+    /// and a 2x2 `DETAIL` patch: the archive `load_texture` reads.
+    fn texture_session(names: &[&str], def: TextureDef) -> Session {
+        let owned: Vec<String> = names.iter().map(|text| (*text).to_owned()).collect();
+        let table = TextureLump {
+            layout: TextureLayout::Doom,
+            textures: vec![def],
+        };
+        let mut extra = vec![
+            lump(
+                "TEXTURE1",
+                write_texture_lump(&table).expect("test records are valid"),
+            ),
+            lump("DETAIL", doom_patch(2, 2, (0, 0), 0x22)),
+        ];
+        if !owned.is_empty() {
+            extra.insert(
+                0,
+                lump(
+                    "PNAMES",
+                    write_pnames(&owned).expect("test names are valid"),
+                ),
+            );
+        }
+        with_extra(extra)
+    }
+
+    /// The palette index of one pixel of a composite.
+    fn index_at(image: &IndexedImage, x: u32, y: u32) -> u8 {
+        image.get(x, y).expect("test composites hold pixels").0
+    }
+
+    #[test]
+    fn composites_mappatches_in_record_order() {
+        let session = texture_session(
+            &["WALLP1", "DETAIL"],
+            record(4, 4, vec![mappatch(0, 0, 0), mappatch(1, 1, 1)]),
+        );
+        let image = load_texture(&session, name("WALL1")).expect("the fixture composites");
+        assert_eq!((image.width, image.height), (4, 4), "the record's canvas");
+        assert_eq!(index_at(&image, 0, 0), 0x11, "only the base patch");
+        assert_eq!(index_at(&image, 1, 1), 0x22, "the later patch wins");
+        assert_eq!(index_at(&image, 2, 2), 0x22, "and covers its own shape");
+        assert_eq!(index_at(&image, 3, 3), 0x11, "outside its corners");
+    }
+
+    #[test]
+    fn places_components_from_the_top_left_and_wraps_the_columns() {
+        let session = texture_session(
+            &["WALLP1", "DETAIL"],
+            record(4, 4, vec![mappatch(0, 0, 0), mappatch(1, 3, 0)]),
+        );
+        let image = load_texture(&session, name("WALL1")).expect("an offset composites");
+        assert_eq!(index_at(&image, 3, 0), 0x22, "the column that fits");
+        assert_eq!(index_at(&image, 0, 0), 0x22, "the column wrapped around");
+        assert_eq!(index_at(&image, 1, 0), 0x11, "a column it never reaches");
+        assert_eq!(index_at(&image, 3, 2), 0x11, "rows are not wrapped");
+    }
+
+    #[test]
+    fn drops_the_part_of_a_component_outside_the_canvas() {
+        let session = texture_session(&["DETAIL"], record(4, 4, vec![mappatch(0, 3, 3)]));
+        let image = load_texture(&session, name("WALL1")).expect("a corner composites");
+        assert_eq!(image.get(3, 3), Some((0x22, true)), "the pixel inside");
+        assert_eq!(image.get(0, 0), Some((0, false)), "the rest is a hole");
+    }
+
+    #[test]
+    fn load_texture_reports_every_piece_that_is_missing() {
+        let session = texture_session(&["WALLP1"], record(4, 4, vec![mappatch(0, 0, 0)]));
+        let absent = load_texture(&session, name("NOPE")).expect_err("no such texture");
+        assert_eq!(code(&absent), "not_found", "no record code");
+        assert!(
+            absent.to_string().contains("list_textures"),
+            "the message names the listing: {absent}"
+        );
+
+        let dangling = texture_session(&[], record(4, 4, vec![mappatch(3, 0, 0)]));
+        let no_entry = load_texture(&dangling, name("WALL1")).expect_err("a name table is missing");
+        assert_eq!(code(&no_entry), "not_found", "no PNAMES entry code");
+        assert!(
+            no_entry.to_string().contains("list_pnames"),
+            "the message names the listing: {no_entry}"
+        );
+
+        let junk = texture_session(&["JUNK"], record(4, 4, vec![mappatch(0, 0, 0)]));
+        let no_picture = load_texture(&junk, name("WALL1")).expect_err("no picture inside");
+        assert_eq!(
+            code(&no_picture),
+            "format_error",
+            "a component that is not a patch"
+        );
+    }
+
+    #[test]
+    fn load_texture_refuses_an_implausible_record() {
+        for edge in [0_u16, 8192_u16] {
+            let session = texture_session(&["WALLP1"], record(edge, 4, vec![mappatch(0, 0, 0)]));
+            let error = load_texture(&session, name("WALL1"))
+                .expect_err("an edge outside 1..=4096 is not drawn");
+            assert_eq!(code(&error), "limit_exceeded", "an implausible size code");
+        }
     }
 }

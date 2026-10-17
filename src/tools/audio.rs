@@ -381,7 +381,7 @@ async fn import(
 }
 
 /// Sample width of the generated `WAV` files unless `bits` says otherwise.
-const DEFAULT_BITS: u16 = 16_u16;
+pub(in crate::tools) const DEFAULT_BITS: u16 = 16_u16;
 
 /// Arguments for [`Cyberdemon::preview_sound`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -452,7 +452,7 @@ fn parse_bits(value: Option<u16>) -> Result<u16, CyberError> {
 }
 
 /// Whether a classification names a sound [`sound_to_playable`] converts.
-const fn is_sound_kind(kind: LumpKind) -> bool {
+pub(in crate::tools) const fn is_sound_kind(kind: LumpKind) -> bool {
     matches!(
         kind,
         LumpKind::DoomSound

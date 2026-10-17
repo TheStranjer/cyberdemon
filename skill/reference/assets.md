@@ -1,6 +1,7 @@
 # Assets tools
 
-Finding the asset server and tuning the store it keeps.
+Finding the asset server, tuning the store it keeps, and handing one
+session resource to you as a file you can look at or listen to.
 
 ## `get_asset_server_info`
 
@@ -53,3 +54,71 @@ Finding the asset server and tuning the store it keeps.
   many assets the change dropped (`0` when growing or when it still fits).
 - Errors: `invalid_argument` if `capacity` is outside `1..=10000`; the store
   is then left unchanged.
+
+## `get_asset_url`
+
+- Purpose: one entry point for "give me something to look at or listen to
+  for NAME". It resolves the name, decides what kind of resource the bytes
+  are, converts them with the same code the dedicated tools use and
+  publishes one file on the asset origin. The archives are never modified:
+  a call is a read, not an edit, so nothing lands in the undo history.
+- Arguments:
+  - `name` (string, required): the resource's name, matched as a lump name
+    (1-8 printable ASCII characters, case-insensitive).
+  - `scope` / `namespace` / `occurrence` (optional): the shared lump
+    selector, exactly as `get_lump` takes it (see `reference/lumps.md`).
+    The default `occurrence` is the last, winning match.
+  - `palette` (number, optional, default 0): the `PLAYPAL` entry that
+    colours an indexed picture and the palette swatch.
+  - `prefer` (string, optional, default `"lump"`): what a name that both a
+    lump and a `TEXTURE1`/`TEXTURE2` definition owns means. `"texture"`
+    composites the definition. A texture name no lump carries composites
+    either way. Any other word is `invalid_argument`.
+- What it publishes, in the order the decision is made:
+
+  | The name resolves to | `resolved_as` | File |
+  |---|---|---|
+  | a `TEXTURE1`/`TEXTURE2` definition (`prefer: "texture"`, or a texture with no lump of its name) | `texture` | `PNG` of its `PNAMES` patches drawn on its own canvas, later mappatches over earlier |
+  | a flat, or any lump in the flats region | `flat` | `PNG` of the `PLAYPAL` index plane; a `PNG`-encoded flat is quantized then recoloured |
+  | a patch, a sprite picture, or any bytes with a `Doom` patch header | `patch` or `sprite` | `PNG` with the drawing offsets carried in a `grAb` chunk |
+  | a `PNG`, `JPEG` or `GIF` lump | `image` | the same picture re-encoded as `PNG`, keeping a `PNG`'s `grAb` offsets |
+  | a `DMX`, `PC` speaker, `WAV`, `OGG`, `MP3` or `FLAC` sound lump | `sound` | what `preview_sound` publishes: a `WAV`, or the original container |
+  | a `MUS`, `MIDI` or tracker-module lump | `music` | what `preview_music` publishes: `MIDI` for a `MUS` lump |
+  | `PLAYPAL` | `palette` | the swatch `get_palette` publishes, of the requested entry |
+  | `COLORMAP`, or any lump in the `colormaps` region | `colormap` | a `PNG` one row per light table, one column per palette index, drawn through `PLAYPAL` entry 0 |
+  | anything else | - | `unsupported`, naming `get_lump format=url` as the way out |
+
+  A `COLORMAP` grid always uses entry `0`: the tables map that palette onto
+  its darkened copies, so another entry would show colours no light level
+  ever produced.
+- Returns (structured content):
+
+  ```json
+  {
+    "name": "WALL1", "resolved_as": "texture", "mime": "image/png",
+    "width": 64, "height": 128,
+    "asset": {"url": "http://localhost:PORT/assets/ID/WALL1.png",
+              "filename": "WALL1.png", "mime": "image/png", "size": 386}
+  }
+  ```
+
+  `width` and `height` are present for a picture only; a sound or music
+  file reports no pixel size. `resolved_as` tells you which row of the
+  table matched, so a name you were unsure about answers for itself.
+- Errors: `not_found` when no lump matches and no texture definition carries
+  the name either (the message says so and points at `list_textures`), for
+  a `palette` past the loaded `PLAYPAL`'s last entry, or for a component a
+  texture record needs that is not there; `unsupported` for bytes nothing
+  converts; `format_error` for a payload the chosen converter cannot read;
+  `invalid_argument` for a bad name, `scope`, `namespace` or `prefer`.
+- Example: the four things worth looking at in one map's texture set:
+
+  ```json
+  {"name": "WALL1", "prefer": "texture"}
+  {"name": "FLOOR4", "palette": 2}
+  {"name": "DSPISTOL"}
+  {"name": "D_RUNNIN"}
+  ```
+
+  Fetch each returned `url` to see (or hear) the file.
+

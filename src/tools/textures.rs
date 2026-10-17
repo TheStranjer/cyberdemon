@@ -212,6 +212,15 @@ impl TextureSet {
             })
     }
 
+    /// The merged `PNAMES` names, in index order; empty when the session
+    /// has no `PNAMES` lump, which leaves every texture's patch references
+    /// unresolvable.
+    #[must_use]
+    #[inline]
+    pub fn pnames(&self) -> &[String] {
+        &self.pnames
+    }
+
     /// Every texture of both lumps, in lump order, as listing rows.
     fn texture_rows(&self) -> Vec<TextureRow> {
         let mut rows = Vec::new();

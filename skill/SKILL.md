@@ -144,6 +144,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `add_vertex`             | `reference/vertices.md` |
 | `move_vertex`            | `reference/vertices.md` |
 | `remove_vertex`          | `reference/vertices.md` |
+| `validate_map`           | `reference/validate.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |
@@ -203,7 +204,11 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 ## Typical workflow
 
 `open_iwad` the game archive → `open_wad` your project WAD or `new_wad`
-for a fresh one → edit the working archive → `save_wad`. `get_session_info`
+for a fresh one → edit the working archive → `validate_map` → `save_wad`.
+`validate_map` reads a map's health — dangling references, broken lines,
+missing starts, specials outside the tables — as severity-ranked issues you
+fix with the editing tools before saving (`reference/validate.md`).
+`get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`
 (an empty map block in the working archive; `copy_map` clones an existing

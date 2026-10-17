@@ -204,6 +204,11 @@ src/
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`;
+                  `tools/validate.rs` is the thin `validate_map` group: it
+                  parses `min_severity`/`codes`/`limit`, reads the map and
+                  the session's definitions under one lock and runs the
+                  pure `wad::map::validate` checks, paging and counting the
+                  issues outside them;
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses.
@@ -247,10 +252,15 @@ src/
                   (bounds-derived grid, block-touching linedef lists),
                   `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
-                  bounding boxes, line lengths and sector adjacency) and
+                  bounding boxes, line lengths and sector adjacency),
                   `map/convert.rs` the pure within-flag-family format
                   conversion (`Target`, `convert_map`, `Conversion`) behind
-                  `convert_map_format`.
+                  `convert_map_format`, and `map/validate.rs` +
+                  `map/validate/` the pure map-health checks behind
+                  `validate_map`: `validate.rs` the `Issue`/`Severity`
+                  model and the `CHECKS` pipeline (`references`,
+                  `structure`, `things`, `specials` submodules, one per
+                  check group, each returning `Vec<Issue>`).
 data/
   themes/         Per-game texture-theme TSV tables embedded in the binary
                   (`doom.tsv` also serves DOOM II and undetected sessions):

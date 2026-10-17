@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 95] = [
+    const EXPECTED_TOOLS: [&str; 96] = [
         "add_lump",
         "add_sector",
         "add_sidedef",
@@ -175,6 +175,7 @@ mod tests {
         "set_render_resolution",
         "set_texture_theme",
         "undo",
+        "validate_map",
         "version",
     ];
 

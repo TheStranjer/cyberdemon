@@ -27,7 +27,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
 > (`render_topdown`, `render_minimap`, `set_render_resolution`,
 > `set_render_options`, `get_render_settings`), a `textures` group (`list_textures`,
-> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `themes` group
+> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `themes` group
 > (`get_texture_theme`, `set_texture_theme`, `auto_texture`, `align_textures`) and a `palette` group (`get_palette`, `set_palette`),
 > and defines the structured JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started

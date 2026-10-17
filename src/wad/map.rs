@@ -19,7 +19,10 @@
 //! questions over a decoded map: sector boundaries, point containment,
 //! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
 //! a decoded map in another layout inside one flag family, the pure step
-//! behind `convert_map_format`.
+//! behind `convert_map_format`. [`validate`] runs the pure map-health checks
+//! behind `validate_map`: reference integrity, line structure, thing
+//! presence and special/tag sanity, each returning its [`validate::Issue`]
+//! rows.
 
 pub mod blockmap;
 pub mod build_blockmap;
@@ -35,6 +38,7 @@ pub mod reject;
 pub mod remove;
 pub mod stats;
 pub mod udmf_map;
+pub mod validate;
 
 mod common;
 

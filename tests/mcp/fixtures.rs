@@ -422,6 +422,69 @@ pub fn iwad(dir: &Path) -> PathBuf {
     write_iwad(dir, "iwad-doom2.wad", iwad_lumps(false))
 }
 
+/// The two-room map with its rendering upgrades: room 0's floor on the
+/// two-tone `CHECKER` flat and room 1's ceiling on `F_SKY1`, for the
+/// textured-plane and sky view tests.
+#[must_use]
+#[inline]
+pub fn two_room_textured_map() -> Map {
+    let mut map = two_room_map();
+    map.sectors[0].floor_flat = "CHECKER".to_owned();
+    map.sectors[1].ceiling_flat = "F_SKY1".to_owned();
+    map
+}
+
+/// The `CHECKER` fixture flat: `64x64`, left half palette index 10, right
+/// half index 20.
+fn checker_flat() -> Vec<u8> {
+    let mut data = Vec::new();
+    for _row in 0..64_usize {
+        data.extend_from_slice(&[10_u8; 32]);
+        data.extend_from_slice(&[20_u8; 32]);
+    }
+    data
+}
+
+/// The `SKY1` fixture sky: a `128x128` flat of uniform index 200.
+fn sky_texture() -> Vec<u8> {
+    vec![200_u8; 0x4000]
+}
+
+/// An `IWAD` for the textured-view tests: `MAP01` as
+/// [`two_room_textured_map`], plus the pictures it draws with.
+///
+/// The flat region holds `FLOOR1`, the two-tone `CHECKER`, the `F_SKY1`
+/// stand-in and the uniform `SKY1` sky; the patch region and texture
+/// records dress the walls like the plain fixture `IWAD` does.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn iwad_view_textures(dir: &Path) -> PathBuf {
+    let mut lumps = vec![lump("PLAYPAL", playpal()), lump("COLORMAP", colormap())];
+    let mut map = two_room_textured_map();
+    map.name = parsed("MAP01");
+    lumps.extend(write_doom_map(&map).expect("the fixture map serializes"));
+    lumps.push(marker("F_START"));
+    lumps.push(lump("FLOOR1", vec![1_u8; FLAT_BYTES]));
+    lumps.push(lump("CHECKER", checker_flat()));
+    lumps.push(lump("F_SKY1", vec![66_u8; FLAT_BYTES]));
+    lumps.push(lump("SKY1", sky_texture()));
+    lumps.push(marker("F_END"));
+    lumps.push(marker("P_START"));
+    lumps.push(lump(
+        "WALLP1",
+        patch_with(16, 16, 100_u8, (-2_i16, -14_i16)),
+    ));
+    lumps.push(lump("STEPP1", patch(16, 8, 150_u8)));
+    lumps.push(marker("P_END"));
+    lumps.push(lump("PNAMES", pnames()));
+    lumps.push(lump("TEXTURE1", texture1()));
+    write_iwad(dir, "iwad-view-textures.wad", lumps)
+}
+
 /// The same `IWAD` with a second `FLOOR1` (filled with byte 3) after the
 /// first in the flats region, for the occurrence-selection tests.
 ///

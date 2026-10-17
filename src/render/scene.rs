@@ -83,9 +83,9 @@ pub struct Scene {
     /// The image of every flat the map's sectors name, keyed by name.
     pub flats: BTreeMap<String, IndexedImage>,
     /// The sky image the map's name and the session's game select, drawn
-    /// where a ceiling carries [`Scene::sky_flat`].
+    /// where a ceiling or floor carries [`Scene::sky_flat`].
     pub sky: IndexedImage,
-    /// The ceiling flat name that means "sky": [`SKY_FLAT`].
+    /// The flat name that means "sky": [`SKY_FLAT`].
     pub sky_flat: String,
     /// The settings this scene was built with.
     pub settings: RenderSettings,

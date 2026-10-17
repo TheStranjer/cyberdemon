@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 97] = [
+    const EXPECTED_TOOLS: [&str; 98] = [
         "add_lump",
         "add_sector",
         "add_sidedef",
@@ -90,6 +90,7 @@ mod tests {
         "assemble_map",
         "auto_texture",
         "build_blockmap",
+        "build_nodes",
         "build_reject",
         "build_texture",
         "convert_map_format",

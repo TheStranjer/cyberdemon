@@ -1,10 +1,9 @@
 # Nodes tools
 
 The node-builder output of a map: `get_nodes`, `get_reject` and
-`get_blockmap` read it, `build_blockmap` and `build_reject` rebuild the
-two lumps that need no BSP tree. The `SEGS`/`SSECTORS`/`NODES` tree
-builder is still to come; today you can measure it and rebuild what
-surrounds it.
+`get_blockmap` read it, `build_nodes` rebuilds the
+`SEGS`/`SSECTORS`/`NODES` BSP tree itself, and `build_blockmap` and
+`build_reject` rebuild the two lumps that need no tree.
 
 ## What these lumps are for
 
@@ -50,7 +49,7 @@ default; `"merged"`, `"working"` or `"layer:N"`). `detail` is
 `"summary"` (the default: numbers only) or `"full"`: `full` publishes the
 parsed structure as a JSON asset and attaches
 `"asset": {url, filename, mime, size}` to the result. A missing or empty
-lump never publishes anything. The two builders take `map` the same way
+lump never publishes anything. The three builders take `map` the same way
 and always edit the working archive; they carry no `scope` or `detail`.
 
 ## `get_nodes`
@@ -133,6 +132,46 @@ other — while same-component pairs stay clear. `rejected_pairs` counts
 the set bits written. Only `REJECT` changes (`nodes_invalidated` false);
 an unknown `mode` is `invalid_argument`.
 
+## `build_nodes`
+
+`{map?, variant? ("classic" | "extended" | "gl"), split_cost? (8)}` →
+`{variant, segs, subsectors, nodes, split_vertices, warnings, map,
+nodes_invalidated, copied_to_working}` — one undoable edit that rebuilds
+the map's BSP tree from its current geometry with the in-house builder
+and writes the result. `variant` selects the layout: `"classic"` (the
+default) writes the vanilla three-lump run — 12-byte `SEGS`, 4-byte
+`SSECTORS`, 28-byte `NODES` with the root last — which vanilla `Doom`
+needs to play the map and every port can use. `"extended"` (`ZDoom`
+`XNOD`, fraction-precise split vertices) and `"gl"` (the glBSP `GL_*`
+run) are **not implemented yet** and fail `unsupported`; use
+`"classic"`.
+
+`split_cost` is the builder's judgment knob: what a candidate partition
+is charged per seg it cuts (default `8`, added to the front/back
+imbalance; the cheapest candidate wins, ties to the earliest). Raise it
+to keep segs whole, lower it to prefer cutting.
+
+How the result is measured: `segs`, `subsectors` and `nodes` count the
+records written; `warnings` holds one note per subsector that spans
+several sectors (not a failure — vanilla maps carry such leaves);
+`split_vertices` counts the vertices **appended to `VERTEXES`** because
+a seg endpoint landed between existing ones. Split vertices are
+invisible to every other tool (no linedef ends at them, so
+`reference/vertices.md`'s orphan rules apply) and are stripped
+automatically by the next geometry edit, which invalidates this node run
+anyway. Building nodes is a generated product, not geometry, so
+`nodes_invalidated` is `false` here even though the vertex list grew —
+run `get_nodes` afterwards to see the tree. Undo takes the whole build
+(the lumps, the appended vertices) back as one step.
+
+A map with no linedef sides is `invalid_argument` (give the geometry
+sides first); a region the builder cannot split is `internal` (adjust
+`split_cost` or fix the geometry); values past the vanilla limits — more
+than `65535` vertices, an `i16`/`u16` record field, more than `32767`
+nodes or subsectors — are `limit_exceeded` naming variant `"extended"`
+(which `get_nodes` already reads once that writer lands). Unknown map is
+`not_found`; an unparsable block is `format_error`.
+
 ## Errors
 
 An absent or empty lump is data, never an error. Malformed lumps fail
@@ -141,9 +180,11 @@ number of records, a child or subsector reference that leaves its table,
 a truncated or trailing-magic extended lump, an inflated `ZNOD` over the
 decompression cap, a `BLOCKMAP` offset outside the lump or a blocklist
 without its `0xFFFF` terminator. The message names the lump; the fix is
-`build_blockmap` / `build_reject` for those two lumps (the `SEGS`/
-`SSECTORS`/`NODES` tree builder is still to come) or reading a different
-scope. An unknown `map` is `not_found`; an unparsable `map`, `scope` or
-`detail` is `invalid_argument`; `build_blockmap` on a map with no
-vertices is `invalid_argument` and an oversized grid, linedef index or
-lump is `limit_exceeded`.
+`build_nodes` for the tree lumps, `build_blockmap` / `build_reject` for
+those two, or reading a different scope. An unknown `map` is `not_found`;
+an unparsable `map`, `scope` or `detail` is `invalid_argument`;
+`build_blockmap` on a map with no vertices is `invalid_argument` and an
+oversized grid, linedef index or lump is `limit_exceeded`; `build_nodes`
+on a map with no linedef sides is `invalid_argument`, an unbuilt
+`variant` is `unsupported` and a past-vanilla record limit is
+`limit_exceeded`.

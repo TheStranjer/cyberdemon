@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_vertex_appends_a_point_and_invalidates_the_nodes() {
+    async fn add_vertex_appends_a_point_and_the_nodes_stay_trusted() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
         let result = call(&client, "add_vertex", json!({"x": 128_i32, "y": 128_i32})).await;
@@ -134,8 +134,8 @@ mod tests {
         );
         assert_eq!(
             result["nodes_invalidated"],
-            json!(true),
-            "the vertex block is geometry"
+            json!(false),
+            "no linedef ends at the appended point, so the node builder sees no change"
         );
         let rows = working_vertices(&client, "MAP01").await;
         assert_eq!(rows.len(), 7, "the map holds seven vertices now");
@@ -385,8 +385,8 @@ mod tests {
         assert_eq!(result["map"], json!("MAP01"), "the fragment names the map");
         assert_eq!(
             result["nodes_invalidated"],
-            json!(true),
-            "the vertex block changed"
+            json!(false),
+            "nothing referenced the point, so the node builder sees no change"
         );
         assert_eq!(
             counts(&client, "MAP01", "working").await,

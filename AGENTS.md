@@ -63,7 +63,9 @@ src/
                   `sniff_format` magic detection, 10-minute cap).
   bsp.rs          BSP node builder core: 16.16 `Point`, integer
                   `Partition`, `BuildOptions` and the `build_tree` entry
-                  point. No lump writing, no tools.
+                  point; `bsp::vanilla::to_vanilla` renders a finished
+                  tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record
+                  bytes. No archive I/O, no tools.
   bsp/            Builder internals (no MCP concerns): `bsp/seg.rs`
                   linedef sides to `BuildSeg`s with index validation,
                   `bsp/side.rs` `R_PointOnSide` tests and the tolerant
@@ -71,7 +73,9 @@ src/
                   and seg cutting in i128, `bsp/choose.rs` candidate
                   lines, sampling and split cost, `bsp/tree.rs` the
                   recursion, convexity, bounding boxes, guards and
-                  `BspTree`.
+                  `BspTree`, `bsp/vanilla.rs` the vanilla serialization:
+                  rounded split-vertex reuse/append, the three record
+                  writers and the i16/u16 limit refusals.
   music.rs        Music core module root: re-exports the converter and writer.
   music/          Music building blocks (no MCP concerns): `music/midi_write.rs`
                   the type-0 SMF writer (`MidiWriter`, big-endian chunks,

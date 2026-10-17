@@ -18,7 +18,7 @@ each sector's boundary `linedefs`, `sidedefs` and neighbouring `sectors`.
 The sector count is part of the geometry the node lumps were built from:
 adding or removing sectors reports `nodes_invalidated: true` and empties
 the generated `SEGS`/`SSECTORS`/`NODES`/`REJECT`/`BLOCKMAP` (and drops the
-`GL` run) — run `build_all_nodes` before playing the map in vanilla
+`GL` run) — run `build_nodes` before playing the map in vanilla
 `Doom`. Heights, flats, light, special and tag are sector *properties*:
 editing them keeps the nodes trusted (`nodes_invalidated: false`). Every
 call is one undoable step, and editing a layer-owned map copies the block

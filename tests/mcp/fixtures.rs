@@ -160,6 +160,41 @@ pub fn two_room_map() -> Map {
     }
 }
 
+/// A single-sector L-shaped room: the concave corner makes a node build
+/// cut the bottom wall at `(128, 0)`, one point no vertex sits on, so
+/// `build_nodes` appends exactly one split vertex there.
+#[must_use]
+#[inline]
+pub fn l_room_map() -> Map {
+    let ring: [(i32, i32); 6] = [
+        (0, 256),
+        (128, 256),
+        (128, 128),
+        (256, 128),
+        (256, 0),
+        (0, 0),
+    ];
+    let mut map = Map {
+        name: parsed("MAP01"),
+        format: MapFormat::Doom,
+        things: vec![spawn(1, 64, 128, 0)],
+        sectors: vec![room(0, 128, 180, 0)],
+        sidedefs: vec![side("-", "-", "WALL1", 0)],
+        other: node_lumps(),
+        ..Default::default()
+    };
+    let mut indices: Vec<usize> = Vec::new();
+    for (index, &(x, y)) in ring.iter().enumerate() {
+        map.vertices.push(vertex(x, y));
+        indices.push(index);
+    }
+    let back = indices.iter().skip(1).chain(indices.iter().take(1));
+    for (&from, &to) in indices.iter().zip(back) {
+        map.linedefs.push(solid_line(from, to, 0));
+    }
+    map
+}
+
 /// A map block: the two-room map encoded as binary `Doom` lumps under the
 /// header `text`.
 fn map_block(text: &str) -> Vec<Lump> {
@@ -452,6 +487,23 @@ fn hexen_lumps() -> Vec<Lump> {
 #[inline]
 pub fn iwad_hexen(dir: &Path) -> PathBuf {
     write_iwad(dir, "iwad-hexen.wad", hexen_lumps())
+}
+
+/// A minimal `IWAD` whose only map is the concave [`l_room_map`]: a node
+/// build cuts its bottom wall, appending one split vertex, for the
+/// `build_nodes` tests.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn iwad_l_room(dir: &Path) -> PathBuf {
+    let wad = Wad {
+        kind: WadKind::Iwad,
+        lumps: write_doom_map(&l_room_map()).expect("the L fixture serializes"),
+    };
+    write_wad(dir, "iwad-lroom.wad", &wad)
 }
 
 /// An `IWAD` whose only map is [`two_room_map`] with sidedef 4's sector

@@ -11,12 +11,16 @@
 //! The rule for node invalidation: the generated lumps (`SEGS`,
 //! `SSECTORS`, `NODES`, `REJECT`, `BLOCKMAP`, `ZNODES` and the `GL` run)
 //! only stay trusted while the geometry they were built from is unchanged.
-//! Geometry means the vertex list, each linedef's `(v1, v2, front, back)`
-//! references, each sidedef's sector assignment and the sector count;
-//! everything else (textures, heights, light levels, flags, specials,
+//! Geometry means the vertex list up to the highest index a linedef
+//! references, each linedef's `(v1, v2, front, back)` references, each
+//! sidedef's sector assignment and the sector count; vertices trailing
+//! past the last reference are invisible to a node build (`build_nodes`
+//! appends its split points there), so they stay out of the signature,
+//! and everything else (textures, heights, light levels, flags, specials,
 //! things) is a property edit that keeps the nodes. After a geometry edit
-//! vanilla `Doom` needs `build_all_nodes` before the map plays, while
-//! `ZDoom`-family ports rebuild missing nodes themselves.
+//! vanilla `Doom` needs `build_nodes` before the map plays — which also
+//! strips the stale split vertices, no longer referenced by anything —
+//! while `ZDoom`-family ports rebuild missing nodes themselves.
 
 use crate::error::CyberError;
 use crate::session::MergedLump;
@@ -52,7 +56,9 @@ pub struct MapEditReport {
 /// geometry from either.
 #[derive(PartialEq, Eq)]
 struct Signature {
-    /// Every vertex coordinate, in index order.
+    /// The coordinates of the referenced vertices, in index order: the
+    /// trailing unreferenced ones a node build leaves behind are not
+    /// geometry, and get stripped whenever the nodes go.
     vertices: Vec<(i32, i32)>,
     /// Every linedef's endpoints and side assignments, in index order.
     linedefs: Vec<LineRef>,
@@ -65,7 +71,12 @@ struct Signature {
 /// The geometry signature of `map`.
 fn signature(map: &Map) -> Signature {
     Signature {
-        vertices: map.vertices.iter().map(|v| (v.x, v.y)).collect(),
+        vertices: map
+            .vertices
+            .iter()
+            .take(used_vertices(map))
+            .map(|v| (v.x, v.y))
+            .collect(),
         linedefs: map
             .linedefs
             .iter()
@@ -74,6 +85,26 @@ fn signature(map: &Map) -> Signature {
         sidedefs: map.sidedefs.iter().map(|side| side.sector).collect(),
         sector_count: map.sectors.len(),
     }
+}
+
+/// How many vertices the linedefs reference: one past the highest
+/// endpoint index. Vertices trailing past it are invisible to a node
+/// build (`build_nodes` keeps its split points there, and removal
+/// cascades leave orphans there), so they stay out of the signature.
+fn used_vertices(map: &Map) -> usize {
+    map.linedefs
+        .iter()
+        .flat_map(|line| [line.v1, line.v2])
+        .max()
+        .and_then(|top| top.checked_add(1))
+        .unwrap_or(0_usize)
+}
+
+/// Drops trailing vertices no linedef references: the split points an
+/// earlier `build_nodes` appended belong to its node lumps, which have
+/// just been invalidated.
+fn strip_split_vertices(map: &mut Map) {
+    map.vertices.truncate(used_vertices(map));
 }
 
 /// The working archive's block named `map`, the last of any same-named
@@ -114,8 +145,9 @@ fn clear_node_lumps(model: &mut Map) {
 ///
 /// The block is copied in when `wad` lacks it, decoded, handed to `edit`,
 /// and re-encoded over its own directory range. A changed geometry
-/// signature empties the node lumps and drops the block's `GL` run from
-/// `wad` before the write.
+/// signature empties the node lumps, strips the unreferenced trailing
+/// (split) vertices and drops the block's `GL` run from `wad` before the
+/// write.
 ///
 /// # Errors
 ///
@@ -143,6 +175,7 @@ where
     let nodes_invalidated = before != signature(&model);
     if nodes_invalidated {
         clear_node_lumps(&mut model);
+        strip_split_vertices(&mut model);
         if let Some((start, stop)) = gl {
             wad.lumps.drain(start..stop);
         }
@@ -429,6 +462,65 @@ mod tests {
     /// An edit closure that fails without touching `map`.
     fn failing(_map: &mut Map) -> Result<(), CyberError> {
         Err(CyberError::InvalidArgument("nope".to_owned()))
+    }
+
+    /// An edit closure that appends one unreferenced vertex and writes a
+    /// `SEGS` record over the placeholder, the way `build_nodes` lands
+    /// its split points.
+    fn append_split_vertex(map: &mut Map) -> Result<(), CyberError> {
+        map.vertices.push(vertex(128, 0));
+        let segs = map
+            .other
+            .iter_mut()
+            .find(|lump| lump.name.as_bytes() == b"SEGS")
+            .ok_or_else(|| CyberError::InvalidArgument("the fixture has no SEGS".to_owned()))?;
+        *segs = Lump::new(name("SEGS"), vec![0_u8; 12]);
+        Ok(())
+    }
+
+    /// The payload size of the `other` lump named `text` in the decoded
+    /// working `MAP01` block.
+    fn other_size(session: &Session, text: &str) -> usize {
+        let (map, _) = working_block(session, "MAP01");
+        map.other
+            .iter()
+            .find(|lump| lump.name == name(text))
+            .unwrap_or_else(|| panic!("no {text} in the block"))
+            .size()
+    }
+
+    #[test]
+    fn trailing_unreferenced_vertices_are_not_geometry() {
+        let mut session = base_session(iwad_lumps(MapFormat::Doom));
+        let ((), report) = session
+            .edit_map(name("MAP01"), "split corner", append_split_vertex)
+            .expect("the append lands");
+        assert!(
+            !report.nodes_invalidated,
+            "no linedef points at the appended vertex, so the node builder sees no change"
+        );
+        let (map, _) = working_block(&session, "MAP01");
+        assert_eq!(map.vertices.len(), 5, "the split point stays");
+        assert_eq!(other_size(&session, "SEGS"), 12, "and the run is trusted");
+    }
+
+    #[test]
+    fn a_geometry_edit_strips_the_split_vertices_with_the_nodes() {
+        let mut session = base_session(iwad_lumps(MapFormat::Doom));
+        session
+            .edit_map(name("MAP01"), "split corner", append_split_vertex)
+            .expect("the build-like edit lands");
+        let ((), report) = session
+            .edit_map(name("MAP01"), "move corner", move_vertex)
+            .expect("the move lands");
+        assert!(report.nodes_invalidated, "moving a used vertex is geometry");
+        let (map, _) = working_block(&session, "MAP01");
+        assert_eq!(
+            map.vertices.len(),
+            4,
+            "the stale split point went with the nodes"
+        );
+        assert_eq!(other_size(&session, "SEGS"), 0, "and the run emptied");
     }
 
     #[test]

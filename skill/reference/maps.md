@@ -52,13 +52,15 @@ all share one contract, and each result carries the fragment
 - Every call is **one undo step**. `undo` takes back a single edit (the
   first-edit copy included) and a call that fails — bad argument, broken
   map — changes nothing at all.
-- **Geometry edits invalidate nodes.** When an edit changes the vertex
-  list, a linedef's `(v1, v2, front, back)` references, a sidedef's
-  sector or the sector count, the generated node data is dropped:
-  `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` are emptied but
-  kept in place, `ZNODES` is removed and the map's `GL_` node run is
-  deleted. The result says `nodes_invalidated: true`; run
-  `build_all_nodes` before playing the map in vanilla `Doom` —
+- **Geometry edits invalidate nodes.** When an edit changes a vertex a
+  linedef ends at, a linedef's `(v1, v2, front, back)` references, a
+  sidedef's sector or the sector count, the generated node data is
+  dropped: `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` are
+  emptied but kept in place, `ZNODES` is removed, trailing vertices no
+  linedef references (the split points a `build_nodes` appended) are
+  stripped, and the map's `GL_` node run is deleted. The result says
+  `nodes_invalidated: true`; run
+  `build_nodes` before playing the map in vanilla `Doom` —
   `ZDoom`-family ports rebuild missing node data themselves and play
   fine. Property-only edits (textures, heights, light levels, flags,
   specials, things) leave the node lumps untouched.

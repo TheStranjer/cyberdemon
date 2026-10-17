@@ -20,7 +20,7 @@ The sidedef block counts as map geometry for the node lumps: adding or
 removing a sidedef, or changing a sidedef's `sector`, reports
 `nodes_invalidated: true` and empties the generated `SEGS`/`SSECTORS`/
 `NODES`/`REJECT`/`BLOCKMAP` (and drops the `GL` run) — run
-`build_all_nodes` before playing the map in vanilla `Doom`.
+`build_nodes` before playing the map in vanilla `Doom`.
 Texture and offset edits are property edits: the nodes stay trusted
 (`nodes_invalidated: false`). Every call is one undoable step, and
 editing a layer-owned map copies the block in first

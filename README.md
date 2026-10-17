@@ -21,7 +21,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group (`list_maps`, `get_map_lumps`, `get_map_summary`, `assemble_map`, `set_active_map`, `create_map`, `copy_map`, `rename_map`, `remove_map`), an `edit_things` group (`add_thing`, `edit_thing`, `remove_thing`), an `edit_sidedefs` group (`add_sidedef`, `edit_sidedef`, `remove_sidedef`), an `edit_sectors` group (`add_sector`, `edit_sector`, `remove_sector`), an `edit_vertices` group (`add_vertex`, `move_vertex`, `remove_vertex`), a `convert` group (`convert_map_format`), an
 > `audio` group (`import_sound`, `preview_sound`), a `music` group
 > (`import_music`, `preview_music`), a `nodes` group (`get_nodes`, `get_reject`,
-> `get_blockmap`, `build_blockmap`, `build_reject`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
+> `get_blockmap`, `build_nodes`, `build_blockmap`, `build_reject`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
 > `edit_decorate`, `edit_zscript`), a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
@@ -65,7 +65,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > drawing goes through `geom::arrange`) and a pure float-free BSP node
 > builder (`src/bsp*`: segs from linedef sides, 16.16/i128 side tests,
 > splitting and cost-chosen partition lines, a tree of convex subsectors
-> with integer bounding boxes) and a pure raster sketch measurer
+> with integer bounding boxes, and the vanilla SEGS/SSECTORS/NODES writer behind `build_nodes`) and a pure raster sketch measurer
 > (`src/sketch*`: ink mask, stroke width, morphological closing,
 > deterministic components, enclosed regions, marks and wall gaps, and
 > regions grown to wall centrelines then traced, simplified, straightened

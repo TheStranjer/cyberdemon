@@ -8,20 +8,23 @@
 //! the segs that cross), and stops when the segs of a child form a convex
 //! region, a subsector.
 //!
-//! Nothing here touches lump formats or `MCP` types, and no float is
+//! Nothing here touches archives, sessions or `MCP` types, and no float is
 //! involved: coordinates are `Doom` 16.16 fixed values held in `i64`
 //! ([`Point`]), partitions are whole-unit [`Partition`] lines, and every
 //! crossing test and product is computed in `i128`.
-//! [`build_tree`] is the entry point.
+//! [`build_tree`] is the entry point; [`vanilla::to_vanilla`] renders a
+//! finished tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record bytes.
 
 pub mod choose;
 pub mod seg;
 pub mod side;
 pub mod split;
 pub mod tree;
+pub mod vanilla;
 
 pub use seg::BuildSeg;
 pub use tree::{BBox, BspTree, BuiltNode, Child, build_tree};
+pub use vanilla::{VanillaNodes, to_vanilla};
 
 use crate::wad::map::Vertex;
 

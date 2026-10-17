@@ -2,20 +2,24 @@
 //! [`Cyberdemon::get_blockmap`], the inspection side of the node-builder
 //! output lumps parsed by [`crate::wad::map::nodes`],
 //! [`crate::wad::map::reject`] and [`crate::wad::map::blockmap`], plus the
-//! builders [`Cyberdemon::build_blockmap`] and
-//! [`Cyberdemon::build_reject`], which recompute the `BLOCKMAP` and
-//! `REJECT` lumps from the map's current geometry as single undoable
-//! edits (see [`crate::wad::map::build_blockmap`] and
-//! [`crate::wad::map::build_reject`]).
+//! builders [`Cyberdemon::build_blockmap`],
+//! [`Cyberdemon::build_reject`] and [`Cyberdemon::build_nodes`], which
+//! recompute the `BLOCKMAP`, the `REJECT` and the `SEGS`/`SSECTORS`/`NODES`
+//! tree from the map's current geometry as single undoable edits (see
+//! [`crate::wad::map::build_blockmap`], [`crate::wad::map::build_reject`]
+//! and [`crate::bsp`]).
 //!
 //! All three readers take the usual `map` and `scope` parameters and a
 //! `detail` knob: `summary` (the default) reports measurable numbers only,
 //! `full` additionally publishes the parsed structure as a `JSON` asset,
 //! held back until the session lock is released. Missing or empty lumps
 //! are never errors, they report as absent data; malformed lumps fail with
-//! `format_error`. The two builders take the usual `map` parameter plus
-//! their judgment knob (`compress` / `mode`) and rewrite only their own
-//! lump in the block, so no node data is invalidated.
+//! `format_error`. The two lump builders take the usual `map` parameter
+//! plus their judgment knob (`compress` / `mode`) and rewrite only their
+//! own lump in the block, so no node data is invalidated.
+//! [`Cyberdemon::build_nodes`] writes the whole vanilla run through
+//! [`crate::bsp::to_vanilla`]; its split vertices are appended to
+//! `VERTEXES` and cleaned up again by the next geometry edit.
 
 use alloc::collections::BTreeMap;
 
@@ -28,6 +32,7 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
+use crate::bsp::{BuildOptions, build_tree, to_vanilla};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
@@ -121,6 +126,24 @@ struct BuildRejectParams {
     /// connected components of the sector graph).
     #[serde(default)]
     mode: Option<String>,
+}
+
+/// Arguments for [`Cyberdemon::build_nodes`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BuildNodesParams {
+    /// The map to edit; defaults like [`GetNodesParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// The node layout to write: `"classic"` (the default: the vanilla
+    /// `SEGS`/`SSECTORS`/`NODES` lumps), `"extended"` (`ZDoom` `XNOD`) or
+    /// `"gl"` (the `glBSP` `GL_*` run); the latter two are not
+    /// implemented yet and fail `unsupported`.
+    #[serde(default)]
+    variant: Option<String>,
+    /// Cost added per seg a candidate partition splits (default `8`);
+    /// raise it to avoid splitting segs, lower it to prefer it.
+    #[serde(default)]
+    split_cost: Option<i64>,
 }
 
 /// How much of a result to publish.
@@ -742,6 +765,15 @@ where
 const BLOCKMAP_AFTER: [&[u8]; 4] = [b"REJECT", b"NODES", b"SSECTORS", b"SEGS"];
 /// The canonical neighbours of `REJECT`.
 const REJECT_AFTER: [&[u8]; 3] = [b"NODES", b"SSECTORS", b"SEGS"];
+/// The canonical neighbours of `SEGS` inside [`Map::other`]: nothing in
+/// the side-bag precedes it.
+const SEGS_AFTER: [&[u8]; 0] = [];
+/// The canonical neighbour of `SSECTORS`.
+const SSECTORS_AFTER: [&[u8]; 1] = [b"SEGS"];
+/// The canonical neighbours of `NODES`.
+const NODES_AFTER: [&[u8]; 2] = [b"SSECTORS", b"SEGS"];
+/// The `build_nodes` default for the per-split cost.
+const DEFAULT_SPLIT_COST: i64 = 8_i64;
 
 /// The accepted `mode` text, `zero` being the default.
 ///
@@ -875,6 +907,158 @@ fn reject_build_run(
     })
 }
 
+/// Which node layout [`Cyberdemon::build_nodes`] should write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Variant {
+    /// The vanilla `SEGS`/`SSECTORS`/`NODES` record lumps.
+    Classic,
+    /// `ZDoom`'s extended lump: not implemented yet.
+    Extended,
+    /// The `glBSP` `GL_*` run: not implemented yet.
+    Gl,
+}
+
+impl Variant {
+    /// The accepted `variant` text, `classic` being the default.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] naming the three accepted values.
+    fn parse(text: Option<&str>) -> Result<Self, CyberError> {
+        let lowered = match text {
+            None => return Ok(Self::Classic),
+            Some(given) => given.to_ascii_lowercase(),
+        };
+        match lowered.as_str() {
+            "" | "classic" => Ok(Self::Classic),
+            "extended" => Ok(Self::Extended),
+            "gl" => Ok(Self::Gl),
+            other => Err(CyberError::InvalidArgument(format!(
+                "variant {other:?} is neither \"classic\", \"extended\" nor \"gl\"; \
+                 pass one of those three or leave the parameter out"
+            ))),
+        }
+    }
+
+    /// Refuses the layouts this build cannot write yet.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Unsupported`] for [`Variant::Extended`] and
+    /// [`Variant::Gl`], pointing back at `"classic"`.
+    fn check(self) -> Result<(), CyberError> {
+        let note = match self {
+            Self::Classic => return Ok(()),
+            Self::Extended => "the \"extended\" (ZDoom XNOD) node writer",
+            Self::Gl => "the \"gl\" (glBSP GL_*) node writer",
+        };
+        Err(CyberError::Unsupported(format!(
+            "{note} is not implemented yet: build variant \"classic\", which \
+             vanilla Doom and every ZDoom-family port play"
+        )))
+    }
+}
+
+/// What one classic node build wrote, before the edit fragment joins it.
+#[derive(Debug)]
+struct ClassicBuild {
+    /// Segs stored.
+    segs: usize,
+    /// Subsectors stored.
+    subsectors: usize,
+    /// Interior nodes stored.
+    nodes: usize,
+    /// Vertices appended to `VERTEXES` for seg splits.
+    split_vertices: usize,
+    /// The builder's per-leaf warnings.
+    warnings: Vec<String>,
+}
+
+/// The edit closure of [`Cyberdemon::build_nodes`]: rebuild the tree and
+/// install the three vanilla lumps, appending the split vertices the seg
+/// endpoints need after the map's own.
+fn install_classic_nodes(map: &mut Map, split_cost: i64) -> Result<ClassicBuild, CyberError> {
+    let tree = build_tree(
+        map,
+        BuildOptions {
+            split_cost,
+            ..BuildOptions::default()
+        },
+    )?;
+    let run = to_vanilla(map, &tree)?;
+    let built = ClassicBuild {
+        segs: tree.segs.len(),
+        subsectors: tree.subsectors.len(),
+        nodes: tree.nodes.len(),
+        split_vertices: run.new_vertices.len(),
+        warnings: tree.warnings,
+    };
+    map.vertices.extend(run.new_vertices);
+    install_lump(
+        map,
+        LumpName::from_raw(*b"SEGS\0\0\0\0"),
+        &run.segs,
+        &SEGS_AFTER,
+    );
+    install_lump(
+        map,
+        LumpName::from_raw(*b"SSECTORS"),
+        &run.ssectors,
+        &SSECTORS_AFTER,
+    );
+    install_lump(
+        map,
+        LumpName::from_raw(*b"NODES\0\0\0"),
+        &run.nodes,
+        &NODES_AFTER,
+    );
+    Ok(built)
+}
+
+/// Structured result of [`Cyberdemon::build_nodes`].
+#[derive(Debug, Serialize)]
+struct NodesBuildReport {
+    /// The layout that was built (`"classic"` until the others land).
+    variant: &'static str,
+    /// Segs written.
+    segs: usize,
+    /// Subsectors written.
+    subsectors: usize,
+    /// Interior nodes written; `0` when the whole map is one subsector.
+    nodes: usize,
+    /// Vertices appended to `VERTEXES` for seg splits.
+    split_vertices: usize,
+    /// The builder's warnings, one per subsector spanning several sectors.
+    warnings: Vec<String>,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// `build_nodes`' work: resolve the variant, the map and the cost, run
+/// the one edit step.
+fn nodes_build_run(
+    session: &mut Session,
+    args: &BuildNodesParams,
+) -> Result<NodesBuildReport, CyberError> {
+    let variant = Variant::parse(args.variant.as_deref())?;
+    variant.check()?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let split_cost = args.split_cost.unwrap_or(DEFAULT_SPLIT_COST);
+    let (built, report) = session.edit_map(name, "build nodes", move |map| {
+        install_classic_nodes(map, split_cost)
+    })?;
+    Ok(NodesBuildReport {
+        variant: "classic",
+        segs: built.segs,
+        subsectors: built.subsectors,
+        nodes: built.nodes,
+        split_vertices: built.split_vertices,
+        warnings: built.warnings,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// Hand a builder's outcome to the client as the documented result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -967,6 +1151,20 @@ impl Cyberdemon {
                 .with_session(|session| reject_build_run(session, &args)),
         )
     }
+
+    /// Rebuilds a map's BSP node tree (SEGS/SSECTORS/NODES).
+    #[tool(
+        description = "Rebuilds a map's BSP node tree from its current geometry and writes it as the vanilla SEGS/SSECTORS/NODES lumps, as a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). variant selects the layout: \"classic\" (the default) writes the vanilla three-lump run every engine and port plays; \"extended\" (ZDoom XNOD, fraction-precise split vertices) and \"gl\" (glBSP GL_* run) are not implemented yet and fail unsupported. split_cost (default 8) is what the builder charges per seg a candidate partition splits: raise it to avoid cutting segs, lower it to prefer cutting over imbalance. The builder turns every linedef side into a seg, recursively splits the map on partition lines taken from the segs, and stops at convex subsectors; seg endpoints that fall between vertices append new vertices after the existing ones (split_vertices counts them): they are invisible to every other tool and the next geometry edit strips them when it invalidates the nodes. Building is a generated product, not geometry, so nodes_invalidated reports false; any later geometry edit (move_vertex, add_sector, ...) empties these lumps and you build again. Returns {variant, segs, subsectors, nodes (0 when the whole map is one subsector), split_vertices, warnings (one note per subsector spanning several sectors), map, nodes_invalidated, copied_to_working}. A map with no linedef sides is invalid_argument; past the vanilla limits (65535 vertices, an i16/u16 field, 32767 nodes or subsectors) is limit_exceeded naming variant \"extended\"; a stuck region is internal. Unknown map is not_found, an unparsable block is format_error. Run get_nodes to inspect the result; see skill/reference/nodes.md."
+    )]
+    fn build_nodes(
+        &self,
+        Parameters(args): Parameters<BuildNodesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| nodes_build_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -974,17 +1172,20 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        BuildBlockmapParams, BuildRejectParams, Detail, GlInfo, NodeData, RejectMode, Request,
-        blockmap_build_run, blockmap_summary, empty_blockmap_report, gl_info, install_lump,
-        json_bytes, lump_magic, nodes_asset_body, nodes_outcome, parse_detail, parse_mode,
-        parse_scope, read_node_data, reject_build_run,
+        BuildBlockmapParams, BuildNodesParams, BuildRejectParams, Detail, GlInfo, NodeData,
+        RejectMode, Request, Variant, blockmap_build_run, blockmap_summary, empty_blockmap_report,
+        find_lump, gl_info, install_lump, json_bytes, lump_magic, nodes_asset_body,
+        nodes_build_run, nodes_outcome, parse_detail, parse_mode, parse_scope, read_node_data,
+        reject_build_run,
     };
+    use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::bytes::Writer;
     use crate::wad::classify::analyze;
     use crate::wad::map::Blockmap;
     use crate::wad::map::Map;
+    use crate::wad::map::{Linedef, Sector, Sidedef, Vertex, read_map, write_map};
     use crate::wad::name::LumpName;
     use serde_json::json;
 
@@ -1701,5 +1902,231 @@ mod tests {
         let mut session = Session::default();
         session.set_iwad(base(lumps));
         session
+    }
+
+    /// A single-sector L-shaped room as the map model, ready to encode.
+    fn l_room_model() -> Map {
+        let ring: [(i32, i32); 6] = [
+            (0, 256),
+            (128, 256),
+            (128, 128),
+            (256, 128),
+            (256, 0),
+            (0, 0),
+        ];
+        let mut map = Map {
+            name: name("MAP01"),
+            ..Map::default()
+        };
+        map.sectors.push(Sector::default());
+        map.sidedefs.push(Sidedef {
+            sector: 0,
+            ..Sidedef::default()
+        });
+        let mut indices: Vec<usize> = Vec::new();
+        for &(x, y) in &ring {
+            map.vertices.push(Vertex {
+                x,
+                y,
+                ..Default::default()
+            });
+            indices.push(map.vertices.len().checked_sub(1).expect("just pushed"));
+        }
+        let back = indices.iter().skip(1).chain(indices.iter().take(1));
+        for (&from, &to) in indices.iter().zip(back) {
+            map.linedefs.push(Linedef {
+                v1: from,
+                v2: to,
+                flags: 1,
+                front: Some(0),
+                ..Default::default()
+            });
+        }
+        map
+    }
+
+    /// A session holding one decodable L-shaped room as `MAP01`.
+    fn l_room_session() -> Session {
+        let lumps = write_map(&l_room_model()).expect("the L fixture encodes");
+        session_over(lumps)
+    }
+
+    /// A session holding the L-shaped room with every line's sides cut: a
+    /// map that yields no segs.
+    fn sidedless_session() -> Session {
+        let mut map = l_room_model();
+        for line in &mut map.linedefs {
+            line.front = None;
+            line.back = None;
+        }
+        session_over(write_map(&map).expect("the sidedless fixture encodes"))
+    }
+
+    /// `build_nodes` arguments from optional pieces.
+    fn build_params(
+        map: Option<&str>,
+        variant: Option<&str>,
+        split_cost: Option<i64>,
+    ) -> BuildNodesParams {
+        BuildNodesParams {
+            map: map.map(str::to_owned),
+            variant: variant.map(str::to_owned),
+            split_cost,
+        }
+    }
+
+    /// The working archive's decoded `MAP01` block.
+    fn working_map(session: &Session) -> Map {
+        let analysis = analyze(&session.working().lumps);
+        let block = analysis
+            .maps
+            .iter()
+            .rev()
+            .find(|block| block.name == name("MAP01"))
+            .expect("the block was copied in");
+        read_map(&session.working().lumps, block).expect("the edited block decodes")
+    }
+
+    #[test]
+    fn variant_names_parse_default_and_refuse() {
+        assert_eq!(Variant::parse(None).expect("absent"), Variant::Classic);
+        assert_eq!(
+            Variant::parse(Some("Classic")).expect("classic"),
+            Variant::Classic
+        );
+        assert_eq!(
+            Variant::parse(Some("extended")).expect("extended"),
+            Variant::Extended
+        );
+        assert_eq!(Variant::parse(Some("GL")).expect("gl"), Variant::Gl);
+        assert!(Variant::Classic.check().is_ok(), "classic is implemented");
+        for variant in [Variant::Extended, Variant::Gl] {
+            let error = variant.check().expect_err("not implemented yet");
+            assert_eq!(error.code(), "unsupported", "{variant:?} refuses");
+            assert!(
+                error.to_string().contains("classic"),
+                "the hint names classic: {error}"
+            );
+        }
+        let error = Variant::parse(Some("znodes")).expect_err("not a variant");
+        assert_eq!(error.code(), "invalid_argument", "bad variant code");
+        let message = error.to_string();
+        assert!(
+            message.contains("classic") && message.contains("extended") && message.contains("gl"),
+            "the message names all three: {message}"
+        );
+    }
+
+    #[test]
+    fn nodes_build_run_writes_the_vanilla_run_and_is_undoable() {
+        let mut session = l_room_session();
+        let report = nodes_build_run(&mut session, &build_params(None, None, None))
+            .expect("the L room builds");
+        assert_eq!(report.variant, "classic", "the echo");
+        assert_eq!(report.segs, 7, "six sides plus the cut piece");
+        assert_eq!(report.subsectors, 2, "the concave corner needs two leaves");
+        assert_eq!(report.nodes, 1, "one cut suffices");
+        assert_eq!(report.split_vertices, 1, "the bottom wall splits at x=128");
+        assert!(report.warnings.is_empty(), "one sector only");
+        assert_eq!(
+            report.edit.get("map"),
+            Some(&json!("MAP01")),
+            "the fragment"
+        );
+        assert_eq!(
+            report.edit.get("nodes_invalidated"),
+            Some(&json!(false)),
+            "appending split vertices is not a geometry change"
+        );
+        assert_eq!(report.edit.get("copied_to_working"), Some(&json!(true)));
+        assert_eq!(
+            session.undo_labels(),
+            vec!["build nodes".to_owned()],
+            "one step"
+        );
+        let map = working_map(&session);
+        assert_eq!(map.vertices.len(), 7, "the split vertex joined VERTEXES");
+        let run = find_lump(&map.other, b"NODES").expect("NODES kept");
+        assert_eq!(run.size(), 28, "one node record");
+        let segs = find_lump(&map.other, b"SEGS").expect("SEGS kept");
+        assert_eq!(segs.size(), 84, "seven seg records");
+        let again = nodes_build_run(&mut session, &build_params(None, Some("CLASSIC"), None))
+            .expect("a rebuild runs");
+        assert_eq!(
+            again.split_vertices, 0,
+            "the split point is reused, not duplicated"
+        );
+        assert_eq!(again.segs, 7, "the same tree");
+    }
+
+    #[test]
+    fn a_geometry_edit_after_a_build_strips_the_split_vertices() {
+        let mut session = l_room_session();
+        nodes_build_run(&mut session, &build_params(None, None, None)).expect("the L room builds");
+        let ((), moved) = session
+            .edit_map(name("MAP01"), "move corner", |model| {
+                let vertex = model
+                    .vertices
+                    .first_mut()
+                    .ok_or_else(|| CyberError::InvalidArgument("no vertices".to_owned()))?;
+                vertex.x = vertex.x.checked_add(100_i32).expect("the move fits");
+                Ok(())
+            })
+            .expect("the move lands");
+        assert!(moved.nodes_invalidated, "moving a used vertex is geometry");
+        let after = working_map(&session);
+        assert_eq!(
+            after.vertices.len(),
+            6,
+            "the split vertex went with the invalidated nodes"
+        );
+        assert_eq!(
+            find_lump(&after.other, b"NODES")
+                .expect("placeholder kept")
+                .size(),
+            0,
+            "and the run emptied"
+        );
+    }
+
+    #[test]
+    fn split_cost_travels_into_the_build_options() {
+        let mut session = l_room_session();
+        let cheap = nodes_build_run(&mut session, &build_params(None, None, Some(1_i64)))
+            .expect("a cheap split still builds the L");
+        assert_eq!(cheap.segs, 7, "one valid partition either way");
+        assert_eq!(cheap.subsectors, 2, "the same leaves");
+        let mut rerun = l_room_session();
+        let dear = nodes_build_run(&mut rerun, &build_params(Some("map01"), None, Some(64_i64)))
+            .expect("an expensive split still builds the L");
+        assert_eq!(dear.split_vertices, 1, "the cut is still the only choice");
+        assert_eq!(
+            dear.edit.get("map"),
+            Some(&json!("MAP01")),
+            "lowercase resolved"
+        );
+    }
+
+    #[test]
+    fn nodes_build_run_refuses_without_writing_anything() {
+        let mut empty = sidedless_session();
+        let error = nodes_build_run(&mut empty, &build_params(None, None, None))
+            .expect_err("no segs to tree");
+        assert_eq!(error.code(), "invalid_argument", "sidedless map code");
+        assert!(error.to_string().contains("sidedefs"), "the hint: {error}");
+        let mut session = l_room_session();
+        let missing = nodes_build_run(&mut session, &build_params(Some("MAP09"), None, None))
+            .expect_err("no MAP09 anywhere");
+        assert_eq!(missing.code(), "not_found", "unknown map code");
+        for variant in ["gl", "extended"] {
+            let refusal = nodes_build_run(&mut session, &build_params(None, Some(variant), None))
+                .expect_err("the variant is not here yet");
+            assert_eq!(refusal.code(), "unsupported", "{variant} variant code");
+        }
+        let weird = nodes_build_run(&mut session, &build_params(None, Some("znodes"), None))
+            .expect_err("not a variant");
+        assert_eq!(weird.code(), "invalid_argument", "unknown variant code");
+        assert!(session.working().is_empty(), "no refusal wrote anything");
+        assert!(session.undo_labels().is_empty(), "and none was recorded");
     }
 }

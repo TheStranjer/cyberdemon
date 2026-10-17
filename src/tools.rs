@@ -28,6 +28,7 @@ pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;
 pub mod textures;
+pub(crate) mod validate;
 
 use rmcp::model::{CallToolResult, ErrorData};
 use serde::Serialize;

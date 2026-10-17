@@ -1,14 +1,21 @@
 //! Nodes tools: [`Cyberdemon::get_nodes`], [`Cyberdemon::get_reject`] and
 //! [`Cyberdemon::get_blockmap`], the inspection side of the node-builder
 //! output lumps parsed by [`crate::wad::map::nodes`],
-//! [`crate::wad::map::reject`] and [`crate::wad::map::blockmap`].
+//! [`crate::wad::map::reject`] and [`crate::wad::map::blockmap`], plus the
+//! builders [`Cyberdemon::build_blockmap`] and
+//! [`Cyberdemon::build_reject`], which recompute the `BLOCKMAP` and
+//! `REJECT` lumps from the map's current geometry as single undoable
+//! edits (see [`crate::wad::map::build_blockmap`] and
+//! [`crate::wad::map::build_reject`]).
 //!
-//! All three take the usual `map` and `scope` parameters and a `detail`
-//! knob: `summary` (the default) reports measurable numbers only, `full`
-//! additionally publishes the parsed structure as a `JSON` asset, held
-//! back until the session lock is released. Missing or empty lumps are
-//! never errors, they report as absent data; malformed lumps fail with
-//! `format_error`.
+//! All three readers take the usual `map` and `scope` parameters and a
+//! `detail` knob: `summary` (the default) reports measurable numbers only,
+//! `full` additionally publishes the parsed structure as a `JSON` asset,
+//! held back until the session lock is released. Missing or empty lumps
+//! are never errors, they report as absent data; malformed lumps fail with
+//! `format_error`. The two builders take the usual `map` parameter plus
+//! their judgment knob (`compress` / `mode`) and rewrite only their own
+//! lump in the block, so no node data is invalidated.
 
 use alloc::collections::BTreeMap;
 
@@ -17,6 +24,7 @@ use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value};
 
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
@@ -25,9 +33,12 @@ use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::maps::common::{self, Directory};
+use crate::tools::maps::params::edit_result_fragment;
 use crate::tools::{fail, ok};
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapBlock;
+use crate::wad::map::build_blockmap::{self, BlockmapBuild};
+use crate::wad::map::build_reject::{self, RejectBuild, RejectMode};
 use crate::wad::map::nodes::{self, Node, NodesFormat, Seg, Subsector};
 use crate::wad::map::{Blockmap, Map, NodeSet, Reject, read_map};
 use crate::wad::name::LumpName;
@@ -85,6 +96,31 @@ struct GetBlockmapParams {
     /// publishes every block's linedef list as a `JSON` asset.
     #[serde(default)]
     detail: Option<String>,
+}
+
+/// Arguments for [`Cyberdemon::build_blockmap`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BuildBlockmapParams {
+    /// The map to edit; defaults like [`GetNodesParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// Share one copy of identical blocklists (default `true`, the smaller
+    /// lump; `false` writes every block its own list).
+    #[serde(default)]
+    compress: Option<bool>,
+}
+
+/// Arguments for [`Cyberdemon::build_reject`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BuildRejectParams {
+    /// The map to edit; defaults like [`GetNodesParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// `"zero"` (the default: clear the matrix, every sector may see
+    /// every other) or `"components"` (reject sector pairs in different
+    /// connected components of the sector graph).
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 /// How much of a result to publish.
@@ -700,6 +736,156 @@ where
     }
 }
 
+/// The canonical neighbours of the written builder lumps: an absent lump
+/// is inserted after the first of these the block carries (the binary
+/// writers normalise the member order anyway).
+const BLOCKMAP_AFTER: [&[u8]; 4] = [b"REJECT", b"NODES", b"SSECTORS", b"SEGS"];
+/// The canonical neighbours of `REJECT`.
+const REJECT_AFTER: [&[u8]; 3] = [b"NODES", b"SSECTORS", b"SEGS"];
+
+/// The accepted `mode` text, `zero` being the default.
+///
+/// # Errors
+///
+/// [`RejectMode::parse`]'s [`CyberError::InvalidArgument`] for any other
+/// name.
+fn parse_mode(text: Option<&str>) -> Result<RejectMode, CyberError> {
+    text.map_or(Ok(RejectMode::Zero), RejectMode::parse)
+}
+
+/// Replaces the first lump named `name` in `map.other` with `data`, or
+/// inserts it after the last copy of the first canonical neighbour from
+/// `after` the block carries (at the end when it carries none).
+fn install_lump(map: &mut Map, name: LumpName, data: &[u8], after: &[&[u8]]) {
+    let bytes = data.to_vec();
+    if let Some(at) = map.other.iter().position(|lump| lump.name == name) {
+        if let Some(slot) = map.other.get_mut(at) {
+            *slot = Lump::new(name, bytes);
+        }
+        return;
+    }
+    let at = after
+        .iter()
+        .find_map(|wanted| {
+            map.other
+                .iter()
+                .rposition(|lump| lump.name.as_bytes() == *wanted)
+        })
+        .and_then(|seen| seen.checked_add(1))
+        .unwrap_or(map.other.len());
+    map.other.insert(at, Lump::new(name, bytes));
+}
+
+/// `build_blockmap`'s edit step: compute the grid and write its lump.
+fn install_blockmap(map: &mut Map, compress: bool) -> Result<BlockmapBuild, CyberError> {
+    let built = build_blockmap::build(map, compress)?;
+    install_lump(
+        map,
+        LumpName::from_raw(*b"BLOCKMAP"),
+        &built.bytes,
+        &BLOCKMAP_AFTER,
+    );
+    Ok(built)
+}
+
+/// `build_reject`'s edit step: compute the matrix and write its lump.
+fn install_reject(map: &mut Map, mode: RejectMode) -> Result<RejectBuild, CyberError> {
+    let built = build_reject::build(map, mode)?;
+    install_lump(
+        map,
+        LumpName::from_raw(*b"REJECT\0\0"),
+        &built.bytes,
+        &REJECT_AFTER,
+    );
+    Ok(built)
+}
+
+/// Structured result of [`Cyberdemon::build_blockmap`].
+#[derive(Debug, Serialize)]
+struct BlockmapBuildReport {
+    /// Size of the written `BLOCKMAP` lump in bytes.
+    bytes: usize,
+    /// Blocks per row.
+    columns: u16,
+    /// Rows in the grid.
+    rows: u16,
+    /// `X`/`Y` of block `(0, 0)`'s bottom-left corner.
+    origin: BlockOrigin,
+    /// Whether the lump stays inside the 32767 words vanilla reads.
+    vanilla_safe: bool,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Structured result of [`Cyberdemon::build_reject`].
+#[derive(Debug, Serialize)]
+struct RejectBuildReport {
+    /// Size of the written `REJECT` lump in bytes.
+    bytes: usize,
+    /// The map's sector count.
+    sectors: usize,
+    /// Rejected pairs in the written matrix.
+    rejected_pairs: usize,
+    /// The mode that was built.
+    mode: &'static str,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// `build_blockmap`'s work: resolve the map and run the one edit step.
+fn blockmap_build_run(
+    session: &mut Session,
+    args: &BuildBlockmapParams,
+) -> Result<BlockmapBuildReport, CyberError> {
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let compress = args.compress.unwrap_or(true);
+    let (built, report) = session.edit_map(name, "build blockmap", |map| {
+        install_blockmap(map, compress)
+    })?;
+    Ok(BlockmapBuildReport {
+        bytes: built.bytes.len(),
+        columns: built.columns,
+        rows: built.rows,
+        origin: BlockOrigin {
+            x: built.origin_x,
+            y: built.origin_y,
+        },
+        vanilla_safe: built.vanilla_safe,
+        edit: edit_result_fragment(&report),
+    })
+}
+
+/// `build_reject`'s work: resolve the mode and the map, run the edit step.
+fn reject_build_run(
+    session: &mut Session,
+    args: &BuildRejectParams,
+) -> Result<RejectBuildReport, CyberError> {
+    let mode = parse_mode(args.mode.as_deref())?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let (built, report) =
+        session.edit_map(name, "build reject", |map| install_reject(map, mode))?;
+    Ok(RejectBuildReport {
+        bytes: built.bytes.len(),
+        sectors: built.sectors,
+        rejected_pairs: built.rejected_pairs,
+        mode: mode.as_str(),
+        edit: edit_result_fragment(&report),
+    })
+}
+
+/// Hand a builder's outcome to the client as the documented result.
+fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
+where
+    T: Serialize,
+{
+    match outcome {
+        Ok(report) => ok(&report),
+        Err(error) => fail(&error),
+    }
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -753,6 +939,34 @@ impl Cyberdemon {
             blockmap_run,
         )
     }
+
+    /// Rebuilds a map's BLOCKMAP lump from its geometry.
+    #[tool(
+        description = "Recomputes a map's BLOCKMAP lump from its current geometry, as a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). The grid is the vanilla one: origins 8 map units below the lowest vertex, 128x128 map-unit cells covering every vertex (columns = (max_x-origin_x)/128+1, rows likewise). Every linedef is listed in each block whose closed square it touches - it is skipped only when all four block corners lie strictly on the same side of its infinite line - so a line exactly on a shared block edge is listed in both neighbours and one crossing a block corner lands in every block meeting there; untouched blocks get empty lists. compress (default true) shares one copy of identical blocklists, shrinking the lump. Only the BLOCKMAP lump changes (replaced, or inserted after REJECT when the block has none); the BSP lumps are left alone, so nodes_invalidated is false however fresh the nodes are. Returns {bytes (the written lump's size), columns, rows, origin {x, y}, vanilla_safe (the lump is at most 32767 words, what vanilla Doom reads with signed offsets), map, nodes_invalidated, copied_to_working}. A map with no vertices is invalid_argument; a grid, linedef index or lump past the BLOCKMAP format's shape is limit_exceeded (blockmap too large). Linedefs whose vertex references do not resolve are listed in no block. Unknown map is not_found. Run get_blockmap to inspect the result; see skill/reference/nodes.md."
+    )]
+    fn build_blockmap(
+        &self,
+        Parameters(args): Parameters<BuildBlockmapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| blockmap_build_run(session, &args)),
+        )
+    }
+
+    /// Rebuilds a map's REJECT lump.
+    #[tool(
+        description = "Recomputes a map's REJECT lump as a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). mode \"zero\" (the default) clears the matrix: every sector may see every other, which is always correct and what ZDBSP writes by default. mode \"components\" builds the sector graph (an edge joins the two different sectors on the sides of every two-sided linedef; lines whose sides or sectors do not resolve join nothing), finds its connected components, and sets the bit for exactly the ordered pairs in different components: sectors with no opening between them can never see each other, whatever the heights; same-component pairs stay clear. The lump is ceil(sectors^2/8) bytes, bit i*sectors+j (row-major, least significant bit first); a map with no sectors writes an empty lump. Only the REJECT lump changes (replaced, or inserted after NODES when the block has none); the BSP lumps are left alone (nodes_invalidated false). Returns {bytes, sectors, rejected_pairs (set bits in the written matrix), mode, map, nodes_invalidated, copied_to_working}. An unknown mode is invalid_argument; unknown map is not_found. Run get_reject to inspect the result; see skill/reference/nodes.md."
+    )]
+    fn build_reject(
+        &self,
+        Parameters(args): Parameters<BuildRejectParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| reject_build_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -760,9 +974,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Detail, GlInfo, NodeData, Request, blockmap_summary, empty_blockmap_report, gl_info,
-        json_bytes, lump_magic, nodes_asset_body, nodes_outcome, parse_detail, parse_scope,
-        read_node_data,
+        BuildBlockmapParams, BuildRejectParams, Detail, GlInfo, NodeData, RejectMode, Request,
+        blockmap_build_run, blockmap_summary, empty_blockmap_report, gl_info, install_lump,
+        json_bytes, lump_magic, nodes_asset_body, nodes_outcome, parse_detail, parse_mode,
+        parse_scope, read_node_data, reject_build_run,
     };
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::wad::archive::{Lump, Wad, WadKind};
@@ -771,6 +986,7 @@ mod tests {
     use crate::wad::map::Blockmap;
     use crate::wad::map::Map;
     use crate::wad::name::LumpName;
+    use serde_json::json;
 
     /// A valid parsed name for test data.
     fn name(text: &str) -> LumpName {
@@ -1229,6 +1445,243 @@ mod tests {
             String::from_utf8_lossy(&json).contains("\"blocks\""),
             "the full body carries the lists",
         );
+    }
+
+    /// A decodable `MAP01` with real geometry: vertices `(0, 0)` and
+    /// `(200, 0)`, one one-sided line between them (its sidedef
+    /// reference dangles), two sectors, and a `REJECT` placeholder but
+    /// no `BLOCKMAP` lump.
+    fn build_session() -> Session {
+        let mut verts = Writer::new();
+        for (x, y) in [(0_i16, 0_i16), (200_i16, 0_i16)] {
+            verts.put_i16(x);
+            verts.put_i16(y);
+        }
+        let mut line = Writer::new();
+        line.put_u16(0);
+        line.put_u16(1);
+        line.put_u16(1);
+        line.put_u16(0);
+        line.put_u16(0);
+        line.put_u16(0);
+        line.put_u16(0xFFFF);
+        session_over(vec![
+            marker("MAP01"),
+            marker("THINGS"),
+            lump("LINEDEFS", &line.into_inner()),
+            marker("SIDEDEFS"),
+            lump("VERTEXES", &verts.into_inner()),
+            lump("SECTORS", &two_sectors()),
+            marker("SEGS"),
+            marker("SSECTORS"),
+            marker("NODES"),
+            marker("REJECT"),
+        ])
+    }
+
+    /// The first working-archive lump named `text`.
+    fn written<'lump>(session: &'lump Session, text: &[u8]) -> &'lump Lump {
+        session
+            .working()
+            .lumps
+            .iter()
+            .find(|lump| lump.name.as_bytes() == text)
+            .unwrap_or_else(|| panic!("no {text:?} lump was written"))
+    }
+
+    #[test]
+    fn install_lump_replaces_in_place_or_inserts_after_its_neighbour() {
+        let mut map = Map {
+            other: vec![
+                marker("SEGS"),
+                marker("SSECTORS"),
+                lump("NODES", b"nd"),
+                marker("REJECT"),
+                lump("BLOCKMAP", b"old"),
+                marker("BEHAVIOR"),
+            ],
+            ..Map::default()
+        };
+        install_lump(
+            &mut map,
+            LumpName::from_raw(*b"BLOCKMAP"),
+            b"new",
+            &super::BLOCKMAP_AFTER,
+        );
+        assert_eq!(map.other.len(), 6, "the replacement did not grow the block");
+        let at = map
+            .other
+            .iter()
+            .position(|lump| lump.name.as_bytes() == b"BLOCKMAP")
+            .expect("BLOCKMAP is present");
+        assert_eq!(at, 4, "it kept its position");
+        assert_eq!(
+            map.other.get(at).map(|lump| lump.data.as_ref()),
+            Some(&b"new"[..]),
+            "and took the new bytes"
+        );
+        let mut bare = Map {
+            other: vec![marker("SEGS"), marker("NODES"), marker("BEHAVIOR")],
+            ..Map::default()
+        };
+        install_lump(
+            &mut bare,
+            LumpName::from_raw(*b"REJECT\0\0"),
+            b"r",
+            &super::REJECT_AFTER,
+        );
+        let names: Vec<String> = bare
+            .other
+            .iter()
+            .map(|lump| lump.name.to_string())
+            .collect();
+        assert_eq!(
+            names,
+            ["SEGS", "NODES", "REJECT", "BEHAVIOR"],
+            "an absent lump lands after its first canonical neighbour"
+        );
+        let mut empty = Map::default();
+        install_lump(
+            &mut empty,
+            LumpName::from_raw(*b"BLOCKMAP"),
+            b"b",
+            &super::BLOCKMAP_AFTER,
+        );
+        assert_eq!(empty.other.len(), 1, "with no neighbour it appends");
+    }
+
+    #[test]
+    fn parse_mode_defaults_to_zero_and_refuses_anything_else() {
+        assert_eq!(parse_mode(None).expect("absent"), RejectMode::Zero);
+        assert_eq!(
+            parse_mode(Some("Components")).expect("components"),
+            RejectMode::Components
+        );
+        let error = parse_mode(Some("sightlines")).expect_err("not a mode");
+        assert_eq!(error.code(), "invalid_argument", "bad mode code");
+        let message = error.to_string();
+        assert!(
+            message.contains("zero") && message.contains("components"),
+            "the message names both values: {message}"
+        );
+    }
+
+    #[test]
+    fn blockmap_build_run_writes_the_grid_into_the_working_archive() {
+        let mut session = build_session();
+        let report = blockmap_build_run(
+            &mut session,
+            &BuildBlockmapParams {
+                map: Some("map01".to_owned()),
+                compress: None,
+            },
+        )
+        .expect("the fixture builds a blockmap");
+        assert_eq!(report.columns, 2, "x 0..200 from -8 spans two cells");
+        assert_eq!(report.rows, 1, "y 0..0 fits one row");
+        assert_eq!(
+            (report.origin.x, report.origin.y),
+            (-8_i16, -8_i16),
+            "origins"
+        );
+        assert_eq!(report.bytes, 18, "the two identical lists share one copy");
+        assert!(report.vanilla_safe, "a toy grid is tiny");
+        assert_eq!(
+            report.edit.get("map"),
+            Some(&json!("MAP01")),
+            "the fragment"
+        );
+        assert_eq!(
+            report.edit.get("nodes_invalidated"),
+            Some(&json!(false)),
+            "a lump rewrite is not a geometry edit"
+        );
+        assert_eq!(report.edit.get("copied_to_working"), Some(&json!(true)));
+        assert_eq!(
+            session.undo_labels(),
+            vec!["build blockmap".to_owned()],
+            "one undo step"
+        );
+        let parsed = Blockmap::parse(written(&session, b"BLOCKMAP").data.as_ref())
+            .expect("the written lump parses");
+        assert_eq!(
+            parsed.blocks,
+            vec![vec![0_u16], vec![0]],
+            "the line is listed in both cells"
+        );
+        let plain = blockmap_build_run(
+            &mut session,
+            &BuildBlockmapParams {
+                map: None,
+                compress: Some(false),
+            },
+        )
+        .expect("the uncompressed build runs too");
+        assert_eq!(plain.bytes, 24, "every cell writes its own list");
+        assert_eq!(plain.edit.get("copied_to_working"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn reject_build_run_writes_zero_then_components() {
+        let mut session = build_session();
+        let zero = reject_build_run(
+            &mut session,
+            &BuildRejectParams {
+                map: None,
+                mode: None,
+            },
+        )
+        .expect("the default mode builds");
+        assert_eq!(zero.bytes, 1, "two sectors need one byte");
+        assert_eq!(zero.sectors, 2, "the decoded sector count");
+        assert_eq!(zero.rejected_pairs, 0, "zero rejects nothing");
+        assert_eq!(zero.mode, "zero", "the echo");
+        let parts = reject_build_run(
+            &mut session,
+            &BuildRejectParams {
+                map: None,
+                mode: Some("COMPONENTS".to_owned()),
+            },
+        )
+        .expect("components builds");
+        assert_eq!(parts.rejected_pairs, 2, "the dangling side joins nothing");
+        assert_eq!(parts.mode, "components", "the echo");
+        assert_eq!(
+            written(&session, b"REJECT").data.as_ref(),
+            &[0b0000_0110_u8],
+            "bits (0,1) and (1,0) only"
+        );
+        assert_eq!(
+            session.undo_labels().len(),
+            2,
+            "the two builds are two steps"
+        );
+    }
+
+    #[test]
+    fn build_runs_refuse_without_writing_anything() {
+        let mut session = block_session(Vec::new());
+        let error = blockmap_build_run(
+            &mut session,
+            &BuildBlockmapParams {
+                map: None,
+                compress: None,
+            },
+        )
+        .expect_err("the fixture has no vertices");
+        assert_eq!(error.code(), "invalid_argument", "empty map code");
+        assert!(session.working().is_empty(), "the copy rolled back");
+        assert!(session.undo_labels().is_empty(), "and no history entry");
+        let bad = reject_build_run(
+            &mut session,
+            &BuildRejectParams {
+                map: None,
+                mode: Some("opaque".to_owned()),
+            },
+        )
+        .expect_err("not a mode");
+        assert_eq!(bad.code(), "invalid_argument", "bad mode code");
+        assert!(session.working().is_empty(), "still nothing written");
     }
 
     /// A base layer holding `lumps`.

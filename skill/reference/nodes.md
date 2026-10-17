@@ -1,8 +1,10 @@
 # Nodes tools
 
-The node-builder output of a map, for reading: `get_nodes`, `get_reject`
-and `get_blockmap`. The tools that *build* these lumps join this group
-later; today it measures what a map already carries.
+The node-builder output of a map: `get_nodes`, `get_reject` and
+`get_blockmap` read it, `build_blockmap` and `build_reject` rebuild the
+two lumps that need no BSP tree. The `SEGS`/`SSECTORS`/`NODES` tree
+builder is still to come; today you can measure it and rebuild what
+surrounds it.
 
 ## What these lumps are for
 
@@ -42,13 +44,14 @@ you get their presence, magic and sizes.
 
 ## The `map`, `scope` and `detail` parameters
 
-All three tools take `map` and `scope` exactly as the maps tools do
+All three readers take `map` and `scope` exactly as the maps tools do
 (`reference/maps.md`: the active map or the merged view's only map by
 default; `"merged"`, `"working"` or `"layer:N"`). `detail` is
 `"summary"` (the default: numbers only) or `"full"`: `full` publishes the
 parsed structure as a JSON asset and attaches
 `"asset": {url, filename, mime, size}` to the result. A missing or empty
-lump never publishes anything.
+lump never publishes anything. The two builders take `map` the same way
+and always edit the working archive; they carry no `scope` or `detail`.
 
 ## `get_nodes`
 
@@ -92,6 +95,44 @@ blocks, total_entries, max_lines_per_block, empty_blocks}`. `detail:
 `{origin_x, origin_y, columns, rows, blocks}` with `blocks` in row-major
 order, each entry its block's linedef indices.
 
+## `build_blockmap`
+
+`{map?, compress? (true)}` → `{bytes, columns, rows, origin {x, y},
+vanilla_safe, map, nodes_invalidated, copied_to_working}` — one undoable
+edit that recomputes the `BLOCKMAP` from the map's current geometry and
+writes it into the working archive (the lump is replaced, or inserted
+after `REJECT` when the block has none). The grid is the vanilla one:
+origins 8 map units below the lowest vertex, 128×128 map-unit cells,
+`columns = (max_x - origin_x) / 128 + 1`, `rows` likewise. A linedef is
+listed in every block whose closed square it touches (skipped only when
+all four block corners lie strictly on the same side of its infinite
+line), so a line exactly on a shared block edge is listed in both
+neighbours and untouched blocks get empty lists. `compress: true` (the
+default) shares one copy of identical blocklists; `false` gives every
+block its own list and a bigger lump. `vanilla_safe` reports the lump is
+at most 32767 words — what vanilla `Doom` reads with its signed offsets.
+Linedefs whose vertex references do not resolve are listed in no block.
+This rewrites only `BLOCKMAP` — no geometry changed, so
+`nodes_invalidated` is `false`. A map with no vertices is
+`invalid_argument`; a grid, linedef index or lump past the format's
+shape is `limit_exceeded` ("blockmap too large").
+
+## `build_reject`
+
+`{map?, mode? ("zero" | "components")}` → `{bytes, sectors,
+rejected_pairs, mode, map, nodes_invalidated, copied_to_working}` — one
+undoable edit writing the `REJECT` lump (`ceil(sectors² / 8)` bytes, bit
+`i * sectors + j`, row-major, least significant bit first). `mode`
+`"zero"` (the default) clears the matrix: every sector may see every
+other, always correct and what `ZDBSP` writes. `"components"` builds the
+sector graph (an edge joins the two different sectors on the sides of a
+two-sided linedef; sides or sectors that do not resolve join nothing) and
+sets the bit for exactly the ordered pairs in *different* connected
+components — sectors with no opening between them can never see each
+other — while same-component pairs stay clear. `rejected_pairs` counts
+the set bits written. Only `REJECT` changes (`nodes_invalidated` false);
+an unknown `mode` is `invalid_argument`.
+
 ## Errors
 
 An absent or empty lump is data, never an error. Malformed lumps fail
@@ -100,6 +141,9 @@ number of records, a child or subsector reference that leaves its table,
 a truncated or trailing-magic extended lump, an inflated `ZNOD` over the
 decompression cap, a `BLOCKMAP` offset outside the lump or a blocklist
 without its `0xFFFF` terminator. The message names the lump; the fix is
-to rebuild the nodes (a later ticket's tools) or read a different scope.
-An unknown `map` is `not_found`; an unparsable `map`, `scope` or `detail`
-is `invalid_argument`.
+`build_blockmap` / `build_reject` for those two lumps (the `SEGS`/
+`SSECTORS`/`NODES` tree builder is still to come) or reading a different
+scope. An unknown `map` is `not_found`; an unparsable `map`, `scope` or
+`detail` is `invalid_argument`; `build_blockmap` on a map with no
+vertices is `invalid_argument` and an oversized grid, linedef index or
+lump is `limit_exceeded`.

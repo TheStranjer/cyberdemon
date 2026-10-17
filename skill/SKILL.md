@@ -158,6 +158,8 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `get_nodes`              | `reference/nodes.md`    |
 | `get_reject`             | `reference/nodes.md`    |
 | `get_blockmap`           | `reference/nodes.md`    |
+| `build_blockmap`         | `reference/nodes.md`    |
+| `build_reject`           | `reference/nodes.md`    |
 | `get_palette`            | `reference/palette.md`  |
 | `set_palette`            | `reference/palette.md`  |
 | `open_iwad`              | `reference/session.md`  |

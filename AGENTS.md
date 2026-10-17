@@ -218,8 +218,13 @@ src/
                   vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
                   `Seg`, `Subsector`, `Node`, `Child`, magic detection),
                   `map/reject.rs` the REJECT visibility bit-matrix,
-                  `map/blockmap.rs` the BLOCKMAP grid (offset table and
-                  blocklist validation), `map/geometry.rs` pure integer
+                  `map/blockmap.rs` the BLOCKMAP grid (offset table,
+                  blocklist validation and the `to_bytes` serializers),
+                  `map/build_reject.rs` the pure REJECT builder (`zero` and
+                  `components` modes) and
+                  `map/build_blockmap.rs` the pure BLOCKMAP builder
+                  (bounds-derived grid, block-touching linedef lists),
+                  `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
                   bounding boxes, line lengths and sector adjacency) and
                   `map/convert.rs` the pure within-flag-family format

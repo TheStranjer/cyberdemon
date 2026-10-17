@@ -21,7 +21,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group (`list_maps`, `get_map_lumps`, `get_map_summary`, `assemble_map`, `set_active_map`, `create_map`, `copy_map`, `rename_map`, `remove_map`), an `edit_things` group (`add_thing`, `edit_thing`, `remove_thing`), an `edit_sidedefs` group (`add_sidedef`, `edit_sidedef`, `remove_sidedef`), an `edit_sectors` group (`add_sector`, `edit_sector`, `remove_sector`), a `convert` group (`convert_map_format`), an
 > `audio` group (`import_sound`, `preview_sound`), a `music` group
 > (`import_music`, `preview_music`), a `nodes` group (`get_nodes`, `get_reject`,
-> `get_blockmap`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
+> `get_blockmap`, `build_blockmap`, `build_reject`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
 > `edit_decorate`, `edit_zscript`), a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
@@ -49,7 +49,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
 > detection and patch-reference renumbering, and a `UDMF` `TEXTMAP`
 > tokenizer, parser and writer over documents of blocks and key/value
-> pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers and pure integer map geometry), and a session
+> pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers, serializers and pure builders, and pure integer map geometry), and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, a labelled undo/redo history with dirty-state tracking, and the copy-on-write `edit_map` step every map edit wraps) and a definitions registry (`src/defs*`: TSV game tables embedded in the binary,

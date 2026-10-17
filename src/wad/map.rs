@@ -14,13 +14,16 @@
 //! [`nodes`], [`reject`] and [`blockmap`] type the node-builder output:
 //! the `SEGS`/`SSECTORS`/`NODES` tree in its vanilla and `ZDoom` extended
 //! layouts, the `REJECT` visibility matrix and the `BLOCKMAP` spatial
-//! index. [`geometry`] answers the pure integer shape questions over a
-//! decoded map: sector boundaries, point containment, bounding boxes,
-//! line lengths and sector adjacency. [`convert`] rewrites a decoded map in
-//! another layout inside one flag family, the pure step behind
-//! `convert_map_format`.
+//! index; [`build_blockmap`] and [`build_reject`] compute the last two
+//! from a map's geometry. [`geometry`] answers the pure integer shape
+//! questions over a decoded map: sector boundaries, point containment,
+//! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
+//! a decoded map in another layout inside one flag family, the pure step
+//! behind `convert_map_format`.
 
 pub mod blockmap;
+pub mod build_blockmap;
+pub mod build_reject;
 pub mod convert;
 pub mod doom;
 pub mod flags;

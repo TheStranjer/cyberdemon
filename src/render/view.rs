@@ -1,5 +1,5 @@
-//! Column ray caster for the 3D view: textured walls, flat-shaded floors
-//! and ceilings and a solid sky.
+//! Column ray caster for the 3D view: textured walls, world-aligned
+//! textured floors and ceilings and a view-angled sky.
 //!
 //! The camera stands at an explicit `x`/`y`/`z` and looks `angle` degrees
 //! counter-clockwise from east, `pitch` degrees up from level, through a
@@ -7,25 +7,29 @@
 //! needed: every column ray is intersected with every linedef, the hits
 //! are sorted by ray parameter and walked near-to-far (a portal caster).
 //! The walk keeps the window of rows still uncovered; each hit first
-//! fills that window with the faced sector's ceiling and floor, drawn in
-//! the flat's average palette colour shaded by the row's own plane depth,
-//! and then paints the wall face its facing sidedef carries. Floors and
-//! ceilings are solid colours and the sky one flat colour until the next
-//! ticket textures them; masked middle textures seen through two-sided
-//! lines are collected in [`Rendered::masked`] instead of drawn.
+//! fills that window with the faced sector's ceiling and floor, sampled
+//! from the flat at the world point the row's exact ray parameter lands
+//! on (`Doom`'s world-grid alignment, shaded by that row's plane depth),
+//! and then paints the wall face its facing sidedef carries. An `F_SKY1`
+//! plane draws the sky texture instead, bucketed by the column's ray
+//! angle and placed with `Doom`'s 320x200 sky rows, full bright (or the
+//! background when the sky switch is off). Masked middle textures seen
+//! through two-sided lines are collected in [`Rendered::masked`] instead
+//! of drawn. Every painted pixel also records its perpendicular depth in
+//! map units in [`Rendered::depth`] (background and sky keep `i64::MAX`),
+//! the buffer the masked and sprite passes will depth-test against.
 //!
 //! All maths is integer. The camera's `cos`/`sin` are 16.16
 //! ([`crate::fixed::Angle`]), column directions are scaled by `2^32`, and
 //! ray parameters stay exact `i128` fractions until a screen row or map
 //! depth is floor-rounded out of them.
 
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::error::CyberError;
-use crate::fixed::{Angle, FRACUNIT, hypot, mul_div_round};
+use crate::fixed::{Angle, FRACUNIT, atan2, hypot, mul_div_round};
 use crate::gfx::image::IndexedImage;
 use crate::gfx::ops::parse_hex_color;
 use crate::render::canvas::{Canvas, Rgba};
@@ -40,8 +44,9 @@ pub const MIN_PITCH: i32 = -60;
 pub const MAX_PITCH: i32 = 60;
 /// The texture name that means "draw nothing here".
 const TEXTURE_NONE: &str = "-";
-/// The ceiling flat that means "sky"; [`crate::render::scene::SKY_FLAT`]
-/// spells the same constant for scene builders.
+/// The flat that means "sky" for a ceiling or a floor;
+/// [`crate::render::scene::SKY_FLAT`] spells the same constant for scene
+/// builders.
 const SKY_CEILING: &str = "F_SKY1";
 /// One whole map unit or pixel in raw 16.16.
 const ONE_16: i128 = 0x1_0000;
@@ -112,6 +117,11 @@ pub struct Rendered {
     /// Masked middles collected behind two-sided lines, in
     /// column-then-distance order.
     pub masked: Vec<MaskedMiddle>,
+    /// Per-pixel perpendicular depth in map units, row-major
+    /// `width * height`, written for every wall and plane pixel;
+    /// background and sky pixels keep `i64::MAX`. Internal to the
+    /// renderer: the masked and sprite passes depth-test against it.
+    pub depth: Vec<i64>,
 }
 
 /// Renders the 3D view of `scene` from `camera` onto a `width` by
@@ -120,19 +130,41 @@ pub struct Rendered {
 /// The caller is expected to have checked that the camera lies inside a
 /// sector (`crate::render::camera_sector`); a camera in no sector simply
 /// gets no sector data to fill with and renders what the hits still
-/// cover. The result carries the [`MaskedMiddle`] list; this ticket
-/// draws no transparency, so the view only shows solid walls, flat
-/// average-coloured planes and a solid sky.
+/// cover. The result carries the [`MaskedMiddle`] list and the
+/// [`Rendered::depth`] buffer; this ticket draws no transparency, so the
+/// view only shows solid walls, textured planes and the textured sky.
 #[must_use]
 #[inline]
 pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) -> Rendered {
     let caster = Caster::new(scene, camera, width, height);
     let mut canvas = Canvas::new(width, height, caster.background);
+    let rows = i64::from(canvas.height());
+    let mut depth = vec![i64::MAX; pixel_area(&canvas)];
     let mut masked = Vec::new();
-    for column in 0_i64..i64::from(width) {
-        caster.draw_column(&mut canvas, &mut masked, column);
+    for column in 0_i64..i64::from(canvas.width()) {
+        let d = caster.proj.direction(column);
+        let mut walk = Walk {
+            canvas: &mut canvas,
+            masked: &mut masked,
+            depth: &mut depth,
+            column,
+            d,
+            skycol: sky_column(d, scene.sky.width),
+            window: Window::open(rows),
+        };
+        caster.draw_column(&mut walk);
     }
-    Rendered { canvas, masked }
+    Rendered {
+        canvas,
+        masked,
+        depth,
+    }
+}
+
+/// The number of pixels (and depth slots) a canvas holds.
+fn pixel_area(canvas: &Canvas) -> usize {
+    let pixels = u64::from(canvas.width()).saturating_mul(u64::from(canvas.height()));
+    usize::try_from(pixels).unwrap_or(0)
 }
 
 /// An exact fraction `n / d` with a positive denominator: a column ray's
@@ -295,6 +327,39 @@ impl Projection {
     const fn depth16(&self, t: Fraction) -> i128 {
         t.times(self.focal2)
     }
+
+    /// The ray parameter of the plane at world `height` seen at screen
+    /// `row`: `t = (h - z) / (2 * (horizon - row))`, exact. `None` on the
+    /// horizon row itself (zero denominator) and on rows the plane
+    /// cannot own for this camera: a floor above the eye, a ceiling
+    /// below it, or a plane exactly at eye height all give a
+    /// non-positive `t`.
+    fn plane_t(&self, height: i64, row: i64) -> Option<Fraction> {
+        let rise = i128::from(height)
+            .saturating_sub(i128::from(self.z))
+            .saturating_mul(ONE_16);
+        let step = self
+            .horizon
+            .saturating_sub(i128::from(row).saturating_mul(ONE_16))
+            .saturating_mul(2_i128);
+        let t = Fraction::new(rise, step)?;
+        t.is_positive().then_some(t)
+    }
+
+    /// The sky texture row of screen `row`: `Doom`'s 320x200 sky
+    /// placement, `(y - horizon) * 200 / height + 100` in pixels,
+    /// clamped into a sky `sky_height` rows tall.
+    fn sky_row(&self, row: i64, sky_height: u32) -> u32 {
+        let dy = i128::from(row)
+            .saturating_mul(ONE_16)
+            .saturating_sub(self.horizon);
+        let scaled = quot(
+            dy.saturating_mul(200_i128),
+            i128::from(self.height).saturating_mul(ONE_16),
+        );
+        let last = i128::from(sky_height).saturating_sub(1_i128).max(0_i128);
+        u32::try_from(scaled.saturating_add(100_i128).clamp(0_i128, last)).unwrap_or(0)
+    }
 }
 
 /// `width * cot(half)` in raw 16.16; the half angle sits inside
@@ -334,9 +399,9 @@ struct Edge {
 
 /// One sidedef prepared for casting: its sector's planes and its usable
 /// texture keys.
-struct Side {
+struct Side<'scene> {
     /// The sector this side opens into.
-    plane: Plane,
+    plane: Plane<'scene>,
     /// Upper texture key, `None` for `-` or empty.
     upper: Option<String>,
     /// Lower texture key.
@@ -349,55 +414,75 @@ struct Side {
     y_offset: i64,
 }
 
+/// What one ceiling or floor draws.
+#[derive(Clone, Copy, Debug)]
+enum Surface<'scene> {
+    /// The flat's image, sampled at the world point the row lands on.
+    Flat(&'scene IndexedImage),
+    /// The sky texture: an `F_SKY1` plane with the sky switch on.
+    Sky,
+}
+
 /// The view-relevant facts of one sector.
 #[derive(Clone, Copy, Debug)]
-struct Plane {
+struct Plane<'scene> {
     /// Floor height in map units.
     floor: i64,
     /// Ceiling height in map units.
     ceil: i64,
     /// Sector light level.
     light: i32,
-    /// Average palette index of the floor flat, `None` for no flat.
-    floor_fill: Option<u8>,
-    /// Average index filling the ceiling: the sky's for a sky ceiling,
-    /// the ceiling flat's otherwise, `None` for nothing to draw (no
-    /// flat, or the sky switch off on a sky ceiling).
-    ceil_fill: Option<u8>,
-    /// Whether the ceiling flat names the sky.
+    /// The floor's picture, `None` when there is nothing to draw (no
+    /// flat, or the sky switch off on an `F_SKY1` floor).
+    floor_surface: Option<Surface<'scene>>,
+    /// The ceiling's picture, the same rules; an `F_SKY1` ceiling with
+    /// the sky on draws [`Surface::Sky`].
+    ceil_surface: Option<Surface<'scene>>,
+    /// Whether the ceiling flat names the sky; the upper-wall sky hack
+    /// reads this even when the sky switch is off.
     ceil_sky: bool,
 }
 
-impl Plane {
+impl<'scene> Plane<'scene> {
     /// The plane facts of sector `index`; a sector the map lacks reads
-    /// as an empty void (zero heights, no fills).
-    fn of(map: &Map, index: usize, averages: &BTreeMap<String, u8>, sky: Option<u8>) -> Self {
+    /// as an empty void (zero heights, nothing to draw).
+    fn of(map: &Map, index: usize, scene: &'scene Scene, sky: Option<Surface<'scene>>) -> Self {
         let Some(sector) = map.sectors.get(index) else {
             return Self {
                 floor: 0,
                 ceil: 0,
                 light: 0,
-                floor_fill: None,
-                ceil_fill: None,
+                floor_surface: None,
+                ceil_surface: None,
                 ceil_sky: false,
             };
         };
-        let floor_fill = averages.get(&picture_key(&sector.floor_flat)).copied();
-        let ceil_sky = picture_key(&sector.ceiling_flat) == SKY_CEILING;
-        let ceil_fill = if ceil_sky {
-            sky
-        } else {
-            averages.get(&picture_key(&sector.ceiling_flat)).copied()
-        };
+        let floor_surface = plane_surface(scene, &sector.floor_flat, sky);
+        let ceiling_flat = &sector.ceiling_flat;
         Self {
             floor: i64::from(sector.floor_height),
             ceil: i64::from(sector.ceiling_height),
             light: sector.light,
-            floor_fill,
-            ceil_fill,
-            ceil_sky,
+            floor_surface,
+            ceil_surface: plane_surface(scene, ceiling_flat, sky),
+            ceil_sky: picture_key(ceiling_flat) == SKY_CEILING,
         }
     }
+}
+
+/// The surface a plane named `name` draws: the sky for an `F_SKY1` name
+/// (only when the sky switch offers `sky`), the named flat's image when
+/// the scene loaded one, and nothing otherwise.
+fn plane_surface<'scene>(
+    scene: &'scene Scene,
+    name: &str,
+    sky: Option<Surface<'scene>>,
+) -> Option<Surface<'scene>> {
+    let key = picture_key(name);
+    if key == SKY_CEILING {
+        return sky;
+    }
+    scene.flats.get(&key).map(Surface::Flat)
 }
 
 /// One sorted ray/linedef intersection.
@@ -424,9 +509,9 @@ struct Visit<'visit> {
     /// The faced sidedef index.
     side_index: usize,
     /// The faced sidedef.
-    side: &'visit Side,
+    side: &'visit Side<'visit>,
     /// The far sidedef for a transparent crossing.
-    far_side: Option<&'visit Side>,
+    far_side: Option<&'visit Side<'visit>>,
     /// The ray parameter.
     t: Fraction,
     /// The position along the segment.
@@ -479,10 +564,40 @@ struct Walk<'walk> {
     canvas: &'walk mut Canvas,
     /// Masked middles collected this call.
     masked: &'walk mut Vec<MaskedMiddle>,
+    /// The frame's per-pixel depth buffer, written as pixels paint.
+    depth: &'walk mut Vec<i64>,
     /// The screen column being walked.
     column: i64,
+    /// The column's `2^32`-scaled ray direction.
+    d: (i128, i128),
+    /// The sky texture column this ray's angle selects.
+    skycol: u32,
     /// The rows still uncovered.
     window: Window,
+}
+
+impl Walk<'_> {
+    /// Plots one pixel and records its perpendicular depth; rows outside
+    /// the frame are dropped by the canvas and the depth index alike.
+    fn paint(&mut self, row: i64, color: Rgba, depth: i64) {
+        self.canvas.set(self.column, row, color);
+        let Some(index) = self.depth_index(row) else {
+            return;
+        };
+        if let Some(slot) = self.depth.get_mut(index) {
+            *slot = depth;
+        }
+    }
+
+    /// The flat depth-buffer slot of this column and `row`, `None`
+    /// outside the frame.
+    fn depth_index(&self, row: i64) -> Option<usize> {
+        let column = usize::try_from(self.column).ok()?;
+        let line = usize::try_from(row).ok()?;
+        let width = usize::try_from(self.canvas.width()).ok()?;
+        let index = line.checked_mul(width)?.checked_add(column)?;
+        (index < self.depth.len()).then_some(index)
+    }
 }
 
 /// Which texture slot of the faced side a wall part draws.
@@ -497,15 +612,13 @@ enum Slot {
 }
 
 /// One ceiling or floor run to fill: a column's rows of one plane.
-struct FlatRun {
-    /// Screen column.
-    column: i64,
+struct FlatRun<'scene> {
     /// First row.
     top: i64,
     /// Last row.
     bottom: i64,
-    /// Palette index of the plane's average colour.
-    index: u8,
+    /// The picture the plane draws.
+    surface: Surface<'scene>,
     /// Plane height in map units.
     height: i64,
     /// Sector light level.
@@ -528,8 +641,6 @@ struct FacePlan<'plan> {
 
 /// One textured wall run: mapped, shaded and ready to paint row by row.
 struct Part<'tex> {
-    /// Screen column the face paints.
-    column: i64,
     /// The texture image.
     image: &'tex IndexedImage,
     /// First row.
@@ -564,7 +675,7 @@ struct Caster<'scene> {
     /// Castable linedefs.
     edges: Vec<Edge>,
     /// Prepared sidedefs, indexed by sidedef.
-    sides: Vec<Option<Side>>,
+    sides: Vec<Option<Side<'scene>>>,
     /// The background colour.
     background: Rgba,
     /// The lighting model.
@@ -574,13 +685,7 @@ struct Caster<'scene> {
 impl<'scene> Caster<'scene> {
     /// Prepares one view render of `scene` from `camera`.
     fn new(scene: &'scene Scene, camera: &ViewCamera, width: u32, height: u32) -> Self {
-        let averages = flat_averages(scene);
-        let sky = scene
-            .settings
-            .sky
-            .is_on()
-            .then(|| average_index(&scene.sky))
-            .flatten();
+        let sky = scene.settings.sky.is_on().then_some(Surface::Sky);
         let edges = scene
             .map
             .linedefs
@@ -589,7 +694,7 @@ impl<'scene> Caster<'scene> {
             .filter_map(|(index, line)| edge(index, &scene.map, line))
             .collect();
         let sides = (0..scene.map.sidedefs.len())
-            .map(|index| side(&scene.map, index, &averages, sky))
+            .map(|index| side(index, scene, sky))
             .collect();
         Self {
             scene,
@@ -603,17 +708,10 @@ impl<'scene> Caster<'scene> {
     }
 
     /// Casts and walks one screen column; whatever the walk leaves
-    /// uncovered keeps the background.
-    fn draw_column(&self, canvas: &mut Canvas, masked: &mut Vec<MaskedMiddle>, column: i64) {
-        let mut walk = Walk {
-            canvas,
-            masked,
-            column,
-            window: Window::open(self.proj.height),
-        };
-        let d = self.proj.direction(column);
-        for hit in self.hits(d) {
-            self.visit(&mut walk, &hit);
+    /// uncovered keeps the background and the `i64::MAX` depth.
+    fn draw_column(&self, walk: &mut Walk<'_>) {
+        for hit in self.hits(walk.d) {
+            self.visit(walk, &hit);
         }
     }
 
@@ -700,49 +798,77 @@ impl<'scene> Caster<'scene> {
     /// hit: ceiling above, floor below.
     fn fill_planes(&self, walk: &mut Walk<'_>, visit: &Visit<'_>) {
         let plane = &visit.side.plane;
-        if let Some(index) = plane.ceil_fill {
+        if let Some(surface) = plane.ceil_surface {
             let run = FlatRun {
-                column: walk.column,
                 top: walk.window.top,
                 bottom: visit.y_ceil.min(walk.window.bottom),
-                index,
+                surface,
                 height: plane.ceil,
                 light: plane.light,
             };
-            self.fill_flat(walk.canvas, &run);
+            self.fill_flat(walk, &run);
         }
-        if let Some(index) = plane.floor_fill {
+        if let Some(surface) = plane.floor_surface {
             let run = FlatRun {
-                column: walk.column,
                 top: visit.y_floor.max(walk.window.top),
                 bottom: walk.window.bottom,
-                index,
+                surface,
                 height: plane.floor,
                 light: plane.light,
             };
-            self.fill_flat(walk.canvas, &run);
+            self.fill_flat(walk, &run);
         }
     }
 
-    /// Fills the run's rows with the plane's average colour, shaded by
-    /// each row's own plane depth; the horizon row is skipped.
-    fn fill_flat(&self, canvas: &mut Canvas, run: &FlatRun) {
+    /// Fills the run's rows from the plane's picture, each row sampled
+    /// at its own world point and shaded by its own plane depth.
+    fn fill_flat(&self, walk: &mut Walk<'_>, run: &FlatRun<'_>) {
         for row in run.top..=run.bottom {
-            self.fill_flat_row(canvas, run, row);
+            self.fill_flat_row(walk, run, row);
         }
     }
 
-    /// Draws one row of a plane run; the horizon row (zero `dy`) skips.
-    fn fill_flat_row(&self, canvas: &mut Canvas, run: &FlatRun, row: i64) {
-        let dy = i128::from(row)
-            .saturating_mul(ONE_16)
-            .saturating_sub(self.proj.horizon)
-            .abs();
-        let Some(depth) = plane_depth(self.proj.focal2, self.proj.z, run.height, dy) else {
+    /// Draws one row of a plane run; the horizon row (zero step, and so
+    /// no ray parameter) skips, leaving the background.
+    fn fill_flat_row(&self, walk: &mut Walk<'_>, run: &FlatRun<'_>, row: i64) {
+        match run.surface {
+            Surface::Sky => self.paint_sky_row(walk, row),
+            Surface::Flat(_) => self.paint_flat_row(walk, run, row),
+        }
+    }
+
+    /// Draws one row of a flat-covered plane: the world point the row's
+    /// ray parameter lands on, the texel it wraps to on the world grid,
+    /// shaded by that row's own plane depth. Rows the camera cannot see
+    /// (no positive `t`, no texel, no pixel) skip.
+    fn paint_flat_row(&self, walk: &mut Walk<'_>, run: &FlatRun<'_>, row: i64) {
+        let Surface::Flat(image) = run.surface else {
             return;
         };
+        let Some(t) = self.proj.plane_t(run.height, row) else {
+            return;
+        };
+        let (x16, y16) = plane_point(self.cam, walk.d, t);
+        let Some((texcol, texrow)) = flat_texel(x16, y16, image.width, image.height) else {
+            return;
+        };
+        let Some((index, _)) = image.get(texcol, texrow) else {
+            return;
+        };
+        let raw = self.proj.depth16(t).div_euclid(ONE_16);
+        let depth = i64::try_from(raw).unwrap_or(i64::MAX);
         let map = colormap_index(self.lighting, run.light, depth, WallDir::Other);
-        canvas.set(run.column, row, shade(self.scene, run.index, map));
+        walk.paint(row, shade(self.scene, index, map), depth);
+    }
+
+    /// Draws one row of the sky: the ray angle's sky column, `Doom`'s
+    /// vertical placement, full bright and infinitely deep.
+    fn paint_sky_row(&self, walk: &mut Walk<'_>, row: i64) {
+        let sky = &self.scene.sky;
+        let Some((index, _)) = sky.get(walk.skycol, self.proj.sky_row(row, sky.height)) else {
+            return;
+        };
+        walk.paint(row, shade(self.scene, index, 0), i64::MAX);
     }
 
     /// Paints `slot`'s texture across the window rows it owns (an empty
@@ -772,9 +898,8 @@ impl<'scene> Caster<'scene> {
             span,
             depth16: self.proj.depth16(visit.t),
         };
-        let part = part(&plan, walk.column);
-        let canvas = &mut *walk.canvas;
-        self.paint_part(canvas, &part);
+        let part = part(&plan);
+        self.paint_part(walk, &part);
     }
 
     /// The rows `slot`'s face covers, shrinking the window past it;
@@ -818,15 +943,15 @@ impl<'scene> Caster<'scene> {
 
     /// Paints the part's rows: one texture column, heights from the
     /// projection, one lighting table for the whole face.
-    fn paint_part(&self, canvas: &mut Canvas, part: &Part<'_>) {
+    fn paint_part(&self, walk: &mut Walk<'_>, part: &Part<'_>) {
         for row in part.top..=part.bottom {
-            self.paint_row(canvas, part, row);
+            self.paint_row(walk, part, row);
         }
     }
 
     /// Draws one wall row: the texture row the screen row projects to,
-    /// through the whole-face lighting table.
-    fn paint_row(&self, canvas: &mut Canvas, part: &Part<'_>, row: i64) {
+    /// through the whole-face lighting table, at the face's depth.
+    fn paint_row(&self, walk: &mut Walk<'_>, part: &Part<'_>, row: i64) {
         let depth = i64::try_from(part.depth16.div_euclid(ONE_16)).unwrap_or(i64::MAX);
         let map = colormap_index(self.lighting, part.light, depth, part.dir);
         let v16 = part
@@ -837,7 +962,7 @@ impl<'scene> Caster<'scene> {
         let Some((index, _)) = part.image.get(part.texcol, wrap16(v16, rows)) else {
             return;
         };
-        canvas.set(part.column, row, shade(self.scene, index, map));
+        walk.paint(row, shade(self.scene, index, map), depth);
     }
 
     /// Remembers the middle texture seen through this transparent
@@ -884,20 +1009,52 @@ fn pierce(cam: (i64, i64), d: (i128, i128), edge: &Edge) -> Option<(Fraction, Fr
     Some((t, s, den < 0))
 }
 
-/// The depth in map units of a plane row `dy` raw-16.16 pixels from the
-/// horizon: `|plane_h - z| * (focal2 / 2) / |dy|`; `None` at the horizon
-/// row itself, which the walk skips.
-fn plane_depth(focal2: i128, z: i64, height: i64, dy: i128) -> Option<i64> {
-    if dy == 0 {
-        return None;
-    }
-    let rise = i128::from(height)
-        .saturating_sub(i128::from(z))
-        .saturating_abs();
-    let raw = rise
-        .saturating_mul(focal2)
-        .checked_div(dy.saturating_mul(2_i128))?;
-    Some(i64::try_from(raw).unwrap_or(i64::MAX))
+/// The world point `cam + t * d` in raw 16.16 for ray parameter `t`
+/// along the `2^32`-scaled column direction `d`.
+fn plane_point(cam: (i64, i64), d: (i128, i128), t: Fraction) -> (i128, i128) {
+    (
+        i128::from(cam.0)
+            .saturating_mul(ONE_16)
+            .saturating_add(t.times(shift_down(d.0))),
+        i128::from(cam.1)
+            .saturating_mul(ONE_16)
+            .saturating_add(t.times(shift_down(d.1))),
+    )
+}
+
+/// A `2^32`-scaled direction component back to raw 16.16 (the shift can
+/// only fail for a shift distance the constant never is).
+fn shift_down(component: i128) -> i128 {
+    component.checked_shr(16_u32).unwrap_or(0)
+}
+
+/// The flat texel of the raw-16.16 world point `(x16, y16)`, `Doom`-
+/// aligned to the world grid: column `floor(x)` and row `floor(-y)`,
+/// each wrapped into the flat, whatever supported shape it has.
+fn flat_texel(x16: i128, y16: i128, width: u32, height: u32) -> Option<(u32, u32)> {
+    let columns = i128::from(width).max(1_i128);
+    let rows = i128::from(height).max(1_i128);
+    let column = x16.div_euclid(ONE_16).rem_euclid(columns);
+    let row = y16.saturating_neg().div_euclid(ONE_16).rem_euclid(rows);
+    Some((u32::try_from(column).ok()?, u32::try_from(row).ok()?))
+}
+
+/// The sky texture column of a `2^32`-scaled column direction: the ray
+/// angle's `BAM` bucketed into `Doom`'s 1024 slices per turn (`>> 22`)
+/// and wrapped into the sky's width, so a 256-wide sky repeats four
+/// times per full turn.
+fn sky_column(d: (i128, i128), sky_width: u32) -> u32 {
+    let angle = atan2(fit64(d.1), fit64(d.0));
+    let slice = i64::from(angle.0.checked_shr(22_u32).unwrap_or(0));
+    u32::try_from(slice.rem_euclid(i64::from(sky_width.max(1_u32)))).unwrap_or(0)
+}
+
+/// An `i128` saturated into `i64`, for handing raw direction components
+/// to [`atan2`].
+fn fit64(value: i128) -> i64 {
+    let low = i128::from(i64::MIN);
+    let high = i128::from(i64::MAX);
+    i64::try_from(value.clamp(low, high)).unwrap_or(0)
 }
 
 /// The world height whose texture row is `v = 0` for `plan`'s slot,
@@ -924,8 +1081,8 @@ fn tex_top(plan: &FacePlan<'_>) -> i64 {
     if unpegged { unpegged_top } else { pegged }
 }
 
-/// Builds the mapped, shaded wall run from `plan`, painting `column`.
-fn part<'plan>(plan: &'plan FacePlan<'plan>, column: i64) -> Part<'plan> {
+/// Builds the mapped, shaded wall run from `plan`.
+fn part<'plan>(plan: &'plan FacePlan<'plan>) -> Part<'plan> {
     let visit = plan.visit;
     let side = visit.side;
     let along = visit.s.times(visit.edge.len16);
@@ -936,7 +1093,6 @@ fn part<'plan>(plan: &'plan FacePlan<'plan>, column: i64) -> Part<'plan> {
     }
     .saturating_add(i128::from(side.x_offset).saturating_mul(ONE_16));
     Part {
-        column,
         image: plan.image,
         top: plan.span.0,
         bottom: plan.span.1,
@@ -973,26 +1129,6 @@ fn texture_key(name: &str) -> Option<String> {
         return None;
     }
     Some(key)
-}
-
-/// The average palette index of an indexed image, `None` when it holds
-/// no pixels.
-fn average_index(image: &IndexedImage) -> Option<u8> {
-    let count = u64::try_from(image.indices.len()).ok().filter(|&n| n > 0)?;
-    let total = image
-        .indices
-        .iter()
-        .fold(0_u64, |sum, &index| sum.saturating_add(u64::from(index)));
-    u8::try_from(total.checked_div(count)?).ok()
-}
-
-/// The average palette index of every flat the scene loaded.
-fn flat_averages(scene: &Scene) -> BTreeMap<String, u8> {
-    scene
-        .flats
-        .iter()
-        .filter_map(|(name, image)| average_index(image).map(|avg| (name.clone(), avg)))
-        .collect()
 }
 
 /// The fake-contrast orientation of a linedef vector.
@@ -1044,11 +1180,15 @@ fn edge(line: usize, map: &Map, row: &Linedef) -> Option<Edge> {
 }
 
 /// One sidedef prepared for casting, `None` when its sector dangles.
-fn side(map: &Map, index: usize, averages: &BTreeMap<String, u8>, sky: Option<u8>) -> Option<Side> {
-    let row = map.sidedefs.get(index)?;
-    map.sectors.get(row.sector)?;
+fn side<'scene>(
+    index: usize,
+    scene: &'scene Scene,
+    sky: Option<Surface<'scene>>,
+) -> Option<Side<'scene>> {
+    let row = scene.map.sidedefs.get(index)?;
+    scene.map.sectors.get(row.sector)?;
     Some(Side {
-        plane: Plane::of(map, row.sector, averages, sky),
+        plane: Plane::of(&scene.map, row.sector, scene, sky),
         upper: texture_key(&row.upper),
         lower: texture_key(&row.lower),
         middle: texture_key(&row.middle),
@@ -1067,13 +1207,13 @@ mod tests {
 
     use super::{
         DIRECTION_SCALE, Edge, FacePlan, Fraction, MAX_PITCH, MIN_PITCH, ONE_16, Plane, Projection,
-        Slot, ViewCamera, average_index, check_pitch, focal_length, pierce, plane_depth,
-        render_view, tex_top, texture_key, wall_dir, wrap16,
+        Slot, ViewCamera, check_pitch, flat_texel, focal_length, pierce, plane_point, render_view,
+        sky_column, tex_top, texture_key, wall_dir, wrap16,
     };
     use crate::fixed::Angle;
     use crate::gfx::image::IndexedImage;
     use crate::gfx::palette::Palette;
-    use crate::render::{Lighting, RenderSettings, Scene, WallDir};
+    use crate::render::{Lighting, RenderSettings, Scene, Switch, WallDir};
     use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
 
@@ -1245,22 +1385,188 @@ mod tests {
     }
 
     #[test]
-    fn plane_depth_uses_the_row_geometry_and_skips_the_horizon() {
-        let focal2 = raw(160);
+    fn plane_ray_parameters_land_on_the_row_geometry() {
+        // An odd width keeps column 80 exactly on the camera axis, and a
+        // level pitch in an 84-row frame puts the horizon at row 42.
+        let camera = ViewCamera {
+            x: 100,
+            y: 200,
+            z: 41,
+            angle: 0,
+            pitch: 0,
+            fov: 90,
+        };
+        let proj = Projection::new(&camera, 161, 84);
+        assert_eq!(proj.horizon, raw(42), "level pitch centres the view");
+        let d = proj.direction(80);
         assert_eq!(
-            plane_depth(focal2, 41, 0, raw(49)),
-            Some(66),
-            "floor 0 seen 49 rows down: 41 * 80 / 49 = 66.9"
+            d,
+            (raw(161).saturating_mul(ONE_16), 0_i128),
+            "the centre column runs due east"
+        );
+        let floor = proj
+            .plane_t(0, 83)
+            .expect("the bottom row sees the floor below the eye");
+        assert_eq!(
+            floor.times(ONE_16),
+            raw(1).checked_div(2_i128).expect("test divisor"),
+            "t = 1/2 at the bottom row"
         );
         assert_eq!(
-            plane_depth(focal2, 41, 41, raw(1)),
-            Some(0),
-            "an eye-height plane has no depth"
+            proj.depth16(floor),
+            raw(161).checked_div(2_i128).expect("test divisor"),
+            "80.5 units of perpendicular depth"
+        );
+        let point = plane_point((100, 200), d, floor);
+        assert_eq!(
+            point.0,
+            raw(361).checked_div(2_i128).expect("test divisor"),
+            "on the floor, 80.5 map units east of the camera's x"
+        );
+        assert_eq!(point.1, raw(200), "no north-south offset: straight ahead");
+        assert_eq!(
+            point.0.saturating_sub(raw(100)),
+            raw(161).checked_div(2_i128).expect("test divisor"),
+            "the point sits 80.5 units forward of the column under the camera"
+        );
+    }
+
+    #[test]
+    fn planes_the_camera_cannot_see_have_no_ray_parameter() {
+        let camera = ViewCamera {
+            x: 0,
+            y: 0,
+            z: 41,
+            angle: 0,
+            pitch: 0,
+            fov: 90,
+        };
+        let proj = Projection::new(&camera, 161, 84);
+        assert!(
+            proj.plane_t(0, 0).is_none(),
+            "a floor below the eye owns no row above the horizon"
+        );
+        assert!(
+            proj.plane_t(0, 42).is_none(),
+            "the horizon row itself is skipped"
+        );
+        assert!(
+            proj.plane_t(128, 83).is_none(),
+            "a ceiling above the eye owns no row below the horizon"
+        );
+        assert!(
+            proj.plane_t(41, 83).is_none(),
+            "a plane at eye height projects nowhere"
+        );
+        assert!(
+            proj.plane_t(128, 0).is_some(),
+            "the ceiling owns the top row"
+        );
+    }
+
+    #[test]
+    fn flat_texels_wrap_the_world_grid() {
+        assert_eq!(
+            flat_texel(raw(3), raw(-5), 64, 64),
+            Some((3, 5)),
+            "a plain point, its row measured from the negated y"
         );
         assert_eq!(
-            plane_depth(focal2, 41, 0, 0),
-            None,
-            "the horizon row is skipped"
+            flat_texel(raw(67), raw(0), 64, 64),
+            Some((3, 0)),
+            "one lap east"
+        );
+        assert_eq!(
+            flat_texel(raw(-1), raw(0), 64, 64),
+            Some((63, 0)),
+            "west of zero wraps back"
+        );
+        assert_eq!(
+            flat_texel(raw(-64), raw(-64), 64, 64),
+            Some((0, 0)),
+            "exact laps land on the origin texel"
+        );
+        assert_eq!(
+            flat_texel(raw(-1), raw(64), 64, 128),
+            Some((63, 64)),
+            "rows wrap into a 64x128 flat"
+        );
+        let under = raw(-1).checked_add(1).expect("test sum");
+        assert_eq!(
+            flat_texel(under, under, 64, 64),
+            Some((63, 0)),
+            "floor of -0.000015 is -1, of its negation 0"
+        );
+    }
+
+    /// The `2^32`-scaled unit direction of `angle`, for sky tests.
+    fn unit(angle: Angle) -> (i128, i128) {
+        (
+            i128::from(angle.cos().0).saturating_mul(ONE_16),
+            i128::from(angle.sin().0).saturating_mul(ONE_16),
+        )
+    }
+
+    #[test]
+    fn sky_columns_bucket_the_ray_angle() {
+        assert_eq!(sky_column(unit(Angle::EAST), 256), 0, "due east");
+        assert_eq!(
+            sky_column(unit(Angle::from_degrees(3)), 256),
+            8,
+            "3 degrees sits in slice 8"
+        );
+        assert_eq!(
+            sky_column(unit(Angle::from_degrees(89)), 256),
+            253,
+            "just short of north"
+        );
+        assert_eq!(
+            sky_column(unit(Angle::from_degrees(91)), 256),
+            2,
+            "slice 258 wraps the 256-wide sky, which repeats four times a turn"
+        );
+        assert_eq!(
+            sky_column(unit(Angle::from_degrees(359)), 256),
+            253,
+            "one degree short of the turn"
+        );
+        assert_eq!(
+            sky_column(unit(Angle::from_degrees(359)), 128),
+            125,
+            "a 128-wide sky repeats eight times"
+        );
+    }
+
+    #[test]
+    fn sky_rows_use_dooms_placement_and_clamp() {
+        let camera = ViewCamera {
+            x: 0,
+            y: 0,
+            z: 0,
+            angle: 0,
+            pitch: 0,
+            fov: 90,
+        };
+        let proj = Projection::new(&camera, 160, 100);
+        assert_eq!(proj.sky_row(0, 128), 0, "the frame top is the sky top");
+        assert_eq!(proj.sky_row(49, 128), 98, "one row over the horizon");
+        assert_eq!(proj.sky_row(50, 128), 100, "the horizon row reads mid-sky");
+        assert_eq!(proj.sky_row(63, 128), 126, "still inside the 128 rows");
+        assert_eq!(
+            proj.sky_row(64, 128),
+            127,
+            "the placement saturates at the sky's last row"
+        );
+        assert_eq!(proj.sky_row(99, 64), 63, "a short sky clamps early");
+        let up = ViewCamera {
+            pitch: 45,
+            ..camera
+        };
+        let raised = Projection::new(&up, 160, 100);
+        assert_eq!(
+            raised.sky_row(0, 128),
+            0,
+            "looking up pushes the top row past the sky's top, clamped"
         );
     }
 
@@ -1320,13 +1626,13 @@ mod tests {
     /// ceiling, on an edge carrying the asked-for unpegged bits. Near
     /// floor 0 ceiling 128, far floor 32 ceiling 96, texture 32 tall:
     /// the pegged cases differ from the unpegged ones by the table above.
-    fn step_parts(unpegged: bool) -> (Edge, super::Side, super::Side) {
+    fn step_parts(unpegged: bool) -> (Edge, super::Side<'static>, super::Side<'static>) {
         let near = Plane {
             floor: 0,
             ceil: 128,
             light: 255,
-            floor_fill: None,
-            ceil_fill: None,
+            floor_surface: None,
+            ceil_surface: None,
             ceil_sky: false,
         };
         let far = Plane {
@@ -1377,11 +1683,7 @@ mod tests {
     }
 
     #[test]
-    fn averages_and_keys_are_the_picture_side() {
-        let flat = IndexedImage::new(2, 2, vec![1_u8, 3, 5, 7], vec![true; 4]).expect("2x2 builds");
-        assert_eq!(average_index(&flat), Some(4), "the mean index");
-        let nothing = IndexedImage::new(1, 1, vec![9_u8], vec![true]).expect("1x1 builds");
-        assert_eq!(average_index(&nothing), Some(9), "a single pixel");
+    fn texture_keys_trim_uppercase_and_drop_the_none_marker() {
         assert_eq!(texture_key(" wall1 "), Some("WALL1".to_owned()));
         assert_eq!(texture_key("-"), None, "the none-marker");
         assert_eq!(texture_key("  "), None, "an empty name");
@@ -1514,12 +1816,12 @@ mod tests {
         assert_eq!(
             canvas.pixel(0, 63),
             Some([1_u8, 254, 1, 255]),
-            "the bottom row is the FLOOR1 average"
+            "the bottom row is the solid FLOOR1 flat"
         );
         assert_eq!(
             canvas.pixel(0, 0),
             Some([200_u8, 55, 200, 255]),
-            "the top of the north-leaning column is the CEIL3 average"
+            "the top of the north-leaning column is the solid CEIL3 flat"
         );
         assert_eq!(
             canvas.pixel(0, 30),
@@ -1538,6 +1840,168 @@ mod tests {
         );
     }
 
+    /// A `64x64` two-tone flat: columns `0..32` index 1, `32..64` index 2.
+    fn half_flat() -> IndexedImage {
+        let mut indices = Vec::new();
+        for _row in 0..64_usize {
+            indices.extend_from_slice(&[1_u8; 32]);
+            indices.extend_from_slice(&[2_u8; 32]);
+        }
+        let opaque = vec![true; indices.len()];
+        IndexedImage::new(64, 64, indices, opaque).expect("64x64 builds")
+    }
+
+    #[test]
+    fn the_floor_samples_its_flat_on_the_world_grid() {
+        let mut scene = box_scene();
+        scene.flats.insert("FLOOR1".to_owned(), half_flat());
+        let camera = ViewCamera {
+            pitch: -45,
+            ..box_camera()
+        };
+        let rendered = render_view(&scene, &camera, 32, 64);
+        // Centre column, eye 41 over floor 0: the row at `dy` steps below
+        // the horizon (row 16) sits `41 * 32 / (2 * dy)` units east of x 64.
+        assert_eq!(
+            rendered.canvas.pixel(16, 18),
+            Some([1_u8, 254, 1, 255]),
+            "depth 328 lands on x 392, texel column 8"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 22),
+            Some([2_u8, 253, 2, 255]),
+            "depth 109 lands on x 173, texel column 45"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 30),
+            Some([2_u8, 253, 2, 255]),
+            "depth 47 lands on x 110, texel column 46"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 40),
+            Some([1_u8, 254, 1, 255]),
+            "depth 27 lands on x 91, texel column 27"
+        );
+    }
+
+    #[test]
+    fn the_depth_buffer_grows_with_distance_up_the_column() {
+        let scene = box_scene();
+        let camera = ViewCamera {
+            pitch: -45,
+            ..box_camera()
+        };
+        let rendered = render_view(&scene, &camera, 32, 64);
+        let centre = |row: usize| {
+            *rendered
+                .depth
+                .get(row.saturating_mul(32).saturating_add(16))
+                .expect("a frame pixel")
+        };
+        assert_eq!(centre(0), 87, "the ceiling 87 above the eye at 16 rows up");
+        assert_eq!(
+            centre(11),
+            278,
+            "climbing to the horizon the ceiling recedes"
+        );
+        assert_eq!(centre(17), 448, "the east wall's own depth covers its rows");
+        assert_eq!(centre(18), 328, "the floor row just below the wall base");
+        assert_eq!(centre(63), 13, "the near floor at the frame bottom");
+        let mut previous = centre(63);
+        for row in (18_usize..63_usize).rev() {
+            let value = centre(row);
+            assert!(
+                value >= previous,
+                "depth never shrinks climbing the floor run at row {row}"
+            );
+            previous = value;
+        }
+    }
+
+    /// The box scene with its ceiling switched to the sky marker.
+    fn sky_box() -> Scene {
+        let mut scene = box_scene();
+        let sector = scene
+            .map
+            .sectors
+            .get_mut(0)
+            .expect("the box has one sector");
+        sector.ceiling_flat = "F_SKY1".to_owned();
+        sector.light = 0_i32;
+        scene.sky = solid(256, 128, 200);
+        scene
+    }
+
+    #[test]
+    fn a_sky_ceiling_paints_the_sky_texture_full_bright() {
+        let mut scene = sky_box();
+        scene.settings.lighting = Lighting::Flat;
+        let rendered = render_view(&scene, &box_camera(), 32, 64);
+        assert_eq!(
+            rendered.canvas.pixel(0, 0),
+            Some([200_u8, 55, 200, 255]),
+            "a dark sector still gets the full-bright sky"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 0),
+            Some([200_u8, 55, 200, 255]),
+            "the centre column's sky band reads the same"
+        );
+        assert_eq!(
+            *rendered.depth.get(16).expect("a frame pixel"),
+            i64::MAX,
+            "sky pixels stay infinitely deep"
+        );
+    }
+
+    #[test]
+    fn a_sky_floor_paints_the_sky_too() {
+        let mut scene = box_scene();
+        scene.sky = solid(64, 128, 200);
+        let sector = scene
+            .map
+            .sectors
+            .get_mut(0)
+            .expect("the box has one sector");
+        sector.floor_flat = "F_SKY1".to_owned();
+        let rendered = render_view(&scene, &box_camera(), 32, 64);
+        assert_eq!(
+            rendered.canvas.pixel(16, 63),
+            Some([200_u8, 55, 200, 255]),
+            "the F_SKY1 floor draws the sky, not the void"
+        );
+        assert_eq!(
+            *rendered
+                .depth
+                .get(63_usize.saturating_mul(32).saturating_add(16))
+                .expect("a frame pixel"),
+            i64::MAX,
+            "and it stays infinitely deep"
+        );
+    }
+
+    #[test]
+    fn the_sky_switch_off_leaves_sky_rows_the_background() {
+        let mut scene = sky_box();
+        scene.settings.sky = Switch::new(false);
+        let rendered = render_view(&scene, &box_camera(), 32, 64);
+        assert_eq!(
+            rendered.canvas.pixel(16, 0),
+            Some([0_u8, 0, 0, 255]),
+            "sky off: the ceiling rows keep the background colour"
+        );
+        assert_eq!(
+            *rendered.depth.get(16).expect("a frame pixel"),
+            i64::MAX,
+            "and they keep the open depth"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 32),
+            Some([77_u8, 178, 77, 255]),
+            "walls are untouched by the switch"
+        );
+    }
+
     #[test]
     fn the_background_seals_the_frame_outside_every_wall() {
         let mut scene = box_scene();
@@ -1548,6 +2012,10 @@ mod tests {
             rendered.canvas.pixel(16, 32),
             Some([0_u8, 0, 0, 255]),
             "no lines means the plain background colour"
+        );
+        assert!(
+            rendered.depth.iter().all(|slot| *slot == i64::MAX),
+            "nothing painted means nothing nearer than the horizon"
         );
     }
 }

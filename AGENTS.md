@@ -121,9 +121,9 @@ src/
                   frames with, and `render/view.rs` the 3D-view column
                   caster: 16.16 camera trig, exact `i128` ray/segment
                   fractions, the sorted portal column walk (textured
-                  upper/middle/lower faces with pegging, flat-average
-                  shaded planes, solid sky) and the masked-middle
-                  collection for the next pass.
+                  upper/middle/lower faces with pegging, world-aligned
+                  textured planes, a view-angled sky, a per-pixel depth
+                  buffer) and the masked-middle collection for the next pass.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions

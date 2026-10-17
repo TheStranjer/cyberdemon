@@ -5,8 +5,9 @@
 //! highlights and error codes, `render_minimap`' compact automap
 //! square: its window fit, palette colours, zoom, player arrow and
 //! errors, and `render_view`' first-person frame: camera echo, textured
-//! walls, flat-shaded planes, pitch, lighting and error codes. The
-//! `build_scene` preparations the 3D view will use are checked here too.
+//! walls, textured planes, the sky texture, pitch, lighting and error
+//! codes. The `build_scene` preparations the 3D view uses are checked here
+//! too.
 
 #[cfg(test)]
 mod tests {
@@ -22,7 +23,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, iwad_heretic, pwad, pwad_empty_map};
+    use crate::fixtures::{iwad, iwad_heretic, iwad_view_textures, pwad, pwad_empty_map};
     use crate::support::{call, call_err, connect, http_get};
 
     /// The settings a fresh connection starts on.
@@ -1105,6 +1106,115 @@ mod tests {
             [156_u8, 99, 156, 255],
             "light 192 at depth 448 lands on table 7 of the fixture ramp: \
              index 100 + 56, darker than the fullbright wall's (108, 147, 108)"
+        );
+    }
+
+    /// The number of pixels of `image`'s rows `top..` (the rest of the
+    /// frame) that are exactly `color`.
+    fn count_pixels_in_rows(image: &RgbaImage, top: u32, color: [u8; 4]) -> usize {
+        (top..image.height)
+            .flat_map(|row| (0..image.width).map(move |col| (col, row)))
+            .filter(|&(col, row)| image.get(col, row) == Some(color))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn render_view_textures_the_floor_with_its_flat_on_the_world_grid() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let base = iwad_view_textures(dir.path());
+        call(&client, "open_iwad", path_arg(&base)).await;
+        fullbright(&client).await;
+        let report = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "pitch": -45_i64 })),
+        )
+        .await;
+        let image = rendered_image(&report).await;
+        let left = count_pixels_in_rows(&image, 50, [10_u8, 245, 10, 255]);
+        let right = count_pixels_in_rows(&image, 50, [20_u8, 235, 20, 255]);
+        assert!(
+            left > 0,
+            "the CHECKER's index-10 half shows in the lower half: texel columns 0..32 of \
+             the CHECKER 64x64 grid"
+        );
+        assert!(
+            right > 0,
+            "and the index-20 half too: {left}/{right} split by texel column 32"
+        );
+    }
+
+    /// A fullbright client on the textured-view fixture `IWAD`.
+    async fn sky_room_client(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad_view_textures(dir);
+        call(&client, "open_iwad", path_arg(&base)).await;
+        fullbright(&client).await;
+        client
+    }
+
+    /// Asserts the sky band at the frame top of a room-1 view reads the
+    /// `SKY1` texture colour: room 1 (`x 256..512`) has the `F_SKY1`
+    /// ceiling and its sky rows start at the frame top, well above the
+    /// horizon at row 50.
+    fn assert_sky_band(image: &RgbaImage) {
+        for (column, row) in [
+            (40_u32, 0_u32),
+            (40, 10),
+            (80, 0),
+            (80, 10),
+            (120, 0),
+            (120, 10),
+        ] {
+            assert_eq!(
+                image.get(column, row).expect("a pixel"),
+                [200_u8, 55, 200, 255],
+                "the F_SKY1 ceiling draws the SKY1 texture at column {column} row {row}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn render_view_draws_the_sky_texture_over_a_sky_ceiling() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let report = call(
+            &client,
+            "render_view",
+            json!({ "map": "MAP01", "x": 384_i64, "y": 128_i64, "angle": 180_i64,
+                    "width": 160_u64, "height": 100_u64 }),
+        )
+        .await;
+        assert_eq!(
+            report["camera"]["sector"],
+            json!(1_u64),
+            "standing in the sky room"
+        );
+        let image = rendered_image(&report).await;
+        assert_sky_band(&image);
+        assert!(
+            !report["problems"]
+                .as_array()
+                .expect("problems is a list")
+                .iter()
+                .any(|problem| problem.as_str().is_some_and(|text| text.contains("SKY1"))),
+            "the fixture SKY1 loaded: {}",
+            report["problems"]
+        );
+        call(&client, "set_render_options", json!({ "sky": false })).await;
+        let off = call(
+            &client,
+            "render_view",
+            json!({ "map": "MAP01", "x": 384_i64, "y": 128_i64, "angle": 180_i64,
+                    "width": 160_u64, "height": 100_u64 }),
+        )
+        .await;
+        let dark = rendered_image(&off).await;
+        assert_eq!(
+            dark.get(80, 0).expect("a pixel"),
+            [0_u8, 0, 0, 255],
+            "with the sky switch off the sky ceiling reads the background colour"
         );
     }
 

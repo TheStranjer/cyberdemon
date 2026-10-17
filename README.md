@@ -58,7 +58,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > DEHACKED/DECORATE/ZScript/MAPINFO thing definitions), a texture theme core (`src/themes*`: the embedded per-game role/candidate tables and the exact→glob→fallback→default resolver, plus the pure auto-texture and texture-chain alignment engines behind the themes tools) and render defaults (`src/render*`: the validated session-level settings, the integer gamma curve, the 3D-view lighting maths
 > (COLORMAP tables, fake contrast, shading), the scene preparation (textures, flats, sky,
 > fallbacks, `problems`), the integer column caster `render_view` walks (exact `i128` ray
-> fractions, per-column portal walks, textured walls, flat-average planes), the shared
+> fractions, per-column portal walks, textured walls, world-aligned textured planes, the sky texture and a per-pixel depth buffer), the shared
 > automap line map and minimap window, and the clipped integer raster canvas (Bresenham lines, even-odd polygon fills) both paint on) and a
 > pure planar geometry engine (`src/geom*`: layered polygons and external
 > segments arranged into non-crossing, side-labelled integer pieces; all

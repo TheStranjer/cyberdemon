@@ -300,15 +300,23 @@ do not apply, `show_things` does.
   textures, including texture offsets, Doom's pegging flags (one-sided
   middles hang from the ceiling; upper bands sit on the far ceiling,
   lower bands on the far floor) and `COLORMAP` shading with fake
-  contrast, as above. Floors and ceilings paint the **average colour**
-  of their flat, shaded per row by plane depth; a `F_SKY1` ceiling is
-  the sky picture's average colour as a solid, or the `background`
-  colour when the `sky` setting is off. A `-` texture draws nothing and
-  leaves the background.
-- Current limitations: planes and skies are flat colours, not textured
-  (textured planes and sky come in the next update); masked middle
-  textures on two-sided lines are not drawn yet, so switch and door
-  lines look open; things and sprites are not drawn yet.
+  contrast, as above. Floors and ceilings draw their **flat textured**,
+  aligned to the world grid like Doom: each pixel samples the flat at
+  the world point its row's depth lands on, texel column `floor(x)`
+  and texel row `floor(-y)`, wrapped into the picture (any supported
+  flat size works: `64x64`, `64x128`, `128x128`, `256x256`), shaded
+  row by row by that row's plane depth. A ceiling (or floor) whose
+  flat is `F_SKY1` draws the **sky texture** instead: the sky column
+  comes from the column's view angle (Doom's 1024 slices per full
+  turn, so a 256-wide sky repeats four times), the row from Doom's
+  `320x200` sky placement, and sky is always full bright and infinitely
+  far. With the `sky` setting off, sky surfaces show the `background`
+  colour; an upper wall between two sky ceilings is not drawn, so the
+  sky shows through. A `-` texture draws nothing and leaves the
+  background.
+- Current limitations: masked middle textures on two-sided lines are
+  not drawn yet, so switch and door lines look open; things and sprites
+  are not drawn yet.
 - Errors: `invalid_argument` when `x`/`y` lies in no sector ("camera is
   outside the map"), when `pitch` or `fov` is outside its range, for an
   edge outside the resolution ranges or over the pixel cap, and for an

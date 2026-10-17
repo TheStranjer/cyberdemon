@@ -12,14 +12,17 @@
 //! `COLORMAP` tables and shaded pixels for the 3D view. [`topdown`] holds
 //! the shared line map: the `Doom` automap classification and colours,
 //! thing visuals and the square [`Window`] the minimap frames with.
-//! Nothing here knows about MCP; the `render` tool group is the only
-//! caller that talks to clients.
+//! [`view`] casts the columns of the 3D view: exact `i128` ray
+//! parameters, a sorted portal walk per column, textured walls and
+//! flat-shaded planes. Nothing here knows about MCP; the `render` tool
+//! group is the only caller that talks to clients.
 
 pub mod canvas;
 pub mod light;
 pub mod scene;
 pub mod settings;
 pub mod topdown;
+pub mod view;
 
 use crate::render::settings::MAX_GAMMA;
 
@@ -31,6 +34,9 @@ pub use topdown::{
     AutomapColors, PLAYER_ARROW_PX, PlayerMark, THING_DOT_PX, UNKNOWN_THING_RADIUS, Window,
     automap_color, category_color, paint_automap_lines, paint_player_arrow, paint_thing_dots,
     scale_down, side_sector, thing_visual,
+};
+pub use view::{
+    MAX_PITCH, MIN_PITCH, MaskedMiddle, Rendered, ViewCamera, check_pitch, render_view,
 };
 
 /// The brightest input value of an 8-bit channel.

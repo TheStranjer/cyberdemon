@@ -96,8 +96,8 @@ src/
                   the `class` reader on the same scanner and
                   `defs/mapinfo.rs` the `DoomEdNums` block reader.
   render.rs       Rendering core module root: the integer gamma curve
-                  (`gamma_table`) and the settings, canvas, lighting and
-                  scene re-exports.
+                  (`gamma_table`) and the settings, canvas, lighting, scene
+                  and column-caster re-exports.
   render/         Rendering building blocks (no MCP concerns):
                   `render/settings.rs` the session-level `RenderSettings`
                   (resolution, lighting, markers, sky, FOV, gamma, top-down
@@ -110,11 +110,16 @@ src/
                   contrast) and `shade`, `render/scene.rs` the `Scene`
                   preparation: map, palette, COLORMAP, used textures and
                   flats, sky selection, checkerboard fallbacks, `problems`
-                  and the camera helpers, and `render/topdown.rs` the
+                  and the camera helpers, `render/topdown.rs` the
                   shared automap line map: `Doom` classification and
                   colours (RGB defaults plus `PLAYPAL` entries), thing
                   visuals, and the square `Window` mapping the minimap
-                  frames with.
+                  frames with, and `render/view.rs` the 3D-view column
+                  caster: 16.16 camera trig, exact `i128` ray/segment
+                  fractions, the sorted portal column walk (textured
+                  upper/middle/lower faces with pegging, flat-average
+                  shaded planes, solid sky) and the masked-middle
+                  collection for the next pass.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions

@@ -2,8 +2,11 @@
 //! render defaults, the validation each setter applies, how long the
 //! settings live, `render_topdown`' pictures: the fitted transform,
 //! the style colours, sector fills, thing markers, isometric wireframe,
-//! highlights and error codes, and `render_minimap`' compact automap
-//! square: its window fit, palette colours, zoom, player arrow and errors.
+//! highlights and error codes, `render_minimap`' compact automap
+//! square: its window fit, palette colours, zoom, player arrow and
+//! errors, and `render_view`' first-person frame: camera echo, textured
+//! walls, flat-shaded planes, pitch, lighting and error codes. The
+//! `build_scene` preparations the 3D view will use are checked here too.
 
 #[cfg(test)]
 mod tests {
@@ -947,6 +950,216 @@ mod tests {
         assert_eq!(non_background(&image), 0, "an empty map is pure black");
     }
 
+    /// The `render_view` arguments over the fixture camera in the hall,
+    /// with `extra` merged in.
+    fn view_args(extra: &Value) -> Value {
+        let mut args = json!({
+            "map": "MAP01", "x": 64_i64, "y": 128_i64,
+            "width": 160_u64, "height": 100_u64,
+        });
+        let Some(base) = args.as_object_mut() else {
+            return args;
+        };
+        let Some(over) = extra.as_object() else {
+            return args;
+        };
+        for (key, value) in over {
+            base.insert(key.clone(), value.clone());
+        }
+        args
+    }
+
+    /// Refuses one `render_view` camera argument and requires the message
+    /// to show `wanted`.
+    async fn view_refused(client: &Client, field: &str, value: Value, wanted: &str) {
+        let mut args = view_args(&Value::Null);
+        args[field] = value;
+        let (code, message) = call_err(client, "render_view", args).await;
+        assert_eq!(code, "invalid_argument", "{field} out of range");
+        assert!(
+            message.contains(wanted),
+            "the {field} refusal shows {wanted}: {message}"
+        );
+    }
+
+    /// Light everything fully so palette colours land unchanged.
+    async fn fullbright(client: &Client) {
+        call(
+            client,
+            "set_render_options",
+            json!({ "lighting": "fullbright" }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn render_view_reports_the_camera_and_paints_the_hall_view() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        fullbright(&client).await;
+        let report = call(&client, "render_view", view_args(&Value::Null)).await;
+        assert_eq!(report["map"], json!("MAP01"), "the rendered map");
+        assert_eq!(
+            report["camera"],
+            json!({
+                "x": 64_i64, "y": 128_i64, "z": 41_i64, "angle": 0_i64,
+                "pitch": 0_i64, "fov": 90_u64, "sector": 0_u64,
+            }),
+            "the effective camera, standing on the hall floor"
+        );
+        assert_eq!(
+            report["asset"]["filename"],
+            json!("MAP01_view.png"),
+            "the published name"
+        );
+        assert!(
+            report["problems"]
+                .as_array()
+                .expect("problems is a list")
+                .contains(&json!("missing sky SKY1")),
+            "the missing sky is reported: {}",
+            report["problems"]
+        );
+        let image = rendered_image(&report).await;
+        assert_eq!((image.width, image.height), (160, 100), "the PNG shape");
+        assert_eq!(
+            image.get(80, 50).expect("a pixel"),
+            [108_u8, 147, 108, 255],
+            "the centre at the horizon is room 1's far WALL1 wall through the open step \
+             line, a fake-contrast step darker on its north-south line"
+        );
+        assert_eq!(
+            image.get(80, 60).expect("a pixel"),
+            [158_u8, 97, 158, 255],
+            "low in the centre column the STEP1 lower texture faces the step"
+        );
+        assert_eq!(
+            image.get(0, 99).expect("a pixel"),
+            [1_u8, 254, 1, 255],
+            "the bottom-left pixel is the FLOOR1 average as floor"
+        );
+        assert_eq!(
+            image.get(20, 0).expect("a pixel"),
+            [1_u8, 254, 1, 255],
+            "near the top-left the hall's own ceiling still shows"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_pitch_moves_the_horizon_down_the_frame() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        fullbright(&client).await;
+        let report = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "pitch": 30_i64 })),
+        )
+        .await;
+        assert_eq!(report["camera"]["pitch"], json!(30_i64), "echoed back");
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            image.get(80, 84).expect("a pixel"),
+            [108_u8, 147, 108, 255],
+            "the far wall slid down with the horizon: its rows are now around 80 to 97"
+        );
+        assert_eq!(
+            image.get(80, 50).expect("a pixel"),
+            [1_u8, 254, 1, 255],
+            "the old centre row now looks over the hall's ceiling"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_takes_the_room_side_camera_and_an_explicit_eye_height() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let report = call(
+            &client,
+            "render_view",
+            json!({ "map": "MAP01", "x": 384_i64, "y": 128_i64, "z": 100_i64,
+                    "angle": 180_i64, "width": 160_u64, "height": 100_u64 }),
+        )
+        .await;
+        assert_eq!(report["camera"]["sector"], json!(1_u64), "in room 1");
+        assert_eq!(
+            report["camera"]["z"],
+            json!(100_i64),
+            "the given eye height"
+        );
+        assert_eq!(
+            report["camera"]["angle"],
+            json!(180_i64),
+            "looking back west into the hall"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_doom_lighting_darkens_the_far_wall() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let report = call(&client, "render_view", view_args(&Value::Null)).await;
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            image.get(80, 50).expect("a pixel"),
+            [156_u8, 99, 156, 255],
+            "light 192 at depth 448 lands on table 7 of the fixture ramp: \
+             index 100 + 56, darker than the fullbright wall's (108, 147, 108)"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_refuses_a_camera_outside_the_map() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let (code, message) = call_err(
+            &client,
+            "render_view",
+            json!({ "map": "MAP01", "x": -100_i64, "y": -100_i64 }),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "no sector holds the camera");
+        assert!(
+            message.contains("outside"),
+            "the message says the camera is outside: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_refuses_out_of_range_camera_arguments() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        view_refused(&client, "pitch", json!(90_i64), "-60..=60").await;
+        view_refused(&client, "fov", json!(200_u64), "10..=170").await;
+        view_refused(&client, "width", json!(8_u64), "16..=4096").await;
+        view_refused(&client, "lighting", json!("cinematic"), "\"fullbright\"").await;
+    }
+
+    #[tokio::test]
+    async fn render_view_without_a_playpal_is_not_found() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let base = iwad(dir.path());
+        let bytes = fs::read(&base).expect("the fixture WAD is readable");
+        let mut wad = Wad::parse(&bytes).expect("the fixture WAD parses");
+        wad.lumps.retain(|lump| lump.name.to_string() != "PLAYPAL");
+        let stripped = dir.path().join("no-playpal.wad");
+        let out = wad.to_bytes().expect("the stripped archive serializes");
+        fs::write(&stripped, out).expect("the stripped archive writes");
+        call(&client, "open_iwad", path_arg(&stripped)).await;
+        let (code, message) = call_err(
+            &client,
+            "render_view",
+            json!({ "map": "MAP01", "x": 64_i64, "y": 128_i64 }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "a view needs a palette");
+        assert!(
+            message.contains("PLAYPAL"),
+            "the refusal names the missing lump: {message}"
+        );
+    }
+
     /// A parsed test lump name.
     fn parsed_name(text: &str) -> LumpName {
         LumpName::parse(text).expect("test names are valid")
@@ -1009,7 +1222,7 @@ mod tests {
         );
         assert_eq!(
             scene.textures["WALL1"].get(0, 0),
-            Some((0x11, true)),
+            Some((100, true)),
             "the tiled WALLP1 patch is opaque"
         );
         assert_eq!(
@@ -1018,7 +1231,7 @@ mod tests {
         );
         assert_eq!(
             scene.textures["STEP1"].get(0, 0),
-            Some((0x22, true)),
+            Some((150, true)),
             "its STEPP1 tiles drew too"
         );
     }

@@ -182,12 +182,15 @@ fn playpal() -> Vec<u8> {
     palettes
 }
 
-/// 34 `COLORMAP` tables of 256 bytes, every table the identity map.
+/// 34 `COLORMAP` tables of 256 bytes: table 0 the identity (what
+/// `fullbright` renders with) and every later table stepping each index
+/// eight places up the palette, so lit modes read darker against the
+/// fixture palette's brightness-decreasing colour ramp.
 fn colormap() -> Vec<u8> {
     let mut tables = Vec::new();
-    for _table in 0_u8..34 {
+    for table in 0_u8..34 {
         for index in 0_u8..=255 {
-            tables.push(index);
+            tables.push(index.saturating_add(table.saturating_mul(8_u8)));
         }
     }
     tables
@@ -349,9 +352,9 @@ fn iwad_lumps(duplicate_flat: bool) -> Vec<Lump> {
     lumps.push(marker("P_START"));
     lumps.push(lump(
         "WALLP1",
-        patch_with(16, 16, 0x11_u8, (-2_i16, -14_i16)),
+        patch_with(16, 16, 100_u8, (-2_i16, -14_i16)),
     ));
-    lumps.push(lump("STEPP1", patch(16, 8, 0x22_u8)));
+    lumps.push(lump("STEPP1", patch(16, 8, 150_u8)));
     lumps.push(marker("P_END"));
     lumps.extend(sprite_lumps());
     lumps.push(lump("PNAMES", pnames()));

@@ -350,12 +350,12 @@ mod tests {
         let image = fetch_image(url_of(&report)).await;
         assert_eq!(
             image.get(0, 0),
-            Some([17_u8, 238, 17, 255]),
+            Some([100_u8, 155, 100, 255]),
             "the tiled mappatch's index"
         );
         assert_eq!(
             image.get(63, 127),
-            Some([17_u8, 238, 17, 255]),
+            Some([100_u8, 155, 100, 255]),
             "the far corner is covered too"
         );
     }
@@ -379,7 +379,7 @@ mod tests {
         let image = fetch_image(url_of(&texture)).await;
         assert_eq!(
             image.get(0, 0),
-            Some([34_u8, 221, 34, 255]),
+            Some([150_u8, 105, 150, 255]),
             "STEPP1 tiled, not the flat's index"
         );
         let no_definition = call(
@@ -476,8 +476,8 @@ mod tests {
         );
         assert_eq!(
             image.get(17, 33),
-            Some([17_u8, 238, 17, 255]),
-            "the last table's entry 17"
+            Some([255_u8, 0, 255, 255]),
+            "the last table steps entry 17 past the palette's end"
         );
     }
 

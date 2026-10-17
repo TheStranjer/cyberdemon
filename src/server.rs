@@ -44,6 +44,7 @@ impl Cyberdemon {
         router.merge(Self::audio_router());
         router.merge(Self::convert_router());
         router.merge(Self::defs_router());
+        router.merge(Self::edit_linedefs_router());
         router.merge(Self::edit_sectors_router());
         router.merge(Self::edit_sidedefs_router());
         router.merge(Self::edit_things_router());

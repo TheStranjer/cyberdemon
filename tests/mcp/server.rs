@@ -80,7 +80,8 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 98] = [
+    const EXPECTED_TOOLS: [&str; 101] = [
+        "add_linedef",
         "add_lump",
         "add_sector",
         "add_sidedef",
@@ -100,6 +101,7 @@ mod tests {
         "diff_wads",
         "edit_decorate",
         "edit_dehacked",
+        "edit_linedef",
         "edit_pnames",
         "edit_sector",
         "edit_sidedef",
@@ -153,6 +155,7 @@ mod tests {
         "preview_music",
         "preview_sound",
         "redo",
+        "remove_linedef",
         "remove_lump",
         "remove_map",
         "remove_sector",

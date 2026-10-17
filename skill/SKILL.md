@@ -169,6 +169,7 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `redo`                   | `reference/session.md`  |
 | `get_session_info`       | `reference/session.md`  |
 | `get_wad_info`           | `reference/session.md`  |
+| `run_batch`              | `reference/batch.md`    |
 | `render_topdown`         | `reference/render.md`   |
 | `set_render_resolution`  | `reference/render.md`   |
 | `set_render_options`     | `reference/render.md`   |

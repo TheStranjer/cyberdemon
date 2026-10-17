@@ -21,5 +21,11 @@ run the loop:
 When a change went wrong and repairing it looks fiddlier than repeating it,
 call `undo` and redo the step deliberately rather than patching blind.
 
+A failed `run_batch` (default `atomic: true`) leaves the map untouched: the
+whole batch rolls back with it, so there is nothing half-applied to repair —
+fix the failing step's input and send the batch again. A batch that went
+through is one `undo` wide, whatever its length
+(see `../reference/batch.md`).
+
 Until each tool above ships (see the tool index in `../SKILL.md`), run its
 step by hand: re-read the affected map data and compare the numbers.

@@ -13,15 +13,18 @@
 //! ([`Point`]), partitions are whole-unit [`Partition`] lines, and every
 //! crossing test and product is computed in `i128`.
 //! [`build_tree`] is the entry point; [`vanilla::to_vanilla`] renders a
-//! finished tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record bytes.
+//! finished tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record bytes
+//! and [`extended::to_extended`] as one `ZDoom` extended lump.
 
 pub mod choose;
+pub mod extended;
 pub mod seg;
 pub mod side;
 pub mod split;
 pub mod tree;
 pub mod vanilla;
 
+pub use extended::{ExtendedNodes, to_extended};
 pub use seg::BuildSeg;
 pub use tree::{BBox, BspTree, BuiltNode, Child, build_tree};
 pub use vanilla::{VanillaNodes, to_vanilla};

@@ -1,9 +1,10 @@
 # Nodes tools
 
 The node-builder output of a map: `get_nodes`, `get_reject` and
-`get_blockmap` read it, `build_nodes` rebuilds the
-`SEGS`/`SSECTORS`/`NODES` BSP tree itself, and `build_blockmap` and
-`build_reject` rebuild the two lumps that need no tree.
+`get_blockmap` read it, `build_nodes` rebuilds the BSP tree itself —
+as the vanilla `SEGS`/`SSECTORS`/`NODES` run or `ZDoom`'s extended
+lump (`NODES`/`ZNODES`) — and `build_blockmap` and `build_reject`
+rebuild the two lumps that need no tree.
 
 ## What these lumps are for
 
@@ -134,17 +135,34 @@ an unknown `mode` is `invalid_argument`.
 
 ## `build_nodes`
 
-`{map?, variant? ("classic" | "extended" | "gl"), split_cost? (8)}` →
-`{variant, segs, subsectors, nodes, split_vertices, warnings, map,
-nodes_invalidated, copied_to_working}` — one undoable edit that rebuilds
-the map's BSP tree from its current geometry with the in-house builder
-and writes the result. `variant` selects the layout: `"classic"` (the
-default) writes the vanilla three-lump run — 12-byte `SEGS`, 4-byte
-`SSECTORS`, 28-byte `NODES` with the root last — which vanilla `Doom`
-needs to play the map and every port can use. `"extended"` (`ZDoom`
-`XNOD`, fraction-precise split vertices) and `"gl"` (the glBSP `GL_*`
-run) are **not implemented yet** and fail `unsupported`; use
-`"classic"`.
+`{map?, variant? ("classic" | "extended" | "gl"), split_cost? (8),
+compress? (true)}` → `{variant, segs, subsectors, nodes, warnings, map,
+nodes_invalidated, copied_to_working}` plus the per-variant keys below —
+one undoable edit that rebuilds the map's BSP tree from its current
+geometry with the in-house builder and writes the result. `variant`
+selects the layout:
+
+- `"classic"` (the default) writes the vanilla three-lump run —
+  12-byte `SEGS`, 4-byte `SSECTORS`, 28-byte `NODES` with the root last
+  — which vanilla `Doom` needs to play the map and every port can use.
+  Binary maps only: on a `UDMF` map it fails `invalid_argument` (`UDMF
+  maps use extended nodes`). Seg endpoints that fall between vertices
+  append new vertices to `VERTEXES` (`split_vertices` counts them).
+- `"extended"` writes `ZDoom`'s single extended lump: fraction-precise
+  `16.16` split vertices, `u32` vertex/child indices and the `bit 31`
+  leaf flag. Binary blocks get it in `NODES`, with `SEGS` and
+  `SSECTORS` emptied (`ZDoom` ignores them when `NODES` is extended);
+  `UDMF` blocks get a `ZNODES` lump between `TEXTMAP` and `ENDMAP`, and
+  a stale `NODES`/`SEGS`/`SSECTORS` run there is dropped. The map's
+  `VERTEXES` are never modified — the split points live inside the lump
+  (`new_vertices` counts them). Use it for `ZDoom`-family ports, for
+  `UDMF` maps (the only layout they read), and when a classic build
+  refuses `limit_exceeded` on the vanilla record limits. `compress`
+  (default `true`) `zlib`-compresses the payload behind the `ZNOD`
+  magic; `false` stores it raw behind `XNOD`. The result adds `format`
+  (`"ZNOD"`/`"XNOD"`) and `bytes` (the written lump's size).
+- `"gl"` (the glBSP `GL_*` run) is **not implemented yet** and fails
+  `unsupported`.
 
 `split_cost` is the builder's judgment knob: what a candidate partition
 is charged per seg it cuts (default `8`, added to the front/back
@@ -153,23 +171,24 @@ to keep segs whole, lower it to prefer cutting.
 
 How the result is measured: `segs`, `subsectors` and `nodes` count the
 records written; `warnings` holds one note per subsector that spans
-several sectors (not a failure — vanilla maps carry such leaves);
-`split_vertices` counts the vertices **appended to `VERTEXES`** because
-a seg endpoint landed between existing ones. Split vertices are
-invisible to every other tool (no linedef ends at them, so
-`reference/vertices.md`'s orphan rules apply) and are stripped
-automatically by the next geometry edit, which invalidates this node run
-anyway. Building nodes is a generated product, not geometry, so
-`nodes_invalidated` is `false` here even though the vertex list grew —
-run `get_nodes` afterwards to see the tree. Undo takes the whole build
-(the lumps, the appended vertices) back as one step.
+several sectors (not a failure — vanilla maps carry such leaves).
+Classic split vertices are invisible to every other tool (no linedef
+ends at them, so `reference/vertices.md`'s orphan rules apply) and are
+stripped automatically by the next geometry edit, which invalidates
+this node run anyway. Building nodes is a generated product, not
+geometry, so `nodes_invalidated` is `false` here even though a classic
+build grew the vertex list — run `get_nodes` afterwards to see the
+tree. Undo takes the whole build (the lumps, the appended vertices)
+back as one step.
 
 A map with no linedef sides is `invalid_argument` (give the geometry
 sides first); a region the builder cannot split is `internal` (adjust
-`split_cost` or fix the geometry); values past the vanilla limits — more
-than `65535` vertices, an `i16`/`u16` record field, more than `32767`
-nodes or subsectors — are `limit_exceeded` naming variant `"extended"`
-(which `get_nodes` already reads once that writer lands). Unknown map is
+`split_cost` or fix the geometry); values past a record limit — for
+classic more than `65535` vertices, an `i16`/`u16` field, or more than
+`32767` nodes or subsectors (`limit_exceeded` naming variant
+`"extended"`, which takes over at `u32` indices), and for extended an
+`i16`/`u16` node/seg field or a `16.16` coordinate past the `i32` range
+(`limit_exceeded`: no layout holds wider) — are refused. Unknown map is
 `not_found`; an unparsable block is `format_error`.
 
 ## Errors
@@ -185,6 +204,6 @@ those two, or reading a different scope. An unknown `map` is `not_found`;
 an unparsable `map`, `scope` or `detail` is `invalid_argument`;
 `build_blockmap` on a map with no vertices is `invalid_argument` and an
 oversized grid, linedef index or lump is `limit_exceeded`; `build_nodes`
-on a map with no linedef sides is `invalid_argument`, an unbuilt
-`variant` is `unsupported` and a past-vanilla record limit is
-`limit_exceeded`.
+on a map with no linedef sides is `invalid_argument`, `"gl"` is
+`unsupported`, `classic` on a `UDMF` map is `invalid_argument` (build
+`"extended"`) and a past-record limit is `limit_exceeded`.

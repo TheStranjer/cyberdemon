@@ -10,19 +10,24 @@ nothing but coordinates.
 
 A vertex is **only in play when a linedef ends at it**: `add_vertex` on
 its own appends a point that no line uses (an `IWAD`-style orphan, which
-engines ignore and `build_all_nodes` skips). Attach it by adding a linedef
+engines ignore and `build_nodes` skips). Attach it by adding a linedef
 that names it, or bring an existing line's endpoint onto it with
 `move_vertex`. `assemble_map include=["vertices"]` (`reference/maps.md`)
 lists a map's points in index order with the `linedefs` that use each one,
 so orphans show up as `"linedefs": []`.
 
-Every real edit here changes geometry, so it reports
-`nodes_invalidated: true` and empties the generated `SEGS`/`SSECTORS`/
-`NODES`/`REJECT`/`BLOCKMAP` (and drops the map's `GL` run) — run
-`build_all_nodes` before playing the map in vanilla `Doom`. The one
-exception is `add_vertex` **reusing** a point that already exists: it
-changes nothing, so it reports `nodes_invalidated: false`,
-`copied_to_working: false` and leaves **no undo entry** behind.
+An edit changes geometry — reports `nodes_invalidated: true` and empties
+the generated `SEGS`/`SSECTORS`/`NODES`/`REJECT`/`BLOCKMAP` (and drops the
+map's `GL` run) — only when it touches a vertex a linedef ends at or a
+linedef itself; run `build_nodes` before playing such a map in vanilla
+`Doom`. Such an invalidating edit also strips trailing vertices no linedef
+references, which cleans up the split points an earlier `build_nodes`
+appended (`reference/nodes.md`). The two cases that change no buildable
+geometry: `add_vertex` **reusing** a point that already exists (nothing is
+written at all: `nodes_invalidated: false`, `copied_to_working: false`,
+and **no undo entry**), and editing vertices that sit unreferenced past
+the last one a line ends at (e.g. a fresh append or a leftover split
+point), which keeps the nodes trusted.
 
 Every call is one undoable step (a list of vertices moves as one step),
 and editing a layer-owned map copies the block into the working archive
@@ -58,7 +63,7 @@ coordinates on a binary map are `invalid_argument`; an unknown map is
 ```json
 call add_vertex {"map": "MAP01", "x": 128, "y": 128}
 -> {"index": 6, "x": 128, "y": 128, "reused": false, "map": "MAP01",
-    "nodes_invalidated": true, "copied_to_working": true}
+    "nodes_invalidated": false, "copied_to_working": true}
 call add_vertex {"x": 128, "y": 128}
 -> {"index": 6, "x": 128, "y": 128, "reused": true, "map": "MAP01",
     "nodes_invalidated": false, "copied_to_working": false}
@@ -116,7 +121,8 @@ the removal flipped (`flipped_linedefs`) or closed into one side
   `prune_sidedefs` (default `true`) also drops sidedefs no surviving
   linedef references and `prune_vertices` (default `true`) also drops
   vertices no surviving linedef references, so a cascade leaves no orphans
-  unless you switch a pruning off.
+  unless you switch a pruning off (and even then, trailing orphans go: the
+  geometry change invalidates the nodes, which strips them).
 
 ```json
 call remove_vertex {"index": 4}

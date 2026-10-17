@@ -514,17 +514,20 @@ impl Session {
     ///    (see [`cow::copy_map_block`]), reporting `copied_to_working`;
     /// 2. decodes the block with [`crate::wad::map::read_map`] and hands
     ///    the typed [`Map`] to `f`;
-    /// 3. when `f` changed geometry (the vertex list, a linedef's
-    ///    `(v1, v2, front, back)`, a sidedef's sector or the sector count),
-    ///    empties `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` in
-    ///    place, drops `ZNODES` and removes the block's `GL` node run from
-    ///    the working archive, reporting `nodes_invalidated`;
+    /// 3. when `f` changed geometry (a referenced vertex, a linedef's
+    ///    `(v1, v2, front, back)`, a sidedef's sector or the sector count
+    ///    — trailing vertices no linedef references, the split points
+    ///    `build_nodes` appends, are invisible to the node builder and
+    ///    stay out of this comparison), empties `SEGS`, `SSECTORS`,
+    ///    `NODES`, `REJECT` and `BLOCKMAP` in place, strips those trailing
+    ///    vertices, drops `ZNODES` and removes the block's `GL` node run
+    ///    from the working archive, reporting `nodes_invalidated`;
     /// 4. writes the map back with [`crate::wad::map::write_map`] and
     ///    splices the new lumps over the old block range, at the same
     ///    directory position.
     ///
     /// The emptied node lumps mean vanilla `Doom` cannot play the map
-    /// until `build_all_nodes` rebuilds them; `ZDoom`-family ports rebuild
+    /// until `build_nodes` rebuilds them; `ZDoom`-family ports rebuild
     /// missing node data themselves and play fine. Property-only edits keep
     /// the node lumps.
     ///

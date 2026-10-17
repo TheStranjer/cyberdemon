@@ -24,7 +24,7 @@ mod tests {
     type Client = RunningService<RoleClient, ()>;
 
     /// The hint every conversion carries.
-    const NODES_HINT: &str = "run build_all_nodes";
+    const NODES_HINT: &str = "run build_nodes";
 
     /// The fixture map's element counts, as `get_map_summary` reports them.
     const TWO_ROOM_COUNTS: &str = "{\"things\": 2, \"vertices\": 6, \"linedefs\": 7, \

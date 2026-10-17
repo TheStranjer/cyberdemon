@@ -168,6 +168,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `get_nodes`              | `reference/nodes.md`    |
 | `get_reject`             | `reference/nodes.md`    |
 | `get_blockmap`           | `reference/nodes.md`    |
+| `build_nodes`            | `reference/nodes.md`    |
 | `build_blockmap`         | `reference/nodes.md`    |
 | `build_reject`           | `reference/nodes.md`    |
 | `get_palette`            | `reference/palette.md`  |

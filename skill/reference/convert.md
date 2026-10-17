@@ -75,7 +75,7 @@ layer owns is copied into the working archive by that same step
 `SEGS`, `SSECTORS`, `NODES`, `REJECT`, `BLOCKMAP`, `ZNODES` and the block's
 `GL` run are written in the map's own format, so **every** conversion removes
 them: the result says `nodes_removed: true` and its `warnings` tell you to
-run `build_all_nodes` before playing the map in vanilla `Doom`. `ZDoom`-family
+run `build_nodes` before playing the map in vanilla `Doom`. `ZDoom`-family
 ports rebuild missing node data themselves. Check the removal with
 `get_map_lumps` (`reference/maps.md`) or `get_nodes` (`reference/nodes.md`).
 
@@ -88,7 +88,7 @@ call convert_map_format {"map": "MAP01", "to": "udmf"}
      "sectors": 0, "vertices": 0}, "fractional_coordinates": {"things": 0,
      "linedefs": 0, "sidedefs": 0, "sectors": 0, "vertices": 0},
     "warnings": ["the node data went with the old format (…): run
-     build_all_nodes before playing the map in vanilla Doom"],
+     build_nodes before playing the map in vanilla Doom"],
     "nodes_removed": true, "dry_run": false}
 
 call convert_map_format {"map": "E1M1", "to": "hexen"}

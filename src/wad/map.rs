@@ -19,7 +19,9 @@
 //! questions over a decoded map: sector boundaries, point containment,
 //! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
 //! a decoded map in another layout inside one flag family, the pure step
-//! behind `convert_map_format`. [`validate`] runs the pure map-health checks
+//! behind `convert_map_format`. [`draw`] grows a closed corner loop into
+//! one new sector with its walls, the pure room-drawing step behind
+//! `create_sector_from_loop`. [`validate`] runs the pure map-health checks
 //! behind `validate_map`: reference integrity, line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
 //! rows.
@@ -29,6 +31,7 @@ pub mod build_blockmap;
 pub mod build_reject;
 pub mod convert;
 pub mod doom;
+pub mod draw;
 pub mod flags;
 pub mod geometry;
 pub mod hexen;

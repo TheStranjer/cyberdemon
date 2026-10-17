@@ -1,9 +1,10 @@
 # Sector tools
 
-Creating, changing and removing the sectors of a map: `add_sector`,
-`edit_sector` and `remove_sector`. A sector is one contiguous 3-D region:
-its floor and ceiling heights, the two flat textures, the light level, the
-effect number (`special`) and the `tag` linedef actions match.
+Creating, changing and removing the sectors of a map:
+`create_sector_from_loop`, `add_sector`, `edit_sector` and `remove_sector`.
+A sector is one contiguous 3-D region: its floor and ceiling heights, the
+two flat textures, the light level, the effect number (`special`) and the
+`tag` linedef actions match.
 
 ## Sectors and their sidedefs
 
@@ -11,8 +12,8 @@ A sector **does nothing until sidedefs reference it**: sides point at
 sectors, and the region a sector describes is the collection of the sides
 that name it. `add_sector` on its own only appends a record — attach it
 with `add_sidedef`/`edit_sidedef` (and those to linedefs), or use
-`create_sector_from_loop` (not yet implemented) to grow a whole room in
-one call. `assemble_map include=["sectors"]` (`reference/maps.md`) lists
+`create_sector_from_loop` to grow a whole room in one call.
+`assemble_map include=["sectors"]` (`reference/maps.md`) lists
 each sector's boundary `linedefs`, `sidedefs` and neighbouring `sectors`.
 
 The sector count is part of the geometry the node lumps were built from:
@@ -60,6 +61,76 @@ call add_sector {"map": "MAP01"}
     "special": 0, "tag": 0}, "map": "MAP01", "nodes_invalidated": true,
     "copied_to_working": true}
 ```
+
+## `create_sector_from_loop`
+
+`{map?, points? | vertices?, floor_height? = 0, ceiling_height? = 128,
+floor_flat? = "FLOOR4_8", ceiling_flat? = "CEIL3_5", light? = 160,
+special? = 0, tag? = 0, wall_texture? = "STARTAN3", upper_texture?,
+lower_texture?, outer_sector? = "auto"}` → `{sector, vertices_created,
+linedefs_created, linedefs_reused, sidedefs_created, two_sided, map,
+nodes_invalidated: true, copied_to_working}`
+
+The draw-a-room tool: one call turns a closed corner loop into a new
+sector with all its boundary walls, in one undoable step.
+
+- **The loop, exactly one form** (both or neither is `invalid_argument`):
+  `points: [{x, y}, ...]` — at least 3 corners, implicitly closed (a
+  trailing repeat of the first point is dropped); a vertex already at
+  exactly a corner's coordinates is reused, the rest are created; or
+  `vertices: [i, ...]` — at least 3 existing vertex indices.
+- **Orientation is fixed for you**: the ring is walked clockwise so every
+  front side faces into the room (`Doom` puts the front on the right of
+  `v1` to `v2`). Degenerate rings are `invalid_argument`: a repeated
+  corner, zero area (collinear corners) or a self-intersecting loop. An
+  unknown vertex index or `outer_sector` index is `not_found`.
+- **Sector and textures**: the sector fields are `add_sector`'s, with its
+  defaults and format rules. `wall_texture` dresses the `middle` of new
+  one-sided walls; `upper_texture`/`lower_texture` (each defaulting to
+  `wall_texture`) dress the `upper`/`lower` faces of new two-sided
+  transitions, on both sides. On binary maps coordinates must fit `i16`
+  and names 8 characters.
+- **Existing walls are reused, never duplicated**: a linedef running with
+  an edge has its front side pointed at the new sector; one running
+  against the edge is taken over from its back, and if it has no back it
+  opens into two-sided (blocking cleared, its front `middle` moved onto
+  free `upper`/`lower` faces).
+- **`outer_sector`** decides what brand-new walls face outside: an
+  existing sector index turns every new edge two-sided against it;
+  `"auto"` (the default) opens each edge onto the sector found two units
+  just left of the edge midpoint, so edges along the void stay one-sided;
+  `"none"` keeps every new wall a blocking single line.
+- `two_sided` lists the loop lines the call left two-sided (ones it
+  opened backwards, and new ones given an outer back side).
+
+Worked example — an adjacent room sharing room 0's north wall, then a
+raised platform inside room 0 (the two-room fixture):
+
+```json
+call create_sector_from_loop {"points": [{"x": 0, "y": 256}, {"x": 256, "y": 256},
+                                         {"x": 256, "y": 512}, {"x": 0, "y": 512}]}
+-> {"sector": 2, "vertices_created": [6, 7], "linedefs_created": [7, 8, 9],
+    "linedefs_reused": [1], "sidedefs_created": [8, 9, 10, 11],
+    "two_sided": [1], "map": "MAP01", "nodes_invalidated": true,
+    "copied_to_working": true}
+```
+
+Sector 2 sits above the hall; linedef 1 (the shared wall) now opens
+two-sided, and `assemble_map` shows `neighbors: [0]` on sector 2. The two
+free corners became vertices 6 and 7. The platform:
+
+```json
+call create_sector_from_loop {"points": [{"x": 64, "y": 64}, {"x": 192, "y": 64},
+                                         {"x": 192, "y": 192}, {"x": 64, "y": 192}],
+                              "floor_height": 8, "ceiling_height": 192,
+                              "upper_texture": "COMP1"}
+```
+
+Every edge probes room 0 outside, so all four new lines are two-sided
+against it, their ledge faces dressed with `COMP1` above (and
+`wall_texture` below by default). Verify with `assemble_map` (the platform
+sector's `neighbors` is `[0]`) or `render_topdown`, then `build_nodes`
+before a vanilla play test.
 
 ## `edit_sector`
 

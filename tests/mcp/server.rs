@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 101] = [
+    const EXPECTED_TOOLS: [&str; 102] = [
         "add_linedef",
         "add_lump",
         "add_sector",
@@ -97,6 +97,7 @@ mod tests {
         "convert_map_format",
         "copy_map",
         "create_map",
+        "create_sector_from_loop",
         "decode_patch",
         "diff_wads",
         "edit_decorate",

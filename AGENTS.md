@@ -266,6 +266,11 @@ src/
                   `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
                   bounding boxes, line lengths and sector adjacency),
+                  `map/draw.rs` the pure room-drawing engine behind
+                  `create_sector_from_loop` (a resolved corner loop becomes
+                  a new sector with its walls: shoelace orientation,
+                  self-crossing refusal, linedef reuse and two-sided
+                  opening, and the auto outer-sector probe),
                   `map/convert.rs` the pure within-flag-family format
                   conversion (`Target`, `convert_map`, `Conversion`) behind
                   `convert_map_format`, and `map/validate.rs` +

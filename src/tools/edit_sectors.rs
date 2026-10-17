@@ -1,5 +1,6 @@
-//! Sector editing tools: `add_sector`, `edit_sector` and `remove_sector`
-//! (see the `edit_sectors` router methods on [`crate::server::Cyberdemon`]).
+//! Sector editing tools: `add_sector`, `edit_sector`, `remove_sector` and
+//! `create_sector_from_loop` (see the `edit_sectors` router methods on
+//! [`crate::server::Cyberdemon`]).
 //!
 //! Every call is exactly one [`crate::session::Session::edit_map`] step, so
 //! one undo entry moves the whole call. The parameter shapes
@@ -7,6 +8,13 @@
 //! [`validate_texture_name`]) come from [`crate::tools::maps::params`];
 //! removal runs through [`crate::wad::map::remove`] and refuses the
 //! `conflict` of a sector that sidedefs still use unless `cascade` is set.
+//! `create_sector_from_loop` wraps the pure drawing engine
+//! [`crate::wad::map::draw::create_sector_from_loop`]: this module turns
+//! the wire parameters into a validated [`crate::wad::map::draw::LoopRequest`]
+//! (sector fields checked like [`crate::session::Session::edit_map`] hands
+//! in, textures and coordinates checked for the map's format, the outer
+//! rule parsed) and reports the engine's [`crate::wad::map::draw::LoopResult`]
+//! with the standard edit fragment.
 //!
 //! The geometry rule: the sector count is part of the geometry signature,
 //! so appending or removing sectors reports `nodes_invalidated: true` (the
@@ -37,6 +45,7 @@ use crate::tools::maps::params::{
 };
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::draw::{self, LoopGeometry, LoopPoint, LoopRequest, LoopResult, OuterSector};
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };
@@ -66,6 +75,16 @@ const HEIGHT_MAX: i32 = 0x7FFF_i32;
 const FIELD_MIN: i32 = 0_i32;
 /// The highest value a `u16` binary `SECTORS` column holds (`u16::MAX`).
 const FIELD_MAX: i32 = 0xFFFF_i32;
+/// The `create_sector_from_loop` default middle texture of a new wall.
+const DEFAULT_WALL_TEXTURE: &str = "STARTAN3";
+/// The `outer_sector` mode that probes the sector outside each new edge.
+const OUTER_AUTO: &str = "auto";
+/// The `outer_sector` mode that keeps every new wall one-sided.
+const OUTER_NONE: &str = "none";
+/// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
+const COORD_MIN: i32 = -0x8000_i32;
+/// The highest coordinate an `i16` binary `VERTEXES` column holds (`i16::MAX`).
+const COORD_MAX: i32 = 0x7FFF_i32;
 
 /// Arguments for [`Cyberdemon::add_sector`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -157,6 +176,83 @@ struct RemoveSectorParams {
     prune_vertices: Option<bool>,
 }
 
+/// Arguments for [`Cyberdemon::create_sector_from_loop`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CreateSectorFromLoopParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The loop's corners as points `{x, y}` (at least 3, implicitly
+    /// closed): exactly one of `points` and `vertices`.
+    #[serde(default)]
+    points: Option<Vec<LoopPointParam>>,
+    /// The loop's corners as existing vertex indices (at least 3): exactly
+    /// one of `points` and `vertices`.
+    #[serde(default)]
+    vertices: Option<Vec<usize>>,
+    /// Floor height in map units (default `0`).
+    #[serde(default)]
+    floor_height: Option<i32>,
+    /// Ceiling height in map units (default `128`).
+    #[serde(default)]
+    ceiling_height: Option<i32>,
+    /// Floor flat name (default `"FLOOR4_8"`).
+    #[serde(default)]
+    floor_flat: Option<String>,
+    /// Ceiling flat name (default `"CEIL3_5"`).
+    #[serde(default)]
+    ceiling_flat: Option<String>,
+    /// Light level, `0..=255` (default `160`).
+    #[serde(default)]
+    light: Option<i32>,
+    /// Sector effect number (default `0`).
+    #[serde(default)]
+    special: Option<i32>,
+    /// Tag matched by linedef actions (default `0`).
+    #[serde(default)]
+    tag: Option<i32>,
+    /// Middle texture of new one-sided walls (default `"STARTAN3"`).
+    #[serde(default)]
+    wall_texture: Option<String>,
+    /// Upper texture of new two-sided transitions (default: `wall_texture`).
+    #[serde(default)]
+    upper_texture: Option<String>,
+    /// Lower texture of new two-sided transitions (default: `wall_texture`).
+    #[serde(default)]
+    lower_texture: Option<String>,
+    /// The sector across the new walls: an existing sector index, `"auto"`
+    /// (default: open onto the sector found just outside each edge), or
+    /// `"none"` (new walls stay one-sided).
+    #[serde(default)]
+    outer_sector: Option<OuterSectorParam>,
+}
+
+/// One loop corner of [`Cyberdemon::create_sector_from_loop`].
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+struct LoopPointParam {
+    /// `X` coordinate in map units.
+    x: i32,
+    /// `Y` coordinate in map units.
+    y: i32,
+}
+
+/// The `outer_sector` parameter: an existing sector index or a mode name.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum OuterSectorParam {
+    /// Face every new wall's outer side at this existing sector.
+    Index(
+        /// The sector index.
+        usize,
+    ),
+    /// `"auto"` (the default) or `"none"`.
+    Mode(
+        /// The mode name.
+        String,
+    ),
+}
+
 /// One sector's fields as the tools report them.
 #[derive(Debug, Serialize)]
 struct SectorDetail {
@@ -213,6 +309,17 @@ struct EditReport {
 struct RemoveToolReport {
     /// What the removal engine dropped, flipped and normalised.
     removed: RemovalReport,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Structured result of [`Cyberdemon::create_sector_from_loop`].
+#[derive(Serialize)]
+struct LoopToolReport {
+    /// What the drawing engine built, inlined next to the edit fragment.
+    #[serde(flatten)]
+    result: LoopResult,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -605,6 +712,171 @@ fn remove_run(
     })
 }
 
+/// The refusal for a call giving the loop in both forms or in neither.
+fn loop_form_refusal() -> CyberError {
+    CyberError::InvalidArgument(
+        "create_sector_from_loop needs the loop in exactly one form: points [{x, y}, ...] \
+         (at least 3 corners, implicitly closed) or vertices [index, ...] (at least 3 \
+         existing vertex indices)"
+            .to_owned(),
+    )
+}
+
+/// The corner list the parameters give, in exactly one of the two forms,
+/// with point coordinates checked against the map's format.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when both `points` and `vertices` or
+/// neither is passed, or when a point coordinate leaves the binary `i16`
+/// range.
+fn loop_geometry(
+    args: &CreateSectorFromLoopParams,
+    format: MapFormat,
+) -> Result<LoopGeometry, CyberError> {
+    match (args.points.as_ref(), args.vertices.as_ref()) {
+        (Some(points), None) => {
+            if format != MapFormat::Udmf {
+                check_points(points)?;
+            }
+            let corners: Vec<LoopPoint> = points
+                .iter()
+                .map(|corner| LoopPoint {
+                    x: corner.x,
+                    y: corner.y,
+                })
+                .collect();
+            Ok(LoopGeometry::Points(corners))
+        }
+        (None, Some(indices)) => Ok(LoopGeometry::Vertices(indices.clone())),
+        _ => Err(loop_form_refusal()),
+    }
+}
+
+/// Refuses every point corner an `i16` binary `VERTEXES` column cannot hold.
+fn check_points(points: &[LoopPointParam]) -> Result<(), CyberError> {
+    for corner in points {
+        fits_coord("x", corner.x)?;
+        fits_coord("y", corner.y)?;
+    }
+    Ok(())
+}
+
+/// Refuses a loop coordinate an `i16` binary `VERTEXES` column cannot hold.
+fn fits_coord(field: &str, value: i32) -> Result<(), CyberError> {
+    if (COORD_MIN..=COORD_MAX).contains(&value) {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "the loop point {field} {value} is out of range for the binary map format: \
+         coordinates hold {COORD_MIN}..={COORD_MAX}"
+    )))
+}
+
+/// The sector the loop parameters describe, checked like `add_sector`'s.
+fn loop_sector(args: &CreateSectorFromLoopParams, format: MapFormat) -> Result<Sector, CyberError> {
+    let sector = Sector {
+        floor_height: args.floor_height.unwrap_or(DEFAULT_FLOOR_HEIGHT),
+        ceiling_height: args.ceiling_height.unwrap_or(DEFAULT_CEILING_HEIGHT),
+        floor_flat: flat_or_default(args.floor_flat.as_ref(), DEFAULT_FLOOR_FLAT, format)?,
+        ceiling_flat: flat_or_default(args.ceiling_flat.as_ref(), DEFAULT_CEILING_FLAT, format)?,
+        light: args.light.unwrap_or(DEFAULT_LIGHT),
+        special: args.special.unwrap_or_default(),
+        tag: args.tag.unwrap_or_default(),
+        extra: BTreeMap::new(),
+    };
+    check_sector(format, &sector)?;
+    Ok(sector)
+}
+
+/// A texture parameter validated and uppercased, `fallback` when absent.
+fn texture_or_default(
+    given: Option<&String>,
+    fallback: &str,
+    format: MapFormat,
+) -> Result<String, CyberError> {
+    given.map_or_else(
+        || Ok(fallback.to_owned()),
+        |name| validate_texture_name(name, format),
+    )
+}
+
+/// The three wall face textures: the one-sided wall and the two transition
+/// faces, each defaulting to `wall_texture`.
+fn wall_faces(
+    args: &CreateSectorFromLoopParams,
+    format: MapFormat,
+) -> Result<(String, String, String), CyberError> {
+    let wall = texture_or_default(args.wall_texture.as_ref(), DEFAULT_WALL_TEXTURE, format)?;
+    let upper = args.upper_texture.as_ref().map_or_else(
+        || Ok(wall.clone()),
+        |name| validate_texture_name(name, format),
+    )?;
+    let lower = args.lower_texture.as_ref().map_or_else(
+        || Ok(wall.clone()),
+        |name| validate_texture_name(name, format),
+    )?;
+    Ok((wall, upper, lower))
+}
+
+/// The outer rule the `outer_sector` parameter gives, `"auto"` when absent.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a mode name other than `"auto"` or
+/// `"none"`.
+fn outer_sector_of(given: Option<OuterSectorParam>) -> Result<OuterSector, CyberError> {
+    match given {
+        None => Ok(OuterSector::Auto),
+        Some(OuterSectorParam::Index(index)) => Ok(OuterSector::Sector(index)),
+        Some(OuterSectorParam::Mode(text)) => match text.to_ascii_lowercase().as_str() {
+            OUTER_AUTO => Ok(OuterSector::Auto),
+            OUTER_NONE => Ok(OuterSector::OneSided),
+            other => Err(CyberError::InvalidArgument(format!(
+                "outer_sector {other:?} is not a mode: pass an existing sector index, \
+                 \"{OUTER_AUTO}\" to open each new wall onto the sector found outside it, \
+                 or \"{OUTER_NONE}\" to keep new walls one-sided"
+            ))),
+        },
+    }
+}
+
+/// The validated [`LoopRequest`] the parameters and the map describe.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a bad loop form, an out-of-range
+/// coordinate, a sector the format cannot store or a bad texture/mode.
+fn build_request(args: &CreateSectorFromLoopParams, map: &Map) -> Result<LoopRequest, CyberError> {
+    let (wall, upper, lower) = wall_faces(args, map.format)?;
+    Ok(LoopRequest {
+        geometry: loop_geometry(args, map.format)?,
+        sector: loop_sector(args, map.format)?,
+        wall,
+        upper,
+        lower,
+        outer: outer_sector_of(args.outer_sector.clone())?,
+    })
+}
+
+/// `create_sector_from_loop`'s work: resolve the map, then run the
+/// one-step drawing on it.
+fn create_run(
+    session: &mut Session,
+    args: &CreateSectorFromLoopParams,
+) -> Result<LoopToolReport, CyberError> {
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let label = "create sector from loop".to_owned();
+    let (result, report) = session.edit_map(name, &label, |map| {
+        let request = build_request(args, map)?;
+        draw::create_sector_from_loop(map, &request)
+    })?;
+    Ok(LoopToolReport {
+        result,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// Hand an outcome to the client as the documented structured result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -624,7 +896,7 @@ where
 impl Cyberdemon {
     /// Appends one sector to a map in a single undoable edit.
     #[tool(
-        description = "Adds one sector (a region sharing floor, ceiling, flats, light and effect) to a map in a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). Every field is optional with vanilla-flavoured defaults: floor_height (0), ceiling_height (128), floor_flat (FLOOR4_8), ceiling_flat (CEIL3_5), light (160), special (0) and tag (0). A sector does nothing until sidedefs reference it: the appended record is dead space until sides point at it (add_sidedef or edit_sidedef) - to grow a whole room at once use create_sector_from_loop (not yet implemented). Flat names are uppercased and validated (non-empty, printable ASCII, at most 8 characters on binary maps and 64 on UDMF); \"-\" means no texture and is refused for a flat (invalid_argument). Light must sit in 0..=255 (invalid_argument outside). A ceiling below the floor is invalid_argument (equal heights are allowed: a closed door). Binary maps store the heights as i16 and special/tag as u16: out-of-range values are invalid_argument; UDMF is unbounded. Adding changes the sector count, so the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {index, sector: {floor_height, ceiling_height, floor_flat, ceiling_flat, light, special, tag}, map, nodes_invalidated, copied_to_working}. Unknown map is not_found."
+        description = "Adds one sector (a region sharing floor, ceiling, flats, light and effect) to a map in a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). Every field is optional with vanilla-flavoured defaults: floor_height (0), ceiling_height (128), floor_flat (FLOOR4_8), ceiling_flat (CEIL3_5), light (160), special (0) and tag (0). A sector does nothing until sidedefs reference it: the appended record is dead space until sides point at it (add_sidedef or edit_sidedef) - to grow a whole room at once use create_sector_from_loop. Flat names are uppercased and validated (non-empty, printable ASCII, at most 8 characters on binary maps and 64 on UDMF); \"-\" means no texture and is refused for a flat (invalid_argument). Light must sit in 0..=255 (invalid_argument outside). A ceiling below the floor is invalid_argument (equal heights are allowed: a closed door). Binary maps store the heights as i16 and special/tag as u16: out-of-range values are invalid_argument; UDMF is unbounded. Adding changes the sector count, so the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {index, sector: {floor_height, ceiling_height, floor_flat, ceiling_flat, light, special, tag}, map, nodes_invalidated, copied_to_working}. Unknown map is not_found."
     )]
     fn add_sector(
         &self,
@@ -660,6 +932,20 @@ impl Cyberdemon {
                 .with_session(|session| remove_run(session, &args)),
         )
     }
+
+    /// Draws a closed corner loop as one new sector with its walls.
+    #[tool(
+        description = "Draws a closed loop of corners as one new sector with its boundary walls, in a single undoable edit: the main draw-a-room tool. The loop comes in exactly one form (both or neither is invalid_argument): points: [{x, y}, ...] (at least 3 corners, implicitly closed - a trailing repeat of the first point is dropped; a vertex already sitting at exactly these coordinates is reused, the rest are created) or vertices: [i, ...] (at least 3 existing vertex indices). Sector fields match add_sector and validate like it: floor_height (0), ceiling_height (128), floor_flat (FLOOR4_8), ceiling_flat (CEIL3_5), light (160), special (0), tag (0). Textures: wall_texture (default STARTAN3) dresses the middle face of new one-sided walls; upper_texture and lower_texture (each defaulting to wall_texture) dress new two-sided transitions on both sides (\"-\" is allowed for a wall texture, unlike a flat). On binary maps point coordinates must fit i16 and texture names 8 characters (invalid_argument outside; UDMF is wider). The ring is walked clockwise so every front side faces into the room: counter-clockwise corners are reversed for you. Degenerate loops are invalid_argument: a repeated corner, zero area (collinear corners) or a self-intersecting ring; unknown vertex indices or an unknown outer_sector index are not_found. Existing linedefs along the loop are reused, never duplicated: a line pointing the same way as the edge has its front side pointed at the new sector (a front side is created when the line had none); a line pointing the opposite way is taken over from its back side, and a line without a back opens into two-sided (two-sided bit 4 set, blocking bit 1 cleared, the front side's middle texture moved onto its free upper and lower faces, the new back face bare). outer_sector decides what brand-new walls face outside: an existing sector index turns every new edge two-sided against it (upper/lower dressed on both sides, middles empty); \"auto\" (the default) probes two map units left of each edge midpoint and opens onto the sector found there, so a room drawn inside another becomes a platform with the surrounding room across its walls while edges along the void stay one-sided; \"none\" keeps every new wall a blocking single line. The edit grows the sector list and the geometry, so nodes are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {sector: the new sector's index, vertices_created, linedefs_created, linedefs_reused, sidedefs_created, two_sided (the loop lines this call left two-sided: ones it opened backwards and new ones given an outer back side), map, nodes_invalidated, copied_to_working}."
+    )]
+    fn create_sector_from_loop(
+        &self,
+        Parameters(args): Parameters<CreateSectorFromLoopParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| create_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -669,14 +955,16 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddSectorParams, DEFAULT_CEILING_FLAT, DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_FLAT,
-        DEFAULT_LIGHT, EditSectorParams, FIELD_MAX, HEIGHT_MAX, HEIGHT_MIN, LIGHT_MAX, LIGHT_MIN,
-        add_in_place, cascade_options, check_binary_ranges, check_height_order, check_light,
-        edit_in_place, edited_flat, edited_sector, flat_or_default, has_change, join, new_height,
-        new_sector, planned_edits, remove_in_place, validate_edit, validate_flat,
+        AddSectorParams, CreateSectorFromLoopParams, DEFAULT_CEILING_FLAT, DEFAULT_CEILING_HEIGHT,
+        DEFAULT_FLOOR_FLAT, DEFAULT_LIGHT, EditSectorParams, FIELD_MAX, HEIGHT_MAX, HEIGHT_MIN,
+        LIGHT_MAX, LIGHT_MIN, add_in_place, build_request, cascade_options, check_binary_ranges,
+        check_height_order, check_light, edit_in_place, edited_flat, edited_sector,
+        flat_or_default, has_change, join, loop_geometry, new_height, new_sector, outer_sector_of,
+        planned_edits, remove_in_place, validate_edit, validate_flat,
     };
     use crate::error::CyberError;
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::draw::{LoopGeometry, OuterSector};
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
 
@@ -1149,5 +1437,119 @@ mod tests {
             join(&[4_usize, 7]) == "4, 7",
             "the joiner spells the list out"
         );
+    }
+
+    /// A loop request parsed from `json`.
+    fn loop_args(json: &str) -> CreateSectorFromLoopParams {
+        from_str(json).expect("test loop requests parse")
+    }
+
+    /// The three-corner points parameter list, as JSON.
+    const THREE_POINTS: &str =
+        r#""points": [{"x": 0, "y": 0}, {"x": 128, "y": 0}, {"x": 64, "y": 128}]"#;
+
+    /// The points form over [`THREE_POINTS`], as a JSON object.
+    fn three_points_json(tail: &str) -> String {
+        format!("{{{THREE_POINTS}{tail}}}")
+    }
+
+    #[test]
+    fn the_loop_needs_exactly_one_corner_form() {
+        let points = loop_geometry(&loop_args(&three_points_json("")), MapFormat::Doom)
+            .expect("the points form is accepted");
+        assert!(
+            matches!(points, LoopGeometry::Points(list) if list.len() == 3),
+            "three corners stay three"
+        );
+        let indices = loop_geometry(&loop_args(r#"{"vertices": [0, 1, 2]}"#), MapFormat::Doom)
+            .expect("the index form is accepted");
+        assert!(
+            matches!(indices, LoopGeometry::Vertices(list) if list.len() == 3),
+            "three indices stay three"
+        );
+        let both = three_points_json(", \"vertices\": [0, 1, 2]");
+        for json in [
+            "{}",
+            r#"{"points": [], "vertices": [0, 1, 2]}"#,
+            both.as_str(),
+        ] {
+            let error =
+                loop_geometry(&loop_args(json), MapFormat::Doom).expect_err("one form is required");
+            assert_eq!(code(&error), "invalid_argument", "form code for {json}");
+        }
+    }
+
+    #[test]
+    fn the_built_request_carries_the_documented_defaults() {
+        let map = test_map();
+        let args = loop_args(&three_points_json(""));
+        let request = build_request(&args, &map).expect("the minimal loop builds");
+        assert_eq!(request.wall, "STARTAN3", "the wall texture default");
+        assert_eq!(request.upper, "STARTAN3", "the faces fall back to the wall");
+        assert_eq!(request.lower, "STARTAN3");
+        assert_eq!(
+            request.outer,
+            OuterSector::Auto,
+            "auto is the outer default"
+        );
+        assert_eq!(
+            (
+                request.sector.floor_height,
+                request.sector.ceiling_height,
+                request.sector.light
+            ),
+            (0_i32, DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT),
+            "the sector defaults are add_sector's"
+        );
+        assert_eq!(request.sector.floor_flat, DEFAULT_FLOOR_FLAT);
+        let full = loop_args(
+            r#"{"points": [{"x": 0, "y": 0}, {"x": 128, "y": 0}, {"x": 64, "y": 128}],
+                "ceiling_height": 192, "tag": 7, "wall_texture": "brick11",
+                "upper_texture": "-", "lower_texture": "step1", "outer_sector": "none"}"#,
+        );
+        let built = build_request(&full, &map).expect("the full loop builds");
+        assert_eq!(built.wall, "BRICK11", "names are uppercased");
+        assert_eq!(built.upper, "-", "a wall texture may be the dash");
+        assert_eq!(built.lower, "STEP1");
+        assert_eq!(built.outer, OuterSector::OneSided, "none closes the outer");
+        assert_eq!(built.sector.ceiling_height, 192_i32);
+        assert_eq!(built.sector.tag, 7_i32);
+        let indexed = loop_args(r#"{"vertices": [0, 1, 2, 3], "outer_sector": 1}"#);
+        let explicit = build_request(&indexed, &map).expect("the indexed loop builds");
+        assert_eq!(explicit.outer, OuterSector::Sector(1), "an index is taken");
+        assert!(
+            matches!(explicit.geometry, LoopGeometry::Vertices(list) if list == vec![0_usize, 1, 2, 3]),
+            "the indices come through"
+        );
+    }
+
+    #[test]
+    fn bad_loop_fields_are_refused_before_anything_draws() {
+        let map = test_map();
+        let refusals = [
+            three_points_json(", \"light\": 300"),
+            three_points_json(", \"floor_height\": 200"),
+            three_points_json(", \"ceiling_flat\": \"-\""),
+            three_points_json(", \"wall_texture\": \"TOOLONG12\""),
+            three_points_json(", \"outer_sector\": \"sideways\""),
+            r#"{"points": [{"x": 0, "y": 0}, {"x": 40000, "y": 0}, {"x": 64, "y": 128}]}"#
+                .to_owned(),
+        ];
+        for json in &refusals {
+            let args = loop_args(json);
+            let error =
+                build_request(&args, &map).expect_err("the field must refuse on a binary map");
+            assert_eq!(code(&error), "invalid_argument", "refusal code for {json}");
+        }
+        let mode = outer_sector_of(loop_args(r#"{"outer_sector": "AUTO"}"#).outer_sector)
+            .expect("case-insensitive auto");
+        assert_eq!(mode, OuterSector::Auto, "the mode name uppercases away");
+        let mut udmf = test_map();
+        udmf.format = MapFormat::Udmf;
+        let wide = loop_args(
+            r#"{"points": [{"x": 0, "y": 0}, {"x": 40000, "y": 0}, {"x": 64, "y": 128}],
+                "wall_texture": "a_long_udmf_wall_texture", "tag": 70000}"#,
+        );
+        build_request(&wide, &udmf).expect("UDMF takes the wide coordinates, name and tag");
     }
 }

@@ -6,7 +6,11 @@
 //! `ceil(sectors² / 8)` bytes, but engines tolerate wrong sizes and so do
 //! the tools: [`Reject`] stores the bytes as they are, [`Reject::size_ok`]
 //! reports the mismatch and out-of-range lookups read as "not rejected".
-//! Nothing here knows about sessions or MCP.
+//! [`Reject::to_bytes`] serializes a matrix back to exactly the expected
+//! size, dropping junk bytes and zero-filling missing ones. Nothing here
+//! knows about sessions or MCP.
+
+use crate::error::CyberError;
 
 /// The `REJECT` visibility matrix of one map.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +123,32 @@ impl Reject {
         self.sectors.saturating_mul(self.sectors)
     }
 
+    /// Serializes this matrix into `REJECT` lump bytes: the stored bits
+    /// sized to exactly [`Reject::expected_bytes`], bytes beyond the
+    /// matrix dropped and missing ones written as zero (not rejected).
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::LimitExceeded`] when `sectors²` overflows: no lump
+    /// could hold that matrix.
+    #[inline]
+    pub fn to_bytes(&self) -> Result<Vec<u8>, CyberError> {
+        let bits = self.sectors.checked_mul(self.sectors).ok_or_else(|| {
+            CyberError::LimitExceeded(format!(
+                "reject matrix too large: {} sectors squared leaves the addressable range",
+                self.sectors
+            ))
+        })?;
+        let want = bits.div_ceil(8_usize);
+        let mut bytes = self.bits.clone();
+        match bytes.len().cmp(&want) {
+            core::cmp::Ordering::Greater => bytes.truncate(want),
+            core::cmp::Ordering::Less => bytes.resize(want, 0_u8),
+            core::cmp::Ordering::Equal => {}
+        }
+        Ok(bytes)
+    }
+
     /// The flat bit `index`, `false` past the stored bytes.
     fn bit_at(&self, index: usize) -> bool {
         let byte_index = index.checked_div(8).unwrap_or(usize::MAX);
@@ -197,5 +227,48 @@ mod tests {
         assert!(empty.all_zero(), "no bytes, nothing rejected");
         assert_eq!(empty.rejected_pairs(), 0, "and no pairs");
         assert_eq!(empty.row(0), "00", "rows still read, as zeros");
+    }
+
+    #[test]
+    fn to_bytes_sizes_the_matrix_exactly() {
+        let exact = Reject::new(2, &[0b0000_0110_u8]);
+        assert_eq!(
+            exact.to_bytes().expect("two sectors fit one byte"),
+            vec![0b0000_0110_u8],
+            "an exact matrix passes through"
+        );
+        assert_eq!(
+            Reject::new(3, b"").to_bytes().expect("nine bits"),
+            vec![0_u8; 2],
+            "missing bytes write as zero"
+        );
+        assert_eq!(
+            Reject::new(2, &[0xFF_u8, 0xAA, 0x5A])
+                .to_bytes()
+                .expect("truncation is a resize"),
+            vec![0xFF_u8],
+            "junk beyond the matrix drops"
+        );
+        assert!(
+            Reject::new(0, b"").to_bytes().expect("no bits").is_empty(),
+            "an empty matrix writes no bytes"
+        );
+    }
+
+    #[test]
+    fn to_bytes_refuses_a_matrix_that_cannot_be_addressed() {
+        let sectors = 1_usize.checked_shl(40).expect("wide targets hold it");
+        let wild = Reject {
+            sectors,
+            bits: Vec::new(),
+        };
+        let error = wild
+            .to_bytes()
+            .expect_err("2^80 bits fit in no lump address");
+        assert_eq!(error.code(), "limit_exceeded", "wild matrix code");
+        assert!(
+            error.to_string().contains("too large"),
+            "the fault is named: {error}"
+        );
     }
 }

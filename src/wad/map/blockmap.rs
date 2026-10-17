@@ -10,13 +10,17 @@
 //! up to the next block's origin, `y` likewise, and its offset sits at
 //! table position `row × columns + col`. [`Blockmap::parse`] validates
 //! that every offset stays inside the lump and every list terminates;
-//! anything else is a `Format` error. Nothing here knows about sessions
-//! or MCP.
+//! anything else is a `Format` error. Writing goes the other way:
+//! [`Blockmap::to_bytes`] serializes a grid back into lump bytes,
+//! optionally sharing one copy of identical blocklists the way the
+//! builders do. Nothing here knows about sessions or MCP.
+
+use alloc::collections::BTreeMap;
 
 use serde::Serialize;
 
 use crate::error::CyberError;
-use crate::wad::bytes::{Reader, u16_at};
+use crate::wad::bytes::{Reader, Writer, u16_at};
 
 /// Bytes in the blockmap header: two origins and the grid size.
 const HEADER_LEN: usize = 8;
@@ -30,6 +34,12 @@ const OFFSET_ENTRY_LEN: usize = 2;
 const WORD_LEN: usize = 2;
 /// The empty list: start and end adjacent.
 const MIN_LIST_LEN: usize = 4;
+/// Words in the blockmap header.
+const HEADER_WORDS: usize = 4;
+/// Words in a blocklist beyond its linedef entries (`0x0000` and `0xFFFF`).
+const LIST_OVERHEAD: usize = 2;
+/// The largest `BLOCKMAP` lump its `u16` word offsets can address.
+const MAX_LUMP_WORDS: usize = 0xFFFF_usize;
 /// Side of one blockmap block in map units.
 pub const BLOCK_SIZE: i32 = 128;
 
@@ -118,6 +128,171 @@ impl Blockmap {
             blocks,
         })
     }
+
+    /// Serializes this grid into `BLOCKMAP` lump bytes in exactly the
+    /// shape [`Blockmap::parse`] reads. With `compress`, identical
+    /// blocklists share one copy; without it every block writes its own.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::LimitExceeded`] ("blockmap too large") when the
+    /// offset table or the finished lump leaves the 65535 words a `u16`
+    /// offset can address; [`CyberError::InvalidArgument`] when the list
+    /// count does not match the grid or a list holds the `0xFFFF`
+    /// terminator word.
+    #[inline]
+    pub fn to_bytes(&self, compress: bool) -> Result<Vec<u8>, CyberError> {
+        let table_end = self.check_shape()?;
+        let mut plan = Plan::new(table_end, compress);
+        let mut offsets: Vec<u16> = Vec::with_capacity(self.blocks.len());
+        for list in &self.blocks {
+            offsets.push(plan.place(list)?);
+        }
+        plan.finish()?;
+        Ok(write_lump(self, &offsets, &plan.placed))
+    }
+
+    /// Checks that the list count matches the grid and returns the first
+    /// free word after the header and offset table.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] on a count mismatch;
+    /// [`CyberError::LimitExceeded`] when the offset table alone leaves
+    /// the lump.
+    fn check_shape(&self) -> Result<usize, CyberError> {
+        let cells = usize::from(self.columns)
+            .checked_mul(usize::from(self.rows))
+            .ok_or_else(too_large)?;
+        if self.blocks.len() != cells {
+            return Err(CyberError::InvalidArgument(format!(
+                "the BLOCKMAP holds {} lists for a {}x{} grid ({cells} blocks): rebuild the \
+                 blockmap",
+                self.blocks.len(),
+                self.columns,
+                self.rows
+            )));
+        }
+        HEADER_WORDS
+            .checked_add(cells)
+            .filter(|end| *end <= MAX_LUMP_WORDS)
+            .ok_or_else(too_large)
+    }
+}
+
+/// Offset assignment in progress: the next free word, the shared-copy
+/// table (in `compress` mode) and the bodies in ascending-offset order.
+struct Plan<'list> {
+    /// The next free word.
+    next: usize,
+    /// First-use offsets by list content, `compress` mode only.
+    shared: BTreeMap<&'list [u16], u16>,
+    /// The bodies to write, in placement order.
+    placed: Vec<&'list [u16]>,
+    /// Whether identical lists share one copy.
+    compress: bool,
+}
+
+impl<'list> Plan<'list> {
+    /// A plan whose first blocklist starts at word `next`.
+    #[must_use]
+    const fn new(next: usize, compress: bool) -> Self {
+        Self {
+            next,
+            shared: BTreeMap::new(),
+            placed: Vec::new(),
+            compress,
+        }
+    }
+
+    /// The offset word `list` lands on, placing its body (a first-use
+    /// copy in `compress` mode) at the current end of the lump.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] when the list holds the `0xFFFF`
+    /// terminator word, [`CyberError::LimitExceeded`] when the growing
+    /// lump leaves the addressable size.
+    fn place(&mut self, list: &'list [u16]) -> Result<u16, CyberError> {
+        if list.contains(&LIST_END) {
+            return Err(CyberError::InvalidArgument(format!(
+                "a BLOCKMAP blocklist holds {LIST_END:#06X}, the blocklist terminator: \
+                 rebuild the blockmap"
+            )));
+        }
+        let reuse = self
+            .compress
+            .then_some(self.shared.get(list).copied())
+            .flatten();
+        if let Some(word) = reuse {
+            return Ok(word);
+        }
+        let word = u16::try_from(self.next).map_err(|_error| too_large())?;
+        if self.compress {
+            self.shared.insert(list, word);
+        }
+        self.placed.push(list);
+        self.next = list_words(self.next, list)?;
+        Ok(word)
+    }
+
+    /// Checks the finished lump still fits the format.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::LimitExceeded`] when the last list ran past word
+    /// [`MAX_LUMP_WORDS`].
+    fn finish(&self) -> Result<(), CyberError> {
+        if self.next > MAX_LUMP_WORDS {
+            return Err(too_large());
+        }
+        Ok(())
+    }
+}
+
+/// Writes the lump: header, offset table, then every placed blocklist
+/// once, in ascending-offset (first-use) order.
+fn write_lump(map: &Blockmap, offsets: &[u16], placed: &[&[u16]]) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.put_i16(map.origin_x);
+    w.put_i16(map.origin_y);
+    w.put_u16(map.columns);
+    w.put_u16(map.rows);
+    for offset in offsets {
+        w.put_u16(*offset);
+    }
+    for list in placed {
+        w.put_u16(LIST_START);
+        for entry in *list {
+            w.put_u16(*entry);
+        }
+        w.put_u16(LIST_END);
+    }
+    w.into_inner()
+}
+
+/// The next free word after a blocklist of `list` entries placed at
+/// `after`.
+///
+/// # Errors
+///
+/// [`CyberError::LimitExceeded`] when the words leave the addressable
+/// lump.
+fn list_words(after: usize, list: &[u16]) -> Result<usize, CyberError> {
+    after
+        .checked_add(list.len())
+        .and_then(|used| used.checked_add(LIST_OVERHEAD))
+        .ok_or_else(too_large)
+}
+
+/// The refusal of a grid or lump that leaves the words a `BLOCKMAP`
+/// can hold.
+fn too_large() -> CyberError {
+    CyberError::LimitExceeded(
+        "blockmap too large: the grid or its blocklists leave the 65535 words a \
+         BLOCKMAP lump can hold"
+            .to_owned(),
+    )
 }
 
 /// The blocklist `offset_words` points at, validated in bounds and
@@ -174,7 +349,7 @@ fn unterminated(cell: usize, offset_words: u16) -> CyberError {
 
 #[cfg(test)]
 mod tests {
-    use super::Blockmap;
+    use super::{Blockmap, MAX_LUMP_WORDS};
     use crate::wad::bytes::Writer;
 
     /// The three blocklists of [`build`], in placement order.
@@ -318,5 +493,108 @@ mod tests {
             serde_json::json!([[5_u64, 9_u64], [], [2_u64], [5_u64, 9_u64]]),
             "the block lists"
         );
+    }
+
+    #[test]
+    fn to_bytes_round_trips_compressed_and_plain() {
+        let map = Blockmap::parse(&build()).expect("the fixture parses");
+        let plain = map.to_bytes(false).expect("the fixture serializes");
+        let packed = map.to_bytes(true).expect("the fixture compresses");
+        assert_eq!(
+            Blockmap::parse(&plain).expect("the plain lump parses"),
+            map,
+            "uncompressed round trip"
+        );
+        assert_eq!(
+            Blockmap::parse(&packed).expect("the compressed lump parses"),
+            map,
+            "compressed round trip"
+        );
+        assert!(
+            packed.len() < plain.len(),
+            "the shared [5, 9] list is written once: {packed:#?} vs {plain:#?}"
+        );
+        let empty = Blockmap {
+            origin_x: 0,
+            origin_y: 0,
+            columns: 0,
+            rows: 0,
+            blocks: Vec::new(),
+        };
+        let bytes = empty.to_bytes(true).expect("an empty grid writes");
+        assert_eq!(bytes.len(), 8, "header only");
+        assert_eq!(
+            Blockmap::parse(&bytes).expect("it parses"),
+            empty,
+            "and round trips"
+        );
+    }
+
+    #[test]
+    fn to_bytes_refuses_terminators_and_count_mismatches() {
+        let terminator = Blockmap {
+            origin_x: 0,
+            origin_y: 0,
+            columns: 1,
+            rows: 1,
+            blocks: vec![vec![0xFFFF_u16]],
+        };
+        let error = terminator
+            .to_bytes(false)
+            .expect_err("0xFFFF is the list terminator, not an entry");
+        assert_eq!(error.code(), "invalid_argument", "terminator code");
+        assert!(
+            error.to_string().contains("terminator"),
+            "the fault is named: {error}"
+        );
+        let mismatch = Blockmap {
+            origin_x: 0,
+            origin_y: 0,
+            columns: 2,
+            rows: 2,
+            blocks: vec![Vec::new()],
+        };
+        let mismatch_error = mismatch
+            .to_bytes(false)
+            .expect_err("one list cannot serve a 2x2 grid");
+        assert_eq!(
+            mismatch_error.code(),
+            "invalid_argument",
+            "count mismatch code"
+        );
+        assert!(
+            mismatch_error.to_string().contains("rebuild"),
+            "the fix is named: {mismatch_error}"
+        );
+    }
+
+    #[test]
+    fn to_bytes_refuses_grids_and_lists_past_the_addressable_size() {
+        let wild = Blockmap {
+            origin_x: 0,
+            origin_y: 0,
+            columns: 300,
+            rows: 300,
+            blocks: vec![Vec::new(); 90_000_usize],
+        };
+        let wild_error = wild.to_bytes(true).expect_err("90000 offsets do not fit");
+        assert_eq!(wild_error.code(), "limit_exceeded", "wild grid code");
+        assert!(
+            wild_error.to_string().contains("blockmap too large"),
+            "the ticket phrase is kept: {wild_error}"
+        );
+        let mut huge = vec![7_u16; MAX_LUMP_WORDS.saturating_sub(5)];
+        huge.push(8_u16);
+        let heavy = Blockmap {
+            origin_x: 0,
+            origin_y: 0,
+            columns: 1,
+            rows: 1,
+            blocks: vec![huge],
+        };
+        let heavy_error = heavy
+            .to_bytes(true)
+            .expect_err("one list of 65531 entries leaves the lump");
+        assert_eq!(heavy_error.code(), "limit_exceeded", "oversized list code");
     }
 }

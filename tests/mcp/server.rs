@@ -86,6 +86,8 @@ mod tests {
         "add_sidedef",
         "add_thing",
         "assemble_map",
+        "build_blockmap",
+        "build_reject",
         "build_texture",
         "convert_map_format",
         "copy_map",

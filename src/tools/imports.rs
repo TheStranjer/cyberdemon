@@ -20,7 +20,7 @@
 //! picture on its feet and reports the rotations the session's sprites
 //! region already serves. Patch-replacement tools grow on the same pieces.
 
-mod image_pipeline;
+pub(in crate::tools) mod image_pipeline;
 mod sprite;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -166,12 +166,12 @@ struct RawReport {
 }
 
 /// The `PNAMES` side of one patch import.
-struct PnamesPlan {
+pub(in crate::tools) struct PnamesPlan {
     /// The index the name answers with in the effective list.
-    index: usize,
+    pub(in crate::tools) index: usize,
     /// The new `PNAMES` bytes when the list grew, `None` when the name was
     /// already listed and nothing needs writing.
-    bytes: Option<Vec<u8>>,
+    pub(in crate::tools) bytes: Option<Vec<u8>>,
 }
 
 /// The flat import's `resize` choice.
@@ -287,7 +287,7 @@ fn namespace_names() -> String {
 /// # Errors
 ///
 /// [`parse_pnames`]' [`CyberError::Format`] for a malformed lump.
-fn current_pnames(session: &Session) -> Result<Vec<String>, CyberError> {
+pub(in crate::tools) fn current_pnames(session: &Session) -> Result<Vec<String>, CyberError> {
     let Some(entry) = session.find(LumpName::from_raw(PNAMES_RAW), None) else {
         return Ok(Vec::new());
     };
@@ -309,7 +309,7 @@ fn position_of(list: &[String], name: &str) -> Option<usize> {
 /// [`parse_pnames`]' [`CyberError::Format`] for a malformed `PNAMES` and
 /// [`write_pnames`]' [`CyberError::InvalidArgument`] for a name it cannot
 /// store.
-fn pnames_plan(
+pub(in crate::tools) fn pnames_plan(
     state: &AppState,
     name: LumpName,
     add: Option<bool>,

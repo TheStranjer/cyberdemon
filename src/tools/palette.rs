@@ -136,7 +136,7 @@ fn find_global(session: &Session, raw: [u8; 8]) -> Option<MergedLump> {
 
 /// The 256x256 preview image: a 16x16 grid of 16-pixel cells in palette
 /// order, every pixel opaque.
-fn swatch_image(palette: &Palette) -> Result<RgbaImage, CyberError> {
+pub(in crate::tools) fn swatch_image(palette: &Palette) -> Result<RgbaImage, CyberError> {
     let side = usize::try_from(SWATCH_SIDE).unwrap_or(PALETTE_COLORS);
     let mut pixels: Vec<u8> = Vec::with_capacity(side.saturating_mul(side).saturating_mul(4));
     for row in 0..SWATCH_SIDE {

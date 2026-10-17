@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 83] = [
+    const EXPECTED_TOOLS: [&str; 84] = [
         "add_lump",
         "add_sector",
         "add_sidedef",
@@ -101,6 +101,7 @@ mod tests {
         "edit_zscript",
         "extract_lump",
         "get_asset_server_info",
+        "get_asset_url",
         "get_blockmap",
         "get_dehacked",
         "get_flat",
@@ -339,6 +340,25 @@ mod tests {
             ],
         );
         assert_required(&add_lump, "name");
+    }
+
+    #[tokio::test]
+    async fn get_asset_url_flattens_the_selector_and_carries_its_two_choices() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let schema = schema_of(tool_named(&tools, "get_asset_url"));
+        assert_flattens(
+            &schema,
+            &[
+                "name",
+                "scope",
+                "namespace",
+                "occurrence",
+                "palette",
+                "prefer",
+            ],
+        );
+        assert_required(&schema, "name");
     }
 
     #[tokio::test]

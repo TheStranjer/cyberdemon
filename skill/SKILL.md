@@ -95,12 +95,18 @@ Only the most recent N assets are kept (default 50, set with the
 `set_asset_capacity`). Fetching an asset refreshes it, but an evicted one
 comes back `404`; regenerate it rather than retrying the old URL.
 
+`get_asset_url` is the one call that turns any session resource — a
+texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
+`COLORMAP` — into such a file without you first deciding which kind it is
+(see `reference/assets.md`).
+
 ## Tools
 
 | Tool                     | Reference               |
 |--------------------------|-------------------------|
 | `version`                | `reference/meta.md`     |
 | `get_asset_server_info`  | `reference/assets.md`   |
+| `get_asset_url`          | `reference/assets.md`   |
 | `set_asset_capacity`     | `reference/assets.md`   |
 | `get_thing_types`        | `reference/defs.md`     |
 | `get_linedef_specials`   | `reference/defs.md`     |

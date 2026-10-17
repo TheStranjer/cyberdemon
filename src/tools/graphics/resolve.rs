@@ -12,9 +12,10 @@
 //! also carry, quantized against `PLAYPAL` entry 0 with alpha transparency
 //! and with the drawing offsets taken from a `grAb` chunk. `lump_bytes`
 //! is the same name lookup for a tool that reads a lump of any kind. The
-//! image tools of [`crate::tools::graphics`] publish through these and
-//! [`crate::render::scene`] builds its scenes through them, so name
-//! resolution is written once.
+//! image tools of [`crate::tools::graphics`] publish through these,
+//! [`crate::render::scene`] builds its scenes through them and
+//! `crate::tools::assets` dispatches to all of them, so name resolution
+//! is written once.
 
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, is_png};
@@ -458,7 +459,10 @@ fn clamp_offset(value: i32) -> i16 {
 ///
 /// [`decode_flat`]' [`CyberError::Format`] for a raw lump of an
 /// unsupported size; [`quantize_png`]' errors for a `PNG`.
-fn decode_flat_bytes(session: &Session, data: &[u8]) -> Result<IndexedImage, CyberError> {
+pub(in crate::tools) fn decode_flat_bytes(
+    session: &Session,
+    data: &[u8],
+) -> Result<IndexedImage, CyberError> {
     if is_png(data) {
         return quantize_png(session, data);
     }
@@ -474,7 +478,10 @@ fn decode_flat_bytes(session: &Session, data: &[u8]) -> Result<IndexedImage, Cyb
 /// [`decode_patch`]' [`CyberError::Format`] for `Doom` bytes that are
 /// corrupt; [`quantize_png`]' errors for a `PNG`; [`read_grab`]'
 /// [`CyberError::Format`] for a chunk stream that does not parse.
-fn decode_patch_bytes(session: &Session, data: &[u8]) -> Result<Patch, CyberError> {
+pub(in crate::tools) fn decode_patch_bytes(
+    session: &Session,
+    data: &[u8],
+) -> Result<Patch, CyberError> {
     if !is_png(data) {
         return decode_patch(data);
     }
@@ -1098,5 +1105,31 @@ mod tests {
         ]);
         let error = load_texture(&broken, name("ANY")).expect_err("junk is no texture lump");
         assert_eq!(code(&error), "format_error", "undecodable lump code");
+    }
+
+    #[test]
+    fn a_component_that_is_no_picture_stays_a_reported_hole() {
+        let texture1 = texture_bytes(vec![definition("AWRY", 2, 2, vec![place(0, 0, 0)])]);
+        let session = with_extra(vec![
+            pnames_lump(&["JUNK"]),
+            lump("TEXTURE1", texture1),
+            lump("JUNK", vec![b'?'; 40]),
+        ]);
+        let composite = load_texture(&session, name("AWRY")).expect("AWRY composes");
+        assert_eq!(
+            composite.missing,
+            ["JUNK"],
+            "the undecodable patch is named"
+        );
+        assert_eq!(
+            composite.problems,
+            ["texture AWRY is missing patch JUNK".to_owned()],
+            "the problem names the texture"
+        );
+        assert_eq!(
+            composite.image.get(1, 1),
+            Some((0, false)),
+            "its place stays a hole"
+        );
     }
 }

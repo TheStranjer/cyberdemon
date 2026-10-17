@@ -80,8 +80,9 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 83] = [
+    const EXPECTED_TOOLS: [&str; 84] = [
         "add_lump",
+        "add_patch",
         "add_sector",
         "add_sidedef",
         "add_thing",
@@ -167,7 +168,7 @@ mod tests {
     ];
 
     #[tokio::test]
-    async fn lists_the_meta_assets_audio_convert_defs_edit_sectors_edit_sidedefs_edit_things_graphics_imports_inspect_lumps_maps_music_nodes_palette_render_scripts_session_and_textures_tools()
+    async fn lists_the_meta_assets_audio_convert_defs_edit_sectors_edit_sidedefs_edit_things_graphics_imports_inspect_lumps_maps_music_nodes_palette_patches_render_scripts_session_and_textures_tools()
      {
         let client = connect().await;
         let tools = client.list_all_tools().await.expect("list tools");
@@ -317,6 +318,28 @@ mod tests {
         let raw = schema_of(tool_named(&tools, "import_image_as_raw"));
         assert_flattens(&raw, &["source", "name", "namespace", "replace"]);
         assert_required(&raw, "source");
+    }
+
+    /// `add_patch` flattens the picture parameters into its schema and
+    /// keeps both its own `name` and the flattened `source` required.
+    #[tokio::test]
+    async fn add_patch_flattens_the_picture_parameters_and_keeps_its_requireds() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let add_patch = schema_of(tool_named(&tools, "add_patch"));
+        assert_flattens(
+            &add_patch,
+            &[
+                "name",
+                "source",
+                "offsets",
+                "palette",
+                "transparency",
+                "add_to_pnames",
+            ],
+        );
+        assert_required(&add_patch, "name");
+        assert_required(&add_patch, "source");
     }
 
     #[tokio::test]

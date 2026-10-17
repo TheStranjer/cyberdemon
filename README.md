@@ -15,7 +15,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `graphics` group (`list_flats`, `list_patches`, `list_sprites`, `get_flat`,
 > `get_patch`, `get_sprite`, `get_thing_sprite`, `decode_patch`), an
 > `imports` group (`import_image_as_patch`/`import_png_as_patch`,
-> `import_image_as_flat`/`import_png_as_flat`, `import_image_as_sprite`/`import_png_as_sprite`, `import_image_as_raw`), an `inspect` group (`diff_wads`), a
+> `import_image_as_flat`/`import_png_as_flat`, `import_image_as_sprite`/`import_png_as_sprite`, `import_image_as_raw`), a `patches` group (`add_patch`), an `inspect` group (`diff_wads`), a
 > `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
 > `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
 > `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group (`list_maps`, `get_map_lumps`, `get_map_summary`, `assemble_map`, `set_active_map`, `create_map`, `copy_map`, `rename_map`, `remove_map`), an `edit_things` group (`add_thing`, `edit_thing`, `remove_thing`), an `edit_sidedefs` group (`add_sidedef`, `edit_sidedef`, `remove_sidedef`), an `edit_sectors` group (`add_sector`, `edit_sector`, `remove_sector`), a `convert` group (`convert_map_format`), an

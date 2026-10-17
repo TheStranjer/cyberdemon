@@ -24,6 +24,7 @@ pub(crate) mod meta;
 pub(crate) mod music;
 pub(crate) mod nodes;
 pub mod palette;
+pub(crate) mod patches;
 pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;

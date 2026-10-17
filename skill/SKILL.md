@@ -191,6 +191,10 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `edit_pnames`            | `reference/textures.md` |
 | `build_texture`          | `reference/textures.md` |
 | `remove_texture`         | `reference/textures.md` |
+| `get_texture_theme`      | `reference/themes.md`   |
+| `set_texture_theme`      | `reference/themes.md`   |
+| `auto_texture`           | `reference/themes.md`   |
+| `align_textures`         | `reference/themes.md`   |
 
 ## Typical workflow
 

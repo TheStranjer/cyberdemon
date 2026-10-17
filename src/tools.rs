@@ -5,8 +5,11 @@
 //! this library) can build results with them; the tool group modules
 //! themselves stay crate-private, except `textures`, whose session-level
 //! [`textures::TextureSet`] loader is public API texture editing will grow
-//! around, and `maps`, whose [`maps::params`] wire types and validators the
-//! element-editing tools are built from.
+//! around, `maps`, whose [`maps::params`] wire types and validators the
+//! element-editing tools are built from, `graphics` and `palette`, whose
+//! resolvers the renderers share, and `themes`, whose [`themes::theme_texture`]
+//! is how every role-asking tool (drawing, doors, stairs, the plan builder)
+//! resolves its textures.
 
 pub(crate) mod assets;
 pub(crate) mod audio;
@@ -29,6 +32,7 @@ pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;
 pub mod textures;
+pub mod themes;
 
 use rmcp::model::{CallToolResult, ErrorData};
 use serde::Serialize;

@@ -159,6 +159,21 @@ src/
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.
+  themes.rs       Texture themes: the twenty texture `Role`s, the deterministic
+                  `resolve` (exact candidates, globs, `fallback_role` chain,
+                  game default theme, game default names, first available) and
+                  the session's `TextureTheme` (theme name plus per-role
+                  overrides, session state outside the undo history).
+  themes/         Theme building blocks (no MCP concerns):
+                  `themes/table.rs` the `data/themes/*.tsv` readers and the
+                  `include_str!`-embedded per-game theme tables,
+                  `themes/auto.rs` the pure `auto_texture` engine (fill
+                  missing middles, upper gaps and lower steps; theme-wide
+                  repaint keeping door/switch specials, jambs getting
+                  door_track), `themes/align.rs` the pure `align_textures`
+                  engine (drawing-order wall chains, x offsets modulo the
+                  texture width, y offsets pegged to the chain's highest
+                  ceiling).
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them.
@@ -185,7 +200,9 @@ src/
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`;
-                  `tools/palette.rs`' `load_palette` is its palette side.
+                  `tools/palette.rs`' `load_palette` is its palette side;
+                  `tools/themes.rs` is the `themes` group plus the shared
+                  `theme_texture(session, role)` every role-asking tool uses.
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.
@@ -231,6 +248,10 @@ src/
                   conversion (`Target`, `convert_map`, `Conversion`) behind
                   `convert_map_format`.
 data/
+  themes/         Per-game texture-theme TSV tables embedded in the binary
+                  (`doom.tsv` also serves DOOM II and undetected sessions):
+                  `theme`, `role`, `|`-separated `candidates` and
+                  `fallback_role` columns, read by `src/themes/table.rs`.
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by
                   `src/defs/table.rs`. `doom_things.tsv` is the DOOM/DOOM II

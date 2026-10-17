@@ -11,7 +11,7 @@
 //! goes through exactly one [`crate::session::Session::edit`], bringing
 //! the lumps into the working archive as overrides.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -261,6 +261,21 @@ impl TextureSet {
             list.push((&pair.0, WhichLump::Texture2.as_str()));
         }
         list
+    }
+
+    /// Every defined texture name (uppercased) with its width: the
+    /// `TEXTURE1` records first, `TEXTURE2` wins on a duplicate name
+    /// exactly as [`TextureSet::find`] does. The theme tools read the
+    /// merged view's texture inventory through this.
+    #[must_use]
+    #[inline]
+    pub fn widths(&self) -> BTreeMap<String, u16> {
+        [&self.texture1, &self.texture2]
+            .into_iter()
+            .flatten()
+            .flat_map(|pair| pair.0.textures.iter())
+            .map(|def| (def.name.to_ascii_uppercase(), def.width))
+            .collect()
     }
 }
 

@@ -25,9 +25,10 @@
 //! forth; [`Session::is_dirty`] compares the working archive's revision with
 //! the one it was last saved at.
 //!
-//! Alongside the archives a session carries the client's [`RenderSettings`],
-//! the defaults the render tools start from. They are session state rather
-//! than archive state: no edit, undo or replaced archive changes them.
+//! Alongside the archives a session carries the client's [`RenderSettings`]
+//! and [`TextureTheme`], the defaults the render and texture tools start
+//! from. They are session state rather than archive state: no edit, undo or
+//! replaced archive changes them.
 //!
 //! Read-only content reaches the working archive through [`cow`]:
 //! [`Session::copy_map_to_working`] copies one whole map block out of the
@@ -49,6 +50,7 @@ use crate::error::CyberError;
 use crate::render::RenderSettings;
 use crate::session::history::History;
 use crate::session::map_edit::MapEditReport;
+use crate::themes::TextureTheme;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, Namespace};
 use crate::wad::game::{Game, detect_game};
@@ -178,6 +180,8 @@ pub struct Session {
     active_map: Option<LumpName>,
     /// Session-level render defaults, never part of the undo history.
     render: RenderSettings,
+    /// Session-level texture theme, never part of the undo history.
+    theme: TextureTheme,
 }
 
 impl Session {
@@ -265,6 +269,24 @@ impl Session {
     #[inline]
     pub fn set_render_settings(&mut self, settings: RenderSettings) {
         self.render = settings;
+    }
+
+    /// The session-level texture theme the texture tools start from (see
+    /// [`crate::themes`]).
+    #[must_use]
+    #[inline]
+    pub const fn texture_theme(&self) -> &TextureTheme {
+        &self.theme
+    }
+
+    /// The session-level texture theme, mutably: the themes tools validate
+    /// every change before assigning it.
+    ///
+    /// Like the render settings, the theme is session state: it is never
+    /// part of the undo history.
+    #[inline]
+    pub const fn texture_theme_mut(&mut self) -> &mut TextureTheme {
+        &mut self.theme
     }
 
     /// Adopts a new working archive, forgetting the edit history.
@@ -598,6 +620,7 @@ mod tests {
     use crate::error::CyberError;
     use crate::render::{Lighting, RenderSettings};
     use crate::session::history::HISTORY_LIMIT;
+    use crate::themes::Role;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::Namespace;
     use crate::wad::game::Game;
@@ -1297,6 +1320,34 @@ mod tests {
             session.render_settings(),
             &expected,
             "the mutable accessor reaches the stored value"
+        );
+    }
+
+    #[test]
+    fn the_texture_theme_is_session_state_outside_the_history() {
+        let mut session = Session::default();
+        assert!(
+            session.texture_theme().name.is_none() && session.texture_theme().overrides.is_empty(),
+            "a fresh session follows the game default with no overrides"
+        );
+        session.texture_theme_mut().name = Some("hell".to_owned());
+        session
+            .texture_theme_mut()
+            .overrides
+            .insert(Role::Wall, "WALL1".to_owned());
+        session
+            .edit("add MARK", append_marker)
+            .expect("an edit to undo");
+        session.undo().expect("undo it");
+        session.replace_working(pwad(vec![lump("PLAYPAL")]), None);
+        assert_eq!(
+            session.texture_theme().name.as_deref(),
+            Some("hell"),
+            "no edit, undo or new archive touches the theme"
+        );
+        assert!(
+            session.texture_theme().overrides.contains_key(&Role::Wall),
+            "the overrides ride along"
         );
     }
 

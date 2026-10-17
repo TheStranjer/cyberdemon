@@ -25,6 +25,7 @@ pub mod server;
 pub mod session;
 pub mod sketch;
 pub mod state;
+pub mod themes;
 pub mod tools;
 pub mod wad;
 

@@ -179,6 +179,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `get_wad_info`           | `reference/session.md`  |
 | `run_batch`              | `reference/batch.md`    |
 | `render_topdown`         | `reference/render.md`   |
+| `render_minimap`         | `reference/render.md`   |
 | `set_render_resolution`  | `reference/render.md`   |
 | `set_render_options`     | `reference/render.md`   |
 | `get_render_settings`    | `reference/render.md`   |
@@ -207,7 +208,8 @@ one); `reference/maps.md` covers the block management tools. Editing a lump
 the `IWAD` or a resource layer owns creates an override in the working
 archive instead of failing (`replace_lump` reports it); such a lump cannot
 be deleted, renamed or moved (`reference/lumps.md`). `render_topdown` draws
-the map so you can look at it (`reference/render.md`);
+the map so you can look at it and `render_minimap` gives you a small automap
+square for quick orientation (`reference/render.md`);
 `set_render_resolution` and
 `set_render_options` tune the picture for the whole connection (they are not
 part of a WAD and survive every archive change); `get_render_settings` reads

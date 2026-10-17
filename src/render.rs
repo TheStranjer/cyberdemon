@@ -9,14 +9,17 @@
 //! themselves: [`gamma_table`]. [`scene`] prepares a [`Scene`] (map,
 //! palette, `COLORMAP` tables, textures, flats, sky) from a session and
 //! [`light`] turns sector lights, depths and wall orientations into
-//! `COLORMAP` tables and shaded pixels for the 3D view. Nothing here
-//! knows about MCP; the `render` tool group is the only caller that talks
-//! to clients.
+//! `COLORMAP` tables and shaded pixels for the 3D view. [`topdown`] holds
+//! the shared line map: the `Doom` automap classification and colours,
+//! thing visuals and the square [`Window`] the minimap frames with.
+//! Nothing here knows about MCP; the `render` tool group is the only
+//! caller that talks to clients.
 
 pub mod canvas;
 pub mod light;
 pub mod scene;
 pub mod settings;
+pub mod topdown;
 
 use crate::render::settings::MAX_GAMMA;
 
@@ -24,6 +27,11 @@ pub use canvas::{Canvas, Edge, Pt, Rgba, Stroke};
 pub use light::{WallDir, colormap_index, shade};
 pub use scene::{Scene, build_scene, camera_sector, default_eye_z};
 pub use settings::{Lighting, RenderSettings, Switch, TopdownStyle};
+pub use topdown::{
+    AutomapColors, PLAYER_ARROW_PX, PlayerMark, THING_DOT_PX, UNKNOWN_THING_RADIUS, Window,
+    automap_color, category_color, paint_automap_lines, paint_player_arrow, paint_thing_dots,
+    scale_down, side_sector, thing_visual,
+};
 
 /// The brightest input value of an 8-bit channel.
 const GAMMA_MAX_INPUT: i32 = 255;

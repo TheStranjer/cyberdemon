@@ -25,7 +25,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `edit_decorate`, `edit_zscript`), a `session` group
 > (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
-> (`render_topdown`, `render_minimap`, `set_render_resolution`,
+> (`render_topdown`, `render_minimap`, `render_view`, `set_render_resolution`,
 > `set_render_options`, `get_render_settings`), a `textures` group (`list_textures`,
 > `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `themes` group
 > (`get_texture_theme`, `set_texture_theme`, `auto_texture`, `align_textures`) and a `palette` group (`get_palette`, `set_palette`),
@@ -55,11 +55,11 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, a labelled undo/redo history with dirty-state tracking, and the copy-on-write `edit_map` step every map edit wraps) and a definitions registry (`src/defs*`: TSV game tables embedded in the binary,
 > parsed once, selected per game, and overlaid with the session's custom
-> DEHACKED/DECORATE/ZScript/MAPINFO thing definitions), a texture theme core (`src/themes*`: the embedded per-game role/candidate tables and the exact→glob→fallback→default resolver, plus the pure auto-texture and texture-chain alignment engines behind the themes tools) and render defaults (`src/render*`: the
-> validated session-level settings, the integer gamma curve, the 3D-view lighting maths
-> (COLORMAP tables, fake contrast, shading) and scene preparation (textures, flats, sky,
-> fallbacks, `problems`) `render_view` builds on, the shared automap line map and minimap window,
-> and the clipped integer raster canvas (Bresenham lines, even-odd polygon fills) both paint on) and a
+> DEHACKED/DECORATE/ZScript/MAPINFO thing definitions), a texture theme core (`src/themes*`: the embedded per-game role/candidate tables and the exact→glob→fallback→default resolver, plus the pure auto-texture and texture-chain alignment engines behind the themes tools) and render defaults (`src/render*`: the validated session-level settings, the integer gamma curve, the 3D-view lighting maths
+> (COLORMAP tables, fake contrast, shading), the scene preparation (textures, flats, sky,
+> fallbacks, `problems`), the integer column caster `render_view` walks (exact `i128` ray
+> fractions, per-column portal walks, textured walls, flat-average planes), the shared
+> automap line map and minimap window, and the clipped integer raster canvas (Bresenham lines, even-odd polygon fills) both paint on) and a
 > pure planar geometry engine (`src/geom*`: layered polygons and external
 > segments arranged into non-crossing, side-labelled integer pieces; all
 > drawing goes through `geom::arrange`) and a pure float-free BSP node

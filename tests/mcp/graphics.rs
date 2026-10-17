@@ -948,8 +948,8 @@ mod tests {
         let image = decode_image(&bytes).expect("the asset decodes");
         assert_eq!(
             image.get(0, 0),
-            Some([17_u8, 238, 17, 255]),
-            "the fill index 0x11 in palette colour 17"
+            Some([100_u8, 155, 100, 255]),
+            "the fill index 100 in palette colour 100"
         );
         let doubled = call(
             &client,
@@ -1176,8 +1176,8 @@ mod tests {
         let image = decode_image(&bytes).expect("the PNG decodes");
         assert_eq!(
             image.get(15, 7),
-            Some([34_u8, 221, 34, 255]),
-            "the fill index 0x22 in colour"
+            Some([150_u8, 105, 150, 255]),
+            "the fill index 150 in colour"
         );
         let raw = fetch_asset(&asset_url(&report, "rgba")).await;
         assert_eq!(
@@ -1189,7 +1189,7 @@ mod tests {
                 .expect("RGBA8 fits"),
             "width*height*4 raw bytes"
         );
-        assert_eq!(&raw[..4], &[34_u8, 221, 34, 255], "row-major RGBA8");
+        assert_eq!(&raw[..4], &[150_u8, 105, 150, 255], "row-major RGBA8");
         let coloured = call(
             &client,
             "decode_patch",

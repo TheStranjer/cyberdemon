@@ -23,6 +23,12 @@
 //! of the top-down view through [`crate::render::topdown`], frames a
 //! centred [`crate::render::Window`] of the map and publishes the `PNG`
 //! the same way.
+//!
+//! [`Cyberdemon::render_view`] casts a first-person frame: it prepares a
+//! [`crate::render::Scene`] (map, palette, `COLORMAP`, textures, flats,
+//! sky) under the session lock with the call's setting overrides, runs
+//! the integer column caster in [`crate::render::view`], and publishes
+//! the gamma-corrected `PNG` like its siblings.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -38,11 +44,12 @@ use crate::gfx::codec::encode_png;
 use crate::gfx::palette::Palette;
 use crate::render::{
     AutomapColors, Canvas, Edge, PlayerMark, Pt, RenderSettings, Rgba, Stroke, Switch,
-    TopdownStyle, Window, automap_color, gamma_table, paint_automap_lines, paint_player_arrow,
-    paint_thing_dots, scale_down, side_sector, thing_visual,
+    TopdownStyle, ViewCamera, Window, automap_color, build_scene, camera_sector, check_pitch,
+    default_eye_z, gamma_table, paint_automap_lines, paint_player_arrow, paint_thing_dots,
+    render_view, scale_down, side_sector, thing_visual,
 };
 use crate::server::Cyberdemon;
-use crate::session::Scope;
+use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::session_game;
@@ -1392,6 +1399,186 @@ fn minimap_report(
     })
 }
 
+/// Arguments for [`Cyberdemon::render_view`]. `x` and `y` are required;
+/// every other field is optional, defaulting to the camera floor, level
+/// east, or the session's render settings.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RenderViewParams {
+    /// The map to render, e.g. `"MAP01"`. Defaults to the session's active
+    /// map; with none active, the merged view's only map.
+    #[serde(default)]
+    map: Option<String>,
+    /// Camera `x` in map units.
+    x: i32,
+    /// Camera `y` in map units.
+    y: i32,
+    /// Eye height in map units (default: the camera sector's floor plus
+    /// `Doom`'s 41-unit view height).
+    #[serde(default)]
+    z: Option<i32>,
+    /// Facing in degrees, counter-clockwise from east, 0 = east, 90 =
+    /// north (default `0`).
+    #[serde(default)]
+    angle: Option<i32>,
+    /// Pitch in degrees, positive looking up, `-60..=60` (default `0`).
+    #[serde(default)]
+    pitch: Option<i32>,
+    /// Horizontal field of view in degrees, `10..=170` (default: the
+    /// render setting).
+    #[serde(default)]
+    fov: Option<u32>,
+    /// Output width in pixels, `16..=4096` (default: the render setting).
+    #[serde(default)]
+    width: Option<u32>,
+    /// Output height in pixels, `16..=4096` (default: the render setting).
+    #[serde(default)]
+    height: Option<u32>,
+    /// Lighting model for this call only: `"doom"`, `"flat"` or
+    /// `"fullbright"` (default: the render setting).
+    #[serde(default)]
+    lighting: Option<String>,
+}
+
+/// The render settings one `render_view` call draws with: the session's,
+/// with the `lighting`, `fov` and resolution overrides validated on top.
+///
+/// # Errors
+///
+/// [`check_pitch`] and [`RenderSettings`]' setter errors for a refused
+/// override; the session settings are never touched.
+fn view_settings(session: &Session, args: &RenderViewParams) -> Result<RenderSettings, CyberError> {
+    check_pitch(args.pitch.unwrap_or(0_i32))?;
+    let mut settings = session.render_settings().clone();
+    if let Some(text) = args.lighting.as_deref() {
+        settings.set_lighting(text)?;
+    }
+    if let Some(value) = args.fov {
+        settings.set_fov(value)?;
+    }
+    settings.set_resolution(
+        args.width.unwrap_or(settings.width),
+        args.height.unwrap_or(settings.height),
+    )?;
+    Ok(settings)
+}
+
+/// The session half of one `render_view` call: the scene, the camera's
+/// sector and the resolved eye height, all read under the session lock.
+struct PreparedView {
+    /// The prepared scene (its settings carry the resolved overrides).
+    scene: crate::render::Scene,
+    /// The sector index holding the camera.
+    sector: usize,
+    /// The resolved eye height in map units.
+    z: i32,
+}
+
+/// Reads the view's inputs under the session lock: the map, the settings
+/// with overrides, the scene, and the camera placed in a sector.
+///
+/// # Errors
+///
+/// [`common::resolve_map_name`]'s errors, [`view_settings`]' refusals,
+/// [`build_scene`]'s [`CyberError::NotFound`] for a missing `PLAYPAL`,
+/// and [`CyberError::InvalidArgument`] when the camera lies outside every
+/// sector of the map.
+fn load_view(state: &AppState, args: &RenderViewParams) -> Result<PreparedView, CyberError> {
+    state.with_session(|session| {
+        let name = common::resolve_map_name(session, args.map.as_deref())?;
+        let settings = view_settings(session, args)?;
+        let scene = build_scene(session, name, &settings)?;
+        let sector = camera_sector(&scene, i64::from(args.x), i64::from(args.y)).ok_or_else(|| {
+            CyberError::InvalidArgument(format!(
+                "camera is outside the map: ({}, {}) lies in no sector of {}; move x/y inside a \
+                 sector (render_topdown shows the layout)",
+                args.x, args.y, scene.map.name
+            ))
+        })?;
+        let z = args.z.unwrap_or_else(|| default_eye_z(&scene, sector));
+        Ok(PreparedView { scene, sector, z })
+    })
+}
+
+/// [`Cyberdemon::render_view`]'s result: the effective camera, the frame
+/// size, the scene's problems and the published `PNG` asset.
+#[derive(Serialize)]
+struct ViewReport {
+    /// The rendered map's name.
+    map: String,
+    /// The camera the frame was cast from.
+    camera: CameraReport,
+    /// Output width in pixels.
+    width: u32,
+    /// Output height in pixels.
+    height: u32,
+    /// What the scene could not load, one line per item.
+    problems: Vec<String>,
+    /// The published view.
+    asset: AssetRef,
+}
+
+/// The `camera` object of a [`ViewReport`].
+#[derive(Serialize)]
+struct CameraReport {
+    /// Camera `x` in map units.
+    x: i32,
+    /// Camera `y` in map units.
+    y: i32,
+    /// Eye height in map units.
+    z: i32,
+    /// Facing in degrees, counter-clockwise from east.
+    angle: i32,
+    /// Pitch in degrees, positive looking up.
+    pitch: i32,
+    /// Horizontal field of view in degrees.
+    fov: u32,
+    /// The index of the sector holding the camera.
+    sector: usize,
+}
+
+/// `render_view`'s work: resolve, cast, gamma, encode, publish.
+///
+/// # Errors
+///
+/// [`load_view`]'s errors, [`encode_png`]' and [`AppState::publish`]'
+/// failures.
+fn view_report(state: &AppState, args: &RenderViewParams) -> Result<ViewReport, CyberError> {
+    let prepared = load_view(state, args)?;
+    let settings = prepared.scene.settings.clone();
+    let camera = ViewCamera {
+        x: args.x,
+        y: args.y,
+        z: prepared.z,
+        angle: args.angle.unwrap_or(0_i32),
+        pitch: args.pitch.unwrap_or(0_i32),
+        fov: settings.fov,
+    };
+    let mut rendered = render_view(&prepared.scene, &camera, settings.width, settings.height);
+    rendered.canvas.apply_gamma(&gamma_table(settings.gamma));
+    let png = encode_png(&rendered.canvas.to_rgba_image(), None)?;
+    let asset = state.publish(
+        &format!("{}{VIEW_SUFFIX}", prepared.scene.map.name),
+        PNG_MIME,
+        png,
+    )?;
+    Ok(ViewReport {
+        map: prepared.scene.map.name.to_string(),
+        camera: CameraReport {
+            x: camera.x,
+            y: camera.y,
+            z: camera.z,
+            angle: camera.angle,
+            pitch: camera.pitch,
+            fov: camera.fov,
+            sector: prepared.sector,
+        },
+        width: settings.width,
+        height: settings.height,
+        problems: prepared.scene.problems,
+        asset,
+    })
+}
+
 /// Pixels kept clear around the fitted view.
 const MARGIN_PX: i64 = 16;
 /// World units of slack added around the default map bounds.
@@ -1426,6 +1613,8 @@ const MAX_MINIMAP_RADIUS: u32 = 0x1_0000;
 const MINIMAP_FIT_PAD: i64 = 1;
 /// Name suffix of the published minimap files.
 const MINIMAP_SUFFIX: &str = "_minimap.png";
+/// Name suffix of the published 3D view files.
+const VIEW_SUFFIX: &str = "_view.png";
 /// The minimap background: black, as the in-game automap draws it.
 const MINIMAP_BACKGROUND: Rgba = [0, 0, 0, 255];
 
@@ -1515,6 +1704,20 @@ impl Cyberdemon {
         Parameters(args): Parameters<RenderMinimapParams>,
     ) -> Result<CallToolResult, ErrorData> {
         match minimap_report(self.state(), &args) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Renders a first-person 3D view as a `PNG` asset.
+    #[tool(
+        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG asset; returns {map, camera, width, height, problems, asset}. The camera stands at x/y map units with eye height z (default: the camera sector's floor + Doom's 41), faces angle degrees counter-clockwise from east (0 east, 90 north), looks pitch degrees up from level (positive looks up, -60..=60), through fov degrees of horizontal field of view (10..=170) onto width x height pixels. fov, width and height default to the render settings; lighting (\"doom\" | \"flat\" | \"fullbright\") overrides the settings' lighting for this call only. Walls draw the linedef's upper/middle/lower textures with their offsets and Doom's pegging flags, floors and ceilings draw the average colour of their flat (a F_SKY1 ceiling the sky picture's average), all shaded through the COLORMAP by sector light, fake contrast and view depth. The result's camera object echoes the effective camera and names the sector holding it; problems lists pictures the scene could not load. Errors: invalid_argument when x/y lies in no sector (the refusal says so), for pitch/fov outside their range, an edge outside 16..=4096 or over the pixel cap, and an unknown lighting name; not_found when no map resolves or the session has no PLAYPAL."
+    )]
+    fn render_view(
+        &self,
+        Parameters(args): Parameters<RenderViewParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match view_report(self.state(), &args) {
             Ok(report) => ok(&report),
             Err(error) => fail(&error),
         }

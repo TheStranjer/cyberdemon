@@ -1,10 +1,10 @@
 # Render tools
 
-Session-level rendering defaults plus the first renderers. Three settings
+Session-level rendering defaults plus the renderers. Three settings
 tools set and read the defaults every render starts from;
 `render_topdown` draws a whole-map overview as a `PNG` asset,
-`render_minimap` draws a compact automap-style square, and `render_view`
-will join them later.
+`render_minimap` draws a compact automap-style square, and
+`render_view` casts a first-person frame.
 
 ## The settings
 
@@ -80,8 +80,8 @@ at least 34 full tables is used as-is; otherwise the tables are generated
 from `PLAYPAL` palette 0. Missing textures, flats and skies, and a
 generated `COLORMAP`, are reported as `problems` while the view still
 renders: missing pictures become a 64x64 checkerboard of the palette's
-brightest and darkest colours. `render_view` surfaces all of this once it
-ships.
+brightest and darkest colours. `render_view` reports all of this in its
+`problems` list.
 
 ## `get_render_settings`
 
@@ -262,6 +262,64 @@ do not apply, `show_things` does.
   ```json
   {}
   {"center": {"x": 64, "y": 128}, "radius": 64, "player": {"x": 64, "y": 128, "angle": 90}}
+  ```
+
+## `render_view`
+
+- Purpose: render a first-person 3D frame from a camera inside the map
+  and publish it as a `PNG` asset — look at what you built the way the
+  engine draws it.
+- Arguments: `x` and `y` (map units) are required; the rest is optional.
+  - `map`: as everywhere (`list_maps`/`set_active_map` decide the default).
+  - `z`: eye height in map units (default: the camera sector's floor
+    plus Doom's 41-unit view height).
+  - `angle`: facing in degrees **counter-clockwise from east** (`0`
+    east, `90` north, `180` west, `270` south). Default `0`.
+  - `pitch`: look up or down in degrees, **positive looks up**,
+    `-60..=60`. Default `0` (level).
+  - `fov`: horizontal field of view in degrees, `10..=170` (default:
+    the setting).
+  - `width`, `height`: `16..=4096`, total capped like
+    `set_render_resolution` (default: the settings).
+  - `lighting`: `"doom"`, `"flat"` or `"fullbright"` for this call
+    only (default: the setting).
+- Returns:
+
+  ```json
+  {"map": "MAP01",
+   "camera": {"x": 64, "y": 128, "z": 41, "angle": 0, "pitch": 0,
+              "fov": 90, "sector": 0},
+   "width": 160, "height": 100, "problems": ["missing sky SKY1"],
+   "asset": {"url": "http://localhost:PORT/assets/ID/MAP01_view.png", ...}}
+  ```
+
+  `camera` echoes the effective camera — the resolved `z` and the index
+  of the sector holding it — so you can re-find the exact viewpoint.
+  The `gamma` render setting is applied to the output.
+- What it draws: linedef faces with their `upper`/`middle`/`lower`
+  textures, including texture offsets, Doom's pegging flags (one-sided
+  middles hang from the ceiling; upper bands sit on the far ceiling,
+  lower bands on the far floor) and `COLORMAP` shading with fake
+  contrast, as above. Floors and ceilings paint the **average colour**
+  of their flat, shaded per row by plane depth; a `F_SKY1` ceiling is
+  the sky picture's average colour as a solid, or the `background`
+  colour when the `sky` setting is off. A `-` texture draws nothing and
+  leaves the background.
+- Current limitations: planes and skies are flat colours, not textured
+  (textured planes and sky come in the next update); masked middle
+  textures on two-sided lines are not drawn yet, so switch and door
+  lines look open; things and sprites are not drawn yet.
+- Errors: `invalid_argument` when `x`/`y` lies in no sector ("camera is
+  outside the map"), when `pitch` or `fov` is outside its range, for an
+  edge outside the resolution ranges or over the pixel cap, and for an
+  unknown `lighting` name; `not_found` for an unknown map or a session
+  without a `PLAYPAL` (rendering needs one).
+- Example: standing on the player start looking east, then a bright
+  wide-angle check of what is behind you:
+
+  ```json
+  {"x": 64, "y": 128, "angle": 0, "width": 320, "height": 200}
+  {"x": 64, "y": 128, "angle": 180, "lighting": "fullbright", "fov": 110}
   ```
 
 ## Where this fits

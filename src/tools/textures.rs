@@ -7,7 +7,10 @@
 //! through it, `edit_pnames` rewrites the name list renumbering every
 //! texture patch reference so the indices stay truthful, and
 //! `build_texture`/`remove_texture` define and drop single texture
-//! records (appending needed `PNAMES` names along the way). Every write
+//! records (appending needed `PNAMES` names along the way). The removal
+//! half of that machinery is reusable on its own
+//! (`plan_pnames_removal`/`write_pnames_rewrite`) so other tools can
+//! fold a `PNAMES` removal and its renumbering into one edit. Every write
 //! goes through exactly one [`crate::session::Session::edit`], bringing
 //! the lumps into the working archive as overrides.
 
@@ -827,6 +830,92 @@ fn rewrite_textures(
     Ok((out, changed))
 }
 
+/// The whole committed change of one `PNAMES` removal: the re-encoded
+/// lumps ready to write and the removal's report lists.
+///
+/// Built by [`plan_pnames_removal`], applied by [`write_pnames_rewrite`];
+/// a caller that also removes a patch lump folds both into ONE
+/// [`crate::session::Session::edit`] so the removal and the
+/// PNAMES/TEXTURE rewrite land together.
+#[derive(Debug)]
+pub(in crate::tools) struct PnamesRewrite {
+    /// The new complete `PNAMES` list.
+    pub(in crate::tools) names: Vec<String>,
+    /// The re-encoded `PNAMES` lump bytes.
+    pub(in crate::tools) pnames_bytes: Vec<u8>,
+    /// New `TEXTURE1` bytes, when the renumbering changed it.
+    pub(in crate::tools) texture1: Option<Vec<u8>>,
+    /// New `TEXTURE2` bytes, when the renumbering changed it.
+    pub(in crate::tools) texture2: Option<Vec<u8>>,
+    /// Textures whose patch references were renumbered or pruned.
+    pub(in crate::tools) textures_changed: usize,
+    /// Names the removal deleted.
+    pub(in crate::tools) removed: Vec<String>,
+    /// Requested names that `PNAMES` did not hold.
+    pub(in crate::tools) skipped: Vec<String>,
+}
+
+/// Plans the complete `PNAMES` removal of `names` over the merged view —
+/// the shortened list, its bytes and the renumbered texture lumps —
+/// without writing anything.
+///
+/// # Errors
+///
+/// [`plan_edit`]'s errors ([`CyberError::InvalidArgument`] for an empty or
+/// unparsable name list, [`CyberError::LimitExceeded`] over the `u16`
+/// index range, [`CyberError::Conflict`] listing the textures that still
+/// refer to a removed name unless `force`), [`TextureSet::load`]'s
+/// [`CyberError::Format`] and the codecs' [`CyberError::Internal`]-class
+/// errors.
+pub(in crate::tools) fn plan_pnames_removal(
+    session: &Session,
+    names: &[String],
+    force: bool,
+) -> Result<PnamesRewrite, CyberError> {
+    let set = TextureSet::load(session)?;
+    let textures = set.textures();
+    let plan = plan_edit(&set.pnames, Operation::Remove(names), force, &textures)?;
+    let pnames_bytes = write_pnames(&plan.names)?;
+    let (rewritten, changed) = match plan.mapping.as_ref() {
+        Some(mapping) => rewrite_textures(&set, mapping)?,
+        None => (PlannedTextures::default(), 0_usize),
+    };
+    Ok(PnamesRewrite {
+        names: plan.names,
+        pnames_bytes,
+        texture1: rewritten.texture1,
+        texture2: rewritten.texture2,
+        textures_changed: changed,
+        removed: plan.removed,
+        skipped: plan.skipped,
+    })
+}
+
+/// Writes a planned removal into `wad`: `PNAMES` plus each texture lump
+/// the renumbering changed, overwriting the last working copies or
+/// appending them as overrides.
+///
+/// # Errors
+///
+/// [`put_global`]'s [`CyberError::Internal`] for a vanished lump slot.
+pub(in crate::tools) fn write_pnames_rewrite(
+    wad: &mut Wad,
+    rewrite: &PnamesRewrite,
+) -> Result<(), CyberError> {
+    put_global(
+        wad,
+        LumpName::from_raw(PNAMES_RAW),
+        rewrite.pnames_bytes.clone(),
+    )?;
+    if let Some(bytes) = rewrite.texture1.as_ref() {
+        put_global(wad, LumpName::from_raw(TEXTURE1_RAW), bytes.clone())?;
+    }
+    if let Some(bytes) = rewrite.texture2.as_ref() {
+        put_global(wad, LumpName::from_raw(TEXTURE2_RAW), bytes.clone())?;
+    }
+    Ok(())
+}
+
 /// `edit_pnames`' work: plan the change, then commit it as one edit.
 ///
 /// A plan that changed nothing (all names skipped, no texture rewritten)
@@ -842,6 +931,9 @@ fn edit_pnames_run(
     operation: Operation<'_>,
     force: bool,
 ) -> Result<EditReport, CyberError> {
+    if let Operation::Remove(list) = operation {
+        return edit_pnames_remove_run(session, list, force);
+    }
     let set = TextureSet::load(session)?;
     let textures = set.textures();
     let plan = plan_edit(&set.pnames, operation, force, &textures)?;
@@ -869,6 +961,30 @@ fn edit_pnames_run(
     Ok(report_of(&plan, changed))
 }
 
+/// `edit_pnames`' `remove` arm: [`plan_pnames_removal`] computes the
+/// whole change, [`write_pnames_rewrite`] commits it as one edit. A
+/// removal that changed nothing records no history; with nothing removed
+/// the new list stands as it was, so that is exactly an empty `removed`
+/// paired with no renumbered texture.
+///
+/// # Errors
+///
+/// [`plan_pnames_removal`]'s errors and [`write_pnames_rewrite`]'s.
+fn edit_pnames_remove_run(
+    session: &mut Session,
+    list: &[String],
+    force: bool,
+) -> Result<EditReport, CyberError> {
+    let rewrite = plan_pnames_removal(session, list, force)?;
+    let unchanged = rewrite.removed.is_empty() && rewrite.textures_changed == 0;
+    if !unchanged {
+        session.edit("edit_pnames remove", |wad| {
+            write_pnames_rewrite(wad, &rewrite)
+        })?;
+    }
+    Ok(remove_report_of(&rewrite))
+}
+
 /// The report for a finished plan.
 fn report_of(plan: &Plan, changed: usize) -> EditReport {
     EditReport {
@@ -878,6 +994,19 @@ fn report_of(plan: &Plan, changed: usize) -> EditReport {
         removed: plan.removed.clone(),
         renamed: plan.renamed.clone(),
         textures_changed: changed,
+    }
+}
+
+/// The report for a committed [`PnamesRewrite`]: a removal adds nothing
+/// and renames nothing.
+fn remove_report_of(rewrite: &PnamesRewrite) -> EditReport {
+    EditReport {
+        pnames: rewrite.names.len(),
+        added: Vec::new(),
+        skipped: rewrite.skipped.clone(),
+        removed: rewrite.removed.clone(),
+        renamed: Vec::new(),
+        textures_changed: rewrite.textures_changed,
     }
 }
 
@@ -1432,14 +1561,16 @@ mod tests {
         BuildTextureParams, EditPnamesParams, EditReport, Operation, Page, PatchPlacement,
         PnamesReport, RemoveTextureParams, RenamePair, TextureSet, WhichLump, build_texture_run,
         edit_pnames_run, find_global, list_pnames_run, list_textures_run, name_mapping, parse_page,
-        pick_operation, plan_edit, put_global, remove_texture_run,
+        pick_operation, plan_edit, plan_pnames_removal, put_global, remove_texture_run,
+        write_pnames_rewrite,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session, Source};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::name::LumpName;
     use crate::wad::textures::{
-        PatchRef, TextureDef, TextureLayout, TextureLump, write_pnames, write_texture_lump,
+        PatchRef, TextureDef, TextureLayout, TextureLump, parse_pnames, parse_texture_lump,
+        write_pnames, write_texture_lump,
     };
 
     /// A valid parsed name for test data.
@@ -1826,6 +1957,127 @@ mod tests {
         assert_eq!(report.skipped, vec!["NOPE".to_owned()], "reported skipped");
         assert_eq!(report.pnames, 2, "the count stands");
         assert!(session.undo_labels().is_empty(), "a no-op records nothing");
+    }
+
+    /// A session like [`session`] whose `PNAMES` gained a third name no
+    /// texture refers to.
+    fn session_with_spare() -> Session {
+        let mut session = Session::default();
+        session.set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    pnames_lump(&["WALLP1", "STEPP1", "EXTRAP"]),
+                    texture1_lump(),
+                    Lump::new(name("EXTRAP"), vec![b'E']),
+                ],
+            },
+        ));
+        session
+    }
+
+    #[test]
+    fn a_planned_removal_of_an_unreferenced_name_rewrites_no_textures() {
+        let session = session_with_spare();
+        let names = ["EXTRAP".to_owned()];
+        let rewrite = plan_pnames_removal(&session, &names, false).expect("nothing refers to it");
+        assert_eq!(
+            rewrite.removed,
+            vec!["EXTRAP".to_owned()],
+            "reported removed"
+        );
+        assert!(rewrite.skipped.is_empty(), "the name was listed");
+        assert_eq!(rewrite.textures_changed, 0, "no reference shifted or fell");
+        assert!(
+            rewrite.texture1.is_none() && rewrite.texture2.is_none(),
+            "no texture bytes"
+        );
+        assert_eq!(
+            rewrite.names,
+            vec!["WALLP1".to_owned(), "STEPP1".to_owned()],
+            "the shortened list"
+        );
+        assert_eq!(
+            parse_pnames(&rewrite.pnames_bytes).expect("a well-formed lump"),
+            rewrite.names,
+            "the bytes carry the new list"
+        );
+    }
+
+    #[test]
+    fn a_planned_removal_conflicts_on_referenced_names_until_forced() {
+        let session = session();
+        let names = ["WALLP1".to_owned()];
+        let error = plan_pnames_removal(&session, &names, false).expect_err("WALL1 refers to it");
+        assert_eq!(code(&error), "conflict", "conflict code");
+        assert!(
+            error.to_string().contains("WALL1 (TEXTURE1)"),
+            "the message labels the offending lump: {error}"
+        );
+        let rewrite = plan_pnames_removal(&session, &names, true).expect("the force plans");
+        assert_eq!(
+            rewrite.textures_changed, 2,
+            "WALL1 pruned, STEP1 renumbered"
+        );
+        assert!(rewrite.texture2.is_none(), "the fixture has no TEXTURE2");
+        let bytes = rewrite.texture1.as_ref().expect("TEXTURE1 was rewritten");
+        let lump = parse_texture_lump(bytes, 1).expect("the bytes decode");
+        let wall = lump
+            .textures
+            .iter()
+            .find(|candidate| candidate.name == "WALL1")
+            .expect("WALL1 stands");
+        assert_eq!(
+            wall.patches.iter().map(|r| r.patch).collect::<Vec<u16>>(),
+            vec![0_u16],
+            "the vanished refs fell, index 1 became 0"
+        );
+    }
+
+    #[test]
+    fn a_planned_removal_skips_absent_names_and_validates_its_list() {
+        let session = session();
+        let absent = ["NOPE".to_owned(), "GONE".to_owned()];
+        let rewrite = plan_pnames_removal(&session, &absent, false).expect("nothing to remove");
+        assert_eq!(
+            rewrite.skipped,
+            vec!["NOPE".to_owned(), "GONE".to_owned()],
+            "both reported skipped"
+        );
+        assert!(rewrite.removed.is_empty(), "nothing removed");
+        assert_eq!(rewrite.textures_changed, 0, "nothing renumbered");
+        assert!(
+            rewrite.texture1.is_none() && rewrite.texture2.is_none(),
+            "no bytes"
+        );
+        let empty: Vec<String> = Vec::new();
+        let empty_error = plan_pnames_removal(&session, &empty, false).expect_err("empty list");
+        assert_eq!(code(&empty_error), "invalid_argument", "empty remove code");
+        let bad = ["TOO LONG".to_owned()];
+        let bad_error = plan_pnames_removal(&session, &bad, false).expect_err("bad name");
+        assert_eq!(code(&bad_error), "invalid_argument", "bad name code");
+    }
+
+    #[test]
+    fn write_pnames_rewrite_writes_pnames_and_the_changed_texture_lumps() {
+        let session = session();
+        let names = ["WALLP1".to_owned()];
+        let rewrite = plan_pnames_removal(&session, &names, true).expect("the force plans");
+        let mut wad = Wad::default();
+        write_pnames_rewrite(&mut wad, &rewrite).expect("the write runs");
+        let stored: Vec<String> = wad.lumps.iter().map(|lump| lump.name.to_string()).collect();
+        assert_eq!(
+            stored,
+            vec!["PNAMES", "TEXTURE1"],
+            "both overrides appended"
+        );
+        assert_eq!(
+            wad.lumps.first().expect("PNAMES").data.to_vec(),
+            rewrite.pnames_bytes,
+            "the planned bytes landed"
+        );
     }
 
     #[test]

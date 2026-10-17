@@ -10,6 +10,7 @@
 //! `edit_sidedefs`-group tests in `edit_sidedefs`, the
 //! `edit_sectors`-group tests in `edit_sectors`, the
 //! `edit_things`-group tests in `edit_things`, the
+//! `edit_vertices`-group tests in `edit_vertices`, the
 //! graphics-group tests in `graphics`,
 //! the imports-group tests in `imports`, the
 //! inspect-group tests in `inspect`, the
@@ -62,6 +63,9 @@ mod edit_sidedefs;
 #[cfg(test)]
 #[path = "mcp/edit_things.rs"]
 mod edit_things;
+#[cfg(test)]
+#[path = "mcp/edit_vertices.rs"]
+mod edit_vertices;
 #[cfg(test)]
 #[path = "mcp/fixtures.rs"]
 pub mod fixtures;

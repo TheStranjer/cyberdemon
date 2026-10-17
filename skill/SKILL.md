@@ -135,6 +135,9 @@ comes back `404`; regenerate it rather than retrying the old URL.
 | `add_sector`             | `reference/sectors.md`  |
 | `edit_sector`            | `reference/sectors.md`  |
 | `remove_sector`          | `reference/sectors.md`  |
+| `add_vertex`             | `reference/vertices.md` |
+| `move_vertex`            | `reference/vertices.md` |
+| `remove_vertex`          | `reference/vertices.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |

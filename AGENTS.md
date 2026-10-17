@@ -110,7 +110,11 @@ src/
                   contrast) and `shade`, `render/scene.rs` the `Scene`
                   preparation: map, palette, COLORMAP, used textures and
                   flats, sky selection, checkerboard fallbacks, `problems`
-                  and the camera helpers.
+                  and the camera helpers, and `render/topdown.rs` the
+                  shared automap line map: `Doom` classification and
+                  colours (RGB defaults plus `PLAYPAL` entries), thing
+                  visuals, and the square `Window` mapping the minimap
+                  frames with.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions

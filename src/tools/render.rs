@@ -17,6 +17,12 @@
 //! paints, gamma-corrects and publishes the `PNG` outside it, returning
 //! the fitted `transform` so a client can convert pixels back to map
 //! coordinates.
+//!
+//! [`Cyberdemon::render_minimap`] draws a compact automap-style square:
+//! it reuses the line classification, colours and [`crate::render::Canvas`]
+//! of the top-down view through [`crate::render::topdown`], frames a
+//! centred [`crate::render::Window`] of the map and publishes the `PNG`
+//! the same way.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -29,8 +35,11 @@ use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::fixed::{Angle, mul_div_round, rotate_point};
 use crate::gfx::codec::encode_png;
+use crate::gfx::palette::Palette;
 use crate::render::{
-    Canvas, Edge, Pt, RenderSettings, Rgba, Stroke, Switch, TopdownStyle, gamma_table,
+    AutomapColors, Canvas, Edge, PlayerMark, Pt, RenderSettings, Rgba, Stroke, Switch,
+    TopdownStyle, Window, automap_color, gamma_table, paint_automap_lines, paint_player_arrow,
+    paint_thing_dots, scale_down, side_sector, thing_visual,
 };
 use crate::server::Cyberdemon;
 use crate::session::Scope;
@@ -38,6 +47,7 @@ use crate::state::AppState;
 use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
+use crate::tools::palette::load_palette;
 use crate::tools::{fail, ok};
 use crate::wad::map::geometry;
 use crate::wad::map::{Linedef, Map, Thing, Vertex};
@@ -62,7 +72,7 @@ struct SetRenderOptionsParams {
     /// `"fullbright"` (no shading).
     #[serde(default)]
     lighting: Option<String>,
-    /// Whether top-down renders and minimaps mark thing lumps.
+    /// Whether top-down renders mark thing lumps.
     #[serde(default)]
     show_things: Option<bool>,
     /// Whether the 3D view draws sprites for things.
@@ -468,18 +478,6 @@ fn height_span(map: &Map) -> (i64, i64) {
     if span.0 <= span.1 { span } else { (0, 0) }
 }
 
-/// `value * num / den` rounded down, exact in `i128` and saturating back
-/// to `i64`; a non-positive `den` behaves like `1`.
-fn scale_down(value: i64, num: i64, den: i64) -> i64 {
-    let product = i128::from(value).saturating_mul(i128::from(num));
-    narrow(product.div_euclid(i128::from(den).max(1)))
-}
-
-/// The `i64` nearest an `i128` value (saturating at the bounds).
-fn narrow(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
-}
-
 /// Floor-halving `value` (an arithmetic shift, so negatives round down).
 fn half(value: i64) -> i64 {
     value.checked_shr(1).unwrap_or(0)
@@ -689,38 +687,6 @@ fn light_grey(light: i32) -> Rgba {
     [level, level, level, 255_u8]
 }
 
-/// The marker colour and world radius of thing type `kind` according to
-/// `defs`; an unknown type reads as `#B0B0B0` with radius 16.
-fn thing_visual(defs: &Definitions, kind: i32) -> (Rgba, u32) {
-    let found = u32::try_from(kind)
-        .ok()
-        .and_then(|number| defs.thing(number));
-    let Some(row) = found else {
-        return (THING_OTHER, UNKNOWN_THING_RADIUS);
-    };
-    (category_color(&row.category), row.radius)
-}
-
-/// The marker colour an editor category prefix selects.
-fn category_color(category: &str) -> Rgba {
-    if category.starts_with("Monsters") {
-        return THING_MONSTER;
-    }
-    if category.starts_with("Player Starts") {
-        return THING_PLAYER;
-    }
-    if category.starts_with("Weapons") || category.starts_with("Ammunition") {
-        return THING_WEAPON;
-    }
-    if category.starts_with("Health") || category.starts_with("Powerups") {
-        return THING_SUPPORT;
-    }
-    if category.starts_with("Keys") {
-        return THING_KEY;
-    }
-    THING_OTHER
-}
-
 /// The world corners of one isometrically drawn linedef.
 #[derive(Clone, Copy)]
 struct IsoPair {
@@ -747,8 +713,7 @@ impl Scene<'_> {
     /// The sector the sidedef `side` opens into, `None` for an absent or
     /// dangling side.
     fn side_sector(&self, side: Option<usize>) -> Option<usize> {
-        let sidedef = side.and_then(|index| self.map.sidedefs.get(index))?;
-        self.map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
+        side_sector(self.map, side)
     }
 
     /// The floor height behind sidedef `side`, `None` when unresolvable.
@@ -811,32 +776,10 @@ impl Scene<'_> {
         }
     }
 
-    /// The `Doom` automap colour of `line`: skipped for `dontdraw`, red
-    /// for one-sided and secret lines, brown and yellow for height
-    /// changes across two-sided ones, grey for everything else.
+    /// The `Doom` automap colour of `line` with the RGB default palette,
+    /// through the shared classification in [`crate::render::topdown`].
     fn automap_line_color(&self, line: &Linedef) -> Option<Rgba> {
-        if line.flags & FLAG_DONT_DRAW != 0 {
-            return None;
-        }
-        let across = if line.flags & FLAG_SECRET == 0 {
-            line.back
-        } else {
-            None
-        };
-        let (Some(front), Some(back)) = (self.side_sector(line.front), self.side_sector(across))
-        else {
-            return Some(AUTOMAP_WALL);
-        };
-        let (Some(fs), Some(bs)) = (self.map.sectors.get(front), self.map.sectors.get(back)) else {
-            return Some(AUTOMAP_WALL);
-        };
-        if fs.floor_height != bs.floor_height {
-            return Some(AUTOMAP_FLOOR_CHANGE);
-        }
-        if fs.ceiling_height != bs.ceiling_height {
-            return Some(AUTOMAP_CEILING_CHANGE);
-        }
-        Some(AUTOMAP_OTHER)
+        automap_color(self.map, line, &AutomapColors::DEFAULT)
     }
 }
 
@@ -1157,6 +1100,298 @@ fn topdown_report(
     })
 }
 
+/// Arguments for `render_minimap`' `center` and `player` parameters: one
+/// world point.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PointParams {
+    /// World `x`.
+    x: i64,
+    /// World `y`.
+    y: i64,
+}
+
+/// Arguments for `render_minimap`' `player` parameter: the automap player
+/// marker's position and facing.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PlayerParams {
+    /// World `x` of the marker.
+    x: i64,
+    /// World `y` of the marker.
+    y: i64,
+    /// Facing in degrees, counter-clockwise from east.
+    angle: i64,
+}
+
+/// Arguments for [`Cyberdemon::render_minimap`]. Every field is optional;
+/// the view defaults to the whole map and the colours to the vanilla
+/// automap palette entries.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RenderMinimapParams {
+    /// The map to render, e.g. `"MAP01"`. Defaults to the session's active
+    /// map; with none active, the merged view's only map.
+    #[serde(default)]
+    map: Option<String>,
+    /// Square output edge in pixels, `32..=1024` (default `256`).
+    #[serde(default)]
+    size: Option<u32>,
+    /// World point the square window centres on (default: the map centre).
+    #[serde(default)]
+    center: Option<PointParams>,
+    /// Map units from the centre to a window edge, `1..=65536` (default:
+    /// fit the whole map).
+    #[serde(default)]
+    radius: Option<u32>,
+    /// Draw the white automap player arrow here, facing `angle` degrees
+    /// counter-clockwise from east.
+    #[serde(default)]
+    player: Option<PlayerParams>,
+    /// Mark things with `2x2` px category-coloured dots (default `false`).
+    #[serde(default)]
+    show_things: Option<bool>,
+    /// Take the automap colours from `PLAYPAL` palette 0 when the session
+    /// has one (default `true`); off, or without a `PLAYPAL`, uses the RGB
+    /// defaults.
+    #[serde(default)]
+    palette_colors: Option<bool>,
+}
+
+/// One [`Cyberdemon::render_minimap`] call's fully resolved arguments.
+#[derive(Debug)]
+struct Minimap {
+    /// Square output edge in pixels.
+    size: u32,
+    /// The square world window to frame.
+    window: Window,
+    /// The automap colours to draw with.
+    colors: AutomapColors,
+    /// Whether things get category-coloured dots.
+    show_things: bool,
+    /// The player arrow to draw, when given.
+    player: Option<PlayerMark>,
+}
+
+/// Reads the minimap's inputs under the session lock: the map, its thing
+/// definitions, the settings (for `gamma`) and the palette the automap
+/// colours can come from.
+struct PreparedMinimap {
+    /// The map to render, from the merged view.
+    map: Map,
+    /// The session's thing definitions.
+    defs: Definitions,
+    /// The session's render settings.
+    settings: RenderSettings,
+    /// The merged view's `PLAYPAL` palette 0, when there is one.
+    palette: Option<Palette>,
+}
+
+/// [`Cyberdemon::render_minimap`]'s result: the framed window and the
+/// published `PNG` asset.
+#[derive(Serialize)]
+struct MinimapReport {
+    /// The rendered map's name.
+    map: String,
+    /// The square output edge in pixels.
+    size: u32,
+    /// The world centre of the framed window.
+    center: PointReport,
+    /// Map units from the centre to a window edge.
+    radius: i64,
+    /// The published minimap.
+    asset: AssetRef,
+}
+
+/// The `center` object of a [`MinimapReport`].
+#[derive(Serialize)]
+struct PointReport {
+    /// World `x`.
+    x: i64,
+    /// World `y`.
+    y: i64,
+}
+
+/// The refusal for a map with no bounds to frame when the window was not
+/// given outright.
+fn minimap_needs_window(map: &Map) -> CyberError {
+    CyberError::InvalidArgument(format!(
+        "{} has no vertices: pass center {{x, y}} and radius to render_minimap so the window \
+         is known",
+        map.name
+    ))
+}
+
+/// The square output edge: the validated `requested` size, else
+/// [`DEFAULT_MINIMAP_SIZE`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for an edge outside the documented range.
+fn resolve_size(requested: Option<u32>) -> Result<u32, CyberError> {
+    let size = requested.unwrap_or(DEFAULT_MINIMAP_SIZE);
+    if (MIN_MINIMAP_SIZE..=MAX_MINIMAP_SIZE).contains(&size) {
+        return Ok(size);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "render_minimap size must be within {MIN_MINIMAP_SIZE}..={MAX_MINIMAP_SIZE} pixels, \
+         got {size}"
+    )))
+}
+
+/// The window radius: the validated `requested` value, else half the map's
+/// larger span rounded up plus [`MINIMAP_FIT_PAD`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a radius outside the documented
+/// range, and [`minimap_needs_window`] for an empty map.
+fn resolve_radius(requested: Option<u32>, map: &Map) -> Result<i64, CyberError> {
+    if let Some(value) = requested {
+        if !(MIN_MINIMAP_RADIUS..=MAX_MINIMAP_RADIUS).contains(&value) {
+            return Err(CyberError::InvalidArgument(format!(
+                "render_minimap radius must be within {MIN_MINIMAP_RADIUS}..={MAX_MINIMAP_RADIUS} \
+                 map units, got {value}"
+            )));
+        }
+        return Ok(i64::from(value));
+    }
+    let (min_x, min_y, max_x, max_y) = map.bounds().ok_or_else(|| minimap_needs_window(map))?;
+    let span_x = i64::from(max_x).saturating_sub(i64::from(min_x));
+    let span_y = i64::from(max_y).saturating_sub(i64::from(min_y));
+    let half = span_x
+        .max(span_y)
+        .saturating_add(1)
+        .checked_div(2)
+        .unwrap_or(1);
+    Ok(half.saturating_add(MINIMAP_FIT_PAD).max(1))
+}
+
+/// The midpoint of two world coordinates, rounded down.
+const fn midpoint(low: i64, high: i64) -> i64 {
+    low.saturating_add(high).div_euclid(2)
+}
+
+/// The window centre: the `requested` point, else the midpoint of the
+/// map's bounds.
+///
+/// # Errors
+///
+/// [`minimap_needs_window`] for an empty map without a given centre.
+fn resolve_centre(requested: Option<&PointParams>, map: &Map) -> Result<(i64, i64), CyberError> {
+    if let Some(point) = requested {
+        return Ok((point.x, point.y));
+    }
+    let (min_x, min_y, max_x, max_y) = map.bounds().ok_or_else(|| minimap_needs_window(map))?;
+    Ok((
+        midpoint(i64::from(min_x), i64::from(max_x)),
+        midpoint(i64::from(min_y), i64::from(max_y)),
+    ))
+}
+
+/// The automap colours: `palette`' vanilla automap entries when `wanted`
+/// and a `PLAYPAL` is loaded, else the RGB defaults.
+fn minimap_colors(wanted: bool, palette: Option<&Palette>) -> AutomapColors {
+    match (wanted, palette) {
+        (true, Some(found)) => AutomapColors::from_palette(found),
+        (true, None) | (false, _) => AutomapColors::DEFAULT,
+    }
+}
+
+/// The call's resolved arguments: size and radius validated, the centre
+/// and radius defaulted from the map bounds, colours from the palette or
+/// the defaults.
+///
+/// # Errors
+///
+/// [`resolve_size`], [`resolve_radius`] and [`resolve_centre`]'s errors.
+fn resolve_minimap(
+    args: &RenderMinimapParams,
+    map: &Map,
+    palette: Option<&Palette>,
+) -> Result<Minimap, CyberError> {
+    let size = resolve_size(args.size)?;
+    let radius = resolve_radius(args.radius, map)?;
+    let (centre_x, centre_y) = resolve_centre(args.center.as_ref(), map)?;
+    let player = args.player.as_ref().map(|mark| PlayerMark {
+        x: mark.x,
+        y: mark.y,
+        angle: mark.angle,
+    });
+    Ok(Minimap {
+        size,
+        window: Window::new(size, centre_x, centre_y, radius),
+        colors: minimap_colors(args.palette_colors.unwrap_or(true), palette),
+        show_things: args.show_things.unwrap_or(false),
+        player,
+    })
+}
+
+/// Paints the whole minimap: black ground, automap lines, optional thing
+/// dots and the player arrow on top.
+fn paint_minimap(map: &Map, defs: &Definitions, request: &Minimap) -> Canvas {
+    let mut canvas = Canvas::new(request.size, request.size, MINIMAP_BACKGROUND);
+    paint_automap_lines(map, &request.window, &request.colors, &mut canvas);
+    if request.show_things {
+        paint_thing_dots(map, defs, &request.window, &mut canvas);
+    }
+    if let Some(mark) = request.player.as_ref() {
+        paint_player_arrow(mark, &request.window, &request.colors, &mut canvas);
+    }
+    canvas
+}
+
+/// Reads the minimap's inputs under the session lock.
+///
+/// # Errors
+///
+/// [`common::resolve_map_name`] and [`common::load_map`]'s errors, and the
+/// definition-collection errors of [`session_definitions`].
+fn load_minimap(state: &AppState, requested: Option<&str>) -> Result<PreparedMinimap, CyberError> {
+    state.with_session(|session| {
+        let name = common::resolve_map_name(session, requested)?;
+        let map = common::load_map(session, name, Scope::Merged)?;
+        let (sources, _notes) = custom_sources(session)?;
+        let defs = session_definitions(session_game(session), &sources)?;
+        Ok(PreparedMinimap {
+            map,
+            defs,
+            settings: session.render_settings().clone(),
+            palette: load_palette(session, 0).ok(),
+        })
+    })
+}
+
+/// `render_minimap`' work: resolve, paint, gamma, encode, publish.
+///
+/// # Errors
+///
+/// [`load_minimap`] and [`resolve_minimap`]'s errors,
+/// [`encode_png`]' and [`AppState::publish`]' failures.
+fn minimap_report(
+    state: &AppState,
+    args: &RenderMinimapParams,
+) -> Result<MinimapReport, CyberError> {
+    let prepared = load_minimap(state, args.map.as_deref())?;
+    let request = resolve_minimap(args, &prepared.map, prepared.palette.as_ref())?;
+    let mut canvas = paint_minimap(&prepared.map, &prepared.defs, &request);
+    canvas.apply_gamma(&gamma_table(prepared.settings.gamma));
+    let png = encode_png(&canvas.to_rgba_image(), None)?;
+    let asset = state.publish(
+        &format!("{}{MINIMAP_SUFFIX}", prepared.map.name),
+        PNG_MIME,
+        png,
+    )?;
+    let (centre_x, centre_y) = request.window.centre();
+    Ok(MinimapReport {
+        map: prepared.map.name.to_string(),
+        size: request.size,
+        center: PointReport {
+            x: centre_x,
+            y: centre_y,
+        },
+        radius: request.window.radius(),
+        asset,
+    })
+}
+
 /// Pixels kept clear around the fitted view.
 const MARGIN_PX: i64 = 16;
 /// World units of slack added around the default map bounds.
@@ -1165,23 +1400,34 @@ const BOUNDS_PAD: i64 = 32;
 const HIGHLIGHT_WIDTH: u32 = 3;
 /// Half edge of a vertex mark, in pixels (a `3x3` square).
 const VERTEX_HALF: i64 = 1;
-/// World radius assumed for thing types the definitions do not know.
-const UNKNOWN_THING_RADIUS: u32 = 16;
 /// Smallest thing-marker radius, in pixels.
 const MIN_THING_RADIUS: i64 = 2;
 /// Extra length of a thing marker's facing tick, beyond its radius.
 const TICK_PX: i64 = 4;
 /// Radius of an isometric thing marker, in pixels.
 const ISO_THING_RADIUS: i64 = 2;
-/// `Doom`-family linedef flag bit: the automap must not draw the line.
-const FLAG_DONT_DRAW: u32 = 128;
-/// `Doom`-family linedef flag bit: the line marks a secret; the automap
-/// draws it as a plain wall.
-const FLAG_SECRET: u32 = 32;
 /// Name suffix of the published overview files.
 const OVERVIEW_SUFFIX: &str = "_topdown.png";
 /// Media type of the published overview.
 const PNG_MIME: &str = "image/png";
+
+/// Default minimap output edge, in pixels.
+const DEFAULT_MINIMAP_SIZE: u32 = 256;
+/// Smallest minimap output edge, in pixels.
+const MIN_MINIMAP_SIZE: u32 = 32;
+/// Largest minimap output edge, in pixels.
+const MAX_MINIMAP_SIZE: u32 = 1_024;
+/// Smallest minimap window radius, in map units.
+const MIN_MINIMAP_RADIUS: u32 = 1;
+/// Largest minimap window radius, in map units (`0x1_0000`, over the whole
+/// vanilla coordinate range).
+const MAX_MINIMAP_RADIUS: u32 = 0x1_0000;
+/// Map units of slack added when the default radius fits the whole map.
+const MINIMAP_FIT_PAD: i64 = 1;
+/// Name suffix of the published minimap files.
+const MINIMAP_SUFFIX: &str = "_minimap.png";
+/// The minimap background: black, as the in-game automap draws it.
+const MINIMAP_BACKGROUND: Rgba = [0, 0, 0, 255];
 
 /// Editor style: a one-sided wall.
 const LINE_ONE_SIDED: Rgba = [192, 192, 192, 255];
@@ -1195,28 +1441,8 @@ const HIGHLIGHT_RED: Rgba = [255, 64, 64, 255];
 const HIGHLIGHT_TINT: Rgba = [255, 64, 64, 128];
 /// The white outline highlighted things get.
 const MARK_WHITE: Rgba = [255, 255, 255, 255];
-/// Automap: one-sided walls (and secret lines).
-const AUTOMAP_WALL: Rgba = [252, 0, 0, 255];
-/// Automap: a floor-height change across the line.
-const AUTOMAP_FLOOR_CHANGE: Rgba = [188, 120, 72, 255];
-/// Automap: a ceiling-height change across the line.
-const AUTOMAP_CEILING_CHANGE: Rgba = [252, 252, 0, 255];
-/// Automap: a flat two-sided line.
-const AUTOMAP_OTHER: Rgba = [128, 128, 128, 255];
 /// The `3x3` vertex marks.
 const VERTEX_MARK: Rgba = [255, 208, 0, 255];
-/// Thing markers: Monsters.
-const THING_MONSTER: Rgba = [224, 64, 64, 255];
-/// Thing markers: Player Starts.
-const THING_PLAYER: Rgba = [64, 224, 64, 255];
-/// Thing markers: Weapons and Ammunition.
-const THING_WEAPON: Rgba = [224, 160, 64, 255];
-/// Thing markers: Health And Armour and Powerups.
-const THING_SUPPORT: Rgba = [64, 160, 224, 255];
-/// Thing markers: Keys.
-const THING_KEY: Rgba = [224, 224, 64, 255];
-/// Thing markers: every other category, and unknown types.
-const THING_OTHER: Rgba = [176, 176, 176, 255];
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -1240,7 +1466,7 @@ impl Cyberdemon {
 
     /// Changes the session's render options, field by field.
     #[tool(
-        description = "Changes the session's render options, applying only the fields you pass and keeping the rest; at least one field is required. lighting \"doom\" (sector light plus the COLORMAP distance fade) | \"flat\" (sector light only) | \"fullbright\"; show_things (thing markers in top-down renders and minimaps); show_sprites (sprites in the 3D view); sky (draw the sky texture, off means the background colour); fov (horizontal field of view, 10..=170 degrees); gamma (Doom gamma level, 0..=4); topdown_style \"editor\" | \"automap\"; background (\"#RRGGBB\"). All or nothing: a refused value reports invalid_argument listing the valid values and leaves every setting unchanged. Returns the full render settings."
+        description = "Changes the session's render options, applying only the fields you pass and keeping the rest; at least one field is required. lighting \"doom\" (sector light plus the COLORMAP distance fade) | \"flat\" (sector light only) | \"fullbright\"; show_things (thing markers in top-down renders); show_sprites (sprites in the 3D view); sky (draw the sky texture, off means the background colour); fov (horizontal field of view, 10..=170 degrees); gamma (Doom gamma level, 0..=4); topdown_style \"editor\" | \"automap\"; background (\"#RRGGBB\"). All or nothing: a refused value reports invalid_argument listing the valid values and leaves every setting unchanged. Returns the full render settings."
     )]
     fn set_render_options(
         &self,
@@ -1275,6 +1501,20 @@ impl Cyberdemon {
         Parameters(args): Parameters<RenderTopdownParams>,
     ) -> Result<CallToolResult, ErrorData> {
         match topdown_report(self.state(), &args) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Renders a compact automap-style view as a `PNG` asset.
+    #[tool(
+        description = "Renders a compact automap-style view for quick orientation and publishes it as a PNG asset; returns {map, size, center, radius, asset}. Always the automap look on a black background: one-sided (and secret) lines red, floor-height changes brown, ceiling-height changes yellow, other two-sided lines grey, dontdraw lines hidden. size is the square output edge, 32..=1024 (default 256). center {x, y} is the world point to frame (default: the map centre) and radius the map units from the centre to a window edge, 1..=65536 (default: fit the whole map, padded by one unit); lines are clipped to the square, and an empty map without center and radius fails invalid_argument. palette_colors (default true) takes the line colours from PLAYPAL palette 0 at the vanilla automap indices 176/64/231/96 and the player marker at 209 when the session has a PLAYPAL, else the RGB defaults #FC0000/#BC7848/#FCFC00/#808080/#FFFFFF. player {x, y, angle} draws the white automap arrow, 16 pixels long, facing angle degrees counter-clockwise from east. show_things (default false) marks each thing with a 2x2 pixel dot in its category colour. The gamma render setting is applied to the output; map defaults like every other map tool."
+    )]
+    fn render_minimap(
+        &self,
+        Parameters(args): Parameters<RenderMinimapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match minimap_report(self.state(), &args) {
             Ok(report) => ok(&report),
             Err(error) => fail(&error),
         }
@@ -1414,13 +1654,17 @@ mod tests {
     }
 
     use super::{
-        BoundsParams, HighlightParams, Highlights, Plane, Projection, RenderTopdownParams, Request,
-        Scene, background_pixel, bounds_plane, category_color, editor_line_color, fit, height_span,
-        iso_plane, light_grey, paint_map, parse_projection, resolve_bounds, resolve_highlight,
-        resolve_request, scale_down, thing_visual,
+        BoundsParams, HighlightParams, Highlights, MINIMAP_FIT_PAD, Plane, PointParams, Projection,
+        RenderMinimapParams, RenderTopdownParams, Request, Scene, background_pixel, bounds_plane,
+        editor_line_color, fit, height_span, iso_plane, light_grey, paint_map, paint_minimap,
+        parse_projection, resolve_bounds, resolve_centre, resolve_highlight, resolve_minimap,
+        resolve_radius, resolve_request, resolve_size,
     };
     use crate::defs::definitions_for;
-    use crate::render::{Canvas, Rgba, Switch};
+    use crate::gfx::palette::Palette;
+    use crate::render::{
+        AutomapColors, Canvas, PlayerMark, Rgba, Switch, category_color, scale_down, thing_visual,
+    };
     use crate::wad::game::Game;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
     use crate::wad::{LumpName, MapFormat};
@@ -1923,5 +2167,201 @@ mod tests {
             serde_json::from_value(json!({ "style": "wireframe" })).expect("one field");
         let style_error = resolve_request(&settings, &bad_style, &map).expect_err("not a style");
         assert_eq!(style_error.code(), "invalid_argument", "bad style code");
+    }
+
+    /// The fixture palette: colour `i` is `(i, 255 - i, i)`.
+    fn fixture_palette() -> Palette {
+        let mut colors = [[0_u8; 3]; 256];
+        for (index, entry) in colors.iter_mut().enumerate() {
+            let value = u8::try_from(index).expect("indices stay in the u8 range");
+            *entry = [value, 255_u8.wrapping_sub(value), value];
+        }
+        Palette::from(colors)
+    }
+
+    #[test]
+    fn minimap_size_defaults_and_refuses_edges_outside_the_range() {
+        assert_eq!(
+            resolve_size(None).expect("the default"),
+            256,
+            "256 by default"
+        );
+        assert_eq!(resolve_size(Some(32)).expect("the floor"), 32, "the floor");
+        assert_eq!(
+            resolve_size(Some(1_024)).expect("the ceiling"),
+            1_024,
+            "the ceiling"
+        );
+        for bad in [16_u32, 2_048_u32] {
+            let error = resolve_size(Some(bad)).expect_err("outside the range");
+            assert_eq!(error.code(), "invalid_argument", "size {bad} code");
+            assert!(
+                error.to_string().contains("32..=1024"),
+                "the message shows the range: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimap_radius_validates_and_fits_the_whole_map() {
+        let map = two_rooms();
+        assert_eq!(
+            resolve_radius(Some(64), &map).expect("an explicit radius"),
+            64,
+            "the given radius"
+        );
+        assert_eq!(
+            resolve_radius(None, &map).expect("the whole map fits"),
+            257,
+            "half the 512-span rounded up plus the fit padding"
+        );
+        assert_eq!(MINIMAP_FIT_PAD, 1, "the documented slack");
+        for bad in [0_u32, 100_000_u32] {
+            let error = resolve_radius(Some(bad), &map).expect_err("outside the range");
+            assert_eq!(error.code(), "invalid_argument", "radius {bad} code");
+            assert!(
+                error.to_string().contains("1..=65536"),
+                "the message shows the range: {error}"
+            );
+        }
+        let empty = Map::default();
+        let error = resolve_radius(None, &empty).expect_err("nothing to fit");
+        assert_eq!(error.code(), "invalid_argument", "empty map code");
+        let message = error.to_string();
+        assert!(
+            message.contains("center") && message.contains("radius"),
+            "the message names both fixes: {message}"
+        );
+    }
+
+    #[test]
+    fn minimap_centre_defaults_to_the_map_midpoint() {
+        let map = two_rooms();
+        assert_eq!(
+            resolve_centre(None, &map).expect("the map centre"),
+            (256_i64, 128),
+            "midpoint of both spans"
+        );
+        let point = PointParams { x: -100, y: 40 };
+        assert_eq!(
+            resolve_centre(Some(&point), &map).expect("an explicit centre"),
+            (-100_i64, 40),
+            "the given centre wins"
+        );
+        let empty = Map::default();
+        assert_eq!(
+            resolve_centre(None, &empty)
+                .expect_err("nothing to centre on")
+                .code(),
+            "invalid_argument",
+            "empty map code"
+        );
+    }
+
+    #[test]
+    fn the_minimap_request_resolves_every_argument() {
+        let map = two_rooms();
+        let plain: RenderMinimapParams = serde_json::from_value(json!({})).expect("all optional");
+        let request = resolve_minimap(&plain, &map, None).expect("defaults resolve");
+        assert_eq!(request.size, 256, "the size default");
+        assert_eq!(request.window.centre(), (256, 128), "the map centre");
+        assert_eq!(request.window.radius(), 257, "the fitting radius");
+        assert_eq!(
+            request.colors,
+            AutomapColors::DEFAULT,
+            "no palette means the defaults"
+        );
+        assert!(!request.show_things, "thing dots are opt-in");
+        assert!(request.player.is_none(), "no arrow by default");
+
+        let palette = fixture_palette();
+        let detailed: RenderMinimapParams = serde_json::from_value(json!({
+            "size": 64_u64,
+            "radius": 32_u64,
+            "center": { "x": 64_i64, "y": 128_i64 },
+            "player": { "x": 64_i64, "y": 128_i64, "angle": 90_i64 },
+            "show_things": true,
+        }))
+        .expect("the full object");
+        let seen = resolve_minimap(&detailed, &map, Some(&palette)).expect("valid arguments");
+        assert_eq!(seen.size, 64, "size set");
+        assert_eq!(seen.window.centre(), (64, 128), "centre set");
+        assert_eq!(seen.window.radius(), 32, "radius set");
+        assert_eq!(seen.colors.wall, [176, 79, 176, 255], "palette colours");
+        assert!(seen.show_things, "dots on");
+        assert_eq!(
+            seen.player,
+            Some(PlayerMark {
+                x: 64,
+                y: 128,
+                angle: 90
+            }),
+            "the arrow carries position and facing"
+        );
+
+        let declined: RenderMinimapParams =
+            serde_json::from_value(json!({ "palette_colors": false })).expect("one field");
+        assert_eq!(
+            resolve_minimap(&declined, &map, Some(&palette))
+                .expect("valid argument")
+                .colors,
+            AutomapColors::DEFAULT,
+            "the palette is declined"
+        );
+        let bad: RenderMinimapParams =
+            serde_json::from_value(json!({ "size": 8_u64 })).expect("one field");
+        assert_eq!(
+            resolve_minimap(&bad, &map, None)
+                .expect_err("below the floor")
+                .code(),
+            "invalid_argument",
+            "tiny size code"
+        );
+    }
+
+    #[test]
+    fn painting_the_minimap_lands_automap_colours_on_black() {
+        let map = two_rooms();
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let args: RenderMinimapParams = serde_json::from_value(json!({
+            "size": 256_u64,
+            "palette_colors": false,
+            "show_things": true,
+            "player": { "x": 256_i64, "y": 128_i64, "angle": 0_i64 },
+        }))
+        .expect("the picture arguments");
+        let request = resolve_minimap(&args, &map, None).expect("valid arguments");
+        let canvas = paint_minimap(&map, &defs, &request);
+        assert_eq!(
+            (canvas.width(), canvas.height()),
+            (256_u32, 256),
+            "the square output"
+        );
+        assert_eq!(
+            canvas.pixel(0, 128),
+            Some([252, 0, 0, 255]),
+            "the west wall"
+        );
+        assert_eq!(
+            canvas.pixel(128, 120),
+            Some([188, 120, 72, 255]),
+            "the step line brown"
+        );
+        assert_eq!(
+            canvas.pixel(128, 128),
+            Some([255, 255, 255, 255]),
+            "the arrow at its position"
+        );
+        assert_eq!(
+            canvas.pixel(144, 128),
+            Some([255, 255, 255, 255]),
+            "the arrow tip sixteen pixels on"
+        );
+        assert_eq!(
+            canvas.pixel(32, 128),
+            Some([64, 224, 64, 255]),
+            "the player-start dot"
+        );
+        assert_eq!(canvas.pixel(5, 5), Some([0, 0, 0, 255]), "black ground");
     }
 }

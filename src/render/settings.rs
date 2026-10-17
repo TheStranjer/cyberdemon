@@ -123,7 +123,7 @@ pub struct RenderSettings {
     pub height: u32,
     /// How a 3D view is lit; see [`Lighting`].
     pub lighting: Lighting,
-    /// Whether top-down renders and minimaps mark thing lumps.
+    /// Whether top-down renders mark thing lumps.
     pub show_things: Switch,
     /// Whether 3D views draw sprites for things.
     pub show_sprites: Switch,

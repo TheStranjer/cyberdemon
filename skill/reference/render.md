@@ -1,9 +1,10 @@
 # Render tools
 
-Session-level rendering defaults plus the first renderer. Three settings
+Session-level rendering defaults plus the first renderers. Three settings
 tools set and read the defaults every render starts from;
-`render_topdown` draws a whole-map overview as a `PNG` asset, and
-`render_view` and `render_minimap` will join it later.
+`render_topdown` draws a whole-map overview as a `PNG` asset,
+`render_minimap` draws a compact automap-style square, and `render_view`
+will join them later.
 
 ## The settings
 
@@ -12,7 +13,7 @@ tools set and read the defaults every render starts from;
 | `width`         | `640`      | `16..=4096` pixels                                                             |
 | `height`        | `400`      | `16..=4096` pixels; `width * height` at most `16777216` (exactly `4096x4096`)  |
 | `lighting`      | `"doom"`   | `"doom"` (sector light plus the `COLORMAP` distance fade), `"flat"` (sector light only), `"fullbright"` |
-| `show_things`   | `true`     | thing markers in top-down renders and minimaps                                 |
+| `show_things`   | `true`     | thing markers in top-down renders                                              |
 | `show_sprites`  | `true`     | sprites in the 3D view                                                         |
 | `sky`           | `true`     | draw the sky texture; off means the `background` colour                        |
 | `fov`           | `90`       | horizontal field of view, `10..=170` degrees                                   |
@@ -212,6 +213,55 @@ do not apply, `show_things` does.
   {"bounds": {"min_x": 0, "min_y": 0, "max_x": 512, "max_y": 512},
    "style": "automap", "fill_sectors": true}
   {"highlight": {"linedefs": [12, 13], "sectors": [4]}}
+  ```
+
+## `render_minimap`
+
+- Purpose: a compact automap-style view for quick orientation — the same
+  line map the in-game automap draws, in a small square.
+- Arguments: all optional.
+  - `map`: as everywhere (`list_maps`/`set_active_map` decide the default).
+  - `size`: square output edge in pixels, `32..=1024` (default `256`).
+  - `center`: `{x, y}` — the world point to frame (default: the map
+    centre, the midpoint of the vertex bounds).
+  - `radius`: map units from the centre to a window edge, `1..=65536`
+    (default: fit the whole map — half the larger bound span rounded up,
+    padded by one unit).
+  - `player`: `{x, y, angle}` — draws the white automap player arrow at
+    that world position, 16 pixels long, facing `angle` degrees
+    counter-clockwise from east.
+  - `show_things` (default `false`): a `2x2` pixel dot per thing in its
+    category colour (the `render_topdown` legend above; the
+    `show_things` setting does not carry over here).
+  - `palette_colors` (default `true`): with a `PLAYPAL` in the session,
+    take the colours from palette 0 at the vanilla automap indices — 176
+    red, 64 brown, 231 yellow, 96 grey and 209 white; otherwise (or with
+    the flag off) use the RGB defaults below.
+- Style: always automap. Black background; one-sided (and `secret`) lines
+  red, floor-height changes brown, ceiling-height changes yellow, other
+  two-sided lines grey; `dontdraw` lines hidden. Lines are clipped to the
+  square window.
+- Returns:
+
+  ```json
+  {"map": "MAP01", "size": 256, "center": {"x": 256, "y": 128},
+   "radius": 257,
+   "asset": {"url": "http://localhost:PORT/assets/ID/MAP01_minimap.png", ...}}
+  ```
+
+  The window maps pixels by `px = size/2 + floor((x - center.x) * size /
+  (2 * radius))`, `py = size/2 - floor((y - center.y) * size /
+  (2 * radius))` (north up). The `gamma` render setting is applied to the
+  output.
+- Errors: `invalid_argument` for a `size` outside `32..=1024`, a `radius`
+  outside `1..=65536`, or an empty map without `center` and `radius`;
+  `not_found` for an unknown map.
+- Example: the whole map at a glance, then a zoom on one corner with the
+  player marked:
+
+  ```json
+  {}
+  {"center": {"x": 64, "y": 128}, "radius": 64, "player": {"x": 64, "y": 128, "angle": 90}}
   ```
 
 ## Where this fits

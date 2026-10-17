@@ -135,6 +135,9 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `add_thing`              | `reference/things.md`   |
 | `edit_thing`             | `reference/things.md`   |
 | `remove_thing`           | `reference/things.md`   |
+| `add_linedef`            | `reference/linedefs.md` |
+| `edit_linedef`           | `reference/linedefs.md` |
+| `remove_linedef`         | `reference/linedefs.md` |
 | `add_sidedef`            | `reference/sidedefs.md` |
 | `edit_sidedef`           | `reference/sidedefs.md` |
 | `remove_sidedef`         | `reference/sidedefs.md` |

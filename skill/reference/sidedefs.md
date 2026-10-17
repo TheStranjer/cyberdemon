@@ -14,7 +14,8 @@ sidedefs with the first linedef using each one (`linedef`/`side`, `null`
 for orphans); the `linedefs` rows carry their `front`/`back` sides fully
 resolved. A sidedef is **not visible in the game until a linedef uses
 it**: `add_sidedef` on its own only appends a record (attach it with
-`add_linedef` or `edit_linedef` when those land).
+`add_linedef` or point a side at it with `edit_linedef`,
+`reference/linedefs.md`).
 
 The sidedef block counts as map geometry for the node lumps: adding or
 removing a sidedef, or changing a sidedef's `sector`, reports

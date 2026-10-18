@@ -193,7 +193,9 @@ pub(in crate::tools) fn parse_import(
 ///
 /// [`CyberError::InvalidArgument`] for an unknown mode or a malformed
 /// `color`; fields irrelevant to the mode are ignored.
-fn parse_transparency(value: Option<&TransparencyParams>) -> Result<Transparency, CyberError> {
+pub(in crate::tools) fn parse_transparency(
+    value: Option<&TransparencyParams>,
+) -> Result<Transparency, CyberError> {
     let Some(params) = value else {
         return Ok(Transparency::default());
     };

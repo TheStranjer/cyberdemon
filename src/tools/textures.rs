@@ -153,7 +153,7 @@ pub enum WhichLump {
 
 impl WhichLump {
     /// The lump name clients see in the `lump` field.
-    const fn as_str(self) -> &'static str {
+    pub(in crate::tools) const fn as_str(self) -> &'static str {
         match self {
             Self::Texture1 => "TEXTURE1",
             Self::Texture2 => "TEXTURE2",
@@ -161,7 +161,7 @@ impl WhichLump {
     }
 
     /// The eight raw directory bytes of this lump's name.
-    const fn as_raw(self) -> [u8; 8] {
+    pub(in crate::tools) const fn as_raw(self) -> [u8; 8] {
         match self {
             Self::Texture1 => TEXTURE1_RAW,
             Self::Texture2 => TEXTURE2_RAW,
@@ -1080,13 +1080,13 @@ struct PatchPlacement {
 }
 
 /// One validated patch placement: the parsed patch name and its origin.
-struct Placement {
+pub(in crate::tools) struct Placement {
     /// The patch name, uppercased through [`LumpName::parse`].
-    name: String,
+    pub(in crate::tools) name: String,
     /// Horizontal placement in pixels from the texture's left edge.
-    x: i16,
+    pub(in crate::tools) x: i16,
     /// Vertical placement in pixels from the texture's top edge.
-    y: i16,
+    pub(in crate::tools) y: i16,
 }
 
 /// One texture lump one edit rewrites: the raw directory name and the new
@@ -1163,7 +1163,7 @@ struct RemoveReport {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected text.
-fn checked_name(what: &str, text: &str) -> Result<String, CyberError> {
+pub(in crate::tools) fn checked_name(what: &str, text: &str) -> Result<String, CyberError> {
     LumpName::parse(text)
         .map(|name| name.to_string())
         .map_err(|error| {
@@ -1217,7 +1217,7 @@ fn build_patches(args: &BuildTextureParams) -> Result<Vec<Placement>, CyberError
 ///
 /// [`CyberError::InvalidArgument`] for a `target` outside `TEXTURE1` and
 /// `TEXTURE2`.
-fn target_lump(
+pub(in crate::tools) fn target_lump(
     set: &TextureSet,
     target: Option<&str>,
     name: &str,
@@ -1241,7 +1241,7 @@ fn target_lump(
 
 /// The merged copy of one texture lump, or a fresh empty `Doom`-layout
 /// list when no archive holds it.
-fn lump_copy(set: &TextureSet, target: WhichLump) -> TextureLump {
+pub(in crate::tools) fn lump_copy(set: &TextureSet, target: WhichLump) -> TextureLump {
     target.decoded(set).map_or_else(
         || TextureLump {
             layout: TextureLayout::Doom,
@@ -1280,7 +1280,7 @@ fn check_patch_lumps(session: &Session, placements: &[Placement]) -> Result<(), 
 
 /// The placement patch names `PNAMES` does not list yet, in first-use
 /// order.
-fn missing_names(pnames: &[String], placements: &[Placement]) -> Vec<String> {
+pub(in crate::tools) fn missing_names(pnames: &[String], placements: &[Placement]) -> Vec<String> {
     let mut added: Vec<String> = Vec::new();
     for placement in placements {
         if position_of(pnames, &placement.name).is_none() && !added.contains(&placement.name) {
@@ -1297,7 +1297,7 @@ fn missing_names(pnames: &[String], placements: &[Placement]) -> Vec<String> {
 ///
 /// [`usize_to_u16`]'s [`CyberError::LimitExceeded`] for an index past the
 /// `u16` range and [`CyberError::Internal`] for a vanished patch name.
-fn definition(
+pub(in crate::tools) fn definition(
     name: &str,
     size: (u16, u16),
     placements: &[Placement],
@@ -1334,7 +1334,7 @@ fn definition(
 ///
 /// [`CyberError::AlreadyExists`] for a name the lump holds without
 /// `replace`.
-fn place_definition(
+pub(in crate::tools) fn place_definition(
     lump: &mut TextureLump,
     target: WhichLump,
     def: TextureDef,

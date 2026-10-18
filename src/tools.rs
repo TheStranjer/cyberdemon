@@ -16,6 +16,7 @@ pub(crate) mod audio;
 pub(crate) mod batch;
 pub(crate) mod convert;
 pub(crate) mod defs;
+pub(crate) mod edit_geometry;
 pub(crate) mod edit_linedefs;
 pub(crate) mod edit_sectors;
 pub(crate) mod edit_sidedefs;

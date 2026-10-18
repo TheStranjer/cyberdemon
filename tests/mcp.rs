@@ -8,6 +8,7 @@
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
 //! `map_edit`, the maps-group tests in `maps`, the
+//! `edit_geometry`-group tests in `edit_geometry`, the
 //! `edit_linedefs`-group tests in `edit_linedefs`, the
 //! `edit_sidedefs`-group tests in `edit_sidedefs`, the
 //! `edit_sectors`-group tests in `edit_sectors`, the
@@ -61,6 +62,9 @@ mod defs;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;
+#[cfg(test)]
+#[path = "mcp/edit_geometry.rs"]
+mod edit_geometry;
 #[cfg(test)]
 #[path = "mcp/edit_linedefs.rs"]
 mod edit_linedefs;

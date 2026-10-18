@@ -150,6 +150,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `add_vertex`             | `reference/vertices.md` |
 | `move_vertex`            | `reference/vertices.md` |
 | `remove_vertex`          | `reference/vertices.md` |
+| `delete_geometry`        | `reference/geometry.md` |
 | `validate_map`           | `reference/validate.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |

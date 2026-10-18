@@ -9,7 +9,8 @@
 //! as a platform inside it, with `keep_interior` and the `none` outer
 //! mode, `carve_void` punching a pillar and separating the rooms, and the
 //! undo of a whole call. Every drawing ends with `validate_map` reporting
-//! no error- or warning-severity findings.
+//! no error- or warning-severity findings beyond the fixture noise the
+//! `validate_clean` helper spells out.
 
 #[cfg(test)]
 mod tests {
@@ -132,26 +133,34 @@ mod tests {
         .expect("test requests are valid JSON")
     }
 
-    /// Requires `validate_map` to report no error- or warning-severity
-    /// findings for the working `map`.
+    /// Requires `validate_map` to report no unexpected error- or
+    /// warning-severity findings for the working `map`. The geometry and
+    /// health findings the drawing itself is allowed to leave behind are
+    /// filtered out: rooms wear the vanilla default names (`FLOOR4_8`,
+    /// `CEIL3_5`, `STARTAN3`) that this minimal fixture `IWAD` does not
+    /// define, and every draw invalidates the node lumps.
     async fn validate_clean(client: &Client, map: &str) {
+        const EXPECTED: [&str; 3] = ["missing_texture", "missing_flat", "nodes_missing"];
         let report = call(
             client,
             "validate_map",
             json!({"map": map, "scope": "working"}),
         )
         .await;
-        assert_eq!(
-            report["counts"]["error"],
-            json!(0_i32),
-            "no geometry errors: {}",
-            report["issues"]
-        );
-        assert_eq!(
-            report["counts"]["warning"],
-            json!(0_i32),
-            "no doubtful shapes: {}",
-            report["issues"]
+        let unexpected: Vec<String> = report["issues"]
+            .as_array()
+            .expect("an issue list")
+            .iter()
+            .filter(|issue| {
+                let severity = issue["severity"].as_str().expect("a severity");
+                let code = issue["code"].as_str().expect("a code");
+                (severity == "error" || severity == "warning") && !EXPECTED.contains(&code)
+            })
+            .map(|issue| issue["message"].as_str().expect("a message").to_owned())
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "no findings beyond the expected fixture noise: {unexpected:#?}"
         );
     }
 

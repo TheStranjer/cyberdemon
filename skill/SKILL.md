@@ -224,8 +224,10 @@ geometry edits (one undoable step rebuilding the BSP tree, the `REJECT`
 matrix and the `BLOCKMAP` so vanilla `Doom` can play the map;
 `reference/nodes.md`) → `validate_map` → `save_wad`.
 `validate_map` reads a map's health — dangling references, broken lines,
-missing starts, specials outside the tables — as severity-ranked issues you
-fix with the editing tools before saving (`reference/validate.md`).
+missing starts, specials outside the tables, unclosed or crossing
+geometry, textures and flats the session does not define — as
+severity-ranked issues you fix with the editing tools before saving
+(`reference/validate.md`).
 `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`

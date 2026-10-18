@@ -1,5 +1,6 @@
-//! Pure map validation: the reference, structure, thing and special checks
-//! behind the `validate_map` tool.
+//! Pure map validation: the reference, structure, thing, special,
+//! geometry, resource and generated-lump checks behind the `validate_map`
+//! tool.
 //!
 //! Every check is a pure function of the decoded [`Map`], plus the
 //! [`Context`] of game definitions for the thing and special checks, and
@@ -14,7 +15,10 @@
 //! a client asks about (`min_severity`, `codes`, `limit`) are the tool's
 //! decisions, not this module's.
 
+mod geometry;
+mod node_lumps;
 mod references;
+mod resources;
 mod specials;
 mod structure;
 mod things;
@@ -168,6 +172,24 @@ impl Issue {
     }
 }
 
+/// What the merged view provides to draw with, collected by the tool
+/// layer and consulted by the resource checks.
+///
+/// `Default` is a session that defines nothing: the texture side reports
+/// its `texture_check_skipped` info row instead of judging names, and
+/// the flat side stays quiet when [`ResourceIndex::flats`] is empty.
+#[derive(Debug, Default)]
+pub struct ResourceIndex {
+    /// Defined composite texture names, uppercase: the `TEXTURE1` and
+    /// `TEXTURE2` entries plus the `TX_` names of the textures namespace.
+    pub textures: BTreeSet<String>,
+    /// The names of the merged flats-namespace lumps, uppercase.
+    pub flats: BTreeSet<String>,
+    /// Whether the merged view defines composite textures at all: a
+    /// `TEXTURE1`/`TEXTURE2` lump or a textures namespace to fall back on.
+    pub has_texture_defs: bool,
+}
+
 /// The game definitions the thing and special checks consult.
 #[derive(Debug)]
 pub struct Context<'defs> {
@@ -178,6 +200,9 @@ pub struct Context<'defs> {
     /// The `Hexen` specials table: the `unknown_special` check of a
     /// `Hexen`-family map consults it whatever game the session detected.
     pub hexen_specials: &'defs Definitions,
+    /// What the merged view provides as textures and flats, for the
+    /// resource checks.
+    pub resources: &'defs ResourceIndex,
 }
 
 /// One named validation check in the pipeline.
@@ -258,6 +283,58 @@ pub const CHECKS: &[Check] = &[
         code: "tag_without_sector",
         run: |map, context| specials::tag_without_sector(map, context),
     },
+    Check {
+        code: "unclosed_sector",
+        run: |map, _context| geometry::unclosed_sector(map),
+    },
+    Check {
+        code: "crossing_lines",
+        run: |map, _context| geometry::crossing_lines(map),
+    },
+    Check {
+        code: "overlapping_lines",
+        run: |map, _context| geometry::overlapping_lines(map),
+    },
+    Check {
+        code: "check_skipped",
+        run: |map, _context| geometry::check_skipped(map),
+    },
+    Check {
+        code: "ceiling_below_floor",
+        run: |map, _context| geometry::ceiling_below_floor(map),
+    },
+    Check {
+        code: "thing_outside_map",
+        run: |map, _context| things::thing_outside_map(map),
+    },
+    Check {
+        code: "missing_texture",
+        run: |map, context| resources::missing_texture(map, context),
+    },
+    Check {
+        code: "missing_flat",
+        run: |map, context| resources::missing_flat(map, context),
+    },
+    Check {
+        code: "missing_required_texture",
+        run: |map, _context| resources::missing_required_texture(map),
+    },
+    Check {
+        code: "texture_check_skipped",
+        run: |_map, context| resources::texture_check_skipped(context),
+    },
+    Check {
+        code: "nodes_missing",
+        run: |map, _context| node_lumps::nodes_missing(map),
+    },
+    Check {
+        code: "blockmap_missing",
+        run: |map, _context| node_lumps::blockmap_missing(map),
+    },
+    Check {
+        code: "reject_size_mismatch",
+        run: |map, _context| node_lumps::reject_size_mismatch(map),
+    },
 ];
 
 /// The check codes, in [`CHECKS`] order: what `validate_map` accepts as
@@ -312,8 +389,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{CHECKS, Context, Issue, Severity, codes, run};
+    use super::{CHECKS, Context, Issue, ResourceIndex, Severity, codes, run};
     use crate::defs::definitions_for;
+    use crate::wad::archive::Lump;
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
     use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
@@ -324,12 +402,16 @@ mod tests {
         LumpName::parse(text).expect("test names are valid")
     }
 
-    /// The built-in definitions a validation context needs.
+    /// The built-in definitions and the empty resource index a default
+    /// validation context needs.
     struct Tables {
         /// The DOOM II rows (things and the `Doom`-family specials).
         doom: crate::defs::Definitions,
         /// The `Hexen` specials rows.
         hexen: crate::defs::Definitions,
+        /// A resource index defining nothing: the texture side reports
+        /// its skip and the flat side stays quiet.
+        resources: ResourceIndex,
     }
 
     /// The embedded tables, or a test failure when the embedded data broke.
@@ -337,6 +419,7 @@ mod tests {
         Tables {
             doom: definitions_for(Game::Doom2).expect("the embedded Doom II table is valid"),
             hexen: definitions_for(Game::Hexen).expect("the embedded Hexen table is valid"),
+            resources: ResourceIndex::default(),
         }
     }
 
@@ -345,6 +428,7 @@ mod tests {
         Context {
             definitions: &tables.doom,
             hexen_specials: &tables.hexen,
+            resources: &tables.resources,
         }
     }
 
@@ -406,7 +490,9 @@ mod tests {
 
     /// The two-room map of the integration fixtures: a hall and a raised
     /// back room split by a two-sided step line, with a player start and an
-    /// imp. Every index is in range and used, so nothing but info can show.
+    /// imp. Every index is in range and used, the geometry is closed and
+    /// uncrossed, and the block carries built node, reject and blockmap
+    /// lumps, so nothing but info can show.
     fn two_room() -> Map {
         Map {
             name: name("MAP01"),
@@ -444,7 +530,11 @@ mod tests {
                 sector_side(1),
             ],
             sectors: vec![plain_sector(0), plain_sector(1)],
-            other: Vec::new(),
+            other: vec![
+                Lump::new(name("NODES"), vec![0_u8; 28]),
+                Lump::new(name("REJECT"), vec![0_u8; 1]),
+                Lump::new(name("BLOCKMAP"), vec![0_u8; 12]),
+            ],
         }
     }
 
@@ -566,10 +656,39 @@ mod tests {
             "unknown_thing_type",
             "unknown_special",
             "tag_without_sector",
+            "thing_outside_map",
+            "texture_check_skipped",
+            "nodes_missing",
+            "blockmap_missing",
         ] {
             assert!(
                 outcome.issues.iter().any(|issue| issue.code == wanted),
                 "the kitchen-sink map should trip {wanted}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_geometry_resource_and_lump_code_is_registered() {
+        let registered = codes();
+        for wanted in [
+            "unclosed_sector",
+            "crossing_lines",
+            "overlapping_lines",
+            "check_skipped",
+            "ceiling_below_floor",
+            "thing_outside_map",
+            "missing_texture",
+            "missing_flat",
+            "missing_required_texture",
+            "texture_check_skipped",
+            "nodes_missing",
+            "blockmap_missing",
+            "reject_size_mismatch",
+        ] {
+            assert!(
+                registered.contains(&wanted),
+                "{wanted} must be a filterable, reported code: {registered:?}"
             );
         }
     }

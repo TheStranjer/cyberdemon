@@ -1,5 +1,6 @@
-//! Linedef editing tools: `add_linedef`, `edit_linedef` and `remove_linedef`
-//! (see the `edit_linedefs` router methods on [`crate::server::Cyberdemon`]).
+//! Linedef editing tools: `add_linedef`, `edit_linedef`, `remove_linedef`,
+//! `split_linedef` and `join_linedefs` (see the `edit_linedefs` router
+//! methods on [`crate::server::Cyberdemon`]).
 //!
 //! Every call is exactly one [`crate::session::Session::edit_map`] step, so
 //! one undo entry moves the whole call. The parameter shapes
@@ -7,7 +8,8 @@
 //! [`validate_texture_name`], [`edit_result_fragment`]) come from
 //! [`crate::tools::maps::params`]; removal runs through
 //! [`crate::wad::map::remove`] with the linedef set seeded and the pruning
-//! [`crate::wad::map::remove::CascadeOptions`] from the call.
+//! [`crate::wad::map::remove::CascadeOptions`] from the call. The split and
+//! join geometry itself lives in the pure [`crate::wad::map::ops`].
 //!
 //! The orientation rule: walk from `v1` to `v2`, the front sidedef is on
 //! your right, the back sidedef on your left. `edit_linedef`'s `flip` keeps
@@ -46,7 +48,7 @@ use crate::wad::map::flags;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
 };
-use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map, Sidedef, Vertex};
+use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map, Sidedef, Vertex, ops};
 
 /// The `blocking` linedef flag bit: the default flags of a one-sided line.
 const BLOCKING_BITS: u32 = 1_u32;
@@ -234,6 +236,37 @@ struct PointParam {
     y: i32,
 }
 
+/// Arguments for [`Cyberdemon::split_linedef`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SplitLinedefParams {
+    /// The map to edit; defaults like [`AddLinedefParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// The linedef to cut.
+    index: usize,
+    /// The cut point `{x, y}`: on the segment (within one map unit of the
+    /// line, strictly between the endpoints). Defaults to the midpoint,
+    /// rounded to nearest.
+    #[serde(default)]
+    at: Option<PointParam>,
+}
+
+/// Arguments for [`Cyberdemon::join_linedefs`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct JoinLinedefsParams {
+    /// The map to edit; defaults like [`AddLinedefParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// The linedef that survives the join (its properties win under `force`).
+    first: usize,
+    /// The linedef merged into the first and removed.
+    second: usize,
+    /// Join even though the two lines' properties or side textures differ,
+    /// keeping the first linedef's (default `false`).
+    #[serde(default)]
+    force: Option<bool>,
+}
+
 /// A sidedef to create with a new linedef, mirroring `add_sidedef`.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct NewSide {
@@ -371,6 +404,29 @@ struct EditReport {
 struct RemoveToolReport {
     /// What the removal engine dropped, flipped and normalised.
     removed: RemovalReport,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Structured result of [`Cyberdemon::split_linedef`].
+#[derive(Serialize)]
+struct SplitToolReport {
+    /// What the split engine built, inlined next to the edit fragment.
+    #[serde(flatten)]
+    result: ops::SplitResult,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Structured result of [`Cyberdemon::join_linedefs`].
+#[derive(Serialize)]
+struct JoinToolReport {
+    /// What the join engine welded and removed, inlined next to the edit
+    /// fragment.
+    #[serde(flatten)]
+    result: ops::JoinResult,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -1276,6 +1332,42 @@ fn remove_run(
     })
 }
 
+/// `split_linedef`'s work: resolve the map and run the one-step split.
+fn split_run(
+    session: &mut Session,
+    args: &SplitLinedefParams,
+) -> Result<SplitToolReport, CyberError> {
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let label = format!("split linedef {}", args.index);
+    let (result, report) = session.edit_map(name, &label, |map| {
+        ops::split_linedef(
+            map,
+            args.index,
+            args.at.map(|at| ops::Point { x: at.x, y: at.y }),
+        )
+    })?;
+    Ok(SplitToolReport {
+        result,
+        edit: edit_result_fragment(&report),
+    })
+}
+
+/// `join_linedefs`' work: resolve the map and run the one-step join.
+fn join_run(
+    session: &mut Session,
+    args: &JoinLinedefsParams,
+) -> Result<JoinToolReport, CyberError> {
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let label = format!("join linedefs {} and {}", args.first, args.second);
+    let (result, report) = session.edit_map(name, &label, |map| {
+        ops::join_linedefs(map, args.first, args.second, args.force.unwrap_or(false))
+    })?;
+    Ok(JoinToolReport {
+        result,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// Hand an outcome to the client as the documented structured result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -1329,6 +1421,34 @@ impl Cyberdemon {
         reported(
             self.state()
                 .with_session(|session| remove_run(session, &args)),
+        )
+    }
+
+    /// Cuts one linedef into two at a point in a single undoable edit.
+    #[tool(
+        description = "Cuts one linedef into two at a single point in a single undoable edit; the undo counterpart of join_linedefs. map defaults to the active map (set_active_map, else the merged view's only map); index is the linedef to cut. Optional at is the cut point {x, y}: it must lie on the segment (within one map unit of the line) and strictly between the endpoints, else invalid_argument; leave it out for the midpoint of the endpoints (each coordinate rounded to nearest). The vertex at the cut point is reused when one sits at exactly those coordinates, else a new one is created. The original linedef keeps its start and now ends at the cut point; a new linedef is appended to the block running from the cut point to the old end, copying the original's flags, special, tag, args and extra fields. Each existing side gets a copy for the new line with its x_offset shifted so the texture continues where it was (fronts measure from v1, backs from v2): the front copy shifts by the first piece's length and the surviving original back shifts by the second piece's, the new back copy keeps the old offset. Lengths are integer hypots of the coordinate deltas (floored). Binary maps store the cut point and every resulting x_offset as i16: a point or offset outside is invalid_argument; UDMF is unbounded. Cutting is geometry: the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {vertex: the cut point's index, new_linedef: the appended half's index, new_sidedefs: the copies' indices (front first, then back), map, nodes_invalidated, copied_to_working}. A missing linedef or vertex, or a side pointing at a missing sidedef, is not_found; the refusal changes nothing. See skill/reference/linedefs.md."
+    )]
+    fn split_linedef(
+        &self,
+        Parameters(args): Parameters<SplitLinedefParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| split_run(session, &args)),
+        )
+    }
+
+    /// Welds two collinear linedefs into one in a single undoable edit.
+    #[tool(
+        description = "Welds two collinear linedefs into the first of them in a single undoable edit, removing the second and the vertex they shared; the undo counterpart of split_linedef. map defaults to the active map; first is the surviving linedef, second the one merged away. The pair must meet head to tail - first.v2 equals second.v1, or second.v2 equals first.v1 (then the second lines up as the head) - and sharing no vertex, both vertices, or only tails-to-tails is invalid_argument naming the fix. They must lie on one straight line (collinear: invalid_argument otherwise) and run in the same direction (flip one with edit_linedef's flip: true). Their front sides must open onto the same sector and their back sides too (both having none counts), else invalid_argument. The shared vertex must belong to no third linedef - conflict names the blocker. flags, special, tag, args and the front/back side textures must match, else conflict listing the differences; with force: true the first linedef's properties win. The survivor spans its free end through the shared vertex to the other free end, keeping its own sides; the side anchored at the absorbed vertex has its x_offset shifted back by the removed line's length so the texture stays put on the wall. The second linedef, its orphaned sidedefs and the shared vertex leave through the removal engine, the block renumbers and references follow (a survivor past the removed line shifts down; the reported linedef is the survivor's new index). Joining is geometry: the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {linedef: the survivor's new index, removed: {linedefs, sidedefs, vertices, sectors, things, flipped_linedefs, one_sided_linedefs}, map, nodes_invalidated, copied_to_working}. A missing linedef or vertex, or a side pointing at a missing sidedef, is not_found; the refusal changes nothing. See skill/reference/linedefs.md."
+    )]
+    fn join_linedefs(
+        &self,
+        Parameters(args): Parameters<JoinLinedefsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| join_run(session, &args)),
         )
     }
 }

@@ -21,7 +21,9 @@
 //! a decoded map in another layout inside one flag family, the pure step
 //! behind `convert_map_format`. [`draw`] grows a closed corner loop into
 //! one new sector with its walls, the pure room-drawing step behind
-//! `create_sector_from_loop`. [`validate`] runs the pure map-health checks
+//! `create_sector_from_loop`. [`ops`] cuts one linedef at a point and welds
+//! two collinear ones together, the pure geometry behind `split_linedef`
+//! and `join_linedefs`. [`validate`] runs the pure map-health checks
 //! behind `validate_map`: reference integrity, line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
 //! rows.
@@ -37,6 +39,7 @@ pub mod geometry;
 pub mod hexen;
 pub mod model;
 pub mod nodes;
+pub mod ops;
 pub mod reject;
 pub mod remove;
 pub mod stats;

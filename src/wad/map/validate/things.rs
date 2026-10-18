@@ -1,6 +1,7 @@
 //! Thing checks over a decoded [`Map`]: the player starts a map needs to
-//! spawn anyone at all, the coop starts it is better to have, and thing
-//! types the session's definitions do not know.
+//! spawn anyone at all, the coop starts it is better to have, thing types
+//! the session's definitions do not know, and things standing in the void
+//! outside every sector.
 //!
 //! The type check uses [`Context::definitions`] - the built-in game table
 //! overlaid with the loaded archives' DEHACKED, DECORATE/`ZScript` and
@@ -11,6 +12,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{Context, Issue, Severity, listed};
+use crate::wad::map::geometry::{point_in_sector, sector_bbox};
 use crate::wad::map::model::Map;
 
 /// The single-player start: without it no player can enter the map.
@@ -78,16 +80,62 @@ pub(super) fn unknown_thing_type(map: &Map, context: &Context<'_>) -> Vec<Issue>
         .collect()
 }
 
+/// One sector's bounding box `(min_x, min_y, max_x, max_y)`.
+type Box4 = (i32, i32, i32, i32);
+
+/// Whether any sector's bounding box holds the point: containment
+/// implies the box, so the exact even-odd test only ever runs where a
+/// box already passes.
+fn in_some_bbox(boxes: &[Option<Box4>], x: i32, y: i32) -> bool {
+    boxes
+        .iter()
+        .flatten()
+        .any(|&(min_x, min_y, max_x, max_y)| min_x <= x && x <= max_x && min_y <= y && y <= max_y)
+}
+
+/// Things standing outside every sector: the engine spawns them into the
+/// void, no floor is found under them and editors cannot place the camera
+/// on them in `3D`.
+pub(super) fn thing_outside_map(map: &Map) -> Vec<Issue> {
+    let boxes: Vec<Option<Box4>> = map
+        .sectors
+        .iter()
+        .enumerate()
+        .map(|(sector, _)| sector_bbox(map, sector))
+        .collect();
+    map.things
+        .iter()
+        .enumerate()
+        .filter(|&(_, placed)| {
+            !in_some_bbox(&boxes, placed.x, placed.y)
+                || point_in_sector(map, i64::from(placed.x), i64::from(placed.y)).is_none()
+        })
+        .map(|(index, placed)| {
+            Issue::new(
+                Severity::Warning,
+                format!(
+                    "thing {index} at x {}, y {} stands outside every sector: nothing holds \
+                     it; move it into a room (move_thing) or remove it",
+                    placed.x, placed.y,
+                ),
+            )
+            .thing(&[index])
+            .at(placed.x, placed.y)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{missing_coop_starts, no_player1_start, unknown_thing_type};
+    use super::{missing_coop_starts, no_player1_start, thing_outside_map, unknown_thing_type};
     use crate::defs::definitions_for;
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
+    use crate::wad::map::common::fixtures::{name, room, side, solid_line, vertex};
     use crate::wad::map::model::{Map, Thing};
-    use crate::wad::map::validate::Context;
+    use crate::wad::map::validate::{Context, ResourceIndex};
     use crate::wad::name::LumpName;
 
     /// A thing of `kind` at `x`/`y`.
@@ -172,9 +220,11 @@ mod tests {
     #[test]
     fn unknown_thing_type_names_the_unlisted_numbers() {
         let (doom, hexen) = tables();
+        let resources = ResourceIndex::default();
         let context = Context {
             definitions: &doom,
             hexen_specials: &hexen,
+            resources: &resources,
         };
         let mut map = map_with(vec![thing_at(1, 64, 64), thing_at(3001, 384, 128)]);
         assert!(
@@ -195,5 +245,61 @@ mod tests {
         map.things.push(thing_at(-5, 20, 20));
         let more = unknown_thing_type(&map, &context);
         assert_eq!(more.len(), 2, "a negative type cannot be a row");
+    }
+
+    /// A closed 128-square room on sector 0 holding `things`, for the
+    /// containment check.
+    fn ring(things: Vec<Thing>) -> Map {
+        Map {
+            name: name("MAP01"),
+            format: MapFormat::Doom,
+            things,
+            vertices: vec![
+                vertex(0, 0),
+                vertex(128, 0),
+                vertex(128, 128),
+                vertex(0, 128),
+            ],
+            linedefs: vec![
+                solid_line(0, 1, 0),
+                solid_line(1, 2, 0),
+                solid_line(2, 3, 0),
+                solid_line(3, 0, 0),
+            ],
+            sidedefs: vec![side("-", "-", "WALL1", 0)],
+            sectors: vec![room(0, 128, 160, 0)],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn thing_outside_map_finds_only_the_spawn_in_the_void() {
+        let placed = ring(vec![
+            thing_at(1, 64, 64),
+            thing_at(3001, 200, 64),
+            thing_at(2, 0, 64),
+        ]);
+        let issues = thing_outside_map(&placed);
+        let issue = issues.first().expect("the void thing reports");
+        assert_eq!(issues.len(), 1, "only the thing at x 200: {issues:?}");
+        assert_eq!(issue.things, vec![1_usize], "the void spawn");
+        assert_eq!(issue.x, Some(200_i32), "and its place in the void");
+        assert_eq!(issue.y, Some(64_i32), "in map units");
+        assert!(
+            issue.message.contains("outside every sector"),
+            "the message explains: {}",
+            issue.message
+        );
+        let inside_only = ring(vec![thing_at(1, 64, 64)]);
+        assert!(
+            thing_outside_map(&inside_only).is_empty(),
+            "a spawn in the room sits on a floor"
+        );
+        let nowhere = map_with(vec![thing_at(1, 10, 10)]);
+        assert_eq!(
+            thing_outside_map(&nowhere).len(),
+            1,
+            "a map without geometry holds nothing"
+        );
     }
 }

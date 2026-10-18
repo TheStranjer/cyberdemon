@@ -130,19 +130,32 @@ mod tests {
     use crate::wad::map::validate::Context;
     use crate::wad::name::LumpName;
 
-    /// The built-in DOOM II and `Hexen` tables.
-    fn tables() -> (crate::defs::Definitions, crate::defs::Definitions) {
-        (
-            definitions_for(Game::Doom2).expect("the embedded Doom II table is valid"),
-            definitions_for(Game::Hexen).expect("the embedded Hexen table is valid"),
-        )
+    /// The built-in tables plus an empty resource index, owned together
+    /// so a [`Context`] can borrow all three.
+    struct Tables {
+        /// The DOOM II rows.
+        doom: crate::defs::Definitions,
+        /// The `Hexen` specials rows.
+        hexen: crate::defs::Definitions,
+        /// The empty resource index: the specials checks never read it.
+        resources: crate::wad::map::validate::ResourceIndex,
+    }
+
+    /// The built-in tables.
+    fn tables() -> Tables {
+        Tables {
+            doom: definitions_for(Game::Doom2).expect("the embedded Doom II table is valid"),
+            hexen: definitions_for(Game::Hexen).expect("the embedded Hexen table is valid"),
+            resources: crate::wad::map::validate::ResourceIndex::default(),
+        }
     }
 
     /// A validation context over the built-in tables.
-    fn context(tables: &(crate::defs::Definitions, crate::defs::Definitions)) -> Context<'_> {
+    fn context(tables: &Tables) -> Context<'_> {
         Context {
-            definitions: &tables.0,
-            hexen_specials: &tables.1,
+            definitions: &tables.doom,
+            hexen_specials: &tables.hexen,
+            resources: &tables.resources,
         }
     }
 

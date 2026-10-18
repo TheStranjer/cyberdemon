@@ -1,11 +1,11 @@
 //! Validate tools: [`Cyberdemon::validate_map`], the map health report.
 //!
 //! The checks themselves are the pure [`crate::wad::map::validate`]
-//! module's; this file only resolves the parameters, reads the map and the
-//! session's game definitions under one lock, and applies the severity
-//! filter, the paging and the counting the client asked about. Later
-//! validation tickets add checks to [`crate::wad::map::validate::CHECKS`]
-//! without touching anything here.
+//! module's; this file only resolves the parameters, reads the map, the
+//! session's game definitions and the merged view's resource index under
+//! one lock, and applies the severity filter, the paging and the counting
+//! the client asked about. Later validation tickets add checks to
+//! [`crate::wad::map::validate::CHECKS`] without touching anything here.
 
 use alloc::collections::BTreeSet;
 
@@ -22,9 +22,11 @@ use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::defs::collect;
 use crate::tools::maps::common;
+use crate::tools::textures::TextureSet;
 use crate::tools::{fail, ok};
+use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::game::Game;
-use crate::wad::map::validate::{self, Context, Issue, Severity};
+use crate::wad::map::validate::{self, Context, Issue, ResourceIndex, Severity};
 use crate::wad::name::LumpName;
 
 /// Default row cap for the issues list.
@@ -62,7 +64,7 @@ struct ValidateMapParams {
 }
 
 /// The definition tables one validation run consults, owned so the
-/// [`Context`] can borrow both.
+/// [`Context`] can borrow them all.
 struct Tables {
     /// The session's definitions: the detected game's tables with the
     /// loaded archives' custom things and specials overlaid (what the
@@ -74,11 +76,13 @@ struct Tables {
 }
 
 impl Tables {
-    /// The validation context borrowing both tables.
-    const fn context(&self) -> Context<'_> {
+    /// The validation context borrowing both tables and the resource
+    /// index the caller read from the merged view.
+    const fn context<'res>(&'res self, resources: &'res ResourceIndex) -> Context<'res> {
         Context {
             definitions: &self.definitions,
             hexen_specials: &self.hexen_specials,
+            resources,
         }
     }
 }
@@ -107,6 +111,53 @@ fn session_tables(session: &Session) -> Result<Tables, CyberError> {
         definitions: session_definitions(detected_game(session), &sources)?,
         hexen_specials: definitions_for(Game::Hexen)?,
     })
+}
+
+/// Adds the texture name a `TX_` lump stands for (`TX_WALL1` names
+/// `WALL1`) and records that the merged view defines textures.
+fn push_tx_lump(index: &mut ResourceIndex, lump: &str) {
+    if let Some(texture) = lump.strip_prefix("TX_")
+        && !texture.is_empty()
+    {
+        index.textures.insert(texture.to_owned());
+        index.has_texture_defs = true;
+    }
+}
+
+/// The merged view's resource index: what the texture and flat checks
+/// look names up against. The textures are the merged `TEXTURE1` and
+/// `TEXTURE2` entries plus the `TX_` names of the textures namespace,
+/// and `has_texture_defs` records whether either source exists; the
+/// flats are the merged flats-namespace lump names.
+///
+/// # Errors
+///
+/// [`common::directory`]'s errors and [`TextureSet::load`]'s
+/// [`CyberError::Format`] for a malformed texture lump.
+fn resource_index(session: &Session) -> Result<ResourceIndex, CyberError> {
+    let dir = common::directory(session, Scope::Merged)?;
+    let mut index = ResourceIndex::default();
+    for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {
+        let raw = entry.lump.name.as_bytes();
+        if raw == b"TEXTURE1" || raw == b"TEXTURE2" {
+            index.has_texture_defs = true;
+        }
+        if info.kind == LumpKind::Marker {
+            continue;
+        }
+        let text = entry.lump.name.to_string();
+        match info.namespace {
+            Some(Namespace::Flats) => {
+                index.flats.insert(text);
+            }
+            Some(Namespace::Textures) => push_tx_lump(&mut index, &text),
+            Some(_) | None => {}
+        }
+    }
+    index
+        .textures
+        .extend(TextureSet::load(session)?.widths().into_keys());
+    Ok(index)
 }
 
 /// Which archive to read: the parsed `scope`, the merged view by default.
@@ -265,14 +316,14 @@ fn viewed(
 }
 
 /// `validate_map`'s work: resolve and check the parameters before the
-/// session is touched, then read the map and the definitions under one
-/// lock and run the selected checks.
+/// session is touched, then read the map, the definitions and the
+/// resource index under one lock and run the selected checks.
 ///
 /// # Errors
 ///
 /// The parameter parsers' [`CyberError::InvalidArgument`] refusals, and
-/// under the lock [`common::resolve_map_name`]'s, [`common::load_map`]'s
-/// and [`session_tables`]' errors.
+/// under the lock [`common::resolve_map_name`]'s, [`common::load_map`]'s,
+/// [`session_tables`]' and [`resource_index`]' errors.
 fn validate_run(
     state: &AppState,
     args: &ValidateMapParams,
@@ -285,7 +336,8 @@ fn validate_run(
         let name = common::resolve_map_name(session, args.map.as_deref())?;
         let map = common::load_map(session, name, scope)?;
         let tables = session_tables(session)?;
-        let outcome = validate::run(&map, &tables.context(), enabled.as_ref());
+        let resources = resource_index(session)?;
+        let outcome = validate::run(&map, &tables.context(&resources), enabled.as_ref());
         Ok(viewed(name, outcome, min_severity, limit))
     })
 }
@@ -298,7 +350,7 @@ fn validate_run(
 impl Cyberdemon {
     /// Reports a map's structural problems as severity-ranked issues.
     #[tool(
-        description = "Checks one map for reference, structure, thing and special problems and reports every finding as an issue {severity (\"error\"|\"warning\"|\"info\"), code, message, vertices, linedefs, sidedefs, sectors, things (0-based index lists, present only when the issue has them), x, y (map coordinates, when the issue sits at a point)}. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\" or \"layer:N\"). min_severity (\"error\", \"warning\" or \"info\", default \"info\") keeps only that severity and above; codes runs only the named checks; limit (default 500, max 5000) pages the issue list. Returns {map, counts: {error, warning, info}, issues, truncated, checks_run}: counts totals everything the enabled checks found (before the severity filter and the limit), checks_run lists the codes that ran in report order, truncated says whether the limit dropped kept issues. The checks: vertex_out_of_range, sidedef_out_of_range, sector_out_of_range, missing_front_side, zero_length_line, duplicate_line (two linedefs connect the same vertex pair in either direction) and no_player1_start (no thing of type 1) are errors; two_sided_flag_mismatch (back side without the two-sided flag 4, or the flag without a back side), unused_sector (no sidedef references it), unknown_thing_type (the type is absent from the session's definitions, which include DEHACKED/DECORATE/ZScript/MAPINFO customs), unknown_special (outside the map's flag-family table; Doom-family maps also accept the Boom generalized range 0x2F80..=0x7FFF), special_without_tag (Doom-family sector special on an untagged line) and tag_without_sector (Doom-family nonzero tag no sector carries) are warnings; unused_vertex, unused_sidedef, shared_sidedef (several linedefs use one sidedef) and missing_coop_starts (no things of types 2 to 4) are info. The tag checks run only for Doom-family maps (Hexen-family lines trigger through arguments, which are not validated yet); node lumps and UDMF-only features are not checked. Unknown maps are not_found; bad scope, severity, code or limit values are invalid_argument."
+        description = "Checks one map for reference, structure, thing, special, geometry, resource and node-lump problems and reports every finding as an issue {severity (\"error\"|\"warning\"|\"info\"), code, message, vertices, linedefs, sidedefs, sectors, things (0-based index lists, present only when the issue has them), x, y (map coordinates, when the issue sits at a point)}. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\" or \"layer:N\"). min_severity (\"error\", \"warning\" or \"info\", default \"info\") keeps only that severity and above; codes runs only the named checks; limit (default 500, max 5000) pages the issue list. Returns {map, counts: {error, warning, info}, issues, truncated, checks_run}: counts totals everything the enabled checks found (before the severity filter and the limit), checks_run lists the codes that ran in report order, truncated says whether the limit dropped kept issues. The checks: vertex_out_of_range, sidedef_out_of_range, sector_out_of_range, missing_front_side, zero_length_line, duplicate_line (two linedefs connect the same vertex pair in either direction), no_player1_start (no thing of type 1), unclosed_sector (a sector's directed boundary edges - front sides v1 to v2, back sides v2 to v1 - leave vertices with more edges one way than the other; the issue names every unbalanced vertex and the coordinates of the first), crossing_lines (two linedefs cross at a point that is not one of their endpoints; maps above 20000 linedefs skip this and report check_skipped instead), overlapping_lines (two collinear linedefs share a stretch of positive length), ceiling_below_floor (a sector's ceiling is under its floor), missing_texture (a sidedef face names a texture the merged view defines nowhere - TEXTURE1/TEXTURE2 entries and the textures region; unset and \"-\" faces are skipped, and with no texture definitions at all the check stays quiet and texture_check_skipped reports info) and missing_flat (a sector floor or ceiling flat no merged flat-lump provides; F_SKY1 is always allowed, and a session carrying no flats at all is not judged) are errors; two_sided_flag_mismatch (back side without the two-sided flag 4, or the flag without a back side), unused_sector (no sidedef references it), unknown_thing_type (the type is absent from the session's definitions, which include DEHACKED/DECORATE/ZScript/MAPINFO customs), unknown_special (outside the map's flag-family table; Doom-family maps also accept the Boom generalized range 0x2F80..=0x7FFF), special_without_tag (Doom-family sector special on an untagged line), tag_without_sector (Doom-family nonzero tag no sector carries), thing_outside_map (no sector contains the thing's point), missing_required_texture (hall of mirrors: a one-sided line with \"-\" middle, or a two-sided line whose neighbour's lower ceiling / higher floor demands an upper / lower face left \"-\" on either side - sky ceilings on both sectors exempt the upper faces), nodes_missing (binary-format maps whose SEGS, SSECTORS and NODES lumps are all empty or absent; run build_all_nodes - ZDoom-family ports build them automatically) and reject_size_mismatch (a present non-empty REJECT whose size is not ceil(sectors squared / 8) bytes) are warnings; unused_vertex, unused_sidedef, shared_sidedef (several linedefs use one sidedef), missing_coop_starts (no things of types 2 to 4), check_skipped, texture_check_skipped and blockmap_missing (a binary map without BLOCKMAP data) are info. The resource checks (missing_texture, missing_flat) always judge against the merged view, whatever scope the map came from. The tag checks run only for Doom-family maps (Hexen-family lines trigger through arguments, which are not validated yet); UDMF-only features and the node records' internals are not checked. Unknown maps are not_found; bad scope, severity, code or limit values are invalid_argument."
     )]
     fn validate_map(
         &self,
@@ -315,16 +367,17 @@ impl Cyberdemon {
 mod tests {
     use super::{
         Counts, DEFAULT_LIMIT, MAX_LIMIT, ValidateMapParams, detected_game, parse_codes,
-        parse_limit, parse_min_severity, parse_scope, validate_run, viewed,
+        parse_limit, parse_min_severity, parse_scope, resource_index, validate_run, viewed,
     };
     use crate::defs::definitions_for;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::state::AppState;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::game::Game;
-    use crate::wad::map::validate::{self, Context, Severity};
+    use crate::wad::map::validate::{self, Context, ResourceIndex, Severity};
     use crate::wad::map::{Map, Sector};
     use crate::wad::name::LumpName;
+    use crate::wad::textures::{TextureDef, TextureLayout, TextureLump, write_texture_lump};
 
     /// A `validate_map` call over just these parameter texts.
     fn args(map: Option<&str>, scope: Option<&str>) -> ValidateMapParams {
@@ -440,17 +493,25 @@ mod tests {
     fn counts_total_every_severity_of_the_found_issues() {
         let doom = definitions_for(Game::Doom2).expect("the embedded Doom II table is valid");
         let hexen = definitions_for(Game::Hexen).expect("the embedded Hexen table is valid");
+        let resources = ResourceIndex::default();
         let context = Context {
             definitions: &doom,
             hexen_specials: &hexen,
+            resources: &resources,
         };
         let mut map = Map::default();
         map.sectors.push(Sector::default());
         let outcome = validate::run(&map, &context, None);
         let counts = Counts::of(&outcome.issues);
         assert_eq!(counts.error, 1, "only the missing player 1 start");
-        assert_eq!(counts.warning, 1, "only the orphaned sector");
-        assert_eq!(counts.info, 1, "only the missing coop set");
+        assert_eq!(
+            counts.warning, 2,
+            "the orphaned sector and the absent node tree"
+        );
+        assert_eq!(
+            counts.info, 3,
+            "the coop note, the missing blockmap and the skipped texture check"
+        );
         let none = Counts::of(&[]);
         assert_eq!((none.error, none.warning, none.info), (0, 0, 0), "empty");
     }
@@ -489,13 +550,109 @@ mod tests {
         )
     }
 
+    /// A base layer whose directory holds exactly `lumps`.
+    fn layer_with(lumps: Vec<Lump>) -> Layer {
+        Layer::new(
+            std::path::PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        )
+    }
+
+    /// A parsed test name.
+    fn parsed(text: &str) -> LumpName {
+        LumpName::parse(text).expect("test names are valid")
+    }
+
+    /// A session whose only layer holds `lumps`.
+    fn session_over(lumps: Vec<Lump>) -> Session {
+        let mut session = Session::default();
+        session.set_iwad(layer_with(lumps));
+        session
+    }
+
+    /// A valid `TEXTURE1` body defining exactly `names`.
+    fn texture_lump(names: &[&str]) -> Vec<u8> {
+        let lump = TextureLump {
+            layout: TextureLayout::Doom,
+            textures: names
+                .iter()
+                .map(|name| TextureDef {
+                    name: (*name).to_owned(),
+                    flags_raw: 0,
+                    width: 64,
+                    height: 64,
+                    patches: Vec::new(),
+                })
+                .collect(),
+        };
+        write_texture_lump(&lump).expect("test texture lumps serialize")
+    }
+
+    #[test]
+    fn resource_index_collects_flats_tx_names_and_defined_textures() {
+        let session = session_over(vec![
+            Lump::marker(parsed("F_START")),
+            Lump::new(parsed("FLOOR1"), vec![1_u8; 64]),
+            Lump::marker(parsed("F_END")),
+            Lump::marker(parsed("TX_START")),
+            Lump::new(parsed("TX_WIDE"), vec![2_u8; 8]),
+            Lump::marker(parsed("TX_END")),
+            Lump::new(parsed("TEXTURE1"), texture_lump(&["WALL1", "STEP1"])),
+        ]);
+        let index = resource_index(&session).expect("the fixture view indexes");
+        assert!(index.has_texture_defs, "a TEXTURE1 lump defines textures");
+        assert_eq!(
+            index.flats.into_iter().collect::<Vec<String>>(),
+            vec!["FLOOR1".to_owned()],
+            "the flat region's one lump"
+        );
+        assert_eq!(
+            index.textures.into_iter().collect::<Vec<String>>(),
+            vec!["STEP1".to_owned(), "WALL1".to_owned(), "WIDE".to_owned()],
+            "the defined records plus the TX_ name, sorted"
+        );
+    }
+
+    #[test]
+    fn resource_index_reports_no_texture_definitions_without_the_lumps() {
+        let session = session_over(vec![
+            Lump::marker(parsed("F_START")),
+            Lump::new(parsed("FLOOR1"), vec![0_u8; 4]),
+            Lump::marker(parsed("F_END")),
+        ]);
+        let index = resource_index(&session).expect("a flat-only view indexes");
+        assert!(
+            !index.has_texture_defs,
+            "no TEXTURE1/TEXTURE2 and no textures region"
+        );
+        assert!(index.textures.is_empty(), "nothing to look names up in");
+        assert_eq!(index.flats.len(), 1, "the flat is still collected");
+    }
+
+    #[test]
+    fn resource_index_refuses_a_malformed_texture_lump() {
+        let session = session_over(vec![Lump::new(parsed("TEXTURE1"), b"junk".to_vec())]);
+        let error = resource_index(&session).expect_err("the lump cannot decode");
+        assert_eq!(
+            error.code(),
+            "format_error",
+            "a broken TEXTURE1 fails the run with the fix-hinting format error"
+        );
+    }
+
     #[test]
     fn viewed_totals_everything_then_filters_and_pages() {
         let doom = definitions_for(Game::Doom2).expect("the embedded Doom II table is valid");
         let hexen = definitions_for(Game::Hexen).expect("the embedded Hexen table is valid");
+        let resources = ResourceIndex::default();
         let context = Context {
             definitions: &doom,
             hexen_specials: &hexen,
+            resources: &resources,
         };
         let mut map = Map::default();
         map.sectors.push(Sector::default());
@@ -504,8 +661,8 @@ mod tests {
         let errors_only = viewed(name, outcome, Severity::Error, DEFAULT_LIMIT);
         assert_eq!(errors_only.map, name, "the map travels");
         assert_eq!(errors_only.issues.len(), 1, "only the start error stays");
-        assert_eq!(errors_only.counts.warning, 1, "counts keep the whole truth");
-        assert_eq!(errors_only.counts.info, 1, "at every severity");
+        assert_eq!(errors_only.counts.warning, 2, "counts keep the whole truth");
+        assert_eq!(errors_only.counts.info, 3, "at every severity");
         assert!(!errors_only.truncated, "one row fits any page");
         assert_eq!(
             errors_only.checks_run,
@@ -518,24 +675,22 @@ mod tests {
     fn viewed_pages_the_kept_rows_and_says_so() {
         let doom = definitions_for(Game::Doom2).expect("the embedded Doom II table is valid");
         let hexen = definitions_for(Game::Hexen).expect("the embedded Hexen table is valid");
+        let resources = ResourceIndex::default();
         let context = Context {
             definitions: &doom,
             hexen_specials: &hexen,
+            resources: &resources,
         };
         let mut map = Map::default();
         map.sectors.push(Sector::default());
         let name = LumpName::parse("MAP01").expect("test names are valid");
         let outcome = validate::run(&map, &context, None);
         let paged = viewed(name, outcome, Severity::Info, 2);
-        assert_eq!(
-            paged.issues.len(),
-            2,
-            "the page holds two of the three rows"
-        );
-        assert!(paged.truncated, "and one stayed behind");
+        assert_eq!(paged.issues.len(), 2, "the page holds two of the six rows");
+        assert!(paged.truncated, "four stayed behind");
         assert_eq!(paged.counts.error, 1, "counts still total everything");
-        assert_eq!(paged.counts.warning, 1, "at every severity,");
-        assert_eq!(paged.counts.info, 1, "filtered or paged out or not");
+        assert_eq!(paged.counts.warning, 2, "at every severity,");
+        assert_eq!(paged.counts.info, 3, "filtered or paged out or not");
     }
 
     #[test]

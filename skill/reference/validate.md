@@ -1,9 +1,10 @@
 # Validate tools
 
-Reading a map's health: `validate_map` runs the structural checks and
-reports what it finds. It never changes anything — fixing is the editing
-tools' job (`reference/things.md`, `reference/sidedefs.md`,
-`reference/sectors.md`, `reference/maps.md`, `reference/lumps.md`).
+Reading a map's health: `validate_map` runs the structural, geometric and
+resource checks and reports what it finds. It never changes anything —
+fixing is the editing tools' job (`reference/things.md`,
+`reference/sidedefs.md`, `reference/sectors.md`, `reference/maps.md`,
+`reference/lumps.md`, `reference/nodes.md`).
 
 ## `validate_map`
 
@@ -51,6 +52,19 @@ with `render_topdown` to look at the spot.
 | `unknown_special` | warning | The linedef special is outside the map's flag-family table (see below). |
 | `special_without_tag` | warning | A Doom-family sector special carries tag 0, so nothing triggers its sector. |
 | `tag_without_sector` | warning | A Doom-family linedef carries a non-zero tag no sector in the map has. |
+| `unclosed_sector` | error | A sector's directed boundary edges (front sides `v1`→`v2`, back sides `v2`→`v1`) leave vertices with more edges one way than the other: the ring has free ends. The issue lists every unbalanced vertex and gives the first one's `x`/`y`. |
+| `crossing_lines` | error | Two linedefs cross at a point that is not one of their endpoints. Maps above 20 000 linedefs skip this check (see `check_skipped`). |
+| `overlapping_lines` | error | Two collinear linedefs share a stretch of positive length — the same wall drawn twice. Touching at a single endpoint is fine. |
+| `check_skipped` | info | The crossing check declined a map with more than 20 000 linedefs; nothing was checked there. |
+| `ceiling_below_floor` | error | A sector's ceiling height is below its floor height. |
+| `thing_outside_map` | warning | No sector contains the thing's point: it spawns into the void. |
+| `missing_texture` | error | A sidedef face names a texture the merged view does not define (`TEXTURE1`/`TEXTURE2` entries plus the textures region). Empty and `"-"` faces are skipped. Runs only when the merged view defines textures (see `texture_check_skipped`). |
+| `missing_flat` | error | A sector floor or ceiling flat is no flat lump of the merged flats namespace. `F_SKY1` is always allowed; a session carrying no flats at all is not judged. |
+| `missing_required_texture` | warning | Hall of mirrors: a one-sided line with `"-"` middle, or a two-sided line whose neighbour's lower ceiling / higher floor demands an upper / lower face that is `"-"` (checked on both sides; `F_SKY1` on both sectors' ceiling flats exempts the upper faces). |
+| `texture_check_skipped` | info | The merged view has no `TEXTURE1`/`TEXTURE2` lump and no textures region, so wall-texture names were not checked. |
+| `nodes_missing` | warning | A binary (Doom/Hexen-format) map whose `SEGS`, `SSECTORS` and `NODES` lumps are all empty or absent. Run `build_all_nodes`; `ZDoom`-family ports build the tree themselves, every other port does not. |
+| `blockmap_missing` | info | A binary map without `BLOCKMAP` data. `build_all_nodes` or `build_blockmap` writes it. |
+| `reject_size_mismatch` | warning | A present non-empty `REJECT` whose size is not `ceil(sectors² / 8)` bytes. `build_reject` fixes it. |
 
 Errors mean the map is broken; warnings mean it is probably wrong; info
 rows deserve a look. Run the check list again after every round of fixes
@@ -70,10 +84,16 @@ rows deserve a look. Run the check list again after every round of fixes
   `Hexen` table.
 - The tag checks run **Doom-family only**: `Hexen`-family lines trigger
   through script arguments instead.
+- **Textures and flats** check against the **merged view** whatever scope
+  the map came from: defined textures are the winning `TEXTURE1`/
+  `TEXTURE2` records plus the `TX_` lumps of a textures region, and flats
+  are the lumps of a flats region. An empty geometry edit's invalidated
+  node lumps show up as `nodes_missing` / `blockmap_missing` until
+  `build_all_nodes` runs.
 
 ## Not checked yet
 
-Hexen/`UDMF` line and thing **arguments**, the node lumps, sector-boundary
-geometry (holes, unconnected sectors, self-intersections) and texture
-presence join this list in a later ticket. `validate_map` reports
+Hexen/`UDMF` line and thing **arguments**, the internal consistency of
+the node records (seg endpoints, subsector convexity) and sprite/sound
+presence join this list in later tickets. `validate_map` reports
 `checks_run` so you can tell which world you are in.

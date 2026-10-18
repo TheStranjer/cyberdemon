@@ -1497,9 +1497,11 @@ mod tests {
     /// report over `map`.
     fn geometry_errors(map: &Map) -> Vec<String> {
         let definitions = definitions_for(Game::Doom).expect("the embedded tables parse");
+        let resources = crate::wad::map::validate::ResourceIndex::default();
         let context = Context {
             definitions: &definitions,
             hexen_specials: &definitions,
+            resources: &resources,
         };
         let enabled: BTreeSet<&'static str> = [
             "vertex_out_of_range",

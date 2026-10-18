@@ -221,7 +221,10 @@ src/
                   step (`dry_run` converts a copy and only reports);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
-                  WAD path) onto `crate::wad::diff`;
+                  WAD path) onto `crate::wad::diff`, and its `optimize_wad`
+                  runs the pure `crate::wad::optimize` plan over the
+                  working/base/merged snapshots and applies it as one
+                  `Session::edit`;
                   `tools/validate.rs` is the thin `validate_map` group: it
                   parses `min_severity`/`codes`/`limit`, reads the map and
                   the session's definitions under one lock and runs the
@@ -238,12 +241,18 @@ src/
                   `wad/bytes.rs` bounds-checked little-endian `Reader` and
                   `Writer` plus the checked usize/u32 casts,
                   `wad/archive.rs` the `Wad` archive with parsing,
-                  serialization, lookup and atomic I/O, `wad/classify.rs`
+                  serialization (canonical and payload-deduplicating),
+                  lookup and atomic I/O, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
                   `MapBlock`s and `LumpKind` type hints, `wad/diff.rs` the
                   pure two-directory comparison: map blocks as units, lumps
                   keyed by namespace, name and occurrence and the
-                  length/`FNV`-1a/bytes content rule, `wad/game.rs`
+                  length/`FNV`-1a/bytes content rule, `wad/optimize.rs` the
+                  pure cleanup planner (`optimize_wad`): identical overrides,
+                  empty marker pairs, shadowed duplicates with the
+                  `ZDoom`-concatenated-name exception, unused
+                  `PNAMES`/patches/flats and the renumbered `PNAMES`/texture
+                  rewrite, `wad/game.rs`
                   the pure game signature detection (`detect_game`),
                   `wad/textures.rs` the `PNAMES` and `TEXTURE1`/`TEXTURE2`
                   codecs: patch-name index, texture records with

@@ -5,12 +5,15 @@
 //! snapshot copies pointers, not bytes. [`Wad::parse`] accepts every layout
 //! real engines produce, including overlapping data and a directory placed
 //! before the payloads; [`Wad::to_bytes`] writes the canonical layout (data
-//! in directory order, then the directory). [`Wad::read_file`] and
+//! in directory order, then the directory) and [`Wad::to_bytes_dedup`] the
+//! same with duplicate payloads stored once at shared offsets.
+//! [`Wad::read_file`] and
 //! [`write_file_atomic`] move archives to and from disk, replacing the
 //! target through a synced sibling file so a crash never truncates it.
 //! Nothing here knows about MCP or sessions.
 
 use alloc::sync::Arc;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -191,6 +194,16 @@ pub struct Wad {
     pub lumps: Vec<Lump>,
 }
 
+/// The layout one [`Wad::to_bytes_dedup`] write plans.
+struct DedupPlan<'wad> {
+    /// The `filepos` of every lump, duplicate payloads sharing an offset.
+    offsets: Vec<u32>,
+    /// The byte the directory starts at.
+    directory_at: u32,
+    /// The unique non-empty payloads, in the order they are written.
+    payloads: Vec<&'wad [u8]>,
+}
+
 impl Default for Wad {
     /// An empty `PWAD`: the starting point for building a new archive.
     #[inline]
@@ -208,6 +221,38 @@ fn advance(position: usize, index: usize, width: usize) -> Result<usize, CyberEr
         CyberError::LimitExceeded(format!(
             "lump {index} data at offset {position} plus {width} bytes exceeds the addressable range"
         ))
+    })
+}
+
+/// Walks the deduplicating layout [`Wad::to_bytes_dedup`] writes: the
+/// shared `filepos` table, the directory position and the unique
+/// non-empty payloads in write order, every position checked against the
+/// format's `i32` field limits.
+fn dedup_plan(lumps: &[Lump]) -> Result<DedupPlan<'_>, CyberError> {
+    let mut offsets = Vec::with_capacity(lumps.len());
+    let mut payloads: Vec<&[u8]> = Vec::new();
+    let mut seen: HashMap<&[u8], u32> = HashMap::new();
+    let mut position = HEADER_LEN;
+    for (index, lump) in lumps.iter().enumerate() {
+        let data: &[u8] = &lump.data;
+        let at = if data.is_empty() {
+            offset_field(position, &format!("lump {index} data"))?
+        } else if let Some(shared) = seen.get(data) {
+            *shared
+        } else {
+            let at = offset_field(position, &format!("lump {index} data"))?;
+            seen.insert(data, at);
+            payloads.push(data);
+            position = advance(position, index, data.len())?;
+            at
+        };
+        offsets.push(at);
+    }
+    let directory_at = offset_field(position, "directory")?;
+    Ok(DedupPlan {
+        offsets,
+        directory_at,
+        payloads,
     })
 }
 
@@ -306,6 +351,40 @@ impl Wad {
     #[inline]
     pub fn data_offsets(&self) -> Result<Vec<u32>, CyberError> {
         self.plan().map(|(offsets, _directory_at)| offsets)
+    }
+
+    /// Serializes like [`to_bytes`](Self::to_bytes) but writes every
+    /// distinct non-empty payload once: later directory entries holding
+    /// equal bytes share the first copy's offset, which the `WAD` format
+    /// allows (and [`parse`](Self::parse) reads back). Zero-size lumps
+    /// keep the current write position as their `filepos`, exactly as the
+    /// canonical layout gives them.
+    ///
+    /// Returns the file bytes and the payload bytes the sharing saved.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::LimitExceeded`] under the same conditions as
+    /// [`to_bytes`](Self::to_bytes).
+    #[inline]
+    pub fn to_bytes_dedup(&self) -> Result<(Vec<u8>, usize), CyberError> {
+        let count = usize_to_u32(self.lumps.len(), "lump")?;
+        let planned = dedup_plan(&self.lumps)?;
+        let mut out = Writer::new();
+        out.put_bytes(self.kind.magic());
+        out.put_u32(count);
+        out.put_u32(planned.directory_at);
+        for payload in &planned.payloads {
+            out.put_bytes(payload);
+        }
+        for (lump, position) in self.lumps.iter().zip(&planned.offsets) {
+            out.put_u32(*position);
+            out.put_u32(usize_to_u32(lump.size(), "lump")?);
+            out.put_bytes(&lump.name.raw());
+        }
+        let written: usize = planned.payloads.iter().map(|payload| payload.len()).sum();
+        let total: usize = self.lumps.iter().map(Lump::size).sum();
+        Ok((out.into_inner(), total.saturating_sub(written)))
     }
 
     /// Walks the layout [`to_bytes`](Self::to_bytes) writes: the `u32`
@@ -724,6 +803,86 @@ mod tests {
             let stored = u32::try_from(entries[index].0).expect("test files are small");
             assert_eq!(stored, *offset, "entry {index} was written as planned");
         }
+    }
+
+    /// A `Wad` carrying two byte-identical payloads, a third distinct one,
+    /// and a marker between the twins.
+    fn duplicated() -> Wad {
+        Wad {
+            kind: WadKind::Pwad,
+            lumps: vec![
+                Lump::new(name("FIRST"), b"same-same".to_vec()),
+                Lump::marker(name("NOTE")),
+                Lump::new(name("SECOND"), b"same-same".to_vec()),
+                Lump::new(name("THIRD"), b"different!".to_vec()),
+                Lump::new(name("FOURTH"), b"same-same".to_vec()),
+            ],
+        }
+    }
+
+    #[test]
+    fn to_bytes_dedup_round_trips_through_parse_to_an_equal_wad() {
+        let wad = duplicated();
+        let (bytes, saved) = wad.to_bytes_dedup().expect("a small WAD serializes");
+        assert_eq!(
+            Wad::parse(&bytes).expect("shared offsets parse back"),
+            wad,
+            "the round trip is exact even though entries share data ranges"
+        );
+        assert_eq!(&bytes[..4], b"PWAD", "the magic is written as usual");
+        assert_eq!(saved, 18, "the two later copies of the 9-byte payload");
+    }
+
+    #[test]
+    fn to_bytes_dedup_is_smaller_with_duplicates_and_identical_without() {
+        let wad = duplicated();
+        let plain = wad.to_bytes().expect("serializes");
+        let (deduped, saved) = wad.to_bytes_dedup().expect("serializes");
+        assert!(
+            deduped.len() < plain.len(),
+            "sharing the payload shrinks the file: {} vs {saved} saved",
+            deduped.len()
+        );
+        assert_eq!(
+            plain.len().saturating_sub(deduped.len()),
+            saved,
+            "the reported saving is the size difference"
+        );
+        let unique = sample(WadKind::Pwad);
+        let (unique_dedup, unique_saved) = unique.to_bytes_dedup().expect("serializes");
+        assert_eq!(
+            unique_dedup,
+            unique.to_bytes().expect("serializes"),
+            "no duplicates means the plain layout byte for byte"
+        );
+        assert_eq!(unique_saved, 0_usize, "and nothing is saved");
+    }
+
+    #[test]
+    fn to_bytes_dedup_gives_the_twins_one_shared_offset() {
+        let wad = duplicated();
+        let (bytes, _saved) = wad.to_bytes_dedup().expect("serializes");
+        let entries = written_entries(&bytes, wad.len());
+        assert_eq!(
+            entries[0].0, entries[2].0,
+            "the twin shares the first offset"
+        );
+        assert_eq!(entries[0].0, entries[4].0, "and so does the third copy");
+        assert_ne!(
+            entries[0].0, entries[3].0,
+            "the distinct payload sits elsewhere"
+        );
+        assert_eq!(
+            entries[2].1, 9_i32,
+            "the size field still names the whole payload"
+        );
+        let start = usize::try_from(entries[0].0).expect("test files are small");
+        let end = start.checked_add(9_usize).expect("test files are small");
+        assert_eq!(
+            &bytes[start..end],
+            b"same-same",
+            "at the first copy's bytes"
+        );
     }
 
     #[test]

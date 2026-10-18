@@ -175,6 +175,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `replace_patch`          | `reference/patches.md`  |
 | `remove_patch`           | `reference/patches.md`  |
 | `diff_wads`              | `reference/inspect.md`  |
+| `optimize_wad`           | `reference/inspect.md`  |
 | `import_sound`           | `reference/audio.md`    |
 | `preview_sound`          | `reference/audio.md`    |
 | `import_music`           | `reference/music.md`    |

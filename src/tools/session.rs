@@ -136,6 +136,12 @@ struct SaveWadParams {
     /// is loaded, else `PWAD`.
     #[serde(default)]
     kind: Option<String>,
+    /// Write each distinct non-empty lump payload once, with the duplicate
+    /// directory entries sharing the first copy's offset (default `false`).
+    /// Engines read shared offsets fine; the result then reports how many
+    /// bytes the sharing saved.
+    #[serde(default)]
+    dedupe: bool,
 }
 
 /// How [`Cyberdemon::save_wad`] decides what to write.
@@ -302,6 +308,9 @@ struct SaveReport {
     lumps: usize,
     /// Bytes in the file.
     bytes: usize,
+    /// Payload bytes saved by writing duplicate lump data once, `0` unless
+    /// the call passed `dedupe`.
+    bytes_saved_by_dedupe: usize,
     /// Whether the working archive still holds unsaved changes (`false`
     /// after a `pwad` save, unchanged after a `full` export).
     dirty: bool,
@@ -701,23 +710,25 @@ fn merged_export(session: &Session, kind: Option<WadKind>) -> Wad {
 }
 
 /// `save_wad`'s work: resolve path, mode and kind, write the file and, in
-/// mode `pwad`, record it as the working archive's saved state.
-fn save_wad_report(
-    state: &AppState,
-    text: Option<&str>,
-    mode: Option<&str>,
-    kind: Option<&str>,
-) -> Result<SaveReport, CyberError> {
-    let wanted_mode = parse_save_mode(mode)?;
-    let wanted_kind = parse_kind(kind)?;
+/// mode `pwad`, record it as the working archive's saved state. With
+/// `dedupe` the write shares duplicate payloads and the report carries the
+/// bytes saved.
+fn save_wad_report(state: &AppState, args: &SaveWadParams) -> Result<SaveReport, CyberError> {
+    let wanted_mode = parse_save_mode(args.mode.as_deref())?;
+    let wanted_kind = parse_kind(args.kind.as_deref())?;
+    let dedupe = args.dedupe;
     state.with_session(|session| {
-        let target = resolve_target(session, text)?;
+        let target = resolve_target(session, args.path.as_deref())?;
         ensure_not_layer_file(session, &target)?;
         let wad = match wanted_mode {
             SaveMode::Pwad => working_copy(session, wanted_kind),
             SaveMode::Full => merged_export(session, wanted_kind),
         };
-        let bytes = wad.to_bytes()?;
+        let (bytes, bytes_saved_by_dedupe) = if dedupe {
+            wad.to_bytes_dedup()?
+        } else {
+            (wad.to_bytes()?, 0_usize)
+        };
         write_file_atomic(&target, &bytes)?;
         if wanted_mode == SaveMode::Pwad {
             session.mark_saved(target.clone());
@@ -728,6 +739,7 @@ fn save_wad_report(
             kind: wad.kind,
             lumps: wad.len(),
             bytes: bytes.len(),
+            bytes_saved_by_dedupe,
             dirty: session.is_dirty(),
         })
     })
@@ -994,18 +1006,13 @@ impl Cyberdemon {
 
     /// Writes the working archive or the whole merged view to a file.
     #[tool(
-        description = "Saves the session to a file. mode \"pwad\" (the default) writes the working archive and marks it saved (the working path becomes the file written); mode \"full\" exports the entire merged view (IWAD layer, resource layers and working archive under the override rules) as one standalone WAD without changing the working path or the dirty flag. path is absolute and defaults to the working archive's own path; kind (\"PWAD\"|\"IWAD\") overrides the header magic. Refuses with conflict to overwrite a loaded layer's file. Returns {path, mode, kind, lumps, bytes, dirty}."
+        description = "Saves the session to a file. mode \"pwad\" (the default) writes the working archive and marks it saved (the working path becomes the file written); mode \"full\" exports the entire merged view (IWAD layer, resource layers and working archive under the override rules) as one standalone WAD without changing the working path or the dirty flag. path is absolute and defaults to the working archive's own path; kind (\"PWAD\"|\"IWAD\") overrides the header magic. dedupe (default false) writes each distinct non-empty lump payload once, later copies sharing the first one's offset, and reports the bytes saved; engines read such files fine, but a naive byte-comparing tool may not. Refuses with conflict to overwrite a loaded layer's file. Returns {path, mode, kind, lumps, bytes, bytes_saved_by_dedupe, dirty}."
     )]
     fn save_wad(
         &self,
         Parameters(args): Parameters<SaveWadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(save_wad_report(
-            self.state(),
-            args.path.as_deref(),
-            args.mode.as_deref(),
-            args.kind.as_deref(),
-        ))
+        reported(save_wad_report(self.state(), &args))
     }
 
     /// Describes the session's archives, history and state.
@@ -1059,9 +1066,13 @@ impl Cyberdemon {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{clear_missing_active_map, merged_holds_map, parse_steps, redo_run, undo_run};
+    use super::{
+        SaveWadParams, clear_missing_active_map, merged_holds_map, parse_steps, redo_run,
+        save_wad_report, undo_run,
+    };
     use crate::session::history::HISTORY_LIMIT;
     use crate::session::{Layer, LayerRole, Session};
+    use crate::state::AppState;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::name::LumpName;
 
@@ -1075,12 +1086,68 @@ mod tests {
         Lump::marker(name(text))
     }
 
+    /// A lump named `text` carrying `body`.
+    fn carrying(text: &str, body: &str) -> Lump {
+        Lump::new(name(text), body.as_bytes().to_vec())
+    }
+
     /// A `PWAD` holding `lumps`.
     fn pwad(lumps: Vec<Lump>) -> Wad {
         Wad {
             kind: WadKind::Pwad,
             lumps,
         }
+    }
+
+    #[test]
+    fn save_wad_report_dedupes_only_when_asked_and_reports_the_saving() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let state = AppState::default();
+        state
+            .with_session(|session| {
+                session.replace_working(
+                    pwad(vec![
+                        carrying("FIRST", "same-bytes"),
+                        carrying("SECOND", "same-bytes"),
+                        marker("NOTE"),
+                    ]),
+                    None,
+                );
+                Ok(())
+            })
+            .expect("seeding the session works");
+        let plain_path = dir.path().join("plain.wad");
+        let plain_args = SaveWadParams {
+            path: Some(plain_path.display().to_string()),
+            mode: None,
+            kind: None,
+            dedupe: false,
+        };
+        let plain = save_wad_report(&state, &plain_args).expect("the plain save lands");
+        assert_eq!(
+            plain.bytes_saved_by_dedupe, 0,
+            "nothing shared, nothing saved"
+        );
+        assert!(!plain.dirty, "a pwad save marks the archive saved");
+        let dedup_path = dir.path().join("dedup.wad");
+        let dedup_args = SaveWadParams {
+            path: Some(dedup_path.display().to_string()),
+            mode: None,
+            kind: None,
+            dedupe: true,
+        };
+        let deduped = save_wad_report(&state, &dedup_args).expect("the dedupe save lands");
+        assert_eq!(deduped.bytes_saved_by_dedupe, 10, "the twin's payload");
+        assert_eq!(
+            plain.bytes.saturating_sub(deduped.bytes),
+            10,
+            "the file really is smaller by the saved bytes"
+        );
+        assert_eq!(
+            Wad::read_file(&dedup_path).expect("it re-opens"),
+            Wad::read_file(&plain_path).expect("so does the plain save"),
+            "dedupe changes the layout, never the archive"
+        );
     }
 
     /// Appends an empty marker named `text` as one `add_lump TEXT` edit.

@@ -1,4 +1,5 @@
-//! Inspect tools: comparing what two WAD states hold.
+//! Inspect tools: comparing what two WAD states hold and cleaning up what
+//! the working archive does not need.
 //!
 //! [`Cyberdemon::diff_wads`] answers "what does my `PWAD` override?" by
 //! default (`base` against `working`) and any other question of the same
@@ -6,7 +7,13 @@
 //! file on disk. The comparison itself is the pure [`crate::wad::diff`];
 //! this module only resolves side strings to directories, runs the diff
 //! under the session lock and pages the result.
+//!
+//! [`Cyberdemon::optimize_wad`] answers "what can my `PWAD` drop?": it
+//! runs the pure [`crate::wad::optimize`] planner over the working, base
+//! and merged snapshots and, unless asked only to report, commits the
+//! whole plan as one undoable [`Session::edit`] step.
 
+use alloc::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -23,6 +30,8 @@ use crate::tools::{fail, ok};
 use crate::wad::Lump;
 use crate::wad::archive::Wad;
 use crate::wad::diff::{Diff, LumpDiff, MapDiff, Mode, Status, Summary, diff};
+use crate::wad::name::LumpName;
+use crate::wad::optimize::{self, Action, Operation, Plan};
 
 /// Default side `a`: the layers without the working archive.
 const DEFAULT_A: &str = "base";
@@ -273,6 +282,123 @@ fn diff_run(state: &AppState, args: &DiffWadsParams) -> Result<DiffReport, Cyber
     ))
 }
 
+/// Arguments for [`Cyberdemon::optimize_wad`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct OptimizeWadParams {
+    /// The cleanup operations to run; left out, every safe one runs
+    /// (`identical_overrides`, `empty_namespaces`, `shadowed_duplicates`,
+    /// `unused_pnames`). `unused_patches` and `unused_flats` only run when
+    /// named.
+    #[serde(default)]
+    operations: Option<Vec<String>>,
+    /// Report the plan without changing anything (the default); `false`
+    /// applies the whole plan as one undoable `optimize_wad` edit.
+    #[serde(default = "default_dry_run")]
+    dry_run: bool,
+}
+
+/// The `dry_run` default: plan only.
+const fn default_dry_run() -> bool {
+    true
+}
+
+/// Structured result of [`Cyberdemon::optimize_wad`].
+#[derive(Debug, Serialize)]
+struct OptimizeReport {
+    /// Whether the plan was reported only.
+    dry_run: bool,
+    /// Every planned removal (and, with `dry_run: false`, every done one):
+    /// `{operation, lump | map, index, bytes}`.
+    actions: Vec<Action>,
+    /// Payload bytes freed.
+    bytes_saved: usize,
+    /// Working directory entries removed.
+    lumps_removed: usize,
+    /// Duplicated `ZDoom`-concatenated names the plan kept whole.
+    kept_concatenated: Vec<LumpName>,
+}
+
+/// The operations [`Cyberdemon::optimize_wad`] runs: the parsed,
+/// de-duplicated list in canonical order, or [`Operation::SAFE`] when the
+/// parameter is absent.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming every valid operation for any
+/// unknown name.
+fn parse_operations(list: Option<&[String]>) -> Result<Vec<Operation>, CyberError> {
+    let Some(requested) = list else {
+        return Ok(Operation::SAFE.to_vec());
+    };
+    let mut chosen = BTreeSet::new();
+    for text in requested {
+        let Some(operation) = Operation::parse(text) else {
+            return Err(CyberError::InvalidArgument(format!(
+                "unknown operation {text:?}: choose from {}, or leave operations out for the \
+                 safe default",
+                Operation::names(&Operation::ALL)
+            )));
+        };
+        chosen.insert(operation);
+    }
+    Ok(chosen.into_iter().collect())
+}
+
+/// The report for one finished plan.
+fn optimize_report(dry_run: bool, plan: Plan) -> OptimizeReport {
+    OptimizeReport {
+        dry_run,
+        bytes_saved: plan.bytes_saved(),
+        lumps_removed: plan.lumps_removed(),
+        kept_concatenated: plan.kept_concatenated,
+        actions: plan.actions,
+    }
+}
+
+/// Run one `optimize_wad` call end to end: plan over the three session
+/// snapshots, then apply unless the call is a dry run and the plan is not
+/// empty. An empty plan records no history entry.
+///
+/// # Errors
+///
+/// [`parse_operations`]' error, [`optimize::plan`]' `format_error` for
+/// snapshots the requested sweeps cannot read, and whatever
+/// [`Session::edit`] reports.
+fn optimize_run(state: &AppState, args: &OptimizeWadParams) -> Result<OptimizeReport, CyberError> {
+    let operations = parse_operations(args.operations.as_deref())?;
+    state.with_session(|session| {
+        let working = session.working().lumps.clone();
+        let base = owned(session.base_lumps());
+        let merged = owned(session.merged());
+        let inputs = optimize::Inputs {
+            working: &working,
+            base: &base,
+            merged: &merged,
+        };
+        let plan = optimize::plan(&inputs, &operations)?;
+        if args.dry_run || plan.is_empty() {
+            return Ok(optimize_report(args.dry_run, plan));
+        }
+        commit_plan(session, &plan)?;
+        Ok(optimize_report(false, plan))
+    })
+}
+
+/// Commits a non-empty `plan` to `session`'s working archive as one
+/// undoable edit labelled `optimize_wad`.
+///
+/// # Errors
+///
+/// [`CyberError::Internal`] never in practice: the [`optimize::apply`]
+/// step cannot fail, so only [`Session::edit`]'s lock-poisoning could.
+fn commit_plan(session: &mut Session, plan: &Plan) -> Result<(), CyberError> {
+    session.edit("optimize_wad", |wad| {
+        optimize::apply(wad, plan);
+        Ok(())
+    })?;
+    Ok(())
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -292,17 +418,52 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Plans and optionally applies a cleanup of the working archive.
+    #[tool(
+        description = "Finds and removes redundant lumps in the working archive. operations (default: all safe ones; unused_patches and unused_flats are opt-in): \"identical_overrides\" drops working lumps and whole map blocks byte-identical to what the base layers provide for the same namespace and name; \"empty_namespaces\" drops adjacent start/end marker pairs with nothing between them, inner markers that end up empty included; \"shadowed_duplicates\" keeps only the last working copy of each duplicated global name (ZDoom-family names that ports concatenate - DECORATE, ZSCRIPT, SNDINFO, MAPINFO, ZMAPINFO, UMAPINFO, LANGUAGE, GLDEFS, ANIMDEFS, KEYCONF, TEXTURES, DECALDEF, LOCKDEFS, SBARINFO, TERRAIN, SNDSEQ, LOADACS, MENUDEF, FONTDEFS, CVARINFO, MODELDEF, VOXELDEF, TEAMINFO, X11R6RGB, DEHACKED - are never pruned and come back in kept_concatenated); \"unused_pnames\" trims the working PNAMES to the entries the merged TEXTURE1/TEXTURE2 reference and renumbers those lumps (skipped when the working archive has no PNAMES or its PNAMES is itself a redundant copy); \"unused_patches\" drops working patches-namespace lumps no texture references by PNAMES name; \"unused_flats\" drops working flats-namespace lumps no sector of any merged map uses - other PWADs loaded later in a game can still use them, which is why this sweep is opt-in. dry_run (default true) only reports; false applies the whole plan as ONE undoable edit labelled optimize_wad (an empty plan records nothing). Returns {dry_run, actions: [{operation, lump | map, index, bytes}], bytes_saved, lumps_removed, kept_concatenated}: index is the working directory position (the map header's for a whole block, the PNAMES-list position for a trimmed name) and bytes the payload freed; repeated runs converge. Unknown operation names are invalid_argument; malformed PNAMES/TEXTUREx lumps or undecodable merged maps fail the plan with format_error."
+    )]
+    fn optimize_wad(
+        &self,
+        Parameters(args): Parameters<OptimizeWadParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match optimize_run(self.state(), &args) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
-        DEFAULT_A, DEFAULT_B, DiffWadsParams, MAX_LIMIT, Mode, Prepared, Side, diff_run,
-        parse_limit, parse_side, pick_mode, plan, shows,
+        Action, DEFAULT_A, DEFAULT_B, DiffWadsParams, MAX_LIMIT, Mode, OptimizeWadParams, Prepared,
+        Side, diff_run, optimize_run, parse_limit, parse_operations, parse_side, pick_mode, plan,
+        shows,
     };
     use crate::server::Cyberdemon;
-    use crate::session::Scope;
+    use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::wad::Status;
+    use crate::wad::archive::{Lump, Wad, WadKind};
+    use crate::wad::name::LumpName;
+    use crate::wad::optimize::Operation;
+
+    /// A valid parsed name for test data.
+    fn name(text: &str) -> LumpName {
+        LumpName::parse(text).expect("test names are valid")
+    }
+
+    /// A lump named `text` carrying `body`.
+    fn carrying(text: &str, body: &str) -> Lump {
+        Lump::new(name(text), body.as_bytes().to_vec())
+    }
+
+    /// An empty marker lump named `text`.
+    fn marker(text: &str) -> Lump {
+        Lump::marker(name(text))
+    }
 
     /// `DiffWadsParams` diffing `base` against side `b`.
     fn args_for_b(b: &str) -> DiffWadsParams {
@@ -322,6 +483,51 @@ mod tests {
             include_unchanged: false,
             limit,
         }
+    }
+
+    /// `OptimizeWadParams` running `operations` with the given dry-run flag.
+    fn optimize_args(operations: Option<&[&str]>, dry_run: bool) -> OptimizeWadParams {
+        OptimizeWadParams {
+            operations: operations.map(|list| list.iter().map(|text| (*text).to_owned()).collect()),
+            dry_run,
+        }
+    }
+
+    /// A session whose `IWAD` layer is overridden byte-identically by the
+    /// working archive, which also holds an empty marker pair, a shadowed
+    /// duplicate and a duplicated concatenated name.
+    fn redundant_state() -> Cyberdemon {
+        let server = Cyberdemon::new();
+        server
+            .state()
+            .with_session(|session| {
+                session.set_iwad(Layer::new(
+                    PathBuf::from("doom.wad"),
+                    LayerRole::Iwad,
+                    Wad {
+                        kind: WadKind::Iwad,
+                        lumps: vec![carrying("PLAYPAL", "base bytes")],
+                    },
+                ));
+                session.replace_working(
+                    Wad {
+                        kind: WadKind::Pwad,
+                        lumps: vec![
+                            carrying("PLAYPAL", "base bytes"),
+                            carrying("NOTE", "first"),
+                            carrying("NOTE", "last"),
+                            carrying("DECORATE", "a"),
+                            carrying("DECORATE", "b"),
+                            marker("F_START"),
+                            marker("F_END"),
+                        ],
+                    },
+                    None,
+                );
+                Ok(())
+            })
+            .expect("seeding the session works");
+        server
     }
 
     #[test]
@@ -474,5 +680,161 @@ mod tests {
         let server = Cyberdemon::new();
         let error = diff_run(server.state(), &args_for_b("layer:3")).expect_err("nothing stacked");
         assert_eq!(error.code(), "not_found", "out of range layer code");
+    }
+
+    #[test]
+    fn operations_default_to_the_safe_set_and_reject_unknown_names() {
+        let default = parse_operations(None).expect("absent means the safe set");
+        assert_eq!(default, Operation::SAFE.to_vec(), "the documented default");
+        let subset = parse_operations(Some(&[
+            "unused_flats".to_owned(),
+            "SHADOWED_DUPLICATES".to_owned(),
+            "unused_flats".to_owned(),
+        ]))
+        .expect("a valid list parses");
+        assert_eq!(
+            subset,
+            vec![Operation::ShadowedDuplicates, Operation::UnusedFlats],
+            "case-insensitive, de-duplicated, canonical order"
+        );
+        let error = parse_operations(Some(&["nope".to_owned()])).expect_err("no such operation");
+        assert_eq!(error.code(), "invalid_argument", "unknown operation code");
+        let message = error.to_string();
+        assert!(
+            message.contains("identical_overrides") && message.contains("unused_flats"),
+            "the message lists the choices: {message}"
+        );
+    }
+
+    #[test]
+    fn a_fresh_session_optimizes_to_nothing_and_defaults_to_dry_run() {
+        let server = Cyberdemon::new();
+        let args: OptimizeWadParams =
+            serde_json::from_value(serde_json::json!({})).expect("the empty call parses");
+        assert!(args.dry_run, "dry_run defaults to true");
+        let report = optimize_run(server.state(), &args).expect("empty plan");
+        assert!(report.dry_run, "the report echoes the mode");
+        assert!(report.actions.is_empty(), "nothing to drop");
+        assert_eq!(report.bytes_saved, 0, "no bytes");
+        assert_eq!(report.lumps_removed, 0, "no lumps");
+        assert!(
+            report.kept_concatenated.is_empty(),
+            "and nothing concatenated"
+        );
+    }
+
+    #[test]
+    fn optimize_run_refuses_an_unknown_operation_before_touching_the_session() {
+        let server = redundant_state();
+        let error = optimize_run(
+            server.state(),
+            &optimize_args(Some(&["unused_things"]), true),
+        )
+        .expect_err("no such sweep");
+        assert_eq!(error.code(), "invalid_argument", "unknown operation code");
+        let depth = server
+            .state()
+            .with_session(|session| Ok(session.undo_depth()))
+            .expect("the lock is free");
+        assert_eq!(depth, 0, "the refused call changed nothing");
+    }
+
+    #[test]
+    fn a_dry_run_lists_every_redundant_entry_and_changes_nothing() {
+        let server = redundant_state();
+        let report = optimize_run(server.state(), &optimize_args(None, true)).expect("a plan");
+        assert!(report.dry_run, "reported only");
+        let names: Vec<String> = report.actions.iter().map(Action::name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "PLAYPAL".to_owned(),
+                "F_START".to_owned(),
+                "F_END".to_owned(),
+                "NOTE".to_owned(),
+            ],
+            "the identical override, the empty pair and the shadowed copy, in sweep order"
+        );
+        assert_eq!(report.lumps_removed, 4, "four directory entries go");
+        assert_eq!(report.bytes_saved, 15, "PLAYPAL and the first NOTE's bytes");
+        assert_eq!(
+            report.kept_concatenated,
+            vec![name("DECORATE")],
+            "the DECORATE pair stays whole and is reported"
+        );
+        let (len, depth) = server
+            .state()
+            .with_session(|session| Ok((session.working().len(), session.undo_depth())))
+            .expect("the lock is free");
+        assert_eq!(len, 7, "a dry run leaves the archive as it was");
+        assert_eq!(depth, 0, "and records no history");
+    }
+
+    #[test]
+    fn applying_a_plan_is_one_undoable_step_and_undo_restores_everything() {
+        let server = redundant_state();
+        let report = optimize_run(server.state(), &optimize_args(None, false)).expect("a run");
+        assert!(!report.dry_run, "the report says what ran");
+        let state = server.state();
+        let (len, names, depth, labels) = state
+            .with_session(|session| {
+                Ok((
+                    session.working().len(),
+                    session
+                        .working()
+                        .lumps
+                        .iter()
+                        .map(|lump| lump.name.to_string())
+                        .collect::<Vec<_>>(),
+                    session.undo_depth(),
+                    session
+                        .undo_labels()
+                        .first()
+                        .copied()
+                        .unwrap_or_default()
+                        .to_owned(),
+                ))
+            })
+            .expect("the lock is free");
+        assert_eq!(
+            names,
+            vec![
+                "NOTE".to_owned(),
+                "DECORATE".to_owned(),
+                "DECORATE".to_owned()
+            ],
+            "the last NOTE and the concatenated pair stay"
+        );
+        assert_eq!(len, 3, "and the four redundant entries are gone");
+        assert_eq!(depth, 1, "the whole run is one step");
+        assert_eq!(labels, "optimize_wad", "labelled as documented");
+        let undone = state
+            .with_session(Session::undo)
+            .expect("one undo steps back");
+        assert_eq!(undone, "optimize_wad", "the undo names the step");
+        let restored = state
+            .with_session(|session| Ok(session.working().len()))
+            .expect("the lock is free");
+        assert_eq!(restored, 7, "and brings the archive back whole");
+    }
+
+    #[test]
+    fn an_applied_empty_plan_records_no_history() {
+        let server = redundant_state();
+        let report = optimize_run(server.state(), &optimize_args(Some(&[]), false)).expect("run");
+        assert!(report.actions.is_empty(), "no operation, no action");
+        let depth = server
+            .state()
+            .with_session(|session| Ok(session.undo_depth()))
+            .expect("the lock is free");
+        assert_eq!(depth, 0, "nothing was recorded");
+    }
+
+    #[test]
+    fn a_second_apply_converges_after_the_first_emptied_a_region() {
+        let server = redundant_state();
+        optimize_run(server.state(), &optimize_args(None, false)).expect("the first run");
+        let report = optimize_run(server.state(), &optimize_args(None, false)).expect("the second");
+        assert!(report.actions.is_empty(), "the plan was already complete");
     }
 }

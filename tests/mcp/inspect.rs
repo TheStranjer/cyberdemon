@@ -9,7 +9,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, not_a_wad, pwad};
+    use crate::fixtures::{iwad, not_a_wad, pwad, pwad_redundant};
     use crate::support::{call, call_err, connect};
 
     /// A connected client for one test.
@@ -413,6 +413,253 @@ mod tests {
             report["summary"]["unchanged"],
             json!(0_i64),
             "an empty tally"
+        );
+    }
+
+    /// The `(operation, lump | map)` pairs of an `optimize_wad` report.
+    fn action_rows(report: &Value) -> Vec<(String, String)> {
+        report["actions"]
+            .as_array()
+            .expect("actions is an array")
+            .iter()
+            .map(|row| {
+                let target = row["lump"]
+                    .as_str()
+                    .or_else(|| row["map"].as_str())
+                    .expect("a row names its lump or map");
+                (
+                    row["operation"]
+                        .as_str()
+                        .expect("rows carry an operation")
+                        .to_owned(),
+                    target.to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// The working archive's lump count from `get_session_info`.
+    async fn working_lumps(client: &Client) -> u64 {
+        let session = call(client, "get_session_info", Value::Null).await;
+        session["working"]["lumps"].as_u64().expect("a count")
+    }
+
+    /// The `add_lump` arguments for one redundant-lump step of the fixture
+    /// session: a text payload when given and the duplicate rule.
+    fn add_lump_args(text_name: &str, body: Option<&str>, allow: bool) -> Value {
+        let mut args = json!({ "name": text_name });
+        if let Some(payload) = body {
+            args["text"] = json!(payload);
+        }
+        if allow {
+            args["allow_duplicate"] = json!(true);
+        }
+        args
+    }
+
+    /// Load the `IWAD` fixture, fold the redundant `PWAD` into the working
+    /// archive and add the duplicates and empty markers the sweeps find:
+    /// two shadowed `NOTE`s, a concatenated `DECORATE` pair and an empty
+    /// `F_START`/`F_END` pair, on top of the identical `PLAYPAL`/`ENDOOM`.
+    async fn load_redundant_session(client: &Client, dir: &Path) {
+        load_iwad(client, dir).await;
+        let extra = pwad_redundant(dir);
+        call(
+            client,
+            "merge_wad",
+            json!({ "path": extra.display().to_string(), "mode": "working" }),
+        )
+        .await;
+        for (name, text, allow) in [
+            ("NOTE", Some("first"), false),
+            ("NOTE", Some("last"), true),
+            ("DECORATE", Some("alpha"), false),
+            ("DECORATE", Some("beta"), true),
+            ("F_START", None, false),
+            ("F_END", None, false),
+        ] {
+            call(client, "add_lump", add_lump_args(name, text, allow)).await;
+        }
+    }
+
+    /// Assert the dry-run plan of the redundant session: five directory
+    /// entries go, the `DECORATE` pair stays, nothing changed yet.
+    fn assert_redundant_plan(report: &Value) {
+        assert_eq!(report["dry_run"], json!(true), "the default reports only");
+        assert_eq!(
+            action_rows(report),
+            vec![
+                ("identical_overrides".to_owned(), "PLAYPAL".to_owned()),
+                ("identical_overrides".to_owned(), "ENDOOM".to_owned()),
+                ("empty_namespaces".to_owned(), "F_START".to_owned()),
+                ("empty_namespaces".to_owned(), "F_END".to_owned()),
+                ("shadowed_duplicates".to_owned(), "NOTE".to_owned()),
+            ],
+            "the identical copies, the empty pair and the shadowed note, in sweep order"
+        );
+        assert_eq!(report["lumps_removed"], json!(5_i64), "five entries go");
+        assert_eq!(
+            report["bytes_saved"],
+            json!(10752 + 4000 + 5_i64),
+            "PLAYPAL, ENDOOM and the first NOTE's bytes"
+        );
+        assert_eq!(
+            report["kept_concatenated"],
+            json!(["DECORATE"]),
+            "the concatenated pair is kept and reported"
+        );
+    }
+
+    #[tokio::test]
+    async fn optimize_wad_dry_run_lists_the_redundant_lumps_and_changes_nothing() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        load_redundant_session(&client, dir.path()).await;
+        let before = call(&client, "get_session_info", Value::Null).await;
+        let report = call(&client, "optimize_wad", json!({})).await;
+        assert_redundant_plan(&report);
+        assert_eq!(
+            working_lumps(&client).await,
+            8,
+            "the working archive is untouched"
+        );
+        let after = call(&client, "get_session_info", Value::Null).await;
+        assert_eq!(
+            after["undo"], before["undo"],
+            "and a dry run records nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn optimize_wad_applies_the_plan_as_one_undoable_step() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        load_redundant_session(&client, dir.path()).await;
+        let report = call(&client, "optimize_wad", json!({ "dry_run": false })).await;
+        assert_eq!(report["dry_run"], json!(false), "the run applied");
+        assert_eq!(report["lumps_removed"], json!(5_i64), "five entries went");
+        assert_eq!(working_lumps(&client).await, 3, "three stay");
+        let (code, _) = call_err(
+            &client,
+            "get_lump",
+            json!({ "name": "PLAYPAL", "scope": "working", "format": "info" }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "the identical override is gone");
+        let session = call(&client, "get_session_info", Value::Null).await;
+        let labels = session["undo"].as_array().expect("an undo list");
+        assert_eq!(
+            labels.last().expect("at least one label"),
+            &json!("optimize_wad"),
+            "the whole run is one labelled step on top"
+        );
+        let undone = call(&client, "undo", json!({ "steps": 1_u64 })).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["optimize_wad"]),
+            "undo steps back over it"
+        );
+        assert_eq!(working_lumps(&client).await, 8, "and restores the archive");
+    }
+
+    #[tokio::test]
+    async fn optimize_wad_refuses_unknown_operations_with_the_choices() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        load_iwad(&client, dir.path()).await;
+        let (code, message) = call_err(
+            &client,
+            "optimize_wad",
+            json!({ "operations": ["unused_things"] }),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "unknown operation code");
+        assert!(
+            message.contains("identical_overrides") && message.contains("unused_flats"),
+            "the message lists every operation: {message}"
+        );
+        assert_eq!(working_lumps(&client).await, 0, "and nothing ran");
+    }
+
+    #[tokio::test]
+    async fn optimize_wad_reports_a_format_error_for_a_malformed_pnames() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let base = iwad(dir.path());
+        let client = connect().await;
+        call(&client, "open_wad", path_arg(&base)).await;
+        call(
+            &client,
+            "replace_lump",
+            json!({ "name": "PNAMES", "hex": "05 00 00 00" }),
+        )
+        .await;
+        let (code, message) = call_err(
+            &client,
+            "optimize_wad",
+            json!({ "operations": ["unused_pnames"], "dry_run": false }),
+        )
+        .await;
+        assert_eq!(code, "format_error", "malformed PNAMES code");
+        assert!(
+            message.contains("PNAMES"),
+            "the message says what is unreadable: {message}"
+        );
+        assert_eq!(working_lumps(&client).await, 33, "the archive is untouched");
+    }
+
+    #[tokio::test]
+    async fn save_wad_dedupe_writes_a_smaller_file_that_reopens_identical() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        call(
+            &client,
+            "add_lump",
+            json!({ "name": "DUPA", "text": "samebytes" }),
+        )
+        .await;
+        call(
+            &client,
+            "add_lump",
+            json!({ "name": "DUPB", "text": "samebytes" }),
+        )
+        .await;
+        let plain = dir.path().join("plain.wad");
+        let shared = dir.path().join("dedup.wad");
+        let plain_report = call(&client, "save_wad", path_arg(&plain)).await;
+        assert_eq!(
+            plain_report["bytes_saved_by_dedupe"],
+            json!(0_i64),
+            "a plain save shares nothing and reports zero"
+        );
+        let mut args = path_arg(&shared);
+        args["dedupe"] = json!(true);
+        let dedup_report = call(&client, "save_wad", args).await;
+        let plain_bytes = plain_report["bytes"].as_u64().expect("a count");
+        let shared_bytes = dedup_report["bytes"].as_u64().expect("a count");
+        assert!(
+            shared_bytes < plain_bytes,
+            "the deduped file is smaller: {shared_bytes} vs {plain_bytes}"
+        );
+        assert_eq!(
+            dedup_report["bytes_saved_by_dedupe"],
+            json!(9_i64),
+            "one twin's payload"
+        );
+        assert_eq!(
+            dedup_report["lumps"], plain_report["lumps"],
+            "the directory still names every lump"
+        );
+        let plain_wad = cyberdemon::wad::Wad::read_file(&plain).expect("the plain file parses");
+        let shared_wad = cyberdemon::wad::Wad::read_file(&shared).expect("the deduped file parses");
+        assert_eq!(
+            shared_wad.lumps, plain_wad.lumps,
+            "shared offsets re-open as the identical lumps"
+        );
+        assert_eq!(
+            std::fs::read(&shared).expect("the file").len(),
+            usize::try_from(shared_bytes).expect("a small file"),
+            "bytes match the file"
         );
     }
 }

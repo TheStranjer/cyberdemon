@@ -1,5 +1,16 @@
-//! Multi-kind geometry editing: `delete_geometry` (see the `edit_geometry`
-//! router methods on [`crate::server::Cyberdemon`]).
+//! Multi-kind geometry editing: `delete_geometry` and
+//! `transform_selection` (see the `edit_geometry` router methods on
+//! [`crate::server::Cyberdemon`]).
+//!
+//! `transform_selection` moves a mixed selection of vertices and things
+//! through one scale/rotate/translate. The math and the selection
+//! expansion live in the pure engine [`crate::wad::map::transform`]; this
+//! file parses the request, expands the selection against the map as it
+//! now stands (so a bad index or an empty selection is refused before
+//! anything is copied in) and runs the whole transform inside exactly one
+//! [`crate::session::Session::edit_map`] step, which rolls the map back
+//! untouched when the engine refuses an out-of-range coordinate or a
+//! collapsing linedef.
 //!
 //! One call deletes a mixed selection of vertices, linedefs, sidedefs,
 //! sectors and things with full reference cleanup. The file is a thin
@@ -40,6 +51,10 @@ use crate::tools::{fail, ok};
 use crate::wad::map::Map;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
+};
+use crate::wad::map::transform::{
+    Operations, Point, Rotation, Scale, SelectionRequest, TransformReport, apply_transform,
+    expand_selection,
 };
 use crate::wad::name::LumpName;
 
@@ -266,6 +281,205 @@ fn dry_delete(
     })
 }
 
+/// The `selection` parameter of [`Cyberdemon::transform_selection`]: the
+/// index lists and expansion switches, before anything is resolved
+/// against a map.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SelectionInput {
+    /// Indices into the map's vertex block to move.
+    #[serde(default)]
+    vertices: Option<Vec<usize>>,
+    /// Indices into the map's linedef block; each drags in its two
+    /// endpoints.
+    #[serde(default)]
+    linedefs: Option<Vec<usize>>,
+    /// Indices into the map's sector block; each drags in the vertices of
+    /// all its boundary linedefs and, by default, its things.
+    #[serde(default)]
+    sectors: Option<Vec<usize>>,
+    /// Indices into the map's thing block to move.
+    #[serde(default)]
+    things: Option<Vec<usize>>,
+    /// Select every vertex and thing of the map; with it set the index
+    /// lists add nothing (default `false`).
+    #[serde(default)]
+    all: Option<bool>,
+    /// Whether things standing in a listed sector join the selection,
+    /// judged before anything moves (default `true`).
+    #[serde(default)]
+    include_things_in_sectors: Option<bool>,
+}
+
+/// The `scale` parameter: the exact fraction `num / den` (both above
+/// zero), e.g. 3/2 for 150%.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ScaleInput {
+    /// Numerator; above zero.
+    num: i32,
+    /// Denominator; above zero.
+    den: i32,
+}
+
+/// The `rotate` parameter: exactly one of the two fields,
+/// counter-clockwise.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RotateInput {
+    /// Whole degrees; give exactly one of this and `millidegrees`.
+    #[serde(default)]
+    degrees: Option<i64>,
+    /// Thousandths of a degree; give exactly one of this and `degrees`.
+    /// Thing facings take the nearest whole degree.
+    #[serde(default)]
+    millidegrees: Option<i64>,
+}
+
+/// The `translate` parameter: the whole-unit shift applied last.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TranslateInput {
+    /// `X` shift in map units.
+    dx: i32,
+    /// `Y` shift in map units.
+    dy: i32,
+}
+
+/// A bare `{x, y}` point parameter (`origin`).
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PointInput {
+    /// `X` in map units.
+    x: i32,
+    /// `Y` in map units.
+    y: i32,
+}
+
+impl From<&PointInput> for Point {
+    #[inline]
+    fn from(input: &PointInput) -> Self {
+        Self {
+            x: i64::from(input.x),
+            y: i64::from(input.y),
+        }
+    }
+}
+
+/// Arguments for [`Cyberdemon::transform_selection`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TransformSelectionParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// Which elements to move (expanded into vertices and things).
+    selection: SelectionInput,
+    /// Exact-fraction scaling about the origin, applied first.
+    #[serde(default)]
+    scale: Option<ScaleInput>,
+    /// Counter-clockwise rotation about the origin, applied second.
+    #[serde(default)]
+    rotate: Option<RotateInput>,
+    /// Whole-unit shift, applied last.
+    #[serde(default)]
+    translate: Option<TranslateInput>,
+    /// The pivot of `scale` and `rotate`; defaults to the centre of the
+    /// selection's bounding box, rounded to nearest.
+    #[serde(default)]
+    origin: Option<PointInput>,
+}
+
+/// Structured result of [`Cyberdemon::transform_selection`].
+#[derive(Serialize)]
+struct TransformOutcome {
+    /// What the transform engine did.
+    #[serde(flatten)]
+    transform: TransformReport,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The `selection` parameter as the engine's expansion request, defaults
+/// applied.
+fn selection_request(input: &SelectionInput) -> SelectionRequest {
+    SelectionRequest {
+        vertices: input.vertices.clone().unwrap_or_default(),
+        linedefs: input.linedefs.clone().unwrap_or_default(),
+        sectors: input.sectors.clone().unwrap_or_default(),
+        things: input.things.clone().unwrap_or_default(),
+        all: input.all.unwrap_or(false),
+        include_things_in_sectors: input.include_things_in_sectors.unwrap_or(true),
+    }
+}
+
+/// The `rotate` parameter as a rotation; it must carry exactly one of
+/// `degrees` and `millidegrees`.
+fn rotation_of(input: &RotateInput) -> Result<Rotation, CyberError> {
+    match (input.degrees, input.millidegrees) {
+        (Some(_), Some(_)) | (None, None) => Err(CyberError::InvalidArgument(
+            "rotate needs exactly one of degrees and millidegrees; pass one number and drop \
+             the other"
+                .to_owned(),
+        )),
+        (Some(degrees), None) => Ok(Rotation::from_degrees(degrees)),
+        (None, Some(millidegrees)) => Ok(Rotation::from_millidegrees(millidegrees)),
+    }
+}
+
+/// The call's operations, validated and refusing the empty set: a
+/// transform with nothing to do is never what the caller meant.
+fn operations_of(args: &TransformSelectionParams) -> Result<Operations, CyberError> {
+    let ops = Operations {
+        scale: args
+            .scale
+            .as_ref()
+            .map(|input| Scale::new(input.num, input.den))
+            .transpose()?,
+        rotation: args.rotate.as_ref().map(rotation_of).transpose()?,
+        translate: args.translate.as_ref().map(|input| Point {
+            x: i64::from(input.dx),
+            y: i64::from(input.dy),
+        }),
+    };
+    if ops.is_empty() {
+        return Err(CyberError::InvalidArgument(
+            "no operation: pass at least one of scale, rotate and translate".to_owned(),
+        ));
+    }
+    Ok(ops)
+}
+
+/// `n` and its noun, singular at one and plural otherwise (`"vertex"`
+/// pluralises irregularly, so both forms are given).
+fn counted(n: usize, singular: &str, plural: &str) -> String {
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
+/// `transform_selection`'s work: validate the operations, expand the
+/// selection against the map as it now stands (an early, side-effect-free
+/// refusal of bad indices and empty expansions), then run the whole
+/// transform as one undoable step.
+fn transform_run(
+    session: &mut Session,
+    args: &TransformSelectionParams,
+) -> Result<TransformOutcome, CyberError> {
+    let ops = operations_of(args)?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let request = selection_request(&args.selection);
+    let pivot = args.origin.as_ref().map(Point::from);
+    let expanded = expand_selection(&current_map(session, name)?, &request)?;
+    let label = format!(
+        "transform {} and {}",
+        counted(expanded.vertices.len(), "vertex", "vertices"),
+        counted(expanded.things.len(), "thing", "things")
+    );
+    let (transform, report) = session.edit_map(name, &label, |map| {
+        let moved = expand_selection(map, &request)?;
+        apply_transform(map, &moved, &ops, pivot)
+    })?;
+    Ok(TransformOutcome {
+        transform,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// Hand an outcome to the client as the documented structured result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -296,6 +510,20 @@ impl Cyberdemon {
                 .with_session(|session| delete_run(session, &args)),
         )
     }
+
+    /// Moves a selection of vertices and things with one transform.
+    #[tool(
+        description = "Moves a selection of a map's vertices and things through one scale/rotate/translate transform in a single undoable edit; the math is integer-only and rounded to nearest. map defaults to the active map (set_active_map, else the merged view's only map). selection picks what moves: {vertices, linedefs, sectors, things: 0-based index arrays into that map's blocks; all: true selects every vertex and thing; include_things_in_sectors (default true) also selects the things standing in a listed sector, judged before anything moves}. Expansion: a listed linedef drags in its two endpoints; a listed sector drags in every vertex of its boundary linedefs (its things with the include switch). The expanded selection must hold at least one vertex or thing or the call fails invalid_argument; an index the map does not hold fails not_found naming the kind and index; nothing changes in either case. Give at least one operation (else invalid_argument); they all run in this one call, in the order scale, rotate, translate: p' = origin + rotate(scale(p - origin)) then + translate. scale is {num, den}, an exact positive fraction (both above 0; 3/2 grows to 150%, 1/2 shrinks to 50%); positions only. rotate is {degrees} or {millidegrees} (exactly one of the two, or invalid_argument), counter-clockwise; selected things' angle additionally gains the rotation in whole degrees, normalised into 0..=359. translate is {dx, dy} in map units. origin {x, y} is the pivot of scale and rotate; the default is the centre of the selection's bounding box, rounded to nearest. Validation refuses the whole call with nothing changed: a coordinate the map's format cannot store (i16 for the binary Doom/Hexen formats; run convert_map_format to UDMF for bigger maps, or lower scale/translate or move origin) fails invalid_argument, and a linedef that would become zero-length fails conflict naming it. Vertices landing on an unselected vertex are allowed and listed as coincident_vertices pairs [moved, unmoved]; nothing is merged. Moving any vertex invalidates the node lumps (run build_nodes before playing the map in vanilla Doom); moving things alone keeps them. Returns {origin, vertices_selected, things_selected, vertices_moved, things_moved, coincident_vertices, map, nodes_invalidated, copied_to_working}. See skill/reference/geometry.md."
+    )]
+    fn transform_selection(
+        &self,
+        Parameters(args): Parameters<TransformSelectionParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| transform_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -303,12 +531,15 @@ mod tests {
     use serde_json::{Value, from_str};
 
     use super::{
-        CascadeOptions, DeleteGeometryParams, Map, RemovalReport, cascade_options, check_selection,
-        delete_in_place, has_selection, removal_size, seed_removal, selected_lists,
-        untouched_fragment,
+        CascadeOptions, DeleteGeometryParams, Map, RemovalReport, RotateInput,
+        TransformSelectionParams, cascade_options, check_selection, counted, delete_in_place,
+        has_selection, operations_of, removal_size, rotation_of, seed_removal, selected_lists,
+        selection_request, untouched_fragment,
     };
     use crate::error::CyberError;
+    use crate::fixed::Angle;
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::transform::{Point, Scale};
     use crate::wad::map::{Linedef, Sector, Sidedef, Thing, Vertex};
     use crate::wad::name::LumpName;
     use alloc::collections::BTreeSet;
@@ -642,6 +873,138 @@ mod tests {
             fragment.get("copied_to_working").and_then(Value::as_bool),
             Some(false),
             "nothing was copied"
+        );
+    }
+
+    /// A transform request parsed from `json`.
+    fn transform_args(json: &str) -> TransformSelectionParams {
+        from_str(json).expect("test transform requests parse")
+    }
+
+    /// The `rotate` object of a parsed request.
+    fn rotate_of(json: &str) -> RotateInput {
+        transform_args(&format!(r#"{{"selection": {{}}, "rotate": {json}}}"#))
+            .rotate
+            .expect("the rotate object parses")
+    }
+
+    #[test]
+    fn a_transform_needs_at_least_one_operation() {
+        let none = operations_of(&transform_args(r#"{"selection": {"all": true}}"#))
+            .expect_err("no operation does nothing");
+        assert_eq!(code(&none), "invalid_argument", "no-operation code");
+        assert!(
+            none.to_string().contains("scale, rotate and translate"),
+            "the message names the three: {none}"
+        );
+        let ops = operations_of(&transform_args(
+            r#"{"selection": {"all": true}, "translate": {"dx": 0, "dy": 0}}"#,
+        ))
+        .expect("even the zero shift is an operation");
+        assert_eq!(
+            ops.translate,
+            Some(Point { x: 0, y: 0 }),
+            "the shift reaches the operations"
+        );
+    }
+
+    #[test]
+    fn operations_validate_scale_fractions_and_rotate_shapes() {
+        let bad_scale =
+            transform_args(r#"{"selection": {"all": true}, "scale": {"num": 0, "den": 2}}"#);
+        let zero = operations_of(&bad_scale).expect_err("0/2 is no factor");
+        assert_eq!(code(&zero), "invalid_argument", "zero numerator code");
+        let both = operations_of(&transform_args(
+            r#"{"selection": {"all": true},
+                "rotate": {"degrees": 90, "millidegrees": 90000}}"#,
+        ))
+        .expect_err("two rotation numbers are ambiguous");
+        assert_eq!(code(&both), "invalid_argument", "two-of-one code");
+        assert!(
+            both.to_string().contains("exactly one"),
+            "the message says what to pass: {both}"
+        );
+        let combined = operations_of(&transform_args(
+            r#"{"selection": {"all": true},
+                "scale": {"num": 3, "den": 2},
+                "rotate": {"millidegrees": 45500},
+                "translate": {"dx": 8, "dy": -8}}"#,
+        ))
+        .expect("all three operations parse");
+        assert_eq!(
+            combined.scale,
+            Some(Scale { num: 3, den: 2 }),
+            "the fraction widens intact"
+        );
+        assert_eq!(
+            combined.rotation.map(|rotation| rotation.degrees),
+            Some(46),
+            "thing facings take the rounded degree"
+        );
+        assert_eq!(
+            combined.translate,
+            Some(Point { x: 8, y: -8 }),
+            "the shift comes through"
+        );
+    }
+
+    #[test]
+    fn rotation_reads_its_one_number() {
+        let degrees = rotation_of(&rotate_of(r#"{"degrees": -90}"#)).expect("whole degrees");
+        assert_eq!(degrees.degrees, -90, "the facing delta passes through");
+        assert_eq!(degrees.angle, Angle::from_degrees(-90), "and the angle");
+        let fine = rotation_of(&rotate_of(r#"{"millidegrees": 45000}"#)).expect("millidegrees");
+        assert_eq!(
+            fine.angle,
+            Angle::from_millidegrees(45_000),
+            "the exact angle"
+        );
+        assert!(
+            rotation_of(&rotate_of("{}")).is_err(),
+            "neither number refuses"
+        );
+    }
+
+    #[test]
+    fn the_step_label_counts_each_kind_by_its_own_form() {
+        assert_eq!(
+            counted(0, "vertex", "vertices"),
+            "0 vertices",
+            "zero is plural"
+        );
+        assert_eq!(counted(1, "thing", "things"), "1 thing", "one is singular");
+        assert_eq!(
+            counted(4, "vertex", "vertices"),
+            "4 vertices",
+            "irregular plural"
+        );
+    }
+
+    #[test]
+    fn the_selection_defaults_to_including_sector_things() {
+        let bare = selection_request(&transform_args(r#"{"selection": {}}"#).selection);
+        assert!(!bare.all, "all is off by default");
+        assert!(
+            bare.include_things_in_sectors,
+            "the include switch is on by default"
+        );
+        assert!(
+            bare.vertices.is_empty()
+                && bare.linedefs.is_empty()
+                && bare.sectors.is_empty()
+                && bare.things.is_empty(),
+            "absent lists stay empty"
+        );
+        let switched = transform_args(
+            r#"{"selection": {"sectors": [1], "things": [0], "all": false,
+                "include_things_in_sectors": false}}"#,
+        );
+        let request = selection_request(&switched.selection);
+        assert_eq!(request.sectors, vec![1_usize], "the lists pass through");
+        assert_eq!(request.things, vec![0_usize]);
+        assert!(
+            !request.include_things_in_sectors,
+            "the switch reaches the request"
         );
     }
 }

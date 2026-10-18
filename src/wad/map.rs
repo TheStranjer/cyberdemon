@@ -26,7 +26,9 @@
 //! and `join_linedefs`. [`validate`] runs the pure map-health checks
 //! behind `validate_map`: reference integrity, line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
-//! rows.
+//! rows. [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
+//! translation table (rows, flags and lookups) reserved for cross-family
+//! conversion.
 
 pub mod blockmap;
 pub mod build_blockmap;
@@ -45,6 +47,7 @@ pub mod remove;
 pub mod stats;
 pub mod udmf_map;
 pub mod validate;
+pub mod xlat;
 
 mod common;
 

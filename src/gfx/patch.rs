@@ -3,12 +3,14 @@
 //! convention for images taller than `254` rows.
 //!
 //! [`decode_patch`] reads lump bytes into a [`Patch`] (two drawing offsets
-//! plus an [`IndexedImage`]); [`encode_patch`] writes one back. A patch is
-//! stored column-first: a header, then `width` column offsets counted from
-//! the lump start, then per column a series of posts. Each post is
-//! `topdelta u8`, `length u8`, one unused pad byte, `length` palette
-//! indices and one unused pad byte; a `topdelta` of `0xFF` ends the
-//! column. Pixels no post covers stay transparent.
+//! plus an [`IndexedImage`]); [`encode_patch`] writes one back.
+//! [`set_patch_offsets`] rewrites just the two drawing-offset fields of
+//! existing patch bytes, leaving the encoded columns byte-identical. A
+//! patch is stored column-first: a header, then `width` column offsets
+//! counted from the lump start, then per column a series of posts. Each
+//! post is `topdelta u8`, `length u8`, one unused pad byte, `length`
+//! palette indices and one unused pad byte; a `topdelta` of `0xFF` ends
+//! the column. Pixels no post covers stay transparent.
 //!
 //! `DeePsea` tall patches: a `topdelta` at or below the previous post's
 //! actual top row is relative to that row, so rows beyond the plain
@@ -28,6 +30,11 @@ const MAX_PATCH_DIM: u32 = 4_096_u32;
 const PATCH_HEADER_LEN: usize = 8_usize;
 /// Bytes in one column-offset table entry.
 const COLUMN_OFFSET_LEN: usize = 4_usize;
+/// Byte offset of the header's first drawing-offset field (`left_offset`;
+/// `top_offset` follows at `6`).
+const OFFSET_FIELDS_START: usize = 4_usize;
+/// Bytes in the header's two drawing-offset fields together.
+const OFFSET_FIELDS_LEN: usize = 4_usize;
 /// The `topdelta` byte that ends a column.
 const COLUMN_END: u8 = 0xFF_u8;
 /// Longest pixel run one post can carry.
@@ -93,6 +100,71 @@ pub fn patch_header(bytes: &[u8]) -> Option<PatchHeader> {
 fn fits_patch_dim(value: u16) -> bool {
     let pixels = u32::from(value);
     pixels != 0 && pixels <= MAX_PATCH_DIM
+}
+
+/// Rewrites the two drawing-offset fields of an existing `Doom` patch
+/// lump: the `i16` pair at byte offsets `4` and `6`. Width, height, the
+/// column offset table and every column body stay byte-identical.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when `bytes` answer no [`patch_header`]
+/// or an offset is outside the `-32768..=32767` range the header stores.
+#[inline]
+pub fn set_patch_offsets(bytes: &[u8], left: i32, top: i32) -> Result<Vec<u8>, CyberError> {
+    if patch_header(bytes).is_none() {
+        return Err(no_patch_header(bytes));
+    }
+    let (head, tail) = split_offsets(bytes)?;
+    let mut out = Writer::with_capacity(bytes.len());
+    out.put_bytes(head);
+    out.put_i16(header_offset("left_offset", left)?);
+    out.put_i16(header_offset("top_offset", top)?);
+    out.put_bytes(tail);
+    Ok(out.into_inner())
+}
+
+/// The header bytes before the two offset fields and the bytes after the
+/// header, as [`split_offsets`] reports them.
+type OffsetSplit<'data> = (&'data [u8], &'data [u8]);
+
+/// The bytes before the two offset fields and everything after the header.
+/// [`patch_header`] has already ruled out shorter bytes when this runs.
+///
+/// # Errors
+///
+/// [`no_patch_header`]' [`CyberError::InvalidArgument`] for bytes that do
+/// not hold a full header.
+fn split_offsets(bytes: &[u8]) -> Result<OffsetSplit<'_>, CyberError> {
+    let (head, rest) = bytes
+        .split_at_checked(OFFSET_FIELDS_START)
+        .ok_or_else(|| no_patch_header(bytes))?;
+    let (_, tail) = rest
+        .split_at_checked(OFFSET_FIELDS_LEN)
+        .ok_or_else(|| no_patch_header(bytes))?;
+    Ok((head, tail))
+}
+
+/// The refusal for bytes that carry no [`patch_header`] to rewrite.
+fn no_patch_header(bytes: &[u8]) -> CyberError {
+    CyberError::InvalidArgument(format!(
+        "{} bytes carry no Doom patch header to rewrite: pass the bytes of a Doom patch lump",
+        bytes.len()
+    ))
+}
+
+/// One drawing offset narrowed to the `i16` a patch header stores.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the field and the stored range.
+fn header_offset(field: &str, value: i32) -> Result<i16, CyberError> {
+    i16::try_from(value).map_err(|error| {
+        CyberError::InvalidArgument(format!(
+            "{field} {value} does not fit the -32768..=32767 range a patch header stores: \
+             {error}; pass a smaller offset"
+        ))
+    })
 }
 
 /// Decodes a `Doom` patch lump, accepting `DeePsea` tall patches.
@@ -436,7 +508,7 @@ fn write_filler(out: &mut Writer, last_top: &mut u32) {
 mod tests {
     use super::{
         COLUMN_OFFSET_LEN, Patch, decode_column, decode_patch, encode_patch, paint_post,
-        patch_header,
+        patch_header, set_patch_offsets,
     };
     use crate::error::CyberError;
     use crate::gfx::image::IndexedImage;
@@ -792,6 +864,51 @@ mod tests {
             "width past the cap"
         );
         assert!(patch_header(b"png?").is_none(), "four bytes of text");
+    }
+
+    #[test]
+    fn set_patch_offsets_rewrites_only_the_two_header_fields() {
+        let column0 = [post(0, &[5, 7]), vec![0xFF_u8]].concat();
+        let bytes = patch_lump(2, 3, (-3, -2), &[&column0, &[0xFF_u8]]);
+        let out = set_patch_offsets(&bytes, 5, -7).expect("a real header takes new offsets");
+        assert_eq!(&out[..4], &bytes[..4], "width and height stay");
+        assert_ne!(&out[4..8], &bytes[4..8], "the offset pair changed");
+        assert_eq!(
+            &out[8..],
+            &bytes[8..],
+            "table and bodies stay byte-identical"
+        );
+        let header = patch_header(&out).expect("the rewrite is still a header");
+        assert_eq!(
+            (header.left_offset, header.top_offset),
+            (5, -7),
+            "new offsets"
+        );
+        assert_eq!((header.width, header.height), (2, 3), "old dimensions");
+        let before = decode_patch(&bytes).expect("the original decodes");
+        let after = decode_patch(&out).expect("the rewrite round-trips through decode");
+        assert_eq!(after.image, before.image, "the picture is untouched");
+    }
+
+    #[test]
+    fn set_patch_offsets_refuses_non_patches_and_offsets_past_the_header() {
+        let short = set_patch_offsets(b"png?", 1, 1).expect_err("four bytes are no header");
+        assert_eq!(short.code(), "invalid_argument", "non-patch code");
+        let zero = set_patch_offsets(&patch_lump(0, 1, (0, 0), &[]), 1, 1)
+            .expect_err("zero width answers no header");
+        assert_eq!(zero.code(), "invalid_argument", "corrupt header code");
+        let bytes = patch_lump(1, 1, (0, 0), &[&[0xFF_u8]]);
+        let far = set_patch_offsets(&bytes, 40000, 0).expect_err("past the i16 range");
+        assert_eq!(far.code(), "invalid_argument", "far left code");
+        assert!(
+            far.to_string().contains("left_offset 40000 does not fit"),
+            "the message names the field: {far}"
+        );
+        let low = set_patch_offsets(&bytes, 0, -40000).expect_err("past the i16 range");
+        assert!(
+            low.to_string().contains("top_offset -40000"),
+            "the other field is named too: {low}"
+        );
     }
 
     #[test]

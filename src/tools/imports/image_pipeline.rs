@@ -10,7 +10,9 @@
 //! [`decode_image`], quantization, [`chosen_name`]) plus [`put_lump`], the
 //! matching insertion helper: it drops the finished bytes into a namespace
 //! of the working archive through [`crate::tools::lumps::place`], refusing
-//! a same-name twin unless `replace` overwrites it in place.
+//! a same-name twin unless `replace` overwrites it in place. Everything here
+//! is visible to the whole tools tree, so the patch lifecycle tools share
+//! the same pipeline, [`put_lump`] and [`chosen_name`].
 
 use alloc::sync::Arc;
 
@@ -35,7 +37,7 @@ use crate::wad::classify::{Namespace, analyze};
 use crate::wad::name::LumpName;
 
 /// Default `PLAYPAL` entry image imports quantize against.
-pub(super) const DEFAULT_PALETTE: usize = 0_usize;
+pub(in crate::tools) const DEFAULT_PALETTE: usize = 0_usize;
 /// Default colour-key when `transparency.mode` is `"color"` without a
 /// `color`: the cyan Doom sprite sources are keyed against.
 const DEFAULT_KEY_COLOR: &str = "#00FFFF";
@@ -43,29 +45,29 @@ const DEFAULT_KEY_COLOR: &str = "#00FFFF";
 /// omitted.
 const DEFAULT_TRANSPARENCY_MODE: &str = "alpha";
 
-/// The image-import parameters every import tool shares, flattened into
-/// each tool's arguments.
+/// The image-import parameters shared with the patch lifecycle tools,
+/// flattened into each tool's arguments.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct ImageImportParams {
+pub(in crate::tools) struct ImageImportParams {
     /// File to import: absolute path, `file://` URI, `http(s)://` URL or
     /// this server's asset/upload URL.
-    pub(super) source: String,
+    pub(in crate::tools) source: String,
     /// Lump name to store under: 1 to 8 printable `ASCII` characters,
     /// uppercased. Defaults to the fetched file name's stem uppercased and
     /// trimmed to 8 characters; when nothing usable remains the call fails
     /// asking for this name.
     #[serde(default)]
-    pub(super) name: Option<String>,
+    pub(in crate::tools) name: Option<String>,
     /// Which `PLAYPAL` entry the picture is quantized against (default 0:
     /// the normal palette). Past the entries the lump holds is `not_found`,
     /// as is a session with no `PLAYPAL`.
     #[serde(default)]
-    pub(super) palette: Option<usize>,
+    pub(in crate::tools) palette: Option<usize>,
     /// Which source pixels become transparent (see
     /// `skill/reference/imports.md`); default `{mode: "alpha", threshold:
     /// 128}`.
     #[serde(default)]
-    pub(super) transparency: Option<TransparencyParams>,
+    pub(in crate::tools) transparency: Option<TransparencyParams>,
     /// Drawing offsets: `"zero"`, `"grab"`, `"center"`, `"center_bottom"`
     /// or an explicit `{"x": n, "y": n}` pair. Omitted means `"grab"` when
     /// the `PNG` carries a `grAb` chunk, else the tool's own default.
@@ -74,34 +76,34 @@ pub(super) struct ImageImportParams {
     /// shifts the image left and the top offset is the distance from the
     /// image's top edge to the origin.
     #[serde(default)]
-    pub(super) offsets: Option<OffsetsParam>,
+    pub(in crate::tools) offsets: Option<OffsetsParam>,
     /// Overwrite a same-name lump of the working archive in place (default
     /// `false`; without it such a lump is `already_exists`).
     #[serde(default)]
-    pub(super) replace: bool,
+    pub(in crate::tools) replace: bool,
 }
 
 /// The `transparency` object of [`ImageImportParams`].
 #[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct TransparencyParams {
+pub(in crate::tools) struct TransparencyParams {
     /// Which rule drops pixels: `"alpha"` (default, alpha below
     /// `threshold`), `"color"` (the pixel equals `color` exactly) or
     /// `"none"` (everything stays opaque).
     #[serde(default)]
-    pub(super) mode: Option<String>,
+    pub(in crate::tools) mode: Option<String>,
     /// Exclusive alpha cutoff for `"alpha"` mode (default 128).
     #[serde(default)]
-    pub(super) threshold: Option<u8>,
+    pub(in crate::tools) threshold: Option<u8>,
     /// The key colour for `"color"` mode, as `#RRGGBB` or `#RRGGBBAA`
     /// (default `"#00FFFF"`, `Doom` cyan).
     #[serde(default)]
-    pub(super) color: Option<String>,
+    pub(in crate::tools) color: Option<String>,
 }
 
 /// The `offsets` wire form: a preset word or an explicit pair.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(untagged)]
-pub(super) enum OffsetsParam {
+pub(in crate::tools) enum OffsetsParam {
     /// One of `"zero"`, `"grab"`, `"center"` or `"center_bottom"`.
     Preset(
         /// The preset name, matched exactly.
@@ -118,7 +120,7 @@ pub(super) enum OffsetsParam {
 
 /// A validated `offsets` choice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum OffsetMode {
+pub(in crate::tools) enum OffsetMode {
     /// `(0, 0)`.
     Zero,
     /// A `PNG`'s `grAb` chunk, falling back to the tool's default when the
@@ -139,7 +141,7 @@ pub(super) enum OffsetMode {
 
 /// An import tool's own offset default, used when no `grAb` chunk answers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum OffsetDefault {
+pub(in crate::tools) enum OffsetDefault {
     /// `(0, 0)`: what wall patches are stored with.
     Zero,
     /// `(width/2, height/2)`.
@@ -150,19 +152,19 @@ pub(super) enum OffsetDefault {
 
 /// The validated shared parameters of one image import.
 #[derive(Debug)]
-pub(super) struct ParsedImport {
+pub(in crate::tools) struct ParsedImport {
     /// The `source` to fetch.
-    pub(super) source: String,
+    pub(in crate::tools) source: String,
     /// The explicit lump name, `None` when it is derived from the file.
-    pub(super) name: Option<LumpName>,
+    pub(in crate::tools) name: Option<LumpName>,
     /// `PLAYPAL` entry to quantize against.
-    pub(super) palette: usize,
+    pub(in crate::tools) palette: usize,
     /// Which pixels count as transparent.
-    pub(super) transparency: Transparency,
+    pub(in crate::tools) transparency: Transparency,
     /// The requested offsets, `None` for the grab-or-default rule.
-    pub(super) offsets: Option<OffsetMode>,
+    pub(in crate::tools) offsets: Option<OffsetMode>,
     /// Whether a same-name working lump may be overwritten.
-    pub(super) replace: bool,
+    pub(in crate::tools) replace: bool,
 }
 
 /// Validate the flattened shared parameters.
@@ -172,7 +174,9 @@ pub(super) struct ParsedImport {
 /// [`CyberError::InvalidArgument`] for a name that does not parse, an
 /// unknown `transparency.mode`, a bad `color` hex or an unknown `offsets`
 /// preset.
-pub(super) fn parse_import(params: &ImageImportParams) -> Result<ParsedImport, CyberError> {
+pub(in crate::tools) fn parse_import(
+    params: &ImageImportParams,
+) -> Result<ParsedImport, CyberError> {
     Ok(ParsedImport {
         source: params.source.clone(),
         name: params.name.as_deref().map(LumpName::parse).transpose()?,
@@ -252,33 +256,33 @@ fn parse_offset_preset(text: &str) -> Result<OffsetMode, CyberError> {
 /// The shared report one finished import answers with, flattened into each
 /// tool's result.
 #[derive(Debug, Serialize)]
-pub(super) struct ImportReport {
+pub(in crate::tools) struct ImportReport {
     /// Patch width in pixels.
-    pub(super) width: u32,
+    pub(in crate::tools) width: u32,
     /// Patch height in pixels.
-    pub(super) height: u32,
+    pub(in crate::tools) height: u32,
     /// Horizontal drawing offset as stored.
-    pub(super) left_offset: i32,
+    pub(in crate::tools) left_offset: i32,
     /// Vertical drawing offset as stored.
-    pub(super) top_offset: i32,
+    pub(in crate::tools) top_offset: i32,
     /// Pixels the quantization dropped.
-    pub(super) transparent_pixels: usize,
+    pub(in crate::tools) transparent_pixels: usize,
     /// Distinct colours among the opaque pixels.
-    pub(super) colors_used: usize,
+    pub(in crate::tools) colors_used: usize,
     /// Worst squared `RGB` distance from an opaque colour to its palette
     /// entry.
-    pub(super) max_color_error: i32,
+    pub(in crate::tools) max_color_error: i32,
 }
 
 /// An encoded patch ready for insertion.
 #[derive(Debug)]
-pub(super) struct Patched {
+pub(in crate::tools) struct Patched {
     /// The lump name: the explicit one or the derived one.
-    pub(super) name: LumpName,
+    pub(in crate::tools) name: LumpName,
     /// The `Doom` patch bytes to store.
-    pub(super) data: Vec<u8>,
+    pub(in crate::tools) data: Vec<u8>,
     /// The shared report fields.
-    pub(super) report: ImportReport,
+    pub(in crate::tools) report: ImportReport,
 }
 
 /// Run the shared pipeline: fetch, decode, quantize, offset and encode.
@@ -295,7 +299,7 @@ pub(super) struct Patched {
 /// outside the `i16` range a patch header stores, [`load_palette`]'
 /// [`CyberError::NotFound`] for the palette and [`encode_patch`]' errors
 /// for an image past the patch codec's limits.
-pub(super) async fn build_patch(
+pub(in crate::tools) async fn build_patch(
     state: &AppState,
     import: &ParsedImport,
     default: OffsetDefault,
@@ -344,7 +348,7 @@ pub(super) async fn build_patch(
 ///
 /// [`CyberError::InvalidArgument`] asking for `name` when nothing usable
 /// can be derived.
-pub(super) fn chosen_name(
+pub(in crate::tools) fn chosen_name(
     explicit: Option<LumpName>,
     filename: &str,
 ) -> Result<LumpName, CyberError> {
@@ -447,15 +451,15 @@ fn transparent_pixels(patch: &Patch) -> usize {
 
 /// One lump write into the working archive.
 #[derive(Debug)]
-pub(super) struct LumpWrite<'data> {
+pub(in crate::tools) struct LumpWrite<'data> {
     /// The name to insert under.
-    pub(super) name: LumpName,
+    pub(in crate::tools) name: LumpName,
     /// The payload bytes.
-    pub(super) data: &'data [u8],
+    pub(in crate::tools) data: &'data [u8],
     /// The region to place it in; `None` is the loose global area.
-    pub(super) namespace: Option<Namespace>,
+    pub(in crate::tools) namespace: Option<Namespace>,
     /// Whether a same-name working lump may be overwritten in place.
-    pub(super) replace: bool,
+    pub(in crate::tools) replace: bool,
 }
 
 /// Insert (or replace) one lump of the working archive, reporting its
@@ -471,7 +475,10 @@ pub(super) struct LumpWrite<'data> {
 /// [`CyberError::AlreadyExists`] for a same-name working lump in the same
 /// namespace when `replace` is `false`, [`place::insert`]' placement errors
 /// and [`CyberError::Internal`] for a stale overwrite index.
-pub(super) fn put_lump(wad: &mut Wad, write: &LumpWrite<'_>) -> Result<usize, CyberError> {
+pub(in crate::tools) fn put_lump(
+    wad: &mut Wad,
+    write: &LumpWrite<'_>,
+) -> Result<usize, CyberError> {
     let LumpWrite {
         name,
         data,

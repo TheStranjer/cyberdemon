@@ -271,11 +271,13 @@ src/
                   `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
                   bounding boxes, line lengths and sector adjacency),
-                  `map/draw.rs` the pure room-drawing engine behind
-                  `create_sector_from_loop` (a resolved corner loop becomes
-                  a new sector with its walls: shoelace orientation,
-                  self-crossing refusal, linedef reuse and two-sided
-                  opening, and the auto outer-sector probe),
+                  `map/overlay.rs` the pure room-drawing and void-carving
+                  engine behind `create_sector_from_loop` and `carve_void`
+                  (a polygon folded over the map through `geom::arrange`
+                  rebuilds every linedef, sidedef and vertex: T-junction
+                  and crossing splits, painted-over drops, two-sided
+                  opening, offset-preserving side copies, the
+                  `keep_interior` probe and the original-map outer side),
                   `map/ops.rs` the pure linedef-geometry engine behind
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and

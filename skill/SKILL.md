@@ -147,6 +147,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `edit_sector`            | `reference/sectors.md`  |
 | `remove_sector`          | `reference/sectors.md`  |
 | `create_sector_from_loop` | `reference/sectors.md` |
+| `carve_void`             | `reference/sectors.md`  |
 | `add_vertex`             | `reference/vertices.md` |
 | `move_vertex`            | `reference/vertices.md` |
 | `remove_vertex`          | `reference/vertices.md` |
@@ -222,7 +223,8 @@ shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`
 (an empty map block in the working archive; `copy_map` clones an existing
 one); `reference/maps.md` covers the block management tools. Draw whole
-rooms in one call with `create_sector_from_loop` (`reference/sectors.md`).
+rooms in one call with `create_sector_from_loop`, and carve solid rock out
+of the map with `carve_void` (`reference/sectors.md`).
 Editing a lump
 the `IWAD` or a resource layer owns creates an override in the working
 archive instead of failing (`replace_lump` reports it); such a lump cannot

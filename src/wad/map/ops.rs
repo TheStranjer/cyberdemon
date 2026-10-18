@@ -10,7 +10,7 @@
 //! when the anchor moves. Lengths are [`crate::fixed::hypot`] of the
 //! vertex deltas (floored to whole map units); on-segment and collinearity
 //! tests use `i128` cross and dot products. Like
-//! [`crate::wad::map::draw::create_sector_from_loop`], a refused call
+//! [`crate::wad::map::ops::split_linedef`], a refused call
 //! leaves the map untouched: every check runs before any mutation.
 
 use alloc::collections::BTreeSet;

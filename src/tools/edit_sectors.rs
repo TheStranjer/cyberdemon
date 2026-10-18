@@ -1,5 +1,6 @@
-//! Sector editing tools: `add_sector`, `edit_sector`, `remove_sector` and
-//! `create_sector_from_loop` (see the `edit_sectors` router methods on
+//! Sector editing tools: `add_sector`, `edit_sector`, `remove_sector`,
+//! `create_sector_from_loop` and `carve_void` (see the `edit_sectors`
+//! router methods on
 //! [`crate::server::Cyberdemon`]).
 //!
 //! Every call is exactly one [`crate::session::Session::edit_map`] step, so
@@ -8,12 +9,14 @@
 //! [`validate_texture_name`]) come from [`crate::tools::maps::params`];
 //! removal runs through [`crate::wad::map::remove`] and refuses the
 //! `conflict` of a sector that sidedefs still use unless `cascade` is set.
-//! `create_sector_from_loop` wraps the pure drawing engine
-//! [`crate::wad::map::draw::create_sector_from_loop`]: this module turns
-//! the wire parameters into a validated [`crate::wad::map::draw::LoopRequest`]
+//! `create_sector_from_loop` and `carve_void` wrap the pure overlay
+//! engine [`crate::wad::map::overlay::apply_overlay`]: this module turns
+//! the wire parameters into a validated
+//! [`crate::wad::map::overlay::OverlayRequest`]
 //! (sector fields checked like [`crate::session::Session::edit_map`] hands
 //! in, textures and coordinates checked for the map's format, the outer
-//! rule parsed) and reports the engine's [`crate::wad::map::draw::LoopResult`]
+//! rule parsed) and reports the engine's
+//! [`crate::wad::map::overlay::OverlayResult`]
 //! with the standard edit fragment.
 //!
 //! The geometry rule: the sector count is part of the geometry signature,
@@ -37,15 +40,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
+use crate::geom::Pt;
 use crate::server::Cyberdemon;
 use crate::session::Session;
+use crate::themes::Role;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
     IndexSelector, check_index, edit_result_fragment, validate_texture_name,
 };
+use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
-use crate::wad::map::draw::{self, LoopGeometry, LoopPoint, LoopRequest, LoopResult, OuterSector};
+use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };
@@ -183,12 +189,12 @@ struct CreateSectorFromLoopParams {
     /// active, the merged view's only map when it holds exactly one.
     #[serde(default)]
     map: Option<String>,
-    /// The loop's corners as points `{x, y}` (at least 3, implicitly
+    /// The polygon's corners as points `{x, y}` (at least 3, implicitly
     /// closed): exactly one of `points` and `vertices`.
     #[serde(default)]
     points: Option<Vec<LoopPointParam>>,
-    /// The loop's corners as existing vertex indices (at least 3): exactly
-    /// one of `points` and `vertices`.
+    /// The polygon's corners as existing vertex indices (at least 3):
+    /// exactly one of `points` and `vertices`.
     #[serde(default)]
     vertices: Option<Vec<usize>>,
     /// Floor height in map units (default `0`).
@@ -222,10 +228,32 @@ struct CreateSectorFromLoopParams {
     #[serde(default)]
     lower_texture: Option<String>,
     /// The sector across the new walls: an existing sector index, `"auto"`
-    /// (default: open onto the sector found just outside each edge), or
-    /// `"none"` (new walls stay one-sided).
+    /// (default: the sector found just outside each edge on the original
+    /// map), or `"none"` (new walls stay one-sided).
     #[serde(default)]
     outer_sector: Option<OuterSectorParam>,
+    /// Keep existing sectors that sit strictly inside the polygon (a
+    /// pillar, an inner room): only the area of the sectors the polygon's
+    /// boundary touches is repainted (default `false`: everything inside
+    /// is overwritten).
+    #[serde(default)]
+    keep_interior: bool,
+}
+
+/// Arguments for [`Cyberdemon::carve_void`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CarveVoidParams {
+    /// The map to edit; defaults like [`CreateSectorFromLoopParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// The polygon's corners as points `{x, y}` (at least 3, implicitly
+    /// closed): exactly one of `points` and `vertices`.
+    #[serde(default)]
+    points: Option<Vec<LoopPointParam>>,
+    /// The polygon's corners as existing vertex indices (at least 3):
+    /// exactly one of `points` and `vertices`.
+    #[serde(default)]
+    vertices: Option<Vec<usize>>,
 }
 
 /// One loop corner of [`Cyberdemon::create_sector_from_loop`].
@@ -317,9 +345,23 @@ struct RemoveToolReport {
 /// Structured result of [`Cyberdemon::create_sector_from_loop`].
 #[derive(Serialize)]
 struct LoopToolReport {
-    /// What the drawing engine built, inlined next to the edit fragment.
+    /// What the overlay engine built, inlined next to the edit fragment.
     #[serde(flatten)]
-    result: LoopResult,
+    result: OverlayResult,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Structured result of [`Cyberdemon::carve_void`].
+#[derive(Serialize)]
+struct CarveToolReport {
+    /// What the overlay engine built, inlined next to the fragment.
+    #[serde(flatten)]
+    result: OverlayResult,
+    /// Indices of the sectors the carve left without a single sidedef
+    /// (the same list `empty_sectors` reports; they stay in the map).
+    removed_sectors_empty: Vec<usize>,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -712,45 +754,72 @@ fn remove_run(
     })
 }
 
-/// The refusal for a call giving the loop in both forms or in neither.
+/// The refusal for a call giving the polygon in both forms or in neither.
 fn loop_form_refusal() -> CyberError {
     CyberError::InvalidArgument(
-        "create_sector_from_loop needs the loop in exactly one form: points [{x, y}, ...] \
+        "the polygon needs its corners in exactly one form: points [{x, y}, ...] \
          (at least 3 corners, implicitly closed) or vertices [index, ...] (at least 3 \
          existing vertex indices)"
             .to_owned(),
     )
 }
 
-/// The corner list the parameters give, in exactly one of the two forms,
-/// with point coordinates checked against the map's format.
+/// The polygon's corners the two optional parameters give, in exactly
+/// one of the two forms: points checked against the map's format, or
+/// existing vertex indices resolved to their coordinates.
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] when both `points` and `vertices` or
 /// neither is passed, or when a point coordinate leaves the binary `i16`
-/// range.
-fn loop_geometry(
-    args: &CreateSectorFromLoopParams,
-    format: MapFormat,
-) -> Result<LoopGeometry, CyberError> {
-    match (args.points.as_ref(), args.vertices.as_ref()) {
-        (Some(points), None) => {
-            if format != MapFormat::Udmf {
-                check_points(points)?;
-            }
-            let corners: Vec<LoopPoint> = points
-                .iter()
-                .map(|corner| LoopPoint {
-                    x: corner.x,
-                    y: corner.y,
-                })
-                .collect();
-            Ok(LoopGeometry::Points(corners))
-        }
-        (None, Some(indices)) => Ok(LoopGeometry::Vertices(indices.clone())),
+/// range; [`CyberError::NotFound`] for a vertex index the map does not
+/// hold.
+fn polygon_of(
+    points: Option<&Vec<LoopPointParam>>,
+    vertices: Option<&Vec<usize>>,
+    map: &Map,
+) -> Result<Vec<Pt>, CyberError> {
+    match (points, vertices) {
+        (Some(list), None) => points_of(map.format, list),
+        (None, Some(indices)) => vertices_of(map, indices),
         _ => Err(loop_form_refusal()),
     }
+}
+
+/// The point form: coordinates checked for the format, widened to `i64`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] through [`check_points`] when a
+/// coordinate leaves the binary `i16` range.
+fn points_of(format: MapFormat, points: &[LoopPointParam]) -> Result<Vec<Pt>, CyberError> {
+    if format != MapFormat::Udmf {
+        check_points(points)?;
+    }
+    Ok(points
+        .iter()
+        .map(|corner| (i64::from(corner.x), i64::from(corner.y)))
+        .collect())
+}
+
+/// The index form: every corner resolved to its vertex' coordinates.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] naming the first index past [`Map::vertices`].
+fn vertices_of(map: &Map, indices: &[usize]) -> Result<Vec<Pt>, CyberError> {
+    let mut corners: Vec<Pt> = Vec::with_capacity(indices.len());
+    for index in indices {
+        let vertex = map.vertices.get(*index).ok_or_else(|| {
+            CyberError::NotFound(format!(
+                "vertex {index} does not exist (map has {} vertices): pass existing \
+                 indices, or draw with points",
+                map.vertices.len()
+            ))
+        })?;
+        corners.push((i64::from(vertex.x), i64::from(vertex.y)));
+    }
+    Ok(corners)
 }
 
 /// Refuses every point corner an `i16` binary `VERTEXES` column cannot hold.
@@ -825,13 +894,13 @@ fn wall_faces(
 ///
 /// [`CyberError::InvalidArgument`] for a mode name other than `"auto"` or
 /// `"none"`.
-fn outer_sector_of(given: Option<OuterSectorParam>) -> Result<OuterSector, CyberError> {
+fn outer_sector_of(given: Option<OuterSectorParam>) -> Result<Outside, CyberError> {
     match given {
-        None => Ok(OuterSector::Auto),
-        Some(OuterSectorParam::Index(index)) => Ok(OuterSector::Sector(index)),
+        None => Ok(Outside::Original),
+        Some(OuterSectorParam::Index(index)) => Ok(Outside::Face(index)),
         Some(OuterSectorParam::Mode(text)) => match text.to_ascii_lowercase().as_str() {
-            OUTER_AUTO => Ok(OuterSector::Auto),
-            OUTER_NONE => Ok(OuterSector::OneSided),
+            OUTER_AUTO => Ok(Outside::Original),
+            OUTER_NONE => Ok(Outside::Solid),
             other => Err(CyberError::InvalidArgument(format!(
                 "outer_sector {other:?} is not a mode: pass an existing sector index, \
                  \"{OUTER_AUTO}\" to open each new wall onto the sector found outside it, \
@@ -841,26 +910,56 @@ fn outer_sector_of(given: Option<OuterSectorParam>) -> Result<OuterSector, Cyber
     }
 }
 
-/// The validated [`LoopRequest`] the parameters and the map describe.
+/// The validated [`OverlayRequest`] the parameters and the map describe.
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] for a bad loop form, an out-of-range
-/// coordinate, a sector the format cannot store or a bad texture/mode.
-fn build_request(args: &CreateSectorFromLoopParams, map: &Map) -> Result<LoopRequest, CyberError> {
+/// [`CyberError::InvalidArgument`] for a bad corner form, an out-of-range
+/// coordinate, a sector the format cannot store or a bad texture/mode;
+/// [`CyberError::NotFound`] for an unknown vertex or outer-sector index.
+fn build_request(
+    args: &CreateSectorFromLoopParams,
+    map: &Map,
+) -> Result<OverlayRequest, CyberError> {
     let (wall, upper, lower) = wall_faces(args, map.format)?;
-    Ok(LoopRequest {
-        geometry: loop_geometry(args, map.format)?,
-        sector: loop_sector(args, map.format)?,
-        wall,
-        upper,
-        lower,
-        outer: outer_sector_of(args.outer_sector.clone())?,
+    Ok(OverlayRequest {
+        polygon: polygon_of(args.points.as_ref(), args.vertices.as_ref(), map)?,
+        paint: Paint::Sector(loop_sector(args, map.format)?),
+        keep_interior: args.keep_interior,
+        textures: WallTextures { wall, upper, lower },
+        outside: outer_sector_of(args.outer_sector.clone())?,
+    })
+}
+
+/// The [`OverlayRequest`] the `carve_void` parameters and the map
+/// describe: solid paint, the theme's wall texture standing in for walls
+/// the surrounding sectors cannot dress from their own.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a bad corner form or an
+/// out-of-range coordinate; [`CyberError::NotFound`] for an unknown
+/// vertex index.
+fn build_void_request(
+    args: &CarveVoidParams,
+    map: &Map,
+    wall: &str,
+) -> Result<OverlayRequest, CyberError> {
+    Ok(OverlayRequest {
+        polygon: polygon_of(args.points.as_ref(), args.vertices.as_ref(), map)?,
+        paint: Paint::Void,
+        keep_interior: false,
+        textures: WallTextures {
+            wall: wall.to_owned(),
+            upper: wall.to_owned(),
+            lower: wall.to_owned(),
+        },
+        outside: Outside::Original,
     })
 }
 
 /// `create_sector_from_loop`'s work: resolve the map, then run the
-/// one-step drawing on it.
+/// one-step painting on it.
 fn create_run(
     session: &mut Session,
     args: &CreateSectorFromLoopParams,
@@ -869,9 +968,36 @@ fn create_run(
     let label = "create sector from loop".to_owned();
     let (result, report) = session.edit_map(name, &label, |map| {
         let request = build_request(args, map)?;
-        draw::create_sector_from_loop(map, &request)
+        overlay::apply_overlay(map, &request)
     })?;
     Ok(LoopToolReport {
+        result,
+        edit: edit_result_fragment(&report),
+    })
+}
+
+/// The wall texture a carve dresses bare sectors with: the session
+/// theme's `Wall`, else the `create_sector_from_loop` default.
+fn theme_wall(session: &Session) -> Result<String, CyberError> {
+    let themed = theme_texture(session, Role::Wall)?;
+    if themed == NO_TEXTURE {
+        return Ok(DEFAULT_WALL_TEXTURE.to_owned());
+    }
+    Ok(themed)
+}
+
+/// `carve_void`'s work: resolve the map and the theme wall, then run the
+/// one-step carving on it.
+fn carve_run(session: &mut Session, args: &CarveVoidParams) -> Result<CarveToolReport, CyberError> {
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let wall = theme_wall(session)?;
+    let label = "carve void".to_owned();
+    let (result, report) = session.edit_map(name, &label, |map| {
+        let request = build_void_request(args, map, &wall)?;
+        overlay::apply_overlay(map, &request)
+    })?;
+    Ok(CarveToolReport {
+        removed_sectors_empty: result.empty_sectors.clone(),
         result,
         edit: edit_result_fragment(&report),
     })
@@ -935,7 +1061,7 @@ impl Cyberdemon {
 
     /// Draws a closed corner loop as one new sector with its walls.
     #[tool(
-        description = "Draws a closed loop of corners as one new sector with its boundary walls, in a single undoable edit: the main draw-a-room tool. The loop comes in exactly one form (both or neither is invalid_argument): points: [{x, y}, ...] (at least 3 corners, implicitly closed - a trailing repeat of the first point is dropped; a vertex already sitting at exactly these coordinates is reused, the rest are created) or vertices: [i, ...] (at least 3 existing vertex indices). Sector fields match add_sector and validate like it: floor_height (0), ceiling_height (128), floor_flat (FLOOR4_8), ceiling_flat (CEIL3_5), light (160), special (0), tag (0). Textures: wall_texture (default STARTAN3) dresses the middle face of new one-sided walls; upper_texture and lower_texture (each defaulting to wall_texture) dress new two-sided transitions on both sides (\"-\" is allowed for a wall texture, unlike a flat). On binary maps point coordinates must fit i16 and texture names 8 characters (invalid_argument outside; UDMF is wider). The ring is walked clockwise so every front side faces into the room: counter-clockwise corners are reversed for you. Degenerate loops are invalid_argument: a repeated corner, zero area (collinear corners) or a self-intersecting ring; unknown vertex indices or an unknown outer_sector index are not_found. Existing linedefs along the loop are reused, never duplicated: a line pointing the same way as the edge has its front side pointed at the new sector (a front side is created when the line had none); a line pointing the opposite way is taken over from its back side, and a line without a back opens into two-sided (two-sided bit 4 set, blocking bit 1 cleared, the front side's middle texture moved onto its free upper and lower faces, the new back face bare). outer_sector decides what brand-new walls face outside: an existing sector index turns every new edge two-sided against it (upper/lower dressed on both sides, middles empty); \"auto\" (the default) probes two map units left of each edge midpoint and opens onto the sector found there, so a room drawn inside another becomes a platform with the surrounding room across its walls while edges along the void stay one-sided; \"none\" keeps every new wall a blocking single line. The edit grows the sector list and the geometry, so nodes are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {sector: the new sector's index, vertices_created, linedefs_created, linedefs_reused, sidedefs_created, two_sided (the loop lines this call left two-sided: ones it opened backwards and new ones given an outer back side), map, nodes_invalidated, copied_to_working}."
+        description = "Draws a closed loop of corners as one new sector with its boundary walls, in a single undoable edit: the main draw-a-room tool. Every wall meeting is handled by the geometry engine: the new room's edges split existing walls at T-junctions and crossings, painted-over walls vanish, and no two linedefs are ever left crossing or overlapping. The loop comes in exactly one form (both or neither is invalid_argument): points: [{x, y}, ...] (at least 3 corners, implicitly closed; a vertex already sitting at exactly these coordinates is reused, the rest are created) or vertices: [i, ...] (at least 3 existing vertex indices). Sector fields match add_sector and validate like it: floor_height (0), ceiling_height (128), floor_flat (FLOOR4_8), ceiling_flat (CEIL3_5), light (160), special (0), tag (0). Textures: wall_texture (default STARTAN3) dresses the middle face of new one-sided walls; upper_texture and lower_texture (each defaulting to wall_texture) dress a new two-sided face where the neighbour's ceiling (upper) or floor (lower) differs (\"-\" is allowed for a wall texture, unlike a flat). On binary maps point coordinates must fit i16 and texture names 8 characters (invalid_argument outside; UDMF is wider). Degenerate polygons are invalid_argument: zero area (collinear corners) or a self-intersecting ring; unknown vertex or outer_sector indices are not_found. Existing walls are never duplicated or overlapped: a wall the polygon touches mid-span is split, the piece along the boundary turns two-sided against the new sector (its flags normalized: two-sided bit 4 set, blocking bit 1 cleared; a one-sided wall opening moves its middle texture onto its free upper and lower faces) and keeps its texture, special, tag and args, with x offsets shifted to hold the texture in place; special and tag therefore ride along on every piece. outer_sector decides what brand-new edges face outside: \"auto\" (the default) opens each edge onto the sector found just outside it on the original map, so a room drawn inside another becomes a platform with the surrounding room across its walls while edges along the void stay one-sided; an existing sector index turns every new edge two-sided against it; \"none\" keeps every new wall a blocking single line. keep_interior (default false) leaves existing sectors that sit strictly inside the polygon (a pillar, an inner room) untouched: only the area of the sectors the boundary touches is repainted. The whole map's linedefs, sidedefs and vertices are rebuilt from the arrangement, so their indices can move: the sector list keeps its indices and linedef_map maps every old linedef index onto the new index of its first surviving piece (null when the line vanished; removed_linedefs lists those). Sectors painted out of existence are NOT deleted: they are listed in notes and empty_sectors. The edit grows the sector list and the geometry, so nodes are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {sector: the new sector's index, vertices_created, linedefs_created (new edges), sidedefs_created (sides dressed from scratch), linedef_map, removed_linedefs, empty_sectors, notes, map, nodes_invalidated, copied_to_working}."
     )]
     fn create_sector_from_loop(
         &self,
@@ -944,6 +1070,20 @@ impl Cyberdemon {
         reported(
             self.state()
                 .with_session(|session| create_run(session, &args)),
+        )
+    }
+
+    /// Carves a polygon of solid rock into the map.
+    #[tool(
+        description = "Carves a closed polygon of solid rock out of a map in a single undoable edit: the area holds no sector, surrounding sectors get one-sided walls along it. The polygon comes in exactly one form (both or neither is invalid_argument): points: [{x, y}, ...] (at least 3 corners, implicitly closed) or vertices: [i, ...] (at least 3 existing vertex indices); on binary maps point coordinates must fit i16 (invalid_argument outside; UDMF is wider). Degenerate polygons are invalid_argument: zero area or a self-intersecting ring; unknown vertex indices are not_found. Everything the polygon covers becomes solid: linedefs and sector area inside it vanish, walls it touches mid-span are split, and the surrounding sectors gain a blocking one-sided boundary facing into the carve. Each new wall wears the sector's own middle texture from its nearest original wall; a sector without one gets the session theme's Wall texture (STARTAN3 when the theme names none). Sectors painted out of existence are NOT deleted: they are listed in notes and removed_sectors_empty for you to clean up with remove_sector cascade:true. The whole map's linedefs, sidedefs and vertices are rebuilt, so their indices can move: linedef_map maps every old linedef index onto the new index of its first surviving piece (null when the line vanished). The geometry changes, so nodes are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {sector: null, vertices_created, linedefs_created, sidedefs_created, linedef_map, removed_linedefs, empty_sectors, removed_sectors_empty, notes, map, nodes_invalidated, copied_to_working}."
+    )]
+    fn carve_void(
+        &self,
+        Parameters(args): Parameters<CarveVoidParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| carve_run(session, &args)),
         )
     }
 }
@@ -955,16 +1095,17 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddSectorParams, CreateSectorFromLoopParams, DEFAULT_CEILING_FLAT, DEFAULT_CEILING_HEIGHT,
-        DEFAULT_FLOOR_FLAT, DEFAULT_LIGHT, EditSectorParams, FIELD_MAX, HEIGHT_MAX, HEIGHT_MIN,
-        LIGHT_MAX, LIGHT_MIN, add_in_place, build_request, cascade_options, check_binary_ranges,
-        check_height_order, check_light, edit_in_place, edited_flat, edited_sector,
-        flat_or_default, has_change, join, loop_geometry, new_height, new_sector, outer_sector_of,
-        planned_edits, remove_in_place, validate_edit, validate_flat,
+        AddSectorParams, CarveVoidParams, CreateSectorFromLoopParams, DEFAULT_CEILING_FLAT,
+        DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_FLAT, DEFAULT_LIGHT, EditSectorParams, FIELD_MAX,
+        HEIGHT_MAX, HEIGHT_MIN, LIGHT_MAX, LIGHT_MIN, add_in_place, build_request,
+        build_void_request, cascade_options, check_binary_ranges, check_height_order, check_light,
+        edit_in_place, edited_flat, edited_sector, flat_or_default, has_change, join, new_height,
+        new_sector, outer_sector_of, planned_edits, polygon_of, remove_in_place, validate_edit,
+        validate_flat,
     };
     use crate::error::CyberError;
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::draw::{LoopGeometry, OuterSector};
+    use crate::wad::map::overlay::{Outside, Paint};
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
 
@@ -1444,6 +1585,11 @@ mod tests {
         from_str(json).expect("test loop requests parse")
     }
 
+    /// A carve request parsed from `json`.
+    fn carve_args(json: &str) -> CarveVoidParams {
+        from_str(json).expect("test carve requests parse")
+    }
+
     /// The three-corner points parameter list, as JSON.
     const THREE_POINTS: &str =
         r#""points": [{"x": 0, "y": 0}, {"x": 128, "y": 0}, {"x": 64, "y": 128}]"#;
@@ -1455,28 +1601,38 @@ mod tests {
 
     #[test]
     fn the_loop_needs_exactly_one_corner_form() {
-        let points = loop_geometry(&loop_args(&three_points_json("")), MapFormat::Doom)
-            .expect("the points form is accepted");
-        assert!(
-            matches!(points, LoopGeometry::Points(list) if list.len() == 3),
-            "three corners stay three"
-        );
-        let indices = loop_geometry(&loop_args(r#"{"vertices": [0, 1, 2]}"#), MapFormat::Doom)
-            .expect("the index form is accepted");
-        assert!(
-            matches!(indices, LoopGeometry::Vertices(list) if list.len() == 3),
-            "three indices stay three"
-        );
+        let map = test_map();
+        let points_args = loop_args(&three_points_json(""));
+        let points = polygon_of(
+            points_args.points.as_ref(),
+            points_args.vertices.as_ref(),
+            &map,
+        )
+        .expect("the points form is accepted");
+        assert_eq!(points.len(), 3, "three corners stay three");
+        assert_eq!(points.first().copied(), Some((0_i64, 0_i64)), "widened");
+        let indices =
+            polygon_of(None, Some(&vec![0_usize, 1, 2]), &map).expect("the index form is accepted");
+        assert_eq!(indices.len(), 3, "three indices stay three");
+        assert_eq!(indices.first().copied(), Some((0_i64, 0_i64)), "resolved");
         let both = three_points_json(", \"vertices\": [0, 1, 2]");
         for json in [
             "{}",
             r#"{"points": [], "vertices": [0, 1, 2]}"#,
             both.as_str(),
         ] {
-            let error =
-                loop_geometry(&loop_args(json), MapFormat::Doom).expect_err("one form is required");
+            let args = loop_args(json);
+            let error = polygon_of(args.points.as_ref(), args.vertices.as_ref(), &map)
+                .expect_err("one form is required");
             assert_eq!(code(&error), "invalid_argument", "form code for {json}");
         }
+        let past = polygon_of(None, Some(&vec![0_usize, 1, 99]), &map)
+            .expect_err("vertex 99 is not there");
+        assert_eq!(code(&past), "not_found", "vertex code");
+        assert!(
+            past.to_string().contains("map has 4 vertices"),
+            "the message counts the vertices: {past}"
+        );
     }
 
     #[test]
@@ -1484,43 +1640,76 @@ mod tests {
         let map = test_map();
         let args = loop_args(&three_points_json(""));
         let request = build_request(&args, &map).expect("the minimal loop builds");
-        assert_eq!(request.wall, "STARTAN3", "the wall texture default");
-        assert_eq!(request.upper, "STARTAN3", "the faces fall back to the wall");
-        assert_eq!(request.lower, "STARTAN3");
         assert_eq!(
-            request.outer,
-            OuterSector::Auto,
-            "auto is the outer default"
+            request.textures.wall, "STARTAN3",
+            "the wall texture default"
         );
         assert_eq!(
-            (
-                request.sector.floor_height,
-                request.sector.ceiling_height,
-                request.sector.light
-            ),
+            request.textures.upper, "STARTAN3",
+            "the faces fall back to the wall"
+        );
+        assert_eq!(request.textures.lower, "STARTAN3");
+        assert_eq!(
+            request.outside,
+            Outside::Original,
+            "auto is the outer default"
+        );
+        assert!(
+            !request.keep_interior,
+            "the interior is overwritten by default"
+        );
+        let Paint::Sector(sector) = request.paint else {
+            panic!("a room paints a sector");
+        };
+        assert_eq!(
+            (sector.floor_height, sector.ceiling_height, sector.light),
             (0_i32, DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT),
             "the sector defaults are add_sector's"
         );
-        assert_eq!(request.sector.floor_flat, DEFAULT_FLOOR_FLAT);
+        assert_eq!(sector.floor_flat, DEFAULT_FLOOR_FLAT);
         let full = loop_args(
             r#"{"points": [{"x": 0, "y": 0}, {"x": 128, "y": 0}, {"x": 64, "y": 128}],
                 "ceiling_height": 192, "tag": 7, "wall_texture": "brick11",
-                "upper_texture": "-", "lower_texture": "step1", "outer_sector": "none"}"#,
+                "upper_texture": "-", "lower_texture": "step1", "outer_sector": "none",
+                "keep_interior": true}"#,
         );
         let built = build_request(&full, &map).expect("the full loop builds");
-        assert_eq!(built.wall, "BRICK11", "names are uppercased");
-        assert_eq!(built.upper, "-", "a wall texture may be the dash");
-        assert_eq!(built.lower, "STEP1");
-        assert_eq!(built.outer, OuterSector::OneSided, "none closes the outer");
-        assert_eq!(built.sector.ceiling_height, 192_i32);
-        assert_eq!(built.sector.tag, 7_i32);
+        assert_eq!(built.textures.wall, "BRICK11", "names are uppercased");
+        assert_eq!(built.textures.upper, "-", "a wall texture may be the dash");
+        assert_eq!(built.textures.lower, "STEP1");
+        assert_eq!(built.outside, Outside::Solid, "none closes the outer");
+        assert!(built.keep_interior, "the flag comes through");
+        let Paint::Sector(deep) = built.paint else {
+            panic!("a room paints a sector");
+        };
+        assert_eq!(deep.ceiling_height, 192_i32);
+        assert_eq!(deep.tag, 7_i32);
         let indexed = loop_args(r#"{"vertices": [0, 1, 2, 3], "outer_sector": 1}"#);
         let explicit = build_request(&indexed, &map).expect("the indexed loop builds");
-        assert_eq!(explicit.outer, OuterSector::Sector(1), "an index is taken");
-        assert!(
-            matches!(explicit.geometry, LoopGeometry::Vertices(list) if list == vec![0_usize, 1, 2, 3]),
-            "the indices come through"
+        assert_eq!(explicit.outside, Outside::Face(1), "an index is taken");
+        assert_eq!(
+            explicit.polygon,
+            vec![(0_i64, 0_i64), (128, 0), (128, 128), (0, 128)],
+            "the indices resolve to their vertices' coordinates"
         );
+    }
+
+    #[test]
+    fn a_void_request_carves_with_the_given_wall_texture() {
+        let map = test_map();
+        let carve =
+            carve_args(r#"{"points": [{"x": 8, "y": 8}, {"x": 64, "y": 8}, {"x": 8, "y": 64}]}"#);
+        let request = build_void_request(&carve, &map, "THEME1").expect("the carve builds");
+        assert_eq!(request.paint, Paint::Void, "the interior becomes solid");
+        assert!(!request.keep_interior, "a carve never keeps the interior");
+        assert_eq!(
+            request.outside,
+            Outside::Original,
+            "neighbours stay as they are"
+        );
+        assert_eq!(request.textures.wall, "THEME1", "the theme wall stands in");
+        assert_eq!(request.textures.upper, "THEME1");
+        assert_eq!(request.polygon.len(), 3, "the triangle comes through");
     }
 
     #[test]
@@ -1543,7 +1732,7 @@ mod tests {
         }
         let mode = outer_sector_of(loop_args(r#"{"outer_sector": "AUTO"}"#).outer_sector)
             .expect("case-insensitive auto");
-        assert_eq!(mode, OuterSector::Auto, "the mode name uppercases away");
+        assert_eq!(mode, Outside::Original, "the mode name uppercases away");
         let mut udmf = test_map();
         udmf.format = MapFormat::Udmf;
         let wide = loop_args(

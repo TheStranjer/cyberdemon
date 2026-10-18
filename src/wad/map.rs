@@ -19,10 +19,11 @@
 //! questions over a decoded map: sector boundaries, point containment,
 //! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
 //! a decoded map in another layout inside one flag family, the pure step
-//! behind `convert_map_format`. [`draw`] grows a closed corner loop into
-//! one new sector with its walls, the pure room-drawing step behind
-//! `create_sector_from_loop`. [`ops`] cuts one linedef at a point and welds
-//! two collinear ones together, the pure geometry behind `split_linedef`
+//! behind `convert_map_format`. [`overlay`] paints one polygon onto a
+//! decoded map through [`arrange`](fn@crate::geom::arrange), the pure room-drawing and
+//! void-carving step behind `create_sector_from_loop` and `carve_void`.
+//! [`ops`] cuts one linedef at a point and welds two collinear ones
+//! together, the pure geometry behind `split_linedef`
 //! and `join_linedefs`. [`validate`] runs the pure map-health checks
 //! behind `validate_map`: reference integrity, line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
@@ -33,13 +34,13 @@ pub mod build_blockmap;
 pub mod build_reject;
 pub mod convert;
 pub mod doom;
-pub mod draw;
 pub mod flags;
 pub mod geometry;
 pub mod hexen;
 pub mod model;
 pub mod nodes;
 pub mod ops;
+pub mod overlay;
 pub mod reject;
 pub mod remove;
 pub mod stats;

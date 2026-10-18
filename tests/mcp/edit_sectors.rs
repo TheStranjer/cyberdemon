@@ -5,8 +5,11 @@
 //! the absolute/delta conflict and the empty request, `remove_sector` with
 //! the `conflict` on referenced sectors, the cascaded room removal verified
 //! through `get_map_summary` and `assemble_map`, `create_sector_from_loop`
-//! growing a room next to room 0 and a platform inside it, and the undo of
-//! a whole call.
+//! growing a room next to room 0, attached mid-wall (T-junction split) and
+//! as a platform inside it, with `keep_interior` and the `none` outer
+//! mode, `carve_void` punching a pillar and separating the rooms, and the
+//! undo of a whole call. Every drawing ends with `validate_map` reporting
+//! no error- or warning-severity findings.
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +132,45 @@ mod tests {
         .expect("test requests are valid JSON")
     }
 
-    /// Checks the adjacent-room drawing report.
+    /// Requires `validate_map` to report no error- or warning-severity
+    /// findings for the working `map`.
+    async fn validate_clean(client: &Client, map: &str) {
+        let report = call(
+            client,
+            "validate_map",
+            json!({"map": map, "scope": "working"}),
+        )
+        .await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(0_i32),
+            "no geometry errors: {}",
+            report["issues"]
+        );
+        assert_eq!(
+            report["counts"]["warning"],
+            json!(0_i32),
+            "no doubtful shapes: {}",
+            report["issues"]
+        );
+    }
+
+    /// The working linedefs for `map`, in order.
+    async fn working_linedefs(client: &Client, map: &str) -> Vec<Value> {
+        let report = call(
+            client,
+            "assemble_map",
+            json!({"map": map, "scope": "working", "include": ["linedefs"]}),
+        )
+        .await;
+        report["linedefs"]
+            .as_array()
+            .expect("linedefs is an array")
+            .clone()
+    }
+
+    /// Checks the adjacent-room drawing report: the whole map rebuilds
+    /// deterministically, so the new piece order is part of the contract.
     fn expect_room_report(result: &Value) {
         assert_eq!(result["map"], json!("MAP01"), "the only map is default");
         assert_eq!(result["sector"], json!(2_i32), "a third sector");
@@ -149,28 +190,26 @@ mod tests {
             "the two free corners were created, the room-0 top was reused"
         );
         assert_eq!(
-            result["linedefs_reused"],
-            json!([1_i32]),
-            "room 0's north wall served as the shared edge"
-        );
-        assert_eq!(
             result["linedefs_created"],
-            json!([7_i32, 8_i32, 9_i32]),
-            "the other three walls are new"
+            json!([2_i32, 4_i32, 7_i32]),
+            "the three boundary walls are new pieces, the fourth edge is the old wall"
         );
         assert_eq!(
             result["sidedefs_created"],
-            json!([8_i32, 9_i32, 10_i32, 11_i32])
+            json!([2_i32, 4_i32, 5_i32, 9_i32]),
+            "three new fronts and the shared wall's new room side"
         );
+        assert_eq!(result["removed_linedefs"], json!([]), "nothing vanished");
         assert_eq!(
-            result["two_sided"],
-            json!([1_i32]),
-            "only the shared line opened"
+            result["linedef_map"],
+            json!([0_i32, 3_i32, 5_i32, 1_i32, 8_i32, 9_i32, 6_i32]),
+            "old linedef index to new index of its first piece"
         );
+        assert_eq!(result["notes"], json!([]), "nobody lost their room");
     }
 
-    /// Checks the shared north wall, opened two-sided with its texture
-    /// moved onto the free faces.
+    /// Checks the shared north wall (new linedef 3), opened two-sided with
+    /// its texture moved onto the free faces.
     fn expect_shared_wall(line: &Value) {
         assert_eq!(
             line["flag_names"],
@@ -189,18 +228,22 @@ mod tests {
     }
 
     /// Checks platform edge `edge`, a two-sided transition dressed on both
-    /// faces.
+    /// faces: the hall below and the platform face each other, either way
+    /// round (the engine orients every line by its coordinates).
     fn expect_platform_edge(line: &Value, edge: usize) {
         assert_eq!(line["flag_names"], json!(["twosided"]), "line {edge}");
-        assert_eq!(line["front"]["sector"], json!(2_i32), "faces the platform");
-        assert_eq!(line["back"]["sector"], json!(0_i32), "across is the hall");
-        assert_eq!(
-            line["front"]["middle"],
-            json!("-"),
-            "the ledge face is open"
+        let (front, back) = (&line["front"], &line["back"]);
+        let faces = [front["sector"].clone(), back["sector"].clone()];
+        assert!(
+            (faces[0] == json!(2_i32) && faces[1] == json!(0_i32))
+                || (faces[0] == json!(0_i32) && faces[1] == json!(2_i32)),
+            "hall and platform either way round: {faces:?}"
         );
-        assert_eq!(line["front"]["upper"], json!("STEP1"), "and dressed");
-        assert_eq!(line["back"]["lower"], json!("STEP1"), "from both sides");
+        for side in [front, back] {
+            assert_eq!(side["middle"], json!("-"), "the ledge face is open");
+            assert_eq!(side["upper"], json!("STEP1"), "dressed above");
+            assert_eq!(side["lower"], json!("STEP1"), "and below");
+        }
     }
 
     #[tokio::test]
@@ -710,7 +753,6 @@ mod tests {
     async fn create_sector_from_loop_grows_a_room_next_to_room_zero() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        call(&client, "new_wad", json!({})).await;
         let result = call(
             &client,
             "create_sector_from_loop",
@@ -718,7 +760,7 @@ mod tests {
         )
         .await;
         expect_room_report(&result);
-        expect_shared_wall(&working_linedef(&client, "MAP01", 1).await);
+        expect_shared_wall(&working_linedef(&client, "MAP01", 3).await);
         let hall = working_sector_row(&client, "MAP01", 0).await;
         assert_eq!(
             hall["neighbors"],
@@ -749,12 +791,81 @@ mod tests {
                    "sidedefs": 12_i32, "sectors": 3_i32}),
             "the whole map grew as reported"
         );
+        validate_clean(&client, "MAP01").await;
         let undone = call(&client, "undo", json!({})).await;
         assert_eq!(
             undone["undone"],
             json!(["create sector from loop"]),
             "the drawing is one undo step"
         );
+        let summary_after = call(
+            &client,
+            "get_map_summary",
+            json!({"map": "MAP01", "scope": "merged"}),
+        )
+        .await;
+        assert_eq!(
+            summary_after["counts"]["linedefs"],
+            json!(7_i32),
+            "the base layer kept its original seven lines"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sector_from_loop_welds_to_a_wall_mid_span() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "create_sector_from_loop",
+            json!({"points": [pt(64, 256), pt(192, 256), pt(192, 384), pt(64, 384)]}),
+        )
+        .await;
+        assert_eq!(result["sector"], json!(2_i32), "a third sector");
+        assert_eq!(
+            result["linedefs_created"],
+            json!([3_i32, 5_i32, 6_i32]),
+            "the nub's three free edges are new"
+        );
+        assert_eq!(
+            result["vertices_created"],
+            json!([6_i32, 7_i32, 8_i32, 9_i32]),
+            "the two T-junction points and the two corners are new"
+        );
+        assert_eq!(
+            result["linedef_map"][1],
+            json!(2_i32),
+            "the old hall wall maps to its west piece"
+        );
+        assert_eq!(
+            result["removed_linedefs"],
+            json!([]),
+            "the split wall still lives in its pieces"
+        );
+        let lines = working_linedefs(&client, "MAP01").await;
+        let shared = lines
+            .iter()
+            .find(|line| same_ends(line, [end(64, 256), end(192, 256)]))
+            .expect("the shared piece exists");
+        expect_shared_wall(shared);
+        assert_eq!(
+            shared["front"]["x_offset"],
+            json!(64_i32),
+            "the texture slid with the piece start"
+        );
+        let hall = working_sector_row(&client, "MAP01", 0).await;
+        assert_eq!(
+            hall["neighbors"],
+            json!([1_i32, 2_i32]),
+            "the hall faces the nub across the opened piece"
+        );
+        let nub = working_sector_row(&client, "MAP01", 2).await;
+        assert_eq!(
+            nub["bbox"],
+            json!([64_i32, 256_i32, 192_i32, 384_i32]),
+            "the nub box"
+        );
+        validate_clean(&client, "MAP01").await;
     }
 
     #[tokio::test]
@@ -773,27 +884,28 @@ mod tests {
         assert_eq!(result["sector"], json!(2_i32));
         assert_eq!(
             result["linedefs_created"],
-            json!([7_i32, 8_i32, 9_i32, 10_i32]),
+            json!([3_i32, 4_i32, 5_i32, 6_i32]),
             "all four walls are new lines"
         );
         assert_eq!(
-            result["two_sided"],
-            json!([7_i32, 8_i32, 9_i32, 10_i32]),
-            "auto found room 0 across every edge"
+            result["vertices_created"],
+            json!([6_i32, 7_i32, 8_i32, 9_i32]),
+            "the four corners are new vertices"
         );
         assert_eq!(
             result["sidedefs_created"].as_array().expect("a list").len(),
             8_usize,
             "two sides per wall"
         );
-        expect_platform_edge(&working_linedef(&client, "MAP01", 7).await, 7_usize);
-        expect_platform_edge(&working_linedef(&client, "MAP01", 8).await, 8_usize);
-        expect_platform_edge(&working_linedef(&client, "MAP01", 9).await, 9_usize);
-        expect_platform_edge(&working_linedef(&client, "MAP01", 10).await, 10_usize);
+        expect_platform_edge(&working_linedef(&client, "MAP01", 3).await, 3_usize);
+        expect_platform_edge(&working_linedef(&client, "MAP01", 4).await, 4_usize);
+        expect_platform_edge(&working_linedef(&client, "MAP01", 5).await, 5_usize);
+        expect_platform_edge(&working_linedef(&client, "MAP01", 6).await, 6_usize);
         let platform = working_sector_row(&client, "MAP01", 2).await;
         assert_eq!(platform["floor_height"], json!(8_i32), "raised floor");
         assert_eq!(platform["ceiling_height"], json!(192_i32), "and ceiling");
         assert_eq!(platform["neighbors"], json!([0_i32]), "across is the hall");
+        validate_clean(&client, "MAP01").await;
     }
 
     #[tokio::test]
@@ -806,16 +918,17 @@ mod tests {
             square(r#", "outer_sector": "none""#),
         )
         .await;
-        assert!(
-            result["two_sided"].as_array().expect("a list").is_empty(),
-            "nothing opens"
+        assert_eq!(
+            result["linedefs_created"],
+            json!([3_i32, 4_i32, 5_i32, 6_i32]),
+            "the four sealed walls"
         );
         assert_eq!(
             result["sidedefs_created"].as_array().expect("a list").len(),
             4_usize,
             "one front side per wall"
         );
-        let line = working_linedef(&client, "MAP01", 7).await;
+        let line = working_linedef(&client, "MAP01", 3).await;
         assert_eq!(line["flag_names"], json!(["blocking"]), "a sealed box");
         assert_eq!(line["back"], Value::Null, "no back side");
         assert_eq!(
@@ -823,6 +936,284 @@ mod tests {
             json!("STARTAN3"),
             "the default wall texture"
         );
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn create_sector_from_loop_keep_interior_preserves_the_pillar() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        call(&client, "create_sector_from_loop", square("")).await;
+        let big = call(
+            &client,
+            "create_sector_from_loop",
+            json!({
+                "points": [pt(32, 32), pt(224, 32), pt(224, 224), pt(32, 224)],
+                "keep_interior": true, "ceiling_height": 160_i64,
+            }),
+        )
+        .await;
+        assert_eq!(big["sector"], json!(3_i32), "a fourth sector");
+        assert_eq!(
+            big["empty_sectors"],
+            json!([]),
+            "the pillar keeps its area: {}",
+            big["notes"]
+        );
+        let platform = working_sector_row(&client, "MAP01", 2).await;
+        assert_eq!(
+            platform["sidedefs"].as_array().expect("a list").len(),
+            4_usize,
+            "the pillar's four sides stand"
+        );
+        assert_eq!(
+            platform["neighbors"],
+            json!([3_i32]),
+            "boxed in by the new room"
+        );
+        let room = working_sector_row(&client, "MAP01", 3).await;
+        assert!(
+            room["neighbors"]
+                .as_array()
+                .expect("a list")
+                .contains(&json!(2_i32)),
+            "the new room wraps the pillar"
+        );
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn create_sector_from_loop_without_the_flag_overwrites_the_pillar() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        call(&client, "create_sector_from_loop", square("")).await;
+        call(
+            &client,
+            "create_sector_from_loop",
+            json!({
+                "points": [pt(32, 32), pt(224, 32), pt(224, 224), pt(32, 224)],
+                "keep_interior": true, "ceiling_height": 160_i64,
+            }),
+        )
+        .await;
+        let overwritten = call(
+            &client,
+            "create_sector_from_loop",
+            json!({
+                "points": [pt(16, 16), pt(240, 16), pt(240, 240), pt(16, 240)],
+                "ceiling_height": 192_i64,
+            }),
+        )
+        .await;
+        assert_eq!(
+            overwritten["empty_sectors"],
+            json!([2_i32, 3_i32]),
+            "without the flag the previous room and the pillar are overwritten"
+        );
+        let notes = overwritten["notes"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<&str>>();
+        assert!(
+            notes.iter().any(|note| note.contains("sector 3")),
+            "the note names it: {notes:?}"
+        );
+    }
+
+    /// Requires every linedef `created` by the last report to be a
+    /// one-sided wall wearing `middle`; `sector`, when given, is the
+    /// sector every wall must face.
+    fn expect_single_walls(lines: &[Value], created: &[Value], sector: Option<i32>, middle: &str) {
+        assert!(!created.is_empty(), "the report listed walls: {created:?}");
+        for index in created {
+            let position = usize::try_from(index.as_i64().expect("created indices are numbers"))
+                .expect("non-negative");
+            check_one_wall(
+                lines
+                    .get(position)
+                    .unwrap_or_else(|| panic!("line {position}")),
+                sector,
+                middle,
+            );
+        }
+    }
+
+    /// Checks one carved wall: blocking, one-sided, wearing `middle` and,
+    /// when given, facing `sector`.
+    fn check_one_wall(line: &Value, sector: Option<i32>, middle: &str) {
+        assert_eq!(line["flag_names"], json!(["blocking"]), "a single wall");
+        assert_eq!(line["back"], Value::Null, "no side into the rock");
+        assert_eq!(line["front"]["middle"], json!(middle), "its texture");
+        let faced = line["front"]["sector"].clone();
+        match sector {
+            Some(want) => assert_eq!(faced, json!(want), "the wall faces its sector"),
+            None => assert!(faced.is_number(), "the wall faces some sector"),
+        }
+    }
+
+    /// A grid point parameter for [`same_ends`].
+    fn end(x: i32, y: i32) -> (i32, i32) {
+        (x, y)
+    }
+
+    /// Whether `line` spans exactly the two grid points `ends`.
+    fn same_ends(line: &Value, ends: [(i32, i32); 2]) -> bool {
+        let at = |key: &str| -> Option<(i32, i32)> {
+            let point = line.get(key)?;
+            Some((
+                i32::try_from(point["x"].as_i64()?).ok()?,
+                i32::try_from(point["y"].as_i64()?).ok()?,
+            ))
+        };
+        match (at("v1"), at("v2")) {
+            (Some(first), Some(second)) => {
+                (first == ends[0] && second == ends[1]) || (first == ends[1] && second == ends[0])
+            }
+            _ => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn carve_void_punches_a_pillar_in_the_hall() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "carve_void",
+            json!({"points": [pt(96, 96), pt(160, 96), pt(160, 160), pt(96, 160)]}),
+        )
+        .await;
+        assert_eq!(result["map"], json!("MAP01"), "the default map");
+        assert_eq!(result["sector"], Value::Null, "a carve adds no sector");
+        assert_eq!(
+            result["linedefs_created"],
+            json!([3_i32, 4_i32, 5_i32, 6_i32]),
+            "the four walls around the rock"
+        );
+        assert_eq!(
+            result["vertices_created"],
+            json!([6_i32, 7_i32, 8_i32, 9_i32]),
+            "the pillar corners"
+        );
+        assert_eq!(
+            result["removed_linedefs"],
+            json!([]),
+            "no existing line died"
+        );
+        assert_eq!(
+            result["removed_sectors_empty"],
+            json!([]),
+            "the hall survives"
+        );
+        expect_single_walls(
+            &working_linedefs(&client, "MAP01").await,
+            result["linedefs_created"].as_array().expect("a list"),
+            Some(0_i32),
+            "WALL1",
+        );
+        validate_clean(&client, "MAP01").await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["carve void"]),
+            "the carve is one undo step"
+        );
+    }
+
+    #[tokio::test]
+    async fn carve_void_separates_the_two_rooms() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "carve_void",
+            json!({"points": [pt(192, 0), pt(320, 0), pt(320, 256), pt(192, 256)]}),
+        )
+        .await;
+        assert_eq!(
+            result["removed_linedefs"],
+            json!([2_i32]),
+            "the shared step line is carved away"
+        );
+        assert_eq!(
+            result["linedefs_created"],
+            json!([3_i32, 4_i32]),
+            "the trench walls, east of the hall and west of the room"
+        );
+        assert_eq!(
+            result["removed_sectors_empty"],
+            json!([]),
+            "both rooms survive"
+        );
+        let lines = working_linedefs(&client, "MAP01").await;
+        expect_single_walls(
+            &lines,
+            result["linedefs_created"].as_array().expect("a list"),
+            None,
+            "WALL1",
+        );
+        let trench = lines
+            .iter()
+            .find(|line| same_ends(line, [end(192, 0), end(192, 256)]))
+            .expect("the hall-facing trench wall");
+        assert_eq!(trench["front"]["sector"], json!(0_i32), "walls the hall");
+        let far = lines
+            .iter()
+            .find(|line| same_ends(line, [end(320, 0), end(320, 256)]))
+            .expect("the room-facing trench wall");
+        assert_eq!(far["front"]["sector"], json!(1_i32), "walls the room");
+        let hall = working_sector_row(&client, "MAP01", 0).await;
+        let room = working_sector_row(&client, "MAP01", 1).await;
+        assert!(
+            hall["neighbors"].as_array().expect("a list").is_empty(),
+            "the hall no longer touches the room: {}",
+            hall["neighbors"]
+        );
+        assert!(
+            room["neighbors"].as_array().expect("a list").is_empty(),
+            "nor back: {}",
+            room["neighbors"]
+        );
+        validate_clean(&client, "MAP01").await;
+    }
+
+    /// Carve requests the tool must reject with `invalid_argument`: a
+    /// missing or doubled form, a weak, flat or crossing ring and a
+    /// coordinate outside the binary `i16` range.
+    fn invalid_carves() -> Vec<Value> {
+        vec![
+            json!({}),
+            json!({"points": [pt(0, 0), pt(64, 64)]}),
+            json!({"points": [pt(0, 0), pt(128, 0), pt(256, 0)]}),
+            json!({"points": [pt(0, 0), pt(256, 256), pt(256, 0), pt(0, 256)]}),
+            json!({"points": [pt(0, 0), pt(40000, 0), pt(0, 256)]}),
+            json!({"points": [pt(0, 0), pt(64, 64)], "vertices": [0, 1, 2]}),
+        ]
+    }
+
+    #[tokio::test]
+    async fn carve_void_refuses_bad_polygons() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        refuse_all(&client, "carve_void", invalid_carves()).await;
+        let (code, _) = call_err(
+            &client,
+            "carve_void",
+            json!({"vertices": [0_i32, 1_i32, 99_i32]}),
+        )
+        .await;
+        assert_eq!(code, "not_found", "unknown vertex");
+        let (map_code, _) = call_err(
+            &client,
+            "carve_void",
+            json!({"map": "MAP09", "points": [pt(0, 0), pt(64, 0), pt(0, 64)]}),
+        )
+        .await;
+        assert_eq!(map_code, "not_found", "unknown map");
+        let rows = merged_sectors(&client, "MAP01").await;
+        assert_eq!(rows.len(), 2, "the refusals carved nothing");
     }
 
     /// Loop requests the tool must reject with `invalid_argument`: a
@@ -843,11 +1234,17 @@ mod tests {
         ]
     }
 
-    /// Requires the tool to refuse every one of `requests`.
-    async fn refuse_loops(client: &Client, requests: &[Value]) {
+    /// Requires `tool` to refuse every one of `requests`.
+    async fn refuse_all(client: &Client, tool: &str, requests: Vec<Value>) {
         for args in requests {
-            refuse(client, "create_sector_from_loop", args.clone()).await;
+            refuse(client, tool, args).await;
         }
+    }
+
+    /// Requires `create_sector_from_loop` to refuse every one of
+    /// `requests`.
+    async fn refuse_loops(client: &Client, requests: &[Value]) {
+        refuse_all(client, "create_sector_from_loop", requests.to_vec()).await;
     }
 
     #[tokio::test]

@@ -282,7 +282,11 @@ src/
                   (`XlatFlags`, `XlatRow`, `parse_xlat_table` and the
                   embedded-table lookups `xlat_rows`, `rows_for_doom` and
                   `rows_for_zspecial`) reserved for cross-family
-                  conversion, and `map/validate.rs` +
+                  conversion, the pure thing-flag and sector-type
+                  cross-family stages (`things_to_hexen`,
+                  `things_from_hexen`, `sectors_to_hexen`,
+                  `sectors_from_hexen` returning `FieldReport`) wired in
+                  by a later slice, and `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
                   model and the `CHECKS` pipeline (`references`,

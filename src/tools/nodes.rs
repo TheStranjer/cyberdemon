@@ -25,7 +25,12 @@
 //! split vertices kept inside the lump and `VERTEXES` untouched), or the
 //! `glBSP` v2 run through [`crate::bsp::to_gl`] — the classic lumps plus
 //! a `GL_*` block attached right after the map block, written as one
-//! undoable [`Session::edit`].
+//! undoable [`Session::edit`]. [`Cyberdemon::build_all_nodes`] runs the
+//! whole set at once — the tree, the `REJECT` and the `BLOCKMAP` (a
+//! `UDMF` block gets `ZNODES` alone unless a reject mode is asked for) —
+//! as a single [`Session::edit`], sharing the `apply_build_nodes`,
+//! [`apply_build_reject`] and [`apply_build_blockmap`] steps with the
+//! three single-lump builders.
 
 use alloc::collections::BTreeMap;
 
@@ -157,6 +162,28 @@ struct BuildNodesParams {
     /// Compress the extended lump with `zlib` behind the `ZNOD` magic
     /// (the default, `true`); `false` stores it raw behind `XNOD`. Only
     /// meaningful for variant `"extended"`.
+    #[serde(default)]
+    compress: Option<bool>,
+}
+
+/// Arguments for [`Cyberdemon::build_all_nodes`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BuildAllNodesParams {
+    /// The map to edit; defaults like [`GetNodesParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// The node layout, exactly as in [`BuildNodesParams::variant`]:
+    /// `"classic"`, `"extended"` or `"gl"`. Left out, a binary map takes
+    /// `"classic"` and a `UDMF` one `"extended"`.
+    #[serde(default)]
+    variant: Option<String>,
+    /// The reject matrix mode, as in [`BuildRejectParams::mode`]: `"zero"`
+    /// (the default) or `"components"`. A binary map always gets a fresh
+    /// `REJECT`; a `UDMF` one writes it only when this parameter is given.
+    #[serde(default)]
+    reject_mode: Option<String>,
+    /// Compress what can be compressed: an extended lump behind the `ZNOD`
+    /// magic and identical `BLOCKMAP` blocklists (the default, `true`).
     #[serde(default)]
     compress: Option<bool>,
 }
@@ -904,8 +931,9 @@ fn install_lump(map: &mut Map, name: LumpName, data: &[u8], after: &[&[u8]]) {
     map.other.insert(at, Lump::new(name, bytes));
 }
 
-/// `build_blockmap`'s edit step: compute the grid and write its lump.
-fn install_blockmap(map: &mut Map, compress: bool) -> Result<BlockmapBuild, CyberError> {
+/// The `BLOCKMAP` edit step every blockmap build shares: compute the
+/// grid from the map's current geometry and write its lump.
+fn apply_build_blockmap(map: &mut Map, compress: bool) -> Result<BlockmapBuild, CyberError> {
     let built = build_blockmap::build(map, compress)?;
     install_lump(
         map,
@@ -916,8 +944,9 @@ fn install_blockmap(map: &mut Map, compress: bool) -> Result<BlockmapBuild, Cybe
     Ok(built)
 }
 
-/// `build_reject`'s edit step: compute the matrix and write its lump.
-fn install_reject(map: &mut Map, mode: RejectMode) -> Result<RejectBuild, CyberError> {
+/// The `REJECT` edit step every reject build shares: compute the matrix
+/// in `mode` and write its lump.
+fn apply_build_reject(map: &mut Map, mode: RejectMode) -> Result<RejectBuild, CyberError> {
     let built = build_reject::build(map, mode)?;
     install_lump(
         map,
@@ -928,9 +957,9 @@ fn install_reject(map: &mut Map, mode: RejectMode) -> Result<RejectBuild, CyberE
     Ok(built)
 }
 
-/// Structured result of [`Cyberdemon::build_blockmap`].
+/// What one blockmap build wrote, before the edit fragment joins it.
 #[derive(Debug, Serialize)]
-struct BlockmapBuildReport {
+struct BlockmapBuildBody {
     /// Size of the written `BLOCKMAP` lump in bytes.
     bytes: usize,
     /// Blocks per row.
@@ -941,14 +970,36 @@ struct BlockmapBuildReport {
     origin: BlockOrigin,
     /// Whether the lump stays inside the 32767 words vanilla reads.
     vanilla_safe: bool,
+}
+
+/// Folds a finished blockmap build into its report body.
+fn blockmap_body(built: &BlockmapBuild) -> BlockmapBuildBody {
+    BlockmapBuildBody {
+        bytes: built.bytes.len(),
+        columns: built.columns,
+        rows: built.rows,
+        origin: BlockOrigin {
+            x: built.origin_x,
+            y: built.origin_y,
+        },
+        vanilla_safe: built.vanilla_safe,
+    }
+}
+
+/// Structured result of [`Cyberdemon::build_blockmap`].
+#[derive(Debug, Serialize)]
+struct BlockmapBuildReport {
+    /// What the build wrote.
+    #[serde(flatten)]
+    body: BlockmapBuildBody,
     /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
 }
 
-/// Structured result of [`Cyberdemon::build_reject`].
+/// What one reject build wrote, before the edit fragment joins it.
 #[derive(Debug, Serialize)]
-struct RejectBuildReport {
+struct RejectBuildBody {
     /// Size of the written `REJECT` lump in bytes.
     bytes: usize,
     /// The map's sector count.
@@ -957,6 +1008,24 @@ struct RejectBuildReport {
     rejected_pairs: usize,
     /// The mode that was built.
     mode: &'static str,
+}
+
+/// Folds a finished reject build and the mode it ran in into its body.
+fn reject_body(built: &RejectBuild, mode: RejectMode) -> RejectBuildBody {
+    RejectBuildBody {
+        bytes: built.bytes.len(),
+        sectors: built.sectors,
+        rejected_pairs: built.rejected_pairs,
+        mode: mode.as_str(),
+    }
+}
+
+/// Structured result of [`Cyberdemon::build_reject`].
+#[derive(Debug, Serialize)]
+struct RejectBuildReport {
+    /// What the build wrote.
+    #[serde(flatten)]
+    body: RejectBuildBody,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -970,17 +1039,10 @@ fn blockmap_build_run(
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let compress = args.compress.unwrap_or(true);
     let (built, report) = session.edit_map(name, "build blockmap", |map| {
-        install_blockmap(map, compress)
+        apply_build_blockmap(map, compress)
     })?;
     Ok(BlockmapBuildReport {
-        bytes: built.bytes.len(),
-        columns: built.columns,
-        rows: built.rows,
-        origin: BlockOrigin {
-            x: built.origin_x,
-            y: built.origin_y,
-        },
-        vanilla_safe: built.vanilla_safe,
+        body: blockmap_body(&built),
         edit: edit_result_fragment(&report),
     })
 }
@@ -993,12 +1055,9 @@ fn reject_build_run(
     let mode = parse_mode(args.mode.as_deref())?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let (built, report) =
-        session.edit_map(name, "build reject", |map| install_reject(map, mode))?;
+        session.edit_map(name, "build reject", |map| apply_build_reject(map, mode))?;
     Ok(RejectBuildReport {
-        bytes: built.bytes.len(),
-        sectors: built.sectors,
-        rejected_pairs: built.rejected_pairs,
-        mode: mode.as_str(),
+        body: reject_body(&built, mode),
         edit: edit_result_fragment(&report),
     })
 }
@@ -1012,6 +1071,19 @@ enum Variant {
     Extended,
     /// The `glBSP` `GL_*` run, written alongside the classic lumps.
     Gl,
+}
+
+/// The node part of one builder plan: the layout to write and the
+/// builder's two knobs.
+#[derive(Clone, Copy, Debug)]
+struct NodeBuildPlan {
+    /// The node layout to write.
+    variant: Variant,
+    /// Cost added per seg a candidate partition splits.
+    split_cost: i64,
+    /// Whether an extended lump is `zlib`-compressed behind the `ZNOD`
+    /// magic (`false` stores it raw behind `XNOD`).
+    compress: bool,
 }
 
 /// A node layout this build can write.
@@ -1188,6 +1260,54 @@ fn gl_lump_names(map: LumpName) -> Result<[LumpName; 6], CyberError> {
     ])
 }
 
+/// What one [`apply_build_nodes`] wrote, in whichever layout was chosen.
+enum NodesBuilt {
+    /// The vanilla run's counts.
+    Classic(ClassicBuild),
+    /// The extended lump's counts.
+    Extended(ExtendedBuild),
+    /// The classic counts plus the `GL_*` lumps waiting for the archive.
+    Gl(Box<GlBuild>),
+}
+
+impl NodesBuilt {
+    /// Fold the build's counts into the report body.
+    fn into_body(self) -> NodesBuildBody {
+        match self {
+            Self::Classic(built) => classic_body(built),
+            Self::Extended(built) => extended_body(built),
+            Self::Gl(built) => gl_body(*built),
+        }
+    }
+
+    /// The build's counts plus the standard edit fragment.
+    fn into_report(self, edit: JsonMap<String, Value>) -> NodesBuildReport {
+        NodesBuildReport {
+            body: self.into_body(),
+            edit,
+        }
+    }
+}
+
+/// The node edit step every node build shares: rebuild the tree from the
+/// map's current geometry and install the planned layout. A `gl` build's
+/// `GL_*` lumps come out with the value: the block lives outside the map,
+/// so the caller splices it into the archive with [`install_gl_run`] in
+/// the same [`Session::edit`].
+fn apply_build_nodes(map: &mut Map, plan: NodeBuildPlan) -> Result<NodesBuilt, CyberError> {
+    match plan.variant.check() {
+        Implemented::Classic => {
+            install_classic_nodes(map, plan.split_cost).map(NodesBuilt::Classic)
+        }
+        Implemented::Extended => {
+            install_extended_nodes(map, plan.split_cost, plan.compress).map(NodesBuilt::Extended)
+        }
+        Implemented::Gl => {
+            install_gl_nodes(map, plan.split_cost).map(|built| NodesBuilt::Gl(Box::new(built)))
+        }
+    }
+}
+
 /// The one edit step of a `gl` build: the classic-plus-GL map rewrite
 /// through [`map_edit::edit_in_place`], then the `GL_*` block spliced in
 /// behind the map block — one undo entry carrying both.
@@ -1199,12 +1319,34 @@ fn gl_edit_step(
     wad: &mut Wad,
     merged: &[MergedLump],
     name: LumpName,
-    split_cost: i64,
-) -> Result<(GlBuild, MapEditReport), CyberError> {
+    plan: NodeBuildPlan,
+) -> Result<(NodesBuilt, MapEditReport), CyberError> {
     let (built, report) =
-        map_edit::edit_in_place(wad, merged, name, |map| install_gl_nodes(map, split_cost))?;
-    install_gl_run(wad, name, &built.run)?;
-    Ok((built, report))
+        map_edit::edit_in_place(wad, merged, name, |map| apply_build_nodes(map, plan))?;
+    let spliced = splice_gl_run(wad, name, built)?;
+    Ok((spliced, report))
+}
+
+/// Splice the `GL_*` block of a `gl` build in behind `wad`'s map block
+/// (the run lives outside the map) and hand the build back: the node
+/// builders call this right after the map rewrite, inside the same
+/// [`Session::edit`].
+///
+/// # Errors
+///
+/// [`install_gl_run`]'s refusals.
+fn splice_gl_run(
+    wad: &mut Wad,
+    name: LumpName,
+    built: NodesBuilt,
+) -> Result<NodesBuilt, CyberError> {
+    match built {
+        NodesBuilt::Gl(gl) => {
+            install_gl_run(wad, name, &gl.run)?;
+            Ok(NodesBuilt::Gl(gl))
+        }
+        kept @ (NodesBuilt::Classic(_) | NodesBuilt::Extended(_)) => Ok(kept),
+    }
 }
 
 /// Attach `run` to `wad`'s block named `map`: an existing `GL` run is
@@ -1324,10 +1466,10 @@ fn install_extended_nodes(
     Ok(built)
 }
 
-/// Structured result of [`Cyberdemon::build_nodes`].
+/// What one nodes build wrote, before the edit fragment joins it.
 #[derive(Debug, Serialize)]
-struct NodesBuildReport {
-    /// The layout that was built: `"classic"` or `"extended"`.
+struct NodesBuildBody {
+    /// The layout that was built: `"classic"`, `"extended"` or `"gl"`.
     variant: &'static str,
     /// The magic of the lump an extended build wrote (`"ZNOD"` or
     /// `"XNOD"`); only in the extended result.
@@ -1363,14 +1505,11 @@ struct NodesBuildReport {
     gl_vertices: Option<usize>,
     /// The builder's warnings, one per subsector spanning several sectors.
     warnings: Vec<String>,
-    /// The standard edit fragment.
-    #[serde(flatten)]
-    edit: JsonMap<String, Value>,
 }
 
-/// The classic result: the build's counts plus the standard fragment.
-fn classic_built(built: ClassicBuild, edit: JsonMap<String, Value>) -> NodesBuildReport {
-    NodesBuildReport {
+/// The classic body: the build's counts.
+fn classic_body(built: ClassicBuild) -> NodesBuildBody {
+    NodesBuildBody {
         variant: "classic",
         format: None,
         bytes: None,
@@ -1383,13 +1522,12 @@ fn classic_built(built: ClassicBuild, edit: JsonMap<String, Value>) -> NodesBuil
         minisegs: None,
         gl_vertices: None,
         warnings: built.warnings,
-        edit,
     }
 }
 
-/// The extended result: the build's counts plus the standard fragment.
-fn extended_built(built: ExtendedBuild, edit: JsonMap<String, Value>) -> NodesBuildReport {
-    NodesBuildReport {
+/// The extended body: the build's counts.
+fn extended_body(built: ExtendedBuild) -> NodesBuildBody {
+    NodesBuildBody {
         variant: "extended",
         format: Some(built.format),
         bytes: Some(built.bytes),
@@ -1402,14 +1540,12 @@ fn extended_built(built: ExtendedBuild, edit: JsonMap<String, Value>) -> NodesBu
         minisegs: None,
         gl_vertices: None,
         warnings: built.warnings,
-        edit,
     }
 }
 
-/// The `gl` result: the classic counts, the `GL_*` lump counts and the
-/// standard fragment.
-fn gl_built(built: GlBuild, edit: JsonMap<String, Value>) -> NodesBuildReport {
-    NodesBuildReport {
+/// The `gl` body: the classic counts and the `GL_*` lump counts.
+fn gl_body(built: GlBuild) -> NodesBuildBody {
+    NodesBuildBody {
         variant: "gl",
         format: None,
         bytes: None,
@@ -1422,8 +1558,18 @@ fn gl_built(built: GlBuild, edit: JsonMap<String, Value>) -> NodesBuildReport {
         minisegs: Some(built.run.minisegs),
         gl_vertices: Some(built.run.new_vertices),
         warnings: built.classic.warnings,
-        edit,
     }
+}
+
+/// Structured result of [`Cyberdemon::build_nodes`].
+#[derive(Debug, Serialize)]
+struct NodesBuildReport {
+    /// What the build wrote, in the chosen layout.
+    #[serde(flatten)]
+    body: NodesBuildBody,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
 }
 
 /// `build_nodes`' work: resolve the variant, the map and the cost, run
@@ -1433,32 +1579,168 @@ fn nodes_build_run(
     args: &BuildNodesParams,
 ) -> Result<NodesBuildReport, CyberError> {
     let variant = Variant::parse(args.variant.as_deref())?;
-    let split_cost = args.split_cost.unwrap_or(DEFAULT_SPLIT_COST);
-    match variant.check() {
-        Implemented::Classic => {
-            let name = common::resolve_map_name(session, args.map.as_deref())?;
-            let (built, report) = session.edit_map(name, "build nodes", |map| {
-                install_classic_nodes(map, split_cost)
-            })?;
-            Ok(classic_built(built, edit_result_fragment(&report)))
-        }
-        Implemented::Extended => {
-            let name = common::resolve_map_name(session, args.map.as_deref())?;
-            let compress = args.compress.unwrap_or(true);
-            let (built, report) = session.edit_map(name, "build nodes", |map| {
-                install_extended_nodes(map, split_cost, compress)
-            })?;
-            Ok(extended_built(built, edit_result_fragment(&report)))
-        }
-        Implemented::Gl => {
-            let name = common::resolve_map_name(session, args.map.as_deref())?;
-            let merged = session.merged();
-            let (built, report) = session.edit("build nodes", |wad| {
-                gl_edit_step(wad, &merged, name, split_cost)
-            })?;
-            Ok(gl_built(built, edit_result_fragment(&report)))
-        }
+    let plan = NodeBuildPlan {
+        variant,
+        split_cost: args.split_cost.unwrap_or(DEFAULT_SPLIT_COST),
+        compress: args.compress.unwrap_or(true),
+    };
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let (built, report) = if variant == Variant::Gl {
+        let merged = session.merged();
+        session.edit("build nodes", |wad| gl_edit_step(wad, &merged, name, plan))?
+    } else {
+        session.edit_map(name, "build nodes", |map| apply_build_nodes(map, plan))?
+    };
+    Ok(built.into_report(edit_result_fragment(&report)))
+}
+
+/// Everything one [`Cyberdemon::build_all_nodes`] call writes: the node
+/// plan plus which of the two generated side lumps join the tree.
+#[derive(Clone, Copy, Debug)]
+struct AllPlan {
+    /// The tree build: layout, cost and compression.
+    nodes: NodeBuildPlan,
+    /// The reject matrix to write, when the map gets one.
+    reject: Option<RejectMode>,
+    /// Whether the map also gets a fresh `BLOCKMAP`.
+    blockmap: bool,
+}
+
+/// What one [`Cyberdemon::build_all_nodes`] edit wrote.
+struct AllBuilt {
+    /// The node run, in the layout the plan chose.
+    nodes: NodesBuilt,
+    /// The reject matrix body, when the plan wrote one.
+    reject: Option<RejectBuildBody>,
+    /// The blockmap body, when the plan wrote one.
+    blockmap: Option<BlockmapBuildBody>,
+}
+
+/// Resolve one `build_all_nodes` call's arguments against the map's
+/// format: the node layout (`classic` for a binary map, `extended` for a
+/// `UDMF` one when the caller does not choose), the reject mode (binary
+/// maps always write one, `UDMF` maps only when asked) and the blockmap
+/// (binary maps only, which `ZDoom` builds itself for `UDMF`).
+///
+/// # Errors
+///
+/// [`Variant::parse`]'s and [`RejectMode::parse`]'s refusals.
+fn plan_all(model: &Map, args: &BuildAllNodesParams) -> Result<AllPlan, CyberError> {
+    let udmf = model.format == MapFormat::Udmf;
+    let variant = if udmf && args.variant.is_none() {
+        Variant::Extended
+    } else {
+        Variant::parse(args.variant.as_deref())?
+    };
+    let reject = args
+        .reject_mode
+        .as_deref()
+        .map(RejectMode::parse)
+        .transpose()?
+        .or_else(|| (!udmf).then_some(RejectMode::Zero));
+    Ok(AllPlan {
+        nodes: NodeBuildPlan {
+            variant,
+            split_cost: DEFAULT_SPLIT_COST,
+            compress: args.compress.unwrap_or(true),
+        },
+        reject,
+        blockmap: !udmf,
+    })
+}
+
+/// The combined edit closure of [`Cyberdemon::build_all_nodes`]: the
+/// planned tree, then the reject and the blockmap, all on the one model
+/// so one refusal rolls everything back.
+fn apply_all(map: &mut Map, plan: &AllPlan) -> Result<AllBuilt, CyberError> {
+    let nodes = apply_build_nodes(map, plan.nodes)?;
+    let reject = plan
+        .reject
+        .map(|mode| -> Result<RejectBuildBody, CyberError> {
+            let built = apply_build_reject(map, mode)?;
+            Ok(reject_body(&built, mode))
+        })
+        .transpose()?;
+    let blockmap = plan
+        .blockmap
+        .then(|| -> Result<BlockmapBuildBody, CyberError> {
+            let built = apply_build_blockmap(map, plan.nodes.compress)?;
+            Ok(blockmap_body(&built))
+        })
+        .transpose()?;
+    Ok(AllBuilt {
+        nodes,
+        reject,
+        blockmap,
+    })
+}
+
+/// The one edit step of a `build_all_nodes` call: the tree-plus-reject-
+/// plus-blockmap rewrite through [`map_edit::edit_in_place`], then the
+/// `GL_*` block spliced in behind the map block when the plan built a
+/// `gl` run — one undo entry carrying everything.
+///
+/// # Errors
+///
+/// [`map_edit::edit_in_place`] and [`install_gl_run`]'s refusals.
+fn all_edit_step(
+    wad: &mut Wad,
+    merged: &[MergedLump],
+    name: LumpName,
+    plan: &AllPlan,
+) -> Result<(AllBuilt, MapEditReport), CyberError> {
+    let (mut built, report) =
+        map_edit::edit_in_place(wad, merged, name, |map| apply_all(map, plan))?;
+    built.nodes = splice_gl_run(wad, name, built.nodes)?;
+    Ok((built, report))
+}
+
+/// Structured result of [`Cyberdemon::build_all_nodes`].
+#[derive(Debug, Serialize)]
+struct AllNodesReport {
+    /// The node layout that was built: `"classic"`, `"extended"` or `"gl"`.
+    variant: &'static str,
+    /// What the tree build wrote, exactly the `build_nodes` keys.
+    nodes: NodesBuildBody,
+    /// What the reject build wrote; `null` when the plan wrote none.
+    reject: Option<RejectBuildBody>,
+    /// What the blockmap build wrote; `null` when the plan wrote none.
+    blockmap: Option<BlockmapBuildBody>,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The `build_all_nodes` result: the three bodies and the fragment.
+fn all_built(built: AllBuilt, edit: JsonMap<String, Value>) -> AllNodesReport {
+    let nodes = built.nodes.into_body();
+    AllNodesReport {
+        variant: nodes.variant,
+        nodes,
+        reject: built.reject,
+        blockmap: built.blockmap,
+        edit,
     }
+}
+
+/// `build_all_nodes`' work: read the map's format, plan the whole build
+/// against it and run everything as one undoable edit.
+fn all_nodes_run(
+    session: &mut Session,
+    args: &BuildAllNodesParams,
+) -> Result<AllNodesReport, CyberError> {
+    let request = Request {
+        map: args.map.clone(),
+        scope: Scope::Merged,
+        detail: Detail::Summary,
+    };
+    let (name, _dir, _block, model) = open_map(session, &request)?;
+    let plan = plan_all(&model, args)?;
+    let merged = session.merged();
+    let (built, report) = session.edit("build all nodes", |wad| {
+        all_edit_step(wad, &merged, name, &plan)
+    })?;
+    Ok(all_built(built, edit_result_fragment(&report)))
 }
 
 /// Hand a builder's outcome to the client as the documented result.
@@ -1567,6 +1849,20 @@ impl Cyberdemon {
                 .with_session(|session| nodes_build_run(session, &args)),
         )
     }
+
+    /// Rebuilds a map's whole node data (tree, reject and blockmap) in one step.
+    #[tool(
+        description = "Rebuilds a map's complete node data - the BSP tree, the REJECT matrix and the BLOCKMAP grid - in ONE undoable edit, the step to run after geometry changes instead of separate build_nodes, build_reject and build_blockmap calls. map defaults to the active map (set_active_map, else the merged view's only map). variant picks the node layout exactly as build_nodes does (\"classic\", \"extended\" or \"gl\"); left out, a binary Doom/Hexen map takes \"classic\" and a UDMF one \"extended\". reject_mode is \"zero\" (the default: clear the matrix, every sector may see every other) or \"components\", as in build_reject. compress (default true) zlib-compresses an extended lump behind the ZNOD magic and shares identical blockmap blocklists, as in build_nodes and build_blockmap. The split cost is the builder default 8; call build_nodes directly to tune it. Binary maps get all three: the tree, a fresh REJECT and a fresh BLOCKMAP. A UDMF map gets ZNODES alone - ZDoom builds the blockmap and the reject itself - unless reject_mode is passed explicitly, which then also writes a REJECT lump into the block. classic or gl on a UDMF map is invalid_argument. Everything lands in one Session::edit: one undo entry, and any refusal (an unknown map is not_found, a bad variant or mode is invalid_argument, a map with no vertices or no linedef sides is invalid_argument, a record limit is limit_exceeded) rolls the whole step back with nothing partial written. Returns {variant, nodes {the build_nodes keys minus the edit keys}, reject {bytes, sectors, rejected_pairs, mode} | null, blockmap {bytes, columns, rows, origin {x, y}, vanilla_safe} | null, map, nodes_invalidated, copied_to_working}; a build is a product, not geometry, so nodes_invalidated reports false. Run get_nodes, get_reject and get_blockmap to inspect; see skill/reference/nodes.md."
+    )]
+    fn build_all_nodes(
+        &self,
+        Parameters(args): Parameters<BuildAllNodesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| all_nodes_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1574,12 +1870,12 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        BuildBlockmapParams, BuildNodesParams, BuildRejectParams, Detail, GL_NODES_RECORD,
-        GL_SEGS_RECORD, GlInfo, Implemented, NodeData, RejectMode, Request, Variant,
-        blockmap_build_run, blockmap_summary, empty_blockmap_report, find_lump, gl_info,
-        gl_lump_names, install_lump, json_bytes, lump_magic, nodes_asset_body, nodes_build_run,
-        nodes_outcome, nodes_run, parse_detail, parse_mode, parse_scope, read_node_data,
-        reject_build_run, whole_records,
+        BuildAllNodesParams, BuildBlockmapParams, BuildNodesParams, BuildRejectParams,
+        DEFAULT_SPLIT_COST, Detail, GL_NODES_RECORD, GL_SEGS_RECORD, GlInfo, Implemented, NodeData,
+        RejectMode, Request, Variant, all_nodes_run, blockmap_build_run, blockmap_summary,
+        empty_blockmap_report, find_lump, gl_info, gl_lump_names, install_lump, json_bytes,
+        lump_magic, nodes_asset_body, nodes_build_run, nodes_outcome, nodes_run, parse_detail,
+        parse_mode, parse_scope, plan_all, read_node_data, reject_build_run, whole_records,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
@@ -2184,15 +2480,18 @@ mod tests {
             },
         )
         .expect("the fixture builds a blockmap");
-        assert_eq!(report.columns, 2, "x 0..200 from -8 spans two cells");
-        assert_eq!(report.rows, 1, "y 0..0 fits one row");
+        assert_eq!(report.body.columns, 2, "x 0..200 from -8 spans two cells");
+        assert_eq!(report.body.rows, 1, "y 0..0 fits one row");
         assert_eq!(
-            (report.origin.x, report.origin.y),
+            (report.body.origin.x, report.body.origin.y),
             (-8_i16, -8_i16),
             "origins"
         );
-        assert_eq!(report.bytes, 18, "the two identical lists share one copy");
-        assert!(report.vanilla_safe, "a toy grid is tiny");
+        assert_eq!(
+            report.body.bytes, 18,
+            "the two identical lists share one copy"
+        );
+        assert!(report.body.vanilla_safe, "a toy grid is tiny");
         assert_eq!(
             report.edit.get("map"),
             Some(&json!("MAP01")),
@@ -2224,7 +2523,7 @@ mod tests {
             },
         )
         .expect("the uncompressed build runs too");
-        assert_eq!(plain.bytes, 24, "every cell writes its own list");
+        assert_eq!(plain.body.bytes, 24, "every cell writes its own list");
         assert_eq!(plain.edit.get("copied_to_working"), Some(&json!(false)));
     }
 
@@ -2239,10 +2538,10 @@ mod tests {
             },
         )
         .expect("the default mode builds");
-        assert_eq!(zero.bytes, 1, "two sectors need one byte");
-        assert_eq!(zero.sectors, 2, "the decoded sector count");
-        assert_eq!(zero.rejected_pairs, 0, "zero rejects nothing");
-        assert_eq!(zero.mode, "zero", "the echo");
+        assert_eq!(zero.body.bytes, 1, "two sectors need one byte");
+        assert_eq!(zero.body.sectors, 2, "the decoded sector count");
+        assert_eq!(zero.body.rejected_pairs, 0, "zero rejects nothing");
+        assert_eq!(zero.body.mode, "zero", "the echo");
         let parts = reject_build_run(
             &mut session,
             &BuildRejectParams {
@@ -2251,8 +2550,11 @@ mod tests {
             },
         )
         .expect("components builds");
-        assert_eq!(parts.rejected_pairs, 2, "the dangling side joins nothing");
-        assert_eq!(parts.mode, "components", "the echo");
+        assert_eq!(
+            parts.body.rejected_pairs, 2,
+            "the dangling side joins nothing"
+        );
+        assert_eq!(parts.body.mode, "components", "the echo");
         assert_eq!(
             written(&session, b"REJECT").data.as_ref(),
             &[0b0000_0110_u8],
@@ -2441,21 +2743,24 @@ mod tests {
         let mut session = l_room_session();
         let report = nodes_build_run(&mut session, &build_params(None, None, None))
             .expect("the L room builds");
-        assert_eq!(report.variant, "classic", "the echo");
-        assert_eq!(report.format, None, "classic carries no magic");
-        assert_eq!(report.segs, 7, "six sides plus the cut piece");
-        assert_eq!(report.subsectors, 2, "the concave corner needs two leaves");
-        assert_eq!(report.nodes, 1, "one cut suffices");
+        assert_eq!(report.body.variant, "classic", "the echo");
+        assert_eq!(report.body.format, None, "classic carries no magic");
+        assert_eq!(report.body.segs, 7, "six sides plus the cut piece");
         assert_eq!(
-            report.split_vertices,
+            report.body.subsectors, 2,
+            "the concave corner needs two leaves"
+        );
+        assert_eq!(report.body.nodes, 1, "one cut suffices");
+        assert_eq!(
+            report.body.split_vertices,
             Some(1),
             "the bottom wall splits at x=128"
         );
         assert_eq!(
-            report.new_vertices, None,
+            report.body.new_vertices, None,
             "classic appends, it does not store"
         );
-        assert!(report.warnings.is_empty(), "one sector only");
+        assert!(report.body.warnings.is_empty(), "one sector only");
         assert_eq!(
             report.edit.get("map"),
             Some(&json!("MAP01")),
@@ -2481,11 +2786,11 @@ mod tests {
         let again = nodes_build_run(&mut session, &build_params(None, Some("CLASSIC"), None))
             .expect("a rebuild runs");
         assert_eq!(
-            again.split_vertices,
+            again.body.split_vertices,
             Some(0),
             "the split point is reused, not duplicated"
         );
-        assert_eq!(again.segs, 7, "the same tree");
+        assert_eq!(again.body.segs, 7, "the same tree");
     }
 
     #[test]
@@ -2523,13 +2828,13 @@ mod tests {
         let mut session = l_room_session();
         let cheap = nodes_build_run(&mut session, &build_params(None, None, Some(1_i64)))
             .expect("a cheap split still builds the L");
-        assert_eq!(cheap.segs, 7, "one valid partition either way");
-        assert_eq!(cheap.subsectors, 2, "the same leaves");
+        assert_eq!(cheap.body.segs, 7, "one valid partition either way");
+        assert_eq!(cheap.body.subsectors, 2, "the same leaves");
         let mut rerun = l_room_session();
         let dear = nodes_build_run(&mut rerun, &build_params(Some("map01"), None, Some(64_i64)))
             .expect("an expensive split still builds the L");
         assert_eq!(
-            dear.split_vertices,
+            dear.body.split_vertices,
             Some(1),
             "the cut is still the only choice"
         );
@@ -2625,18 +2930,18 @@ mod tests {
         let mut session = l_room_session();
         let report = nodes_build_run(&mut session, &extended_params(None))
             .expect("the L room builds extended");
-        assert_eq!(report.variant, "extended", "the echo");
-        assert_eq!(report.format, Some("ZNOD"), "compressed by default");
-        assert_eq!(report.segs, 7, "the cut piece counts");
-        assert_eq!(report.subsectors, 2, "the arms are leaves");
-        assert_eq!(report.nodes, 1, "one cut suffices");
+        assert_eq!(report.body.variant, "extended", "the echo");
+        assert_eq!(report.body.format, Some("ZNOD"), "compressed by default");
+        assert_eq!(report.body.segs, 7, "the cut piece counts");
+        assert_eq!(report.body.subsectors, 2, "the arms are leaves");
+        assert_eq!(report.body.nodes, 1, "one cut suffices");
         assert_eq!(
-            report.new_vertices,
+            report.body.new_vertices,
             Some(1),
             "the split point rides in the lump"
         );
-        assert_eq!(report.split_vertices, None, "VERTEXES gain nothing");
-        assert!(report.warnings.is_empty(), "one sector only");
+        assert_eq!(report.body.split_vertices, None, "VERTEXES gain nothing");
+        assert!(report.body.warnings.is_empty(), "one sector only");
         assert_eq!(
             report.edit.get("map"),
             Some(&json!("MAP01")),
@@ -2653,7 +2958,7 @@ mod tests {
             vec!["build nodes".to_owned()],
             "one step"
         );
-        let lump_size = report.bytes.expect("the lump size is reported");
+        let lump_size = report.body.bytes.expect("the lump size is reported");
         assert!(lump_size > 4, "magic plus a payload: {lump_size}");
         assert_binary_lump(&session, b"ZNOD", lump_size);
         assert_extended_tree(&working_run(&session), nodes::NodesFormat::Znod);
@@ -2664,8 +2969,8 @@ mod tests {
         let mut session = l_room_session();
         let report = nodes_build_run(&mut session, &extended_params(Some(false)))
             .expect("the raw build runs");
-        assert_eq!(report.format, Some("XNOD"), "compress false stays raw");
-        let lump_size = report.bytes.expect("a lump size");
+        assert_eq!(report.body.format, Some("XNOD"), "compress false stays raw");
+        let lump_size = report.body.bytes.expect("a lump size");
         assert!(lump_size > 4, "magic plus a payload: {lump_size}");
         assert_binary_lump(&session, b"XNOD", lump_size);
         assert_extended_tree(&working_run(&session), nodes::NodesFormat::Xnod);
@@ -2676,9 +2981,13 @@ mod tests {
         let mut session = udmf_room_session();
         let report = nodes_build_run(&mut session, &extended_params(Some(false)))
             .expect("the UDMF room builds extended raw");
-        assert_eq!(report.format, Some("XNOD"), "compress false stays raw");
-        assert_eq!(report.new_vertices, Some(1), "the cut rides in the lump");
-        assert_eq!(report.subsectors, 2, "the same tree");
+        assert_eq!(report.body.format, Some("XNOD"), "compress false stays raw");
+        assert_eq!(
+            report.body.new_vertices,
+            Some(1),
+            "the cut rides in the lump"
+        );
+        assert_eq!(report.body.subsectors, 2, "the same tree");
         let map = working_map(&session);
         let run = find_lump(&map.other, b"ZNODES").expect("ZNODES written");
         assert!(run.data.starts_with(b"XNOD"), "the raw magic leads");
@@ -2696,7 +3005,7 @@ mod tests {
         );
         assert_extended_tree(&working_run(&session), nodes::NodesFormat::Xnod);
         let again = nodes_build_run(&mut session, &extended_params(None)).expect("a rebuild runs");
-        assert_eq!(again.format, Some("ZNOD"), "the default compresses");
+        assert_eq!(again.body.format, Some("ZNOD"), "the default compresses");
         let remade = working_map(&session);
         let stored: usize = remade
             .other
@@ -2773,28 +3082,32 @@ mod tests {
         let mut session = l_room_session();
         let report = nodes_build_run(&mut session, &build_params(None, Some("gl"), None))
             .expect("the L room gl-builds");
-        assert_eq!(report.variant, "gl", "the echo");
-        assert_eq!(report.segs, 7, "the classic run is written alongside");
-        assert_eq!(report.subsectors, 2, "two leaves");
-        assert_eq!(report.nodes, 1, "one cut");
+        assert_eq!(report.body.variant, "gl", "the echo");
+        assert_eq!(report.body.segs, 7, "the classic run is written alongside");
+        assert_eq!(report.body.subsectors, 2, "two leaves");
+        assert_eq!(report.body.nodes, 1, "one cut");
         assert_eq!(
-            report.split_vertices,
+            report.body.split_vertices,
             Some(1),
             "the cut point joined VERTEXES"
         );
-        assert_eq!(report.gl_segs, Some(9), "seven real segs plus two minisegs");
         assert_eq!(
-            report.minisegs,
+            report.body.gl_segs,
+            Some(9),
+            "seven real segs plus two minisegs"
+        );
+        assert_eq!(
+            report.body.minisegs,
             Some(2),
             "one per side of the doorway plane"
         );
         assert_eq!(
-            report.gl_vertices,
+            report.body.gl_vertices,
             Some(0),
             "the classic run appended (128, 0), so the GL build reuses a map vertex"
         );
         assert!(
-            report.format.is_none() && report.bytes.is_none(),
+            report.body.format.is_none() && report.body.bytes.is_none(),
             "no extended keys"
         );
         let names = lump_names(&session);
@@ -2894,7 +3207,10 @@ mod tests {
         assert_eq!(report.format, "vanilla", "the classic run reads as always");
         assert!(report.gl.present, "the GL block is attached");
         assert_eq!(report.gl.magic.as_deref(), Some("gNd2"), "the v2 magic");
-        assert_eq!(report.gl.segs, built.gl_segs, "the counts agree: GL_SEGS");
+        assert_eq!(
+            report.gl.segs, built.body.gl_segs,
+            "the counts agree: GL_SEGS"
+        );
         assert_eq!(report.gl.subsectors, Some(2), "GL_SSECT rows");
         assert_eq!(report.gl.nodes, Some(1), "GL_NODES rows");
         assert_eq!(report.gl.vertices, Some(0), "GL_VERT rows: none needed");
@@ -2905,5 +3221,223 @@ mod tests {
         assert_eq!(whole_records(20, GL_SEGS_RECORD), Some(2), "two seg rows");
         assert_eq!(whole_records(21, GL_SEGS_RECORD), None, "a trailing byte");
         assert_eq!(whole_records(0, GL_NODES_RECORD), Some(0), "empty is whole");
+    }
+
+    /// `build_all_nodes` arguments from optional pieces.
+    fn all_params(
+        map: Option<&str>,
+        variant: Option<&str>,
+        reject_mode: Option<&str>,
+    ) -> BuildAllNodesParams {
+        BuildAllNodesParams {
+            map: map.map(str::to_owned),
+            variant: variant.map(str::to_owned),
+            reject_mode: reject_mode.map(str::to_owned),
+            compress: None,
+        }
+    }
+
+    #[test]
+    fn plan_all_defaults_follow_the_map_format() {
+        let binary = Map::default();
+        let plan = plan_all(&binary, &all_params(None, None, None)).expect("binary plans");
+        assert_eq!(
+            plan.nodes.variant,
+            Variant::Classic,
+            "binary defaults to classic"
+        );
+        assert_eq!(
+            plan.reject,
+            Some(RejectMode::Zero),
+            "binary maps write a reject"
+        );
+        assert!(plan.blockmap, "and the blockmap");
+        assert_eq!(
+            plan.nodes.split_cost, DEFAULT_SPLIT_COST,
+            "the builder default"
+        );
+        assert!(plan.nodes.compress, "compressed by default");
+        let udmf = Map {
+            format: MapFormat::Udmf,
+            ..Map::default()
+        };
+        let leaves = plan_all(&udmf, &all_params(None, None, None)).expect("UDMF plans");
+        assert_eq!(
+            leaves.nodes.variant,
+            Variant::Extended,
+            "UDMF defaults to extended"
+        );
+        assert_eq!(leaves.reject, None, "ZDoom builds the reject itself");
+        assert!(!leaves.blockmap, "and the blockmap");
+        let asked = plan_all(
+            &udmf,
+            &all_params(None, Some("extended"), Some("COMPONENTS")),
+        )
+        .expect("an explicit mode plans a reject");
+        assert_eq!(
+            asked.reject,
+            Some(RejectMode::Components),
+            "the explicit mode"
+        );
+        let forced = plan_all(&binary, &all_params(None, Some("extended"), None))
+            .expect("an explicit layout wins");
+        assert_eq!(
+            forced.nodes.variant,
+            Variant::Extended,
+            "classic is not forced"
+        );
+        assert!(forced.blockmap, "a binary map keeps its blockmap");
+        let bad =
+            plan_all(&binary, &all_params(None, Some("znodes"), None)).expect_err("not a variant");
+        assert_eq!(bad.code(), "invalid_argument", "bad variant code");
+        let bad_mode =
+            plan_all(&binary, &all_params(None, None, Some("opaque"))).expect_err("not a mode");
+        assert_eq!(bad_mode.code(), "invalid_argument", "bad mode code");
+    }
+
+    #[test]
+    fn all_nodes_run_writes_tree_reject_and_blockmap_in_one_undoable_step() {
+        let mut session = l_room_session();
+        let report = all_nodes_run(&mut session, &all_params(None, None, None))
+            .expect("the L room fully builds");
+        assert_eq!(report.variant, "classic", "the binary default");
+        assert_eq!(report.nodes.segs, 7, "the classic count");
+        assert_eq!(report.nodes.nodes, 1, "one cut");
+        let reject = report.reject.expect("binary maps write a reject");
+        assert_eq!(reject.mode, "zero", "the default mode");
+        assert_eq!(reject.sectors, 1, "one sector");
+        assert_eq!(reject.bytes, 1, "one byte of bits");
+        let blockmap = report.blockmap.expect("and a blockmap");
+        assert!(blockmap.bytes > 0, "the grid is written: {blockmap:?}");
+        assert_eq!(
+            report.edit.get("map"),
+            Some(&json!("MAP01")),
+            "the fragment"
+        );
+        assert_eq!(
+            report.edit.get("copied_to_working"),
+            Some(&json!(true)),
+            "the map came in to edit"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["build all nodes".to_owned()],
+            "all three lumps are one step"
+        );
+        let map = working_map(&session);
+        for wanted in [
+            b"SEGS".as_slice(),
+            b"SSECTORS",
+            b"NODES",
+            b"REJECT",
+            b"BLOCKMAP",
+        ] {
+            assert!(
+                find_lump(&map.other, wanted).is_some_and(|lump| !lump.data.is_empty()),
+                "{wanted:?} was written",
+            );
+        }
+        session.undo().expect("undo the whole build");
+        assert!(
+            session.working().is_empty(),
+            "undo restored the empty node lumps"
+        );
+    }
+
+    #[test]
+    fn all_nodes_gl_run_attaches_the_gl_block_in_the_same_step() {
+        let mut session = l_room_session();
+        let report = all_nodes_run(&mut session, &all_params(None, Some("gl"), None))
+            .expect("the gl build runs");
+        assert_eq!(report.variant, "gl", "the echo");
+        assert_eq!(
+            report.nodes.gl_segs,
+            Some(9),
+            "seven real segs plus two minisegs"
+        );
+        assert!(report.reject.is_some(), "binary maps also get the reject");
+        assert!(report.blockmap.is_some(), "and the blockmap");
+        assert_eq!(
+            session.undo_labels(),
+            vec!["build all nodes".to_owned()],
+            "tree, GL run, reject and grid: one step"
+        );
+        let names = lump_names(&session);
+        assert!(
+            names.contains(&"GL_MAP01".to_owned()),
+            "the run is attached"
+        );
+        session.undo().expect("undo the whole build");
+        assert!(
+            lump_names(&session)
+                .iter()
+                .all(|lump| !lump.starts_with("GL_")),
+            "undo took the GL run with everything else",
+        );
+    }
+
+    #[test]
+    fn all_nodes_udmf_run_writes_znodes_only_unless_asked_for_a_reject() {
+        let mut session = udmf_room_session();
+        let report = all_nodes_run(&mut session, &all_params(None, None, None))
+            .expect("the UDMF room fully builds");
+        assert_eq!(report.variant, "extended", "the UDMF default");
+        assert_eq!(report.nodes.format, Some("ZNOD"), "compressed by default");
+        assert!(report.reject.is_none(), "ZDoom builds the reject itself");
+        assert!(report.blockmap.is_none(), "and the blockmap");
+        let names = lump_names(&session);
+        assert!(names.contains(&"ZNODES".to_owned()), "ZNODES landed");
+        assert!(
+            !names
+                .iter()
+                .any(|lump| lump == "BLOCKMAP" || lump == "REJECT"),
+            "neither side lump was added: {names:?}",
+        );
+        let asked = all_nodes_run(
+            &mut session,
+            &all_params(None, Some("EXTENDED"), Some("components")),
+        )
+        .expect("an explicit mode adds the matrix");
+        assert_eq!(
+            asked.reject.expect("the reject reports").mode,
+            "components",
+            "the echo"
+        );
+        let map = working_map(&session);
+        assert!(
+            find_lump(&map.other, b"REJECT").is_some_and(|lump| lump.size() == 1),
+            "one sector's matrix landed in the block",
+        );
+        assert_eq!(session.undo_labels().len(), 2, "two builds, two steps");
+    }
+
+    #[test]
+    fn all_nodes_run_refuses_without_writing_anything() {
+        let mut empty = sidedless_session();
+        let error =
+            all_nodes_run(&mut empty, &all_params(None, None, None)).expect_err("no segs to tree");
+        assert_eq!(error.code(), "invalid_argument", "sidedless map code");
+        assert!(error.to_string().contains("sidedefs"), "the hint: {error}");
+        assert!(empty.working().is_empty(), "the refusal wrote nothing");
+        assert!(empty.undo_labels().is_empty(), "and recorded nothing");
+        let mut session = udmf_room_session();
+        let forced = all_nodes_run(&mut session, &all_params(None, Some("classic"), None))
+            .expect_err("classic has no place in UDMF");
+        assert_eq!(
+            forced.code(),
+            "invalid_argument",
+            "explicit classic on UDMF code"
+        );
+        assert!(
+            session.working().is_empty(),
+            "and again nothing was written"
+        );
+        let bad_mode = all_nodes_run(&mut session, &all_params(None, None, Some("opaque")))
+            .expect_err("not a mode");
+        assert_eq!(bad_mode.code(), "invalid_argument", "bad reject mode code");
+        assert!(
+            session.undo_labels().is_empty(),
+            "no refusal entered history"
+        );
     }
 }

@@ -178,6 +178,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `get_reject`             | `reference/nodes.md`    |
 | `get_blockmap`           | `reference/nodes.md`    |
 | `build_nodes`            | `reference/nodes.md`    |
+| `build_all_nodes`        | `reference/nodes.md`    |
 | `build_blockmap`         | `reference/nodes.md`    |
 | `build_reject`           | `reference/nodes.md`    |
 | `get_palette`            | `reference/palette.md`  |
@@ -215,7 +216,10 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 ## Typical workflow
 
 `open_iwad` the game archive → `open_wad` your project WAD or `new_wad`
-for a fresh one → edit the working archive → `validate_map` → `save_wad`.
+for a fresh one → edit the working archive → `build_all_nodes` after the
+geometry edits (one undoable step rebuilding the BSP tree, the `REJECT`
+matrix and the `BLOCKMAP` so vanilla `Doom` can play the map;
+`reference/nodes.md`) → `validate_map` → `save_wad`.
 `validate_map` reads a map's health — dangling references, broken lines,
 missing starts, specials outside the tables — as severity-ranked issues you
 fix with the editing tools before saving (`reference/validate.md`).

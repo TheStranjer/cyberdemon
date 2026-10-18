@@ -185,6 +185,12 @@ and `replace_patch` build on exactly the same import parameters as
   working lump of its own — still a legitimate edit when
   `remove_from_pnames` is set. `textures_changed` counts the textures the
   renumbering pruned or shifted (`0` without a `PNAMES` write).
+- Errors: `invalid_argument` (an unparsable `name`); `not_found` (the
+  working archive holds no such patch and, with `remove_from_pnames`,
+  `PNAMES` does not list the name either — see the resolution rule);
+  `conflict` (a `PNAMES` removal textures still refer to, without `force`
+  — nothing is removed); `format_error` (a malformed `PNAMES`). A refusal
+  writes nothing.
 - Check the result with `list_patches` (the name is gone from the working
   archive), `list_pnames` (the entry list and the shifted indices) and
   `list_textures` (pruned or renumbered patch counts). To put a replaced

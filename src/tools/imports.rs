@@ -18,7 +18,9 @@
 //! sprite side: [`sprite`] names the lump through the sprite
 //! grammar of [`crate::gfx::sprite_name::parse_sprite_name`], anchors the
 //! picture on its feet and reports the rotations the session's sprites
-//! region already serves. Patch-replacement tools grow on the same pieces.
+//! region already serves. The patch lifecycle tools of
+//! [`crate::tools::patches`] stage and place their lumps on these same
+//! pieces.
 
 pub(in crate::tools) mod image_pipeline;
 mod sprite;

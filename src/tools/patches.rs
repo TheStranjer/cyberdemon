@@ -1,5 +1,4 @@
-//! Patch lifecycle tools: whole patch lumps in, over, and (as the group
-//! grows) out again.
+//! Patch lifecycle tools: whole patch lumps in, over, and out again.
 //!
 //! [`Cyberdemon::add_patch`] puts one patch lump into the working
 //! archive's `patches` region as a single undoable edit. A source that

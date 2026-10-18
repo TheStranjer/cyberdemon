@@ -13,11 +13,16 @@
 //! ([`Point`]), partitions are whole-unit [`Partition`] lines, and every
 //! crossing test and product is computed in `i128`.
 //! [`build_tree`] is the entry point; [`vanilla::to_vanilla`] renders a
-//! finished tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record bytes
-//! and [`extended::to_extended`] as one `ZDoom` extended lump.
+//! finished tree as the vanilla `SEGS`/`SSECTORS`/`NODES` record bytes,
+//! [`extended::to_extended`] as one `ZDoom` extended lump, and
+//! [`gl::to_gl`] as the `glBSP` v2 `GL_*` run, whose miniseg-closed
+//! subsector polygons `OpenGL` ports need (grown over the clipped
+//! polygons of [`polygon`]).
 
 pub mod choose;
 pub mod extended;
+pub mod gl;
+pub mod polygon;
 pub mod seg;
 pub mod side;
 pub mod split;
@@ -25,6 +30,7 @@ pub mod tree;
 pub mod vanilla;
 
 pub use extended::{ExtendedNodes, to_extended};
+pub use gl::{GlNodes, to_gl};
 pub use seg::BuildSeg;
 pub use tree::{BBox, BspTree, BuiltNode, Child, build_tree};
 pub use vanilla::{VanillaNodes, to_vanilla};

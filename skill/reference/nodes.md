@@ -38,9 +38,11 @@ the magic `XNOD` (raw) or `ZNOD` (zlib-compressed after the magic), kept
 in `NODES` for binary maps or in a `ZNODES` lump for `UDMF` maps. It adds
 fraction-precise (`16.16`) vertices beyond `VERTEXES`, wider child words
 (`bit 31` marks the leaves) and side bytes instead of directions. These
-parse into the same shape. The glBSP (`GL_*`) lumps and the `XGLN`/
-`ZGLN`/`XGL2`/`ZGL2`/`XGL3`/`ZGL3` magics are **reported, never parsed**:
-you get their presence, magic and sizes.
+parse into the same shape. The glBSP (`GL_*`) lumps are a separate block
+attached right after the map block (below); their records are counted for
+a `gNd2` (glBSP v2) run and otherwise **reported, never parsed**, and the
+in-`NODES` `XGLN`/`ZGLN`/`XGL2`/`ZGL2`/`XGL3`/`ZGL3` magics are reported
+with their size only.
 
 ## The `map`, `scope` and `detail` parameters
 
@@ -56,7 +58,8 @@ and always edit the working archive; they carry no `scope` or `detail`.
 ## `get_nodes`
 
 `{map?, scope?, detail?}` → `{map, format, bytes, segs, subsectors,
-nodes, extra_vertices, root, depth, gl {present, magic, lumps}}`
+nodes, extra_vertices, root, depth, gl {present, magic, segs, subsectors,
+nodes, vertices, lumps}}`
 
 - `format` is `"none"` (no node bytes anywhere; the counts read `0`),
   `"vanilla"`, `"xnod"`/`"znod"`, or a lowercase GL magic (`"xgln"`,
@@ -70,7 +73,10 @@ nodes, extra_vertices, root, depth, gl {present, magic, lumps}}`
   levels on the longest root-to-leaf path.
 - `gl.lumps` maps each lump of the attached `GL_` block to its size;
   `gl.magic` is the four letters `GL_VERT` starts with (`gNd2`, `gNd5`,
-  ...).
+  ...). For a `gNd2` run `gl.segs`, `gl.subsectors`, `gl.nodes` and
+  `gl.vertices` count the records in `GL_SEGS`, `GL_SSECT`, `GL_NODES`
+  and `GL_VERT`; they are `null` for any other magic or a lump whose
+  size is not a whole number of records.
 
 `detail: "full"` publishes `<MAP>_nodes.json` —
 `{format, extra_vertices [{x, y}], segs [...], subsectors [...],
@@ -161,8 +167,24 @@ selects the layout:
   (default `true`) `zlib`-compresses the payload behind the `ZNOD`
   magic; `false` stores it raw behind `XNOD`. The result adds `format`
   (`"ZNOD"`/`"XNOD"`) and `bytes` (the written lump's size).
-- `"gl"` (the glBSP `GL_*` run) is **not implemented yet** and fails
-  `unsupported`.
+- `"gl"` writes the classic run **and** the `glBSP` v2 block, for
+  `OpenGL` ports (`GZDoom`, Crispy GL, Woof) and `glBSP`-compatible
+  engines: every subsector becomes a closed convex polygon by stretching
+  **minisegs** (segs with linedef `0xFFFF`) over the stretches of its
+  region's edges that no real seg covers. Segs facing each other across
+  a partition line get `partner` words pointing at one another
+  (`0xFFFF` = none). The block is attached outside the map block, right
+  after it: a zero-size `GL_<MAPNAME>` marker (or `GL_LEVEL` for map
+  names longer than five characters) followed by `GL_VERT` (magic
+  `gNd2` plus the fraction-precise vertices beyond `VERTEXES`),
+  `GL_SEGS`, `GL_SSECT`, `GL_NODES` and an empty `GL_PVS`. A rebuild
+  replaces the existing block; a geometry edit drops it like any other
+  node data; `undo` takes it back with the classic run. Binary maps
+  only: on a `UDMF` map it fails `invalid_argument` like `classic`. The
+  result adds `gl_segs` (all `GL_SEGS` records, real and mini),
+  `minisegs` (the `0xFFFF`-linedef filler) and `gl_vertices` (the
+  `GL_VERT` rows), and keeps `split_vertices` from the classic run it
+  writes alongside.
 
 `split_cost` is the builder's judgment knob: what a candidate partition
 is charged per seg it cuts (default `8`, added to the front/back
@@ -188,7 +210,11 @@ classic more than `65535` vertices, an `i16`/`u16` field, or more than
 `32767` nodes or subsectors (`limit_exceeded` naming variant
 `"extended"`, which takes over at `u32` indices), and for extended an
 `i16`/`u16` node/seg field or a `16.16` coordinate past the `i32` range
-(`limit_exceeded`: no layout holds wider) — are refused. Unknown map is
+(`limit_exceeded`: no layout holds wider), for `gl` a map-vertex or
+`GL_VERT` index past `32767`, a `GL_SEGS` count past `65535`, a node
+child past `32767` or a `16.16` vertex coordinate past `i32` — are
+refused. A region that collapses below a triangle or a seg that lies
+outside every edge of its region is `internal`. Unknown map is
 `not_found`; an unparsable block is `format_error`.
 
 ## Errors
@@ -204,6 +230,8 @@ those two, or reading a different scope. An unknown `map` is `not_found`;
 an unparsable `map`, `scope` or `detail` is `invalid_argument`;
 `build_blockmap` on a map with no vertices is `invalid_argument` and an
 oversized grid, linedef index or lump is `limit_exceeded`; `build_nodes`
-on a map with no linedef sides is `invalid_argument`, `"gl"` is
-`unsupported`, `classic` on a `UDMF` map is `invalid_argument` (build
-`"extended"`) and a past-record limit is `limit_exceeded`.
+on a map with no linedef sides is `invalid_argument`, `classic` or `gl`
+on a `UDMF` map is `invalid_argument` (build `"extended"`), a
+past-record limit (for `gl` too: `GL_VERT` past `32767`, a `GL_SEGS`
+count past `65535`) is `limit_exceeded` and a collapsed GL region or
+unplaceable seg is `internal`.

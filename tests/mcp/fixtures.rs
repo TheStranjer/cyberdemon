@@ -624,6 +624,25 @@ fn map_block_in(text: &str, format: MapFormat, other: Vec<Lump>) -> Vec<Lump> {
     write_map(&map).expect("the fixture map serializes")
 }
 
+/// A `PWAD` overriding nothing: its `PLAYPAL` and `ENDOOM` are byte-identical
+/// copies of the `IWAD` fixture's, for the `optimize_wad` redundancy tests.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be serialized or written.
+#[must_use]
+#[inline]
+pub fn pwad_redundant(dir: &Path) -> PathBuf {
+    let wad = Wad {
+        kind: WadKind::Pwad,
+        lumps: vec![
+            lump("PLAYPAL", playpal()),
+            lump("ENDOOM", vec![b' '; ENDOOM_BYTES]),
+        ],
+    };
+    write_wad(dir, "pwad-redundant.wad", &wad)
+}
+
 /// The map-format fixture's `MAP03`: the two-room map as `UDMF` in the
 /// `zdoom` namespace, a non-empty `ZNODES` in place of the binary nodes,
 /// followed by its `GL` node run.

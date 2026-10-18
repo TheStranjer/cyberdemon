@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 113] = [
+    const EXPECTED_TOOLS: [&str; 114] = [
         "add_linedef",
         "add_lump",
         "add_patch",
@@ -159,6 +159,7 @@ mod tests {
         "new_wad",
         "open_iwad",
         "open_wad",
+        "optimize_wad",
         "preview_music",
         "preview_sound",
         "process_image",

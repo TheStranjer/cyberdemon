@@ -101,12 +101,19 @@ stack; `get_session_info` reports where every archive currently is.
     the working archive's kind for `pwad`; for `full`, `IWAD` when an IWAD
     layer is loaded, else `PWAD`. A save never changes the session's own
     archive kind.
+  - `dedupe` (bool, default `false`) — write each distinct non-empty lump
+    payload once: duplicate directory entries share the first copy's
+    offset, which the WAD format allows and every engine reads. The
+    archive's lumps and their order are unchanged; only the byte layout
+    shrinks.
 - After a `pwad` save the working path becomes `path` and `dirty` is
   `false`; a `full` export leaves the working path and the dirty flag
   exactly as they were.
-- Returns: `{"path", "mode", "kind", "lumps": n, "bytes": n, "dirty": bool}`
-  — `lumps` and `bytes` describe the file written, `dirty` is the session's
-  state afterwards.
+- Returns: `{"path", "mode", "kind", "lumps": n, "bytes": n,
+  "bytes_saved_by_dedupe": n, "dirty": bool}` — `lumps` and `bytes`
+  describe the file written, `bytes_saved_by_dedupe` is the payload the
+  sharing saved (`0` without `dedupe`), `dirty` is the session's state
+  afterwards.
 - Errors: `invalid_argument` (relative path, no path to fall back on, bad
   `mode` or `kind`), `not_found` (parent directory missing), `conflict`
   (the target is the file of a loaded IWAD or resource layer, compared by

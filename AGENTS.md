@@ -271,6 +271,10 @@ src/
                   a new sector with its walls: shoelace orientation,
                   self-crossing refusal, linedef reuse and two-sided
                   opening, and the auto outer-sector probe),
+                  `map/ops.rs` the pure linedef-geometry engine behind
+                  `split_linedef` and `join_linedefs` (integer on-segment
+                  and collinearity tests, offset-preserving side copies and
+                  shifts, and the removal-engine join),
                   `map/convert.rs` the pure within-flag-family format
                   conversion (`Target`, `convert_map`, `Conversion`) behind
                   `convert_map_format`, and `map/validate.rs` +

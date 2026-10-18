@@ -1,8 +1,9 @@
 # Linedef tools
 
-Creating, changing and removing the linedefs of a map: `add_linedef`,
-`edit_linedef` and `remove_linedef`. A linedef is the line between two
-vertices with at most one [`Sidedef`](sidedefs.md) per side — the wall,
+Creating, changing, splitting, joining and removing the linedefs of a map:
+`add_linedef`, `edit_linedef`, `remove_linedef`, `split_linedef` and
+`join_linedefs`. A linedef is the line between two vertices with at most
+one [`Sidedef`](sidedefs.md) per side — the wall,
 step or trigger the engine draws and walks along it.
 
 ## Orientation: the front faces right
@@ -174,6 +175,72 @@ call remove_linedef {"index": [5, 6]}
     "vertices": [2], "sectors": [], "things": [], "flipped_linedefs": [],
     "one_sided_linedefs": []}, "map": "MAP01",
     "nodes_invalidated": true, "copied_to_working": true}
+```
+
+## `split_linedef`
+
+`{map?, index, at?}` → `{vertex, new_linedef, new_sidedefs, map,
+nodes_invalidated, copied_to_working}`
+
+Cuts one linedef into two in a single undoable edit. The cut point is
+`at: {x, y}` when given — it must lie on the segment (within one map unit
+of the line) and strictly between the endpoints, else `invalid_argument` —
+or the midpoint of the endpoints (each coordinate rounded to nearest). A
+vertex already sitting exactly on the cut point is reused; a new one is
+reported in `vertex`. The original keeps its `v1` and ends at the cut; the
+new linedef is appended to the block, runs from the cut to the old `v2`
+and copies `flags`, `special`, `tag`, `args` and `extra`.
+
+Each existing side gets a copy for the new line (reported in
+`new_sidedefs`, front first). Offsets keep the texture in place along the
+wall — fronts measure from `v1`, backs from `v2`: the new front's
+`x_offset` shifts by the first piece's length, the surviving original
+back's `x_offset` shifts by the second piece's and the new back keeps the
+old value. Split and join line up exactly: `split_linedef` then
+`join_linedefs` on the halves restores the map element for element.
+Binary maps store the cut point and the shifted offsets as `i16`
+(`invalid_argument` outside); `UDMF` is unbounded. Cutting is geometry:
+`nodes_invalidated: true`.
+
+```json
+call split_linedef {"index": 0}
+-> {"vertex": 6, "new_linedef": 7, "new_sidedefs": [8], "map": "MAP01",
+    "nodes_invalidated": true, "copied_to_working": true}
+call split_linedef {"index": 2, "at": {"x": 256, "y": 128}}
+```
+
+## `join_linedefs`
+
+`{map?, first, second, force? = false}` → `{linedef, removed, map,
+nodes_invalidated, copied_to_working}`
+
+Welds two collinear linedefs into the first, removing the second. The
+pair must meet **head to tail** (`first.v2` equals `second.v1`, or
+`second.v2` equals `first.v1` — then the second lines up as the head),
+share exactly that one vertex (none, both, or a tail-to-tail meeting is
+`invalid_argument`), lie on one straight line and run in the same
+direction (flip one with `edit_linedef` `flip: true`), and carry the same
+front sector and the same back sector (or no back on both). Any failure
+is `invalid_argument` naming the fix. If a third linedef uses the shared
+vertex, the join is a `conflict` naming it. Differing `flags`, `special`,
+`tag`, `args` or side textures are a `conflict` listing the differences;
+with `force: true` the first linedef's properties win.
+
+The survivor spans its free end through the shared vertex to the other
+free end and keeps its own sides; the side anchored at the absorbed
+vertex has its `x_offset` shifted back by the removed line's length. The
+second linedef, its orphaned sidedefs and the shared vertex leave through
+the removal engine (`removed`, original indices), the block renumbers —
+`linedef` is the survivor's new index. Joining is geometry:
+`nodes_invalidated: true`.
+
+```json
+call join_linedefs {"first": 0, "second": 7}
+-> {"linedef": 0, "removed": {"linedefs": [7], "sidedefs": [8],
+    "vertices": [6], "sectors": [], "things": [], "flipped_linedefs": [],
+    "one_sided_linedefs": []}, "map": "MAP01",
+    "nodes_invalidated": true, "copied_to_working": true}
+call join_linedefs {"first": 4, "second": 5, "force": true}
 ```
 
 ## After editing

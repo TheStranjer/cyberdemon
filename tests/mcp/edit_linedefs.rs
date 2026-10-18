@@ -5,7 +5,11 @@
 //! Hexen-family tag rule, `edit_linedef` flag replacement and adjustment,
 //! the flip verified through `assemble_map`, the `back: null` closing, the
 //! in-place `front_side` texture-offset edit and the nothing-to-change
-//! refusal, and `remove_linedef` with and without its pruning.
+//! refusal, `remove_linedef` with and without its pruning,
+//! `split_linedef` and `join_linedefs` round-tripping linedef 0 of the
+//! fixture map with counts through `get_map_summary`, and the off-line,
+//! endpoint, non-collinear, third-vertex and property-conflict refusals
+//! surfacing as tool errors with the right codes.
 
 #[cfg(test)]
 mod tests {
@@ -877,5 +881,245 @@ mod tests {
             6,
             "the created vertices went"
         );
+    }
+
+    /// The five element counts of `map` in `scope`, through `get_map_summary`.
+    async fn counts(client: &Client, map: &str, scope: &str) -> Value {
+        let summary = call(
+            client,
+            "get_map_summary",
+            json!({"map": map, "scope": scope}),
+        )
+        .await;
+        summary["counts"].clone()
+    }
+
+    /// The fixture map's element counts.
+    fn fixture_counts() -> Value {
+        json!({
+            "things": 2_i32, "vertices": 6_i32, "linedefs": 7_i32,
+            "sidedefs": 8_i32, "sectors": 2_i32,
+        })
+    }
+
+    #[tokio::test]
+    async fn split_linedef_cuts_linedef_zero_in_two() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let split = call(&client, "split_linedef", json!({"index": 0_i32})).await;
+        assert_eq!(split["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(split["vertex"], json!(6_i32), "the midpoint vertex is new");
+        assert_eq!(split["new_linedef"], json!(7_i32), "the half is appended");
+        assert_eq!(
+            split["new_sidedefs"],
+            json!([8_i32]),
+            "one copy: the line is one-sided"
+        );
+        assert_eq!(
+            split["nodes_invalidated"],
+            json!(true),
+            "cutting is geometry"
+        );
+        assert_eq!(split["copied_to_working"], json!(true));
+        assert_eq!(
+            counts(&client, "MAP01", "working").await,
+            json!({
+                "things": 2_i32, "vertices": 7_i32, "linedefs": 8_i32,
+                "sidedefs": 9_i32, "sectors": 2_i32,
+            }),
+            "the block gained one of each"
+        );
+        let half = working_linedef(&client, "MAP01", 7).await;
+        assert_eq!(half["v1"]["y"], json!(128_i32), "it starts at the cut");
+        assert_eq!(half["v2"]["y"], json!(256_i32), "and ends at the old end");
+        assert_eq!(half["front"]["sidedef"], json!(8_i32), "on its own copy");
+        assert_eq!(
+            half["front"]["x_offset"],
+            json!(128_i32),
+            "shifted by the first piece"
+        );
+        let survivor = working_linedef(&client, "MAP01", 0).await;
+        assert_eq!(survivor["v2"]["index"], json!(6_i32), "it ends at the cut");
+        assert_eq!(
+            survivor["front"]["x_offset"],
+            json!(0_i32),
+            "keeping its side"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_linedefs_welds_a_split_pair_back_whole() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        call(&client, "split_linedef", json!({"index": 0_i32})).await;
+        let join = call(
+            &client,
+            "join_linedefs",
+            json!({"first": 0_i32, "second": 7_i32}),
+        )
+        .await;
+        assert_eq!(
+            join["linedef"],
+            json!(0_i32),
+            "the survivor keeps its index"
+        );
+        assert_eq!(join["removed"]["linedefs"], json!([7_i32]), "the half went");
+        assert_eq!(join["removed"]["sidedefs"], json!([8_i32]), "with its copy");
+        assert_eq!(
+            join["removed"]["vertices"],
+            json!([6_i32]),
+            "and the absorbed cut vertex"
+        );
+        assert_eq!(
+            join["nodes_invalidated"],
+            json!(true),
+            "joining is geometry too"
+        );
+        assert_eq!(
+            counts(&client, "MAP01", "working").await,
+            fixture_counts(),
+            "the block is whole again"
+        );
+        let back = working_linedef(&client, "MAP01", 0).await;
+        assert_eq!(
+            back["v2"]["index"],
+            json!(5_i32),
+            "the old endpoints are back"
+        );
+        assert_eq!(back["v2"]["y"], json!(256_i32));
+        assert_eq!(
+            back["front"]["sidedef"],
+            json!(0_i32),
+            "on the original side"
+        );
+        let undo = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undo["undone"],
+            json!(["join linedefs 0 and 7"]),
+            "one labelled step"
+        );
+    }
+
+    #[tokio::test]
+    async fn split_linedef_reports_bad_cuts_as_tool_errors() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        refuse(
+            &client,
+            "split_linedef",
+            json!({"index": 0_i32, "at": {"x": 8_i32, "y": 128_i32}}),
+        )
+        .await;
+        refuse(
+            &client,
+            "split_linedef",
+            json!({"index": 0_i32, "at": {"x": 0_i32, "y": 256_i32}}),
+        )
+        .await;
+        refuse(
+            &client,
+            "split_linedef",
+            json!({"index": 0_i32, "at": {"x": 128_i32, "y": 300_i32}}),
+        )
+        .await;
+        miss(&client, "split_linedef", json!({"index": 99_i32})).await;
+        let rows = merged_linedefs(&client, "MAP01").await;
+        assert_eq!(rows.len(), 7, "the refusals changed nothing");
+    }
+
+    #[tokio::test]
+    async fn join_linedefs_refuses_incompatible_pairs() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let (code, message) = call_err(
+            &client,
+            "join_linedefs",
+            json!({"first": 3_i32, "second": 0_i32}),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "a corner is not a run");
+        assert!(
+            message.contains("collinear"),
+            "the message names the rule: {message}"
+        );
+        let (sector_code, sector_message) = call_err(
+            &client,
+            "join_linedefs",
+            json!({"first": 6_i32, "second": 3_i32}),
+        )
+        .await;
+        assert_eq!(sector_code, "invalid_argument", "front sectors disagree");
+        assert!(
+            sector_message.contains("front sides"),
+            "the message names the side: {sector_message}"
+        );
+        miss(
+            &client,
+            "join_linedefs",
+            json!({"first": 0_i32, "second": 40_i32}),
+        )
+        .await;
+        call(&client, "split_linedef", json!({"index": 0_i32})).await;
+        call(
+            &client,
+            "add_linedef",
+            json!({"v1": 6_i32, "v2": 2_i32, "front": 0_i32}),
+        )
+        .await;
+        let (block_code, block_message) = call_err(
+            &client,
+            "join_linedefs",
+            json!({"first": 0_i32, "second": 7_i32}),
+        )
+        .await;
+        assert_eq!(block_code, "conflict", "a third line stands on the joint");
+        assert!(
+            block_message.contains("linedef 8"),
+            "the blocker is named: {block_message}"
+        );
+        let rows = working_linedefs(&client, "MAP01").await;
+        assert_eq!(rows.len(), 9, "the join refused; split and add stand");
+    }
+
+    #[tokio::test]
+    async fn join_linedefs_conflicts_on_properties_and_force_resolves_it() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        call(&client, "split_linedef", json!({"index": 0_i32})).await;
+        call(
+            &client,
+            "edit_linedef",
+            json!({"index": 7_i32, "set_flags": ["mapped"]}),
+        )
+        .await;
+        let (code, message) = call_err(
+            &client,
+            "join_linedefs",
+            json!({"first": 0_i32, "second": 7_i32}),
+        )
+        .await;
+        assert_eq!(code, "conflict", "the halves now differ in flags");
+        assert!(
+            message.contains("flags") && message.contains("force: true"),
+            "the differences and the fix are named: {message}"
+        );
+        let joined = call(
+            &client,
+            "join_linedefs",
+            json!({"first": 0_i32, "second": 7_i32, "force": true}),
+        )
+        .await;
+        assert_eq!(
+            joined["linedef"],
+            json!(0_i32),
+            "the first linedef survived"
+        );
+        assert_eq!(
+            counts(&client, "MAP01", "working").await,
+            fixture_counts(),
+            "the block is whole again"
+        );
+        let row = working_linedef(&client, "MAP01", 0).await;
+        assert_eq!(row["flag_names"], json!(["blocking"]), "and its flags won");
     }
 }

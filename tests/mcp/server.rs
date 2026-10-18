@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 85] = [
+    const EXPECTED_TOOLS: [&str; 86] = [
         "add_lump",
         "add_patch",
         "add_sector",
@@ -147,6 +147,7 @@ mod tests {
         "redo",
         "remove_lump",
         "remove_map",
+        "remove_patch",
         "remove_sector",
         "remove_sidedef",
         "remove_texture",
@@ -365,6 +366,23 @@ mod tests {
         assert!(
             properties.get("replace").is_none(),
             "the tool always replaces: {replace}"
+        );
+    }
+
+    /// `remove_patch` takes exactly `name` (required), `remove_from_pnames`
+    /// and `force`: no picture side (nothing comes in) and no `replace`.
+    #[tokio::test]
+    async fn remove_patch_takes_exactly_its_name_and_the_two_removal_flags() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let remove = schema_of(tool_named(&tools, "remove_patch"));
+        assert_flattens(&remove, &["name", "remove_from_pnames", "force"]);
+        assert_required(&remove, "name");
+        let properties = remove.get("properties").expect("a properties object");
+        assert_eq!(
+            properties.as_object().expect("an object").len(),
+            3_usize,
+            "exactly the three documented fields: {remove}"
         );
     }
 

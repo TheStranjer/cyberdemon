@@ -13,7 +13,10 @@
 //! already has - the working archive's own copy overwritten in place, or a
 //! working override inserted over an `IWAD` or resource-layer lump - on
 //! the same staged-bytes plumbing and never touching `PNAMES`.
-//! `remove_patch` will grow on the same plumbing.
+//! [`Cyberdemon::remove_patch`] deletes a working patch lump and, on
+//! request, its `PNAMES` entry - renumbering every texture patch reference
+//! through the shared [`crate::tools::textures`] plan, lump and list in one
+//! undoable edit.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -33,9 +36,11 @@ use crate::tools::imports::image_pipeline::{
 };
 use crate::tools::imports::{PnamesPlan, current_pnames, pnames_plan};
 use crate::tools::ok;
-use crate::tools::textures::put_global;
-use crate::wad::archive::Lump;
-use crate::wad::classify::{LumpKind, Namespace, analyze, is_doom_patch};
+use crate::tools::textures::{
+    PnamesRewrite, plan_pnames_removal, put_global, write_pnames_rewrite,
+};
+use crate::wad::archive::{Lump, Wad};
+use crate::wad::classify::{LumpInfo, LumpKind, Namespace, analyze, is_doom_patch};
 use crate::wad::name::LumpName;
 
 /// Raw directory bytes of the patch-name lump.
@@ -100,6 +105,27 @@ struct ReplacePatchParams {
     /// `skill/reference/imports.md` without `name` and `replace`.
     #[serde(flatten)]
     picture: PatchSourceParams,
+}
+
+/// Arguments for [`Cyberdemon::remove_patch`]: one patch name and the two
+/// flags deciding how far the removal reaches. No picture side: the bytes
+/// leave the archive, nothing comes in.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RemovePatchParams {
+    /// Name of the patch to remove: 1 to 8 printable `ASCII` characters,
+    /// uppercased. Only the working archive is searched; `IWAD` and
+    /// resource-layer lumps cannot be deleted.
+    name: String,
+    /// Also delete the name's `PNAMES` entry, renumbering every texture
+    /// patch reference in the same undoable edit (default `false`: the
+    /// list is left as it stands).
+    #[serde(default)]
+    remove_from_pnames: Option<bool>,
+    /// Let a `PNAMES` removal drop texture patch references that still
+    /// refer to the removed entry (default `false`: such a removal is a
+    /// `conflict` and nothing is removed).
+    #[serde(default)]
+    force: Option<bool>,
 }
 
 impl AddPatchParams {
@@ -206,6 +232,25 @@ struct ReplaceOutcome {
     created_override: bool,
     /// The replaced lump's directory index in the working archive.
     lump_index: usize,
+}
+
+/// Structured result of [`Cyberdemon::remove_patch`]: what the one edit
+/// took out of the working archive.
+#[derive(Serialize)]
+struct RemoveOutcome {
+    /// The name the removal was asked for, uppercased.
+    name: LumpName,
+    /// Whether a working lump was deleted. `false` only when the name had
+    /// a `PNAMES` entry but no working lump of its own - still a
+    /// legitimate edit when `remove_from_pnames` was asked for.
+    removed_lump: bool,
+    /// Whether the name left the `PNAMES` list (`false` when
+    /// `remove_from_pnames` was not asked for or the list did not hold
+    /// the name; then no `PNAMES` write happened).
+    removed_from_pnames: bool,
+    /// Textures whose patch references the renumbering pruned or shifted;
+    /// `0` without a `PNAMES` write.
+    textures_changed: usize,
 }
 
 /// Whether fetched bytes are a `Doom` patch to pass through: the cheap
@@ -506,11 +551,160 @@ async fn replace_patch_run(
     state.with_session(move |session| commit_replacement(session, staged, pnames_index, in_working))
 }
 
+/// Whether one working directory entry is a `remove_patch` candidate: a
+/// non-marker lump of `name` inside a `patches` region, or - when the
+/// merged `PNAMES` lists the name - one living outside the flats and
+/// sprites regions, the same candidate rule [`holds_global_patch`] reads
+/// for a `PNAMES`-named global.
+fn is_removal_candidate(info: &LumpInfo, name: LumpName, listed: bool) -> bool {
+    if info.name != name || info.kind == LumpKind::Marker {
+        return false;
+    }
+    if info.namespace == Some(Namespace::Patches) {
+        return true;
+    }
+    listed && !matches!(info.namespace, Some(Namespace::Flats | Namespace::Sprites))
+}
+
+/// The working archive's last `remove_patch` candidate index for `name`,
+/// `None` when the working archive holds no such lump. `PNAMES` entries
+/// without a lump answer `None` here; the caller decides whether they are
+/// still removable through the [`plan_pnames_removal`] list.
+///
+/// # Errors
+///
+/// [`current_pnames`]' [`CyberError::Format`] for a malformed `PNAMES` and
+/// [`Session::lumps_in`]' read errors (none for the working scope).
+fn working_patch_slot(session: &Session, name: LumpName) -> Result<Option<usize>, CyberError> {
+    let listed = pnames_position(session, name)?.is_some();
+    let entries = session.lumps_in(Scope::Working)?;
+    let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
+    let analysis = analyze(&lumps);
+    let mut slot = None;
+    for info in &analysis.lumps {
+        if is_removal_candidate(info, name, listed) {
+            slot = Some(info.index);
+        }
+    }
+    Ok(slot)
+}
+
+/// The refusal for a name the working archive does not hold (and that the
+/// `PNAMES` plan did not claim either): removal reaches working lumps
+/// only, so a layer patch must first gain a working copy through
+/// `replace_patch`.
+fn working_removal_missing(name: LumpName) -> CyberError {
+    CyberError::NotFound(format!(
+        "the working archive holds no patch named {name}: only working lumps can be removed - \
+         an IWAD or resource-layer patch must first be overridden by replace_patch to gain the \
+         working copy (or be left alone), and remove_from_pnames additionally needs the name \
+         listed in PNAMES"
+    ))
+}
+
+/// Deletes the working lump at `index`, guarding the pre-edit scan's
+/// answer: any other lump standing there means the directory moved under
+/// the scan and nothing is committed.
+///
+/// # Errors
+///
+/// [`CyberError::Internal`] when `index` holds no lump named `name`.
+fn remove_lump_at(wad: &mut Wad, name: LumpName, index: usize) -> Result<(), CyberError> {
+    let held = wad.lumps.get(index).is_some_and(|lump| lump.name == name);
+    if !held {
+        return Err(CyberError::Internal(format!(
+            "no lump named {name} at index {index} of the working archive"
+        )));
+    }
+    // One `Vec::remove`: the region markers stay, so the `patches` region
+    // never opens.
+    let _removed = wad.lumps.remove(index);
+    Ok(())
+}
+
+/// The synchronous half of a `remove_patch`: one undoable edit deleting the
+/// working lump at the index the pre-edit scan found (when it found one)
+/// and applying the planned [`PnamesRewrite`] - `PNAMES` plus every texture
+/// lump the renumbering changed - so lump and list always leave together.
+///
+/// # Errors
+///
+/// [`remove_lump_at`]' and [`write_pnames_rewrite`]'
+/// [`CyberError::Internal`] for a directory that moved under the scan;
+/// a refusal leaves the working archive untouched.
+fn commit_removal(
+    session: &mut Session,
+    name: LumpName,
+    index: Option<usize>,
+    rewrite: Option<PnamesRewrite>,
+) -> Result<RemoveOutcome, CyberError> {
+    let removed_from_pnames = rewrite.is_some();
+    let textures_changed = rewrite
+        .as_ref()
+        .map_or(0_usize, |plan| plan.textures_changed);
+    let label = format!("remove_patch {name}");
+    session.edit(&label, move |wad| {
+        let removed_lump = match index {
+            Some(at) => {
+                remove_lump_at(wad, name, at)?;
+                true
+            }
+            None => false,
+        };
+        if let Some(plan) = rewrite.as_ref() {
+            write_pnames_rewrite(wad, plan)?;
+        }
+        Ok(RemoveOutcome {
+            name,
+            removed_lump,
+            removed_from_pnames,
+            textures_changed,
+        })
+    })
+}
+
+/// `remove_patch`' work: scan the working archive, plan the `PNAMES`
+/// removal over the merged view before editing (a `conflict` there removes
+/// nothing), refuse a name neither half holds, then commit lump and list
+/// as the one edit. Nothing here touches the network, so the run is
+/// synchronous behind the `async` tool entry point.
+///
+/// # Errors
+///
+/// [`LumpName::parse`]' [`CyberError::InvalidArgument`] for a bad name,
+/// [`plan_pnames_removal`]' [`CyberError::Conflict`] unless `force`,
+/// [`working_removal_missing`]' [`CyberError::NotFound`],
+/// [`current_pnames`]' [`CyberError::Format`] and
+/// [`commit_removal`]' errors.
+fn remove_patch_run(
+    state: &AppState,
+    args: &RemovePatchParams,
+) -> Result<RemoveOutcome, CyberError> {
+    let name = LumpName::parse(&args.name)?;
+    let index = state.with_session(|session| working_patch_slot(session, name))?;
+    let rewrite = if args.remove_from_pnames.unwrap_or(false) {
+        let force = args.force.unwrap_or(false);
+        let plan = state.with_session(move |session| {
+            plan_pnames_removal(session, &[name.to_string()], force)
+        })?;
+        (!plan.removed.is_empty()).then_some(plan)
+    } else {
+        None
+    };
+    if index.is_none() && rewrite.is_none() {
+        return Err(working_removal_missing(name));
+    }
+    state.with_session(move |session| commit_removal(session, name, index, rewrite))
+}
+
 /// The full documentation of [`Cyberdemon::add_patch`].
 const ADD_PATCH_TOOL_DESCRIPTION: &str = "Adds one patch lump to the working archive's patches region (P_START/P_END markers created there when the working archive has none) as a single undoable edit labelled \"add_patch NAME\" (save_wad writes the result; undo steps it back, redo replays it). name (required: 1 to 8 printable ASCII characters, uppercased) is the lump name - nothing is derived from the file. source: absolute path, file:// URI, http(s):// URL or this server's asset/upload URL. Passthrough rule: source bytes that already are a Doom patch (a valid header and column table, and they decode) are stored unchanged - converted reports false and the column bodies stay byte-identical - while any other source runs the import_image_as_patch pipeline (decode, quantize to the session's PLAYPAL, encode the classic column/post format), reported as converted: true. palette (default 0), transparency ({mode: \"alpha\"} with threshold default 128, {mode: \"color\"} with color default \"#00FFFF\", {mode: \"none\"}) and offsets are the import_image_as_patch parameters (see skill/reference/imports.md) and act on the converted half only. offsets default to \"zero\" here: a converted PNG's grAb chunk still wins over that default, while on a passthrough patch only an explicit {\"x\": n, \"y\": n} pair rewrites the two header fields - presets and an omitted offsets leave the stored header as it is - and either way an offset outside the i16 range a patch header stores is invalid_argument. add_to_pnames (default true) also lists the name in PNAMES, copy-on-write: an already-listed name keeps its index and nothing is rewritten. Errors: invalid_argument (a bad name or offsets preset or transparency mode, an offset outside the i16 range), not_found (missing source; a missing PLAYPAL or a palette index it lacks on the converted half), format_error (bytes that are neither a Doom patch nor a readable image), already_exists when the working archive's patches region already holds this name - add_patch never overwrites, that is replace_patch's job. Returns {name, converted, width, height, left_offset, top_offset, pnames_index}: the dimensions and offsets are the stored patch header's, pnames_index is the PNAMES entry or null when the name is not listed. list_patches shows the region's lumps, get_patch publishes this one back, list_pnames shows the name list, remove_patch deletes a patch, and import_image_as_patch converts a picture under a name derived from the file with a replace=true option.";
 
 /// The full documentation of [`Cyberdemon::replace_patch`].
 const REPLACE_PATCH_TOOL_DESCRIPTION: &str = "Replaces the bytes of one patch lump the session already has, whether the working archive owns it or it comes from the IWAD or a resource layer, as a single undoable edit labelled \"replace_patch NAME\" (save_wad writes the result; undo steps it back, redo replays it). name (required: 1 to 8 printable ASCII characters, uppercased) is resolved against the merged view the way list_patches reads one: the last lump of that name inside a P_START region, or, when PNAMES lists the name, an occurrence living outside the flats and sprites regions as well. Nothing answers is not_found and points at add_patch, the way in for a patch that does not exist yet. source, palette, transparency and offsets are add_patch's shared picture parameters unchanged (see skill/reference/patches.md): source bytes that already are a Doom patch are stored as they are - converted reports false, only an explicit {\"x\": n, \"y\": n} pair rewrites the two header fields, and an offset outside the i16 range a patch header stores is invalid_argument - while any other picture runs the import_image_as_patch pipeline, reported as converted: true; a missing source or PLAYPAL trouble is not_found and bytes that are neither a Doom patch nor a readable image are format_error. The write is decided before the edit: the working archive's patches region already holds the name, so the lump is overwritten in place at its own directory index (created_override: false); only a lower layer holds it, so the bytes land as a working override in the patches region, whose P_START/P_END markers are created there when the working archive has none (created_override: true) - the lower layer is never touched. PNAMES is never written: a listed name keeps its index, so TEXTURE1/TEXTURE2 patch references keep working and list_pnames answers unchanged. Returns add_patch's facts (name, converted, width, height, left_offset, top_offset) plus the unchanged pnames_index (null for an unlisted name), created_override, and lump_index, the replaced lump's position in the working archive. Check the swap with get_patch or list_patches (the row shows source: \"working\"); undoing a created override hands the merged view back to the lower layer.";
+
+/// The full documentation of [`Cyberdemon::remove_patch`].
+const REMOVE_PATCH_TOOL_DESCRIPTION: &str = "Removes one patch from the working archive as a single undoable edit labelled \"remove_patch NAME\" (save_wad writes the result; undo steps it back, redo replays it). name (required: 1 to 8 printable ASCII characters, uppercased) is looked up in the working archive only: the last lump of that name inside a P_START region, or, when the merged PNAMES lists the name, a working occurrence living outside the flats and sprites regions the way list_patches reads one. Nothing answers is not_found - only working lumps can be removed, so an IWAD or resource-layer patch must first be overridden by replace_patch to gain the working copy (or be left alone). remove_from_pnames (default false) also deletes the name's PNAMES entry, copy-on-write like edit_pnames remove: every surviving entry shifts down and all TEXTURE1/TEXTURE2 patch references are renumbered - or dropped with the entry - inside the SAME undoable edit, so the lump never leaves without its list and the list never leaves without the lump. A texture that still refers to the removed entry is conflict and NOTHING is removed (the message names the offending textures); pass force=true to accept the dropped patch references. A name PNAMES does not list is no obstacle: removed_from_pnames reports false and no PNAMES write happens. Returns {name, removed_lump, removed_from_pnames, textures_changed}: removed_lump is false only when the name had a PNAMES entry but no working lump of its own (still a legitimate edit when remove_from_pnames is set), and textures_changed counts the textures the renumbering pruned or shifted (0 without a PNAMES write). An unparsable name is invalid_argument. The working archive is what changes; save_wad is what makes the removal durable on disk.";
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -541,6 +735,18 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Removes one patch from the working archive, `PNAMES` entry included.
+    #[tool(description = REMOVE_PATCH_TOOL_DESCRIPTION)]
+    async fn remove_patch(
+        &self,
+        Parameters(args): Parameters<RemovePatchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match remove_patch_run(self.state(), &args) {
+            Ok(outcome) => ok(&outcome),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -548,8 +754,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AddPatchParams, PatchSourceParams, ReplacePatchParams, holds_patch, located_patch,
-        looks_like_patch, passthrough_staged,
+        AddPatchParams, PatchSourceParams, RemovePatchParams, ReplacePatchParams, holds_patch,
+        located_patch, looks_like_patch, passthrough_staged, remove_lump_at, working_patch_slot,
+        working_removal_missing,
     };
     use crate::error::CyberError;
     use crate::gfx::image::IndexedImage;
@@ -882,5 +1089,113 @@ mod tests {
         assert_eq!(import.palette, 3_usize, "the palette carries");
         assert_eq!(import.offsets, Some(OffsetMode::Grab), "the preset carries");
         assert!(!import.replace, "the tool decides the write itself");
+    }
+
+    #[test]
+    fn the_remove_wire_form_carries_the_name_and_the_two_flags() {
+        let plain: RemovePatchParams =
+            serde_json::from_value(json!({ "name": "wallp1" })).expect("just the name");
+        assert_eq!(plain.name, "wallp1", "the name stays as typed");
+        assert_eq!(
+            plain.remove_from_pnames, None,
+            "the list flag is off by default"
+        );
+        assert_eq!(plain.force, None, "the force flag is off by default");
+        let both: RemovePatchParams = serde_json::from_value(json!({
+            "name": "WALLP1",
+            "remove_from_pnames": true,
+            "force": true,
+        }))
+        .expect("all three fields");
+        assert_eq!(both.remove_from_pnames, Some(true), "the list flag carries");
+        assert_eq!(both.force, Some(true), "the force flag carries");
+        let long = LumpName::parse("TOOLONGNM").expect_err("nine characters");
+        assert_eq!(
+            code(&long),
+            "invalid_argument",
+            "the parse refusal run uses"
+        );
+    }
+
+    #[test]
+    fn working_patch_slot_scans_the_region_and_the_pnames_globals() {
+        let region = session_listed(&["P_START", "MYART", "P_END", "PNAMES"], &[]);
+        assert_eq!(
+            working_patch_slot(&region, name("MYART")).expect("the scan runs"),
+            Some(1_usize),
+            "the region lump at its directory index"
+        );
+        let global = session_listed(&["MYART", "PNAMES"], &["MYART"]);
+        assert_eq!(
+            working_patch_slot(&global, name("MYART")).expect("the scan runs"),
+            Some(0_usize),
+            "a PNAMES-listed global outside any region is a candidate"
+        );
+        let unlisted = session_listed(&["MYART"], &[]);
+        assert_eq!(
+            working_patch_slot(&unlisted, name("MYART")).expect("the scan runs"),
+            None,
+            "an unlisted loose lump is no candidate"
+        );
+        let flats = session_listed(&["F_START", "MYART", "F_END", "PNAMES"], &["MYART"]);
+        assert_eq!(
+            working_patch_slot(&flats, name("MYART")).expect("the scan runs"),
+            None,
+            "the flats and sprites regions never offer a patch"
+        );
+        let markers = session_listed(&["P_START", "P_END", "PNAMES"], &["P_START"]);
+        assert_eq!(
+            working_patch_slot(&markers, name("P_START")).expect("the scan runs"),
+            None,
+            "a marker is no candidate even when PNAMES oddly lists one"
+        );
+        let twice = session_listed(
+            &["MYART", "P_START", "MYART", "P_END", "PNAMES"],
+            &["MYART"],
+        );
+        assert_eq!(
+            working_patch_slot(&twice, name("MYART")).expect("the scan runs"),
+            Some(2_usize),
+            "the last working copy wins"
+        );
+    }
+
+    #[test]
+    fn remove_lump_at_takes_the_named_slot_and_refuses_others() {
+        let mut session = session_with(&["P_START", "MYART", "P_END"]);
+        session
+            .edit("cut", |wad| remove_lump_at(wad, name("MYART"), 1))
+            .expect("the named slot leaves");
+        let names: Vec<String> = session
+            .working()
+            .lumps
+            .iter()
+            .map(|lump| lump.name.to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["P_START".to_owned(), "P_END".to_owned()],
+            "the markers stay, so the region stays closed"
+        );
+        let stale = session
+            .edit("bad cut", |wad| remove_lump_at(wad, name("MYART"), 1))
+            .expect_err("P_END stands at index 1 now");
+        assert_eq!(code(&stale), "internal", "the stale-index guard bites");
+        assert_eq!(
+            session.undo_labels(),
+            vec!["cut", "seed"],
+            "the refused cut left no step"
+        );
+    }
+
+    #[test]
+    fn the_missing_working_removal_hint_names_replace_patch() {
+        let error = working_removal_missing(name("WALLP1"));
+        assert_eq!(code(&error), "not_found", "the documented code");
+        let message = error.to_string();
+        assert!(
+            message.contains("replace_patch") && message.contains("working"),
+            "the hint says what only works on working lumps: {message}"
+        );
     }
 }

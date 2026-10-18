@@ -1,16 +1,17 @@
 # Patches
 
 The patch lifecycle. `add_patch` puts one patch lump into the working
-archive's **patches** region and `replace_patch` swaps the bytes of one the
-session already has; deleting a patch (`remove_patch`) completes the
-lifecycle as it arrives. Where `import_image_as_patch`
-(`reference/imports.md`) is the one-shot conversion of a picture file —
-its name derived from the file, its `replace` flag overwriting in place —
-this group treats the region as a set of lumps you manage: the name is
-always explicit, and `add_patch` never overwrites (a working twin is
-`already_exists`, pointing at `replace_patch`). Every edit is one undoable
-step (`undo`/`redo` step through it, `save_wad` writes the working archive
-out), and both tools build on exactly the same import parameters as
+archive's **patches** region, `replace_patch` swaps the bytes of one the
+session already has, and `remove_patch` deletes a working patch — its
+`PNAMES` entry and every texture reference to it included, on request.
+Where `import_image_as_patch` (`reference/imports.md`) is the one-shot
+conversion of a picture file — its name derived from the file, its
+`replace` flag overwriting in place — this group treats the region as a
+set of lumps you manage: the name is always explicit, and `add_patch`
+never overwrites (a working twin is `already_exists`, pointing at
+`replace_patch`). Every edit is one undoable step (`undo`/`redo` step
+through it, `save_wad` writes the working archive out), and `add_patch`
+and `replace_patch` build on exactly the same import parameters as
 `reference/imports.md`.
 
 ## `add_patch`
@@ -135,3 +136,57 @@ out), and both tools build on exactly the same import parameters as
 - Check the swap with `get_patch` and `list_patches` (the row shows
   `source: "working"` after the edit); `undo` hands the merged view back
   to the lower layer and `redo` re-creates the override.
+
+## `remove_patch`
+
+- Purpose: deletes one patch from the **working archive** as one undoable
+  edit labelled `remove_patch NAME` — the lump alone, or the lump plus its
+  `PNAMES` entry, with every surviving entry shifted down and every
+  `TEXTURE1`/`TEXTURE2` patch reference renumbered in the same edit.
+  `save_wad` is what makes the removal durable on disk; `undo` steps the
+  whole change back and `redo` replays it.
+- How the target resolves: `name` is looked up in the working archive
+  only — the last lump of that name inside a `P_START` region, or, when
+  the merged `PNAMES` lists the name, a working occurrence living outside
+  the flats and sprites regions (the `list_patches` candidate rule).
+  Nothing answers is `not_found`: only working lumps can be removed, so an
+  `IWAD` or resource-layer patch must first be overridden by
+  `replace_patch` to gain the working copy (or be left alone).
+- Arguments:
+  - `name` (string, required): 1 to 8 printable ASCII characters,
+    uppercased; anything else is `invalid_argument`.
+  - `remove_from_pnames` (boolean, optional, default `false`): also delete
+    the `PNAMES` entry, copy-on-write like `edit_pnames remove`, and
+    renumber (or drop, together with the entry) every texture patch
+    reference in the **same** edit — the lump never leaves without its
+    list, and the list never leaves without the lump. A name `PNAMES` does
+    not list is no obstacle: `removed_from_pnames` reports `false` and no
+    `PNAMES` write happens.
+  - `force` (boolean, optional, default `false`): a `PNAMES` removal whose
+    entry textures still refer to is `conflict` and removes nothing (the
+    message names the offending textures, e.g. `WALL1 (TEXTURE1)`);
+    `force=true` accepts dropping those patch references. Without
+    `remove_from_pnames` the flag does nothing.
+- Returns:
+
+  ```json
+  {
+    "name": "WALLP1",
+    "removed_lump": true,
+    "removed_from_pnames": true,
+    "textures_changed": 2
+  }
+  ```
+
+  (That forced example is the classic case: with a `WALL1` referring to
+  the removed entry and a `STEP1` at a later index, `WALL1` has its
+  references dropped and `STEP1`'s renumber down, so both count.)
+  `removed_lump` is `false` only when the name had a `PNAMES` entry but no
+  working lump of its own — still a legitimate edit when
+  `remove_from_pnames` is set. `textures_changed` counts the textures the
+  renumbering pruned or shifted (`0` without a `PNAMES` write).
+- Check the result with `list_patches` (the name is gone from the working
+  archive), `list_pnames` (the entry list and the shifted indices) and
+  `list_textures` (pruned or renumbered patch counts). To put a replaced
+  patch back, `add_patch` it again; `undo` restores lump, list and texture
+  bytes in one step.

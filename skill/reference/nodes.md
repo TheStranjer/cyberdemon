@@ -3,8 +3,9 @@
 The node-builder output of a map: `get_nodes`, `get_reject` and
 `get_blockmap` read it, `build_nodes` rebuilds the BSP tree itself —
 as the vanilla `SEGS`/`SSECTORS`/`NODES` run or `ZDoom`'s extended
-lump (`NODES`/`ZNODES`) — and `build_blockmap` and `build_reject`
-rebuild the two lumps that need no tree.
+lump (`NODES`/`ZNODES`) — `build_blockmap` and `build_reject`
+rebuild the two lumps that need no tree, and `build_all_nodes`
+rebuilds all of it in one undoable step.
 
 ## What these lumps are for
 
@@ -52,8 +53,9 @@ default; `"merged"`, `"working"` or `"layer:N"`). `detail` is
 `"summary"` (the default: numbers only) or `"full"`: `full` publishes the
 parsed structure as a JSON asset and attaches
 `"asset": {url, filename, mime, size}` to the result. A missing or empty
-lump never publishes anything. The three builders take `map` the same way
-and always edit the working archive; they carry no `scope` or `detail`.
+lump never publishes anything. The three single-lump builders and
+`build_all_nodes` take `map` the same way and always edit the working
+archive; they carry no `scope` or `detail`.
 
 ## `get_nodes`
 
@@ -217,6 +219,43 @@ refused. A region that collapses below a triangle or a seg that lies
 outside every edge of its region is `internal`. Unknown map is
 `not_found`; an unparsable block is `format_error`.
 
+## `build_all_nodes`
+
+`{map?, variant? ("classic" | "extended" | "gl"), reject_mode? ("zero" |
+"components"), compress? (true)}` → `{variant, nodes {...}, reject {...}
+| null, blockmap {...} | null, map, nodes_invalidated,
+copied_to_working}` — one undoable edit that rebuilds **all** of a map's
+node data at once: this is the tool to run after geometry edits, before
+`save_wad`. `variant` picks the node layout exactly as `build_nodes`
+does; left out, a binary `Doom`/`Hexen` map takes `"classic"` and a
+`UDMF` one `"extended"`. The split cost is the builder default `8`;
+`build_nodes` is the tool for tuning it.
+
+- Binary maps get all three: the tree (in the chosen layout), a fresh
+  `REJECT` (the `reject_mode`, default `"zero"`, as in `build_reject`)
+  and a fresh `BLOCKMAP` (blocklists shared while `compress`, the
+  default, as in `build_blockmap`).
+- `UDMF` maps get `ZNODES` alone: `ZDoom` builds the blockmap and the
+  reject itself. Pass `reject_mode` explicitly and a `REJECT` lump is
+  written into the block as well (which `ZDoom` reads); `BLOCKMAP` is
+  never added to a `UDMF` block.
+- `compress` also picks `ZNOD` vs raw `XNOD` for an extended build, as
+  in `build_nodes`.
+
+`nodes` carries exactly the `build_nodes` keys (`variant`, `segs`,
+`subsectors`, `nodes`, `warnings` and the per-variant extras); `reject`
+the `build_reject` keys (`bytes`, `sectors`, `rejected_pairs`, `mode`)
+or `null`; `blockmap` the `build_blockmap` keys (`bytes`, `columns`,
+`rows`, `origin`, `vanilla_safe`) or `null`. Everything happens in one
+`Session::edit`: one undo entry covers the tree, the `GL_*` block, the
+matrix and the grid together, and any refusal — a bad `variant` or
+`reject_mode`, `classic`/`gl` on a `UDMF` map, a map with no vertices or
+no linedef sides (`invalid_argument`), a record limit
+(`limit_exceeded`) — rolls the whole step back with nothing partial
+written. Like the single builders, a build is a product, not geometry:
+`nodes_invalidated` reports `false`. Inspect with `get_nodes`,
+`get_reject` and `get_blockmap`.
+
 ## Errors
 
 An absent or empty lump is data, never an error. Malformed lumps fail
@@ -226,12 +265,14 @@ a truncated or trailing-magic extended lump, an inflated `ZNOD` over the
 decompression cap, a `BLOCKMAP` offset outside the lump or a blocklist
 without its `0xFFFF` terminator. The message names the lump; the fix is
 `build_nodes` for the tree lumps, `build_blockmap` / `build_reject` for
-those two, or reading a different scope. An unknown `map` is `not_found`;
-an unparsable `map`, `scope` or `detail` is `invalid_argument`;
-`build_blockmap` on a map with no vertices is `invalid_argument` and an
-oversized grid, linedef index or lump is `limit_exceeded`; `build_nodes`
-on a map with no linedef sides is `invalid_argument`, `classic` or `gl`
-on a `UDMF` map is `invalid_argument` (build `"extended"`), a
-past-record limit (for `gl` too: `GL_VERT` past `32767`, a `GL_SEGS`
-count past `65535`) is `limit_exceeded` and a collapsed GL region or
-unplaceable seg is `internal`.
+those two, or `build_all_nodes` to rebuild everything in one step. An
+unknown `map` is `not_found`; an unparsable `map`, `scope` or `detail`
+is `invalid_argument`; `build_blockmap` on a map with no vertices is
+`invalid_argument` and an oversized grid, linedef index or lump is
+`limit_exceeded`; `build_nodes` and `build_all_nodes` on a map with no
+linedef sides is `invalid_argument`, `classic` or `gl` on a `UDMF` map
+is `invalid_argument` (build `"extended"`), a past-record limit (for
+`gl` too: `GL_VERT` past `32767`, a `GL_SEGS` count past `65535`) is
+`limit_exceeded` and a collapsed GL region or unplaceable seg is
+`internal`; an unknown `variant` or `reject_mode` is
+`invalid_argument`. A `build_all_nodes` refusal writes nothing partial.

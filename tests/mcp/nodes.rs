@@ -7,9 +7,10 @@
 //! (`build_blockmap`, `build_reject`, `build_nodes`) whose written lumps
 //! the inspection tools then read back — `build_nodes` writing the whole
 //! tree either as the vanilla run (its split vertices appended to
-//! `VERTEXES` and stripped again by the next geometry edit) or as one
+//! `VERTEXES` and stripped again by the next geometry edit), as one
 //! `ZDoom` extended lump in `NODES`/`ZNODES` with the splits kept inside
-//! the lump.
+//! the lump, or as the `glBSP` v2 `GL_*` block (classic run plus
+//! miniseg-closed subsectors) attached right after the map block.
 
 #[cfg(test)]
 mod tests {
@@ -102,27 +103,6 @@ mod tests {
         let url = report["asset"]["url"].as_str().expect("a published url");
         let body = fetch_asset(url).await;
         serde_json::from_slice(&body).expect("the asset is json")
-    }
-
-    /// Requires `build_nodes` on `MAP01` to refuse `variant` with `code`
-    /// and point the caller back at `"classic"`.
-    async fn refuse_variant(client: &Client, variant: &str, code: &str) {
-        let (got, message) = call_err(
-            client,
-            "build_nodes",
-            json!({ "map": "MAP01", "variant": variant }),
-        )
-        .await;
-        assert_eq!(got, code, "{variant} must be refused as {code}");
-        assert!(
-            message.contains("classic"),
-            "the hint names classic: {message}"
-        );
-    }
-
-    /// The one not-yet-implemented layout refuses with `unsupported`.
-    async fn refuse_unbuilt_variants(client: &Client) {
-        refuse_variant(client, "gl", "unsupported").await;
     }
 
     #[tokio::test]
@@ -657,10 +637,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_nodes_refuses_unbuilt_variants_unknown_maps_and_empty_geometry() {
+    async fn build_nodes_refuses_unknown_variants_unknown_maps_and_empty_geometry() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        refuse_unbuilt_variants(&client).await;
         let (code, message) = call_err(
             &client,
             "build_nodes",
@@ -689,6 +668,17 @@ mod tests {
         assert!(
             no_message.contains("sidedefs"),
             "the hint names sides: {no_message}"
+        );
+        let (gl_code, gl_message) = call_err(
+            &empty_client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "gl" }),
+        )
+        .await;
+        assert_eq!(gl_code, "invalid_argument", "gl needs sides too");
+        assert!(
+            gl_message.contains("sidedefs"),
+            "the hint names sides: {gl_message}"
         );
         let (scope_code, _) = call_err(
             &empty_client,
@@ -851,6 +841,17 @@ mod tests {
             message.contains("UDMF maps use extended nodes"),
             "the message names the rule: {message}"
         );
+        let (gl_code, gl_message) = call_err(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP07", "variant": "gl" }),
+        )
+        .await;
+        assert_eq!(gl_code, "invalid_argument", "gl writes the classic run too");
+        assert!(
+            gl_message.contains("UDMF maps use extended nodes"),
+            "the same rule: {gl_message}"
+        );
         let after = call(
             &client,
             "get_nodes",
@@ -858,6 +859,192 @@ mod tests {
         )
         .await;
         assert_eq!(after["format"], json!("znod"), "the refusal wrote nothing");
+    }
+
+    /// The name column of one scope's directory.
+    async fn directory_names(client: &Client, scope: &str) -> Vec<String> {
+        let listing = call(
+            client,
+            "list_lumps",
+            json!({ "scope": scope, "limit": 2000_i64 }),
+        )
+        .await;
+        listing["lumps"]
+            .as_array()
+            .expect("a lump list")
+            .iter()
+            .map(|row| row["name"].as_str().expect("a name").to_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn build_nodes_gl_writes_classic_lumps_and_the_readers_agree() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        let built = call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "gl" }),
+        )
+        .await;
+        assert_eq!(built["variant"], json!("gl"), "the echo");
+        assert_eq!(
+            built["segs"],
+            json!(8_u64),
+            "the classic run is written as well"
+        );
+        assert_eq!(built["subsectors"], json!(2_u64), "one leaf per room");
+        assert_eq!(built["nodes"], json!(1_u64), "the shared line cuts once");
+        assert_eq!(built["split_vertices"], json!(0_u64), "flush corners");
+        assert_eq!(
+            built["gl_segs"],
+            json!(8_u64),
+            "every edge holds a real seg"
+        );
+        assert_eq!(
+            built["minisegs"],
+            json!(0_u64),
+            "the shared line is covered both sides"
+        );
+        assert_eq!(
+            built["gl_vertices"],
+            json!(0_u64),
+            "the GL run needs no fraction points"
+        );
+        assert_eq!(
+            built["nodes_invalidated"],
+            json!(false),
+            "a build is a product"
+        );
+        assert_eq!(
+            built["copied_to_working"],
+            json!(true),
+            "the map came in to edit"
+        );
+        let maps = call(&client, "list_maps", json!({ "scope": "working" })).await;
+        assert_eq!(
+            maps["maps"][0]["has_gl_nodes"],
+            json!(true),
+            "list_maps sees the run"
+        );
+        assert_gl_read_back(&client, &built).await;
+    }
+
+    /// Requires `get_nodes` on `MAP01` to read the fresh `glBSP` v2 run:
+    /// the classic records still parsed and the GL block counted.
+    async fn assert_gl_read_back(client: &Client, built: &Value) {
+        let read = call(client, "get_nodes", json!({ "map": "MAP01" })).await;
+        assert_eq!(
+            read["format"],
+            json!("vanilla"),
+            "the classic run still reads"
+        );
+        assert_eq!(
+            read["gl"]["present"],
+            json!(true),
+            "and the GL block rides along"
+        );
+        assert_eq!(read["gl"]["magic"], json!("gNd2"), "the v2 magic");
+        assert_eq!(read["gl"]["segs"], built["gl_segs"], "GL_SEGS rows counted");
+        assert_eq!(read["gl"]["subsectors"], json!(2_u64), "GL_SSECT rows");
+        assert_eq!(read["gl"]["nodes"], json!(1_u64), "GL_NODES rows");
+        assert_eq!(read["gl"]["vertices"], built["gl_vertices"], "GL_VERT rows");
+    }
+
+    #[tokio::test]
+    async fn the_gl_block_sits_after_the_map_and_survives_rebuilds_and_undo() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "gl" }),
+        )
+        .await;
+        let names = directory_names(&client, "working").await;
+        let map_at = names.iter().position(|n| n == "MAP01").expect("the block");
+        let gl_at = names
+            .iter()
+            .position(|n| n == "GL_MAP01")
+            .expect("the marker");
+        let members = map_at
+            .checked_add(11)
+            .expect("ten members after the header");
+        assert_eq!(gl_at, members, "the run sits right after the map block");
+        let end = gl_at.checked_add(6).expect("six run lumps");
+        assert_eq!(
+            names[gl_at..end],
+            [
+                "GL_MAP01", "GL_VERT", "GL_SEGS", "GL_SSECT", "GL_NODES", "GL_PVS"
+            ],
+            "the run in glBSP order"
+        );
+        let again = call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "gl" }),
+        )
+        .await;
+        assert_eq!(again["copied_to_working"], json!(false), "already editable");
+        assert_eq!(
+            directory_names(&client, "working").await,
+            names,
+            "a rebuild replaces, never duplicates"
+        );
+        call(&client, "undo", json!({})).await;
+        assert_eq!(
+            directory_names(&client, "working").await,
+            names,
+            "the first build stands"
+        );
+        call(&client, "undo", json!({})).await;
+        let gone = call(&client, "get_nodes", json!({ "map": "MAP01" })).await;
+        assert_eq!(
+            gone["gl"]["present"],
+            json!(false),
+            "undo took the block away"
+        );
+        assert_eq!(gone["format"], json!("none"), "and the classic run with it");
+    }
+
+    #[tokio::test]
+    async fn gl_minisegs_close_the_uncovered_partition_of_an_l_room() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = l_room_loaded(dir.path()).await;
+        let built = call(
+            &client,
+            "build_nodes",
+            json!({ "map": "MAP01", "variant": "gl" }),
+        )
+        .await;
+        assert_eq!(built["segs"], json!(7_u64), "the classic count");
+        assert_eq!(
+            built["gl_segs"],
+            json!(9_u64),
+            "seven real segs plus two minisegs"
+        );
+        assert_eq!(
+            built["minisegs"],
+            json!(2_u64),
+            "one per side of the doorway plane"
+        );
+        assert_eq!(
+            built["gl_vertices"],
+            json!(0_u64),
+            "the classic run's split vertex is reused"
+        );
+        let read = call(
+            &client,
+            "get_nodes",
+            json!({ "map": "MAP01", "scope": "working" }),
+        )
+        .await;
+        assert_eq!(
+            read["gl"]["segs"],
+            json!(9_u64),
+            "the reader counts them back"
+        );
+        assert_eq!(read["gl"]["subsectors"], json!(2_u64), "two closed leaves");
     }
 
     #[tokio::test]

@@ -121,8 +121,9 @@ const fn between(num: i128, den: i128) -> bool {
 
 /// `value * num / den` rounded to the nearest (halves away from zero)
 /// through an `i128` intermediate, `None` on overflow of `i128` or of
-/// the `i64` result.
-fn scale_round(value: i128, num: i128, den: i128) -> Option<i64> {
+/// the `i64` result. Shared with the polygon clipper, which cuts at the
+/// same rounded points the seg splitter does.
+pub(crate) fn scale_round(value: i128, num: i128, den: i128) -> Option<i64> {
     let product = value.checked_mul(num)?;
     let quotient = product.checked_div(den)?;
     let remainder = product.checked_rem(den)?;

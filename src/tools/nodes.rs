@@ -19,10 +19,13 @@
 //! own lump in the block, so no node data is invalidated.
 //! [`Cyberdemon::build_nodes`] writes the whole vanilla run through
 //! [`crate::bsp::to_vanilla`] (its split vertices are appended to
-//! `VERTEXES` and cleaned up again by the next geometry edit) or one
+//! `VERTEXES` and cleaned up again by the next geometry edit), one
 //! `ZDoom` extended lump through [`crate::bsp::to_extended`] (stored in
 //! `NODES` of a binary block or in `ZNODES` of a `UDMF` one, with the
-//! split vertices kept inside the lump and `VERTEXES` untouched).
+//! split vertices kept inside the lump and `VERTEXES` untouched), or the
+//! `glBSP` v2 run through [`crate::bsp::to_gl`] — the classic lumps plus
+//! a `GL_*` block attached right after the map block, written as one
+//! undoable [`Session::edit`].
 
 use alloc::collections::BTreeMap;
 
@@ -35,16 +38,18 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
-use crate::bsp::{BuildOptions, build_tree, to_extended, to_vanilla};
+use crate::bsp::BspTree;
+use crate::bsp::{BuildOptions, GlNodes, build_tree, to_extended, to_gl, to_vanilla};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::{Scope, Session};
+use crate::session::map_edit::{self, MapEditReport};
+use crate::session::{MergedLump, Scope, Session};
 use crate::state::AppState;
 use crate::tools::maps::common::{self, Directory};
 use crate::tools::maps::params::edit_result_fragment;
 use crate::tools::{fail, ok};
-use crate::wad::archive::Lump;
-use crate::wad::classify::{MapBlock, MapFormat};
+use crate::wad::archive::{Lump, Wad};
+use crate::wad::classify::{Analysis, MapBlock, MapFormat, analyze};
 use crate::wad::map::build_blockmap::{self, BlockmapBuild};
 use crate::wad::map::build_reject::{self, RejectBuild, RejectMode};
 use crate::wad::map::nodes::{self, Node, NodesFormat, Seg, Subsector};
@@ -138,10 +143,11 @@ struct BuildNodesParams {
     #[serde(default)]
     map: Option<String>,
     /// The node layout to write: `"classic"` (the default: the vanilla
-    /// `SEGS`/`SSECTORS`/`NODES` lumps, binary maps only) or `"extended"`
+    /// `SEGS`/`SSECTORS`/`NODES` lumps, binary maps only), `"extended"`
     /// (`ZDoom`'s single `XNOD`/`ZNOD` lump, stored in `NODES` of a
-    /// binary map or in `ZNODES` of a `UDMF` one); `"gl"` (the `glBSP`
-    /// `GL_*` run) is not implemented yet and fails `unsupported`.
+    /// binary map or in `ZNODES` of a `UDMF` one) or `"gl"` (the classic
+    /// lumps plus the `glBSP` v2 `GL_*` run for `OpenGL` ports, binary
+    /// maps only).
     #[serde(default)]
     variant: Option<String>,
     /// Cost added per seg a candidate partition splits (default `8`);
@@ -343,19 +349,92 @@ struct GlInfo {
     /// The `GL_VERT` lump's magic (`gNd2`, `gNd5`, ...), `None` without a
     /// readable one.
     magic: Option<String>,
+    /// `GL_SEGS` records; `null` unless the run is a readable `glBSP` v2.
+    segs: Option<usize>,
+    /// `GL_SSECT` records; `null` unless the run is a readable `glBSP` v2.
+    subsectors: Option<usize>,
+    /// `GL_NODES` records; `null` unless the run is a readable `glBSP` v2.
+    nodes: Option<usize>,
+    /// `GL_VERT` vertices; `null` unless the run is a readable `glBSP` v2.
+    vertices: Option<usize>,
     /// The run's lump sizes by name.
     lumps: BTreeMap<String, usize>,
 }
 
-/// Reports `block`'s attached `GL` run: magic and sizes only, glBSP data
-/// is never parsed here.
+/// Bytes in one `GL_SEGS` record.
+const GL_SEGS_RECORD: usize = 10;
+/// Bytes in one `GL_SSECT` record.
+const GL_SSECT_RECORD: usize = 4;
+/// Bytes in one `GL_NODES` record.
+const GL_NODES_RECORD: usize = 28;
+/// Bytes in one `GL_VERT` row.
+const GL_VERT_ROW: usize = 8;
+/// Bytes in the `GL_VERT` magic that precede the rows.
+const GL_VERT_MAGIC: usize = 4;
+/// The `GL_VERT` magic whose records this reader counts.
+const GL_MAGIC_V2: &str = "gNd2";
+
+/// The record count of a GL lump holding whole `record`-sized rows only.
+fn whole_records(bytes: usize, record: usize) -> Option<usize> {
+    let count = bytes.checked_div(record)?;
+    let used = record.checked_mul(count)?;
+    (used == bytes).then_some(count)
+}
+
+/// The record counts of a `glBSP` v2 run's lumps.
+#[derive(Clone, Copy, Default)]
+struct GlCounts {
+    /// `GL_SEGS` rows.
+    segs: Option<usize>,
+    /// `GL_SSECT` rows.
+    subsectors: Option<usize>,
+    /// `GL_NODES` rows.
+    nodes: Option<usize>,
+    /// `GL_VERT` rows.
+    vertices: Option<usize>,
+}
+
+/// The v2 record counts of the run's lumps, all `None` for any other
+/// magic (only `gNd2` has a defined layout here).
+fn gl_counts(magic: Option<&str>, lumps: &BTreeMap<String, usize>) -> GlCounts {
+    if magic != Some(GL_MAGIC_V2) {
+        return GlCounts::default();
+    }
+    let segs = lumps
+        .get("GL_SEGS")
+        .and_then(|size| whole_records(*size, GL_SEGS_RECORD));
+    let subsectors = lumps
+        .get("GL_SSECT")
+        .and_then(|size| whole_records(*size, GL_SSECT_RECORD));
+    let nodes = lumps
+        .get("GL_NODES")
+        .and_then(|size| whole_records(*size, GL_NODES_RECORD));
+    let vertices = lumps
+        .get("GL_VERT")
+        .and_then(|size| size.checked_sub(GL_VERT_MAGIC))
+        .and_then(|body| whole_records(body, GL_VERT_ROW));
+    GlCounts {
+        segs,
+        subsectors,
+        nodes,
+        vertices,
+    }
+}
+
+/// Reports `block`'s attached `GL` run: magic, `glBSP` v2 counts and
+/// sizes; the record bytes themselves are never parsed here.
 fn gl_info(dir: &Directory, block: &MapBlock) -> GlInfo {
+    let absent = || GlInfo {
+        present: false,
+        magic: None,
+        segs: None,
+        subsectors: None,
+        nodes: None,
+        vertices: None,
+        lumps: BTreeMap::new(),
+    };
     let Some((start, end)) = block.gl else {
-        return GlInfo {
-            present: false,
-            magic: None,
-            lumps: BTreeMap::new(),
-        };
+        return absent();
     };
     let mut lumps = BTreeMap::new();
     let mut magic = None;
@@ -368,9 +447,14 @@ fn gl_info(dir: &Directory, block: &MapBlock) -> GlInfo {
             magic = magic.or_else(|| lump_magic(&lump.data));
         }
     }
+    let counts = gl_counts(magic.as_deref(), &lumps);
     GlInfo {
         present: true,
         magic,
+        segs: counts.segs,
+        subsectors: counts.subsectors,
+        nodes: counts.nodes,
+        vertices: counts.vertices,
         lumps,
     }
 }
@@ -926,7 +1010,7 @@ enum Variant {
     Classic,
     /// `ZDoom`'s extended lump, in `NODES` or `ZNODES`.
     Extended,
-    /// The `glBSP` `GL_*` run: not implemented yet.
+    /// The `glBSP` `GL_*` run, written alongside the classic lumps.
     Gl,
 }
 
@@ -937,6 +1021,8 @@ enum Implemented {
     Classic,
     /// The `ZDoom` extended lump.
     Extended,
+    /// The classic lumps plus the `glBSP` `GL_*` run.
+    Gl,
 }
 
 impl Variant {
@@ -961,21 +1047,12 @@ impl Variant {
         }
     }
 
-    /// The layout this build writes, refusing the one it cannot yet.
-    ///
-    /// # Errors
-    ///
-    /// [`CyberError::Unsupported`] for [`Variant::Gl`], pointing back at
-    /// `"classic"`.
-    fn check(self) -> Result<Implemented, CyberError> {
+    /// The layout this build writes.
+    const fn check(self) -> Implemented {
         match self {
-            Self::Classic => Ok(Implemented::Classic),
-            Self::Extended => Ok(Implemented::Extended),
-            Self::Gl => Err(CyberError::Unsupported(
-                "the \"gl\" (glBSP GL_*) node writer is not implemented yet: build \
-                 variant \"classic\", which vanilla Doom and every ZDoom-family port play"
-                    .to_owned(),
-            )),
+            Self::Classic => Implemented::Classic,
+            Self::Extended => Implemented::Extended,
+            Self::Gl => Implemented::Gl,
         }
     }
 }
@@ -995,10 +1072,12 @@ struct ClassicBuild {
     warnings: Vec<String>,
 }
 
-/// The edit closure of [`Cyberdemon::build_nodes`] variant `"classic"`:
-/// rebuild the tree and install the three vanilla lumps, appending the
-/// split vertices the seg endpoints need after the map's own.
-fn install_classic_nodes(map: &mut Map, split_cost: i64) -> Result<ClassicBuild, CyberError> {
+/// Refuse the layouts a `UDMF` block cannot carry.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] on a `UDMF` block.
+fn require_binary(map: &Map) -> Result<(), CyberError> {
     if map.format == MapFormat::Udmf {
         return Err(CyberError::InvalidArgument(
             "UDMF maps use extended nodes: the classic SEGS/SSECTORS/NODES run \
@@ -1006,20 +1085,19 @@ fn install_classic_nodes(map: &mut Map, split_cost: i64) -> Result<ClassicBuild,
                 .to_owned(),
         ));
     }
-    let tree = build_tree(
-        map,
-        BuildOptions {
-            split_cost,
-            ..BuildOptions::default()
-        },
-    )?;
-    let run = to_vanilla(map, &tree)?;
+    Ok(())
+}
+
+/// Install a finished tree as the vanilla run: the three record lumps and
+/// the split vertices its seg endpoints need, appended after the map's.
+fn write_classic_run(map: &mut Map, tree: &BspTree) -> Result<ClassicBuild, CyberError> {
+    let run = to_vanilla(map, tree)?;
     let built = ClassicBuild {
         segs: tree.segs.len(),
         subsectors: tree.subsectors.len(),
         nodes: tree.nodes.len(),
         split_vertices: run.new_vertices.len(),
-        warnings: tree.warnings,
+        warnings: tree.warnings.clone(),
     };
     map.vertices.extend(run.new_vertices);
     install_lump(
@@ -1041,6 +1119,135 @@ fn install_classic_nodes(map: &mut Map, split_cost: i64) -> Result<ClassicBuild,
         &NODES_AFTER,
     );
     Ok(built)
+}
+
+/// The edit closure of [`Cyberdemon::build_nodes`] variant `"classic"`:
+/// rebuild the tree and install the three vanilla lumps, appending the
+/// split vertices the seg endpoints need after the map's own.
+fn install_classic_nodes(map: &mut Map, split_cost: i64) -> Result<ClassicBuild, CyberError> {
+    require_binary(map)?;
+    let tree = build_tree(
+        map,
+        BuildOptions {
+            split_cost,
+            ..BuildOptions::default()
+        },
+    )?;
+    write_classic_run(map, &tree)
+}
+
+/// What one `gl` variant build wrote: the classic run's report and the
+/// `glBSP` v2 lumps waiting for the archive.
+#[derive(Debug)]
+struct GlBuild {
+    /// The classic counts installed alongside (the map plays everywhere).
+    classic: ClassicBuild,
+    /// The `GL_*` record lumps.
+    run: GlNodes,
+}
+
+/// The edit closure of [`Cyberdemon::build_nodes`] variant `"gl"`: build
+/// the tree once, install the classic run (so vanilla `Doom` and every
+/// port play the map) and serialize the same tree as the `glBSP` v2
+/// lumps. The `GL_*` block itself lives outside the map block, so the
+/// caller splices it into the archive around this edit.
+fn install_gl_nodes(map: &mut Map, split_cost: i64) -> Result<GlBuild, CyberError> {
+    require_binary(map)?;
+    let tree = build_tree(
+        map,
+        BuildOptions {
+            split_cost,
+            ..BuildOptions::default()
+        },
+    )?;
+    let classic = write_classic_run(map, &tree)?;
+    let run = to_gl(map, &tree)?;
+    Ok(GlBuild { classic, run })
+}
+
+/// The six lump names of one map's `GL` run: the `GL_<MAP>` marker, or
+/// `GL_LEVEL` when the map name leaves no room to embed it.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] should a derived name not parse.
+fn gl_lump_names(map: LumpName) -> Result<[LumpName; 6], CyberError> {
+    let map_name = map.to_string();
+    let head = if map.len() > 5 {
+        "GL_LEVEL".to_owned()
+    } else {
+        format!("GL_{map_name}")
+    };
+    Ok([
+        LumpName::parse(&head)?,
+        LumpName::parse("GL_VERT")?,
+        LumpName::parse("GL_SEGS")?,
+        LumpName::parse("GL_SSECT")?,
+        LumpName::parse("GL_NODES")?,
+        LumpName::parse("GL_PVS")?,
+    ])
+}
+
+/// The one edit step of a `gl` build: the classic-plus-GL map rewrite
+/// through [`map_edit::edit_in_place`], then the `GL_*` block spliced in
+/// behind the map block — one undo entry carrying both.
+///
+/// # Errors
+///
+/// [`map_edit::edit_in_place`] and [`install_gl_run`]'s refusals.
+fn gl_edit_step(
+    wad: &mut Wad,
+    merged: &[MergedLump],
+    name: LumpName,
+    split_cost: i64,
+) -> Result<(GlBuild, MapEditReport), CyberError> {
+    let (built, report) =
+        map_edit::edit_in_place(wad, merged, name, |map| install_gl_nodes(map, split_cost))?;
+    install_gl_run(wad, name, &built.run)?;
+    Ok((built, report))
+}
+
+/// Attach `run` to `wad`'s block named `map`: an existing `GL` run is
+/// replaced in place, otherwise the block is inserted right after the
+/// map block. The map block has just been re-encoded by the caller's
+/// [`map_edit::edit_in_place`], so the directory is read as it now stands.
+///
+/// # Errors
+///
+/// [`gl_lump_names`]'s refusals and [`CyberError::NotFound`] when the
+/// archive holds no such block (it was just edited: only a bug gets here).
+fn install_gl_run(wad: &mut Wad, map: LumpName, run: &GlNodes) -> Result<(), CyberError> {
+    let [head, vert, segs, ssect, nodes, pvs] = gl_lump_names(map)?;
+    let lumps = vec![
+        Lump::marker(head),
+        Lump::new(vert, run.vertices.clone()),
+        Lump::new(segs, run.segs.clone()),
+        Lump::new(ssect, run.ssectors.clone()),
+        Lump::new(nodes, run.nodes.clone()),
+        Lump::new(pvs, run.pvs.clone()),
+    ];
+    let analysis = analyze(&wad.lumps);
+    let (start, stop) = gl_insert_point(&analysis, map)?;
+    wad.lumps.drain(start..stop);
+    wad.lumps.splice(start..start, lumps);
+    Ok(())
+}
+
+/// Where the map's `GL` run goes: its current range when it has one, the
+/// position right after the block otherwise.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] naming `map` when the directory holds no
+/// such block.
+fn gl_insert_point(analysis: &Analysis, map: LumpName) -> Result<(usize, usize), CyberError> {
+    let Some(block) = analysis.maps.iter().rev().find(|block| block.name == map) else {
+        return Err(CyberError::NotFound(format!(
+            "no map block named {map} in the working archive: build nodes \
+             on a map the session holds"
+        )));
+    };
+    Ok(block.gl.unwrap_or((block.end, block.end)))
 }
 
 /// What one extended node build wrote, before the edit fragment joins it.
@@ -1144,6 +1351,16 @@ struct NodesBuildReport {
     /// untouched `VERTEXES`; only in the extended result.
     #[serde(skip_serializing_if = "Option::is_none")]
     new_vertices: Option<usize>,
+    /// Segs in the `GL_SEGS` lump, real and mini; only in the `gl` result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gl_segs: Option<usize>,
+    /// Minisegs among the `GL_SEGS` records; only in the `gl` result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minisegs: Option<usize>,
+    /// Fraction-precise vertices written to `GL_VERT`; only in the `gl`
+    /// result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gl_vertices: Option<usize>,
     /// The builder's warnings, one per subsector spanning several sectors.
     warnings: Vec<String>,
     /// The standard edit fragment.
@@ -1162,6 +1379,9 @@ fn classic_built(built: ClassicBuild, edit: JsonMap<String, Value>) -> NodesBuil
         nodes: built.nodes,
         split_vertices: Some(built.split_vertices),
         new_vertices: None,
+        gl_segs: None,
+        minisegs: None,
+        gl_vertices: None,
         warnings: built.warnings,
         edit,
     }
@@ -1178,7 +1398,30 @@ fn extended_built(built: ExtendedBuild, edit: JsonMap<String, Value>) -> NodesBu
         nodes: built.nodes,
         split_vertices: None,
         new_vertices: Some(built.new_vertices),
+        gl_segs: None,
+        minisegs: None,
+        gl_vertices: None,
         warnings: built.warnings,
+        edit,
+    }
+}
+
+/// The `gl` result: the classic counts, the `GL_*` lump counts and the
+/// standard fragment.
+fn gl_built(built: GlBuild, edit: JsonMap<String, Value>) -> NodesBuildReport {
+    NodesBuildReport {
+        variant: "gl",
+        format: None,
+        bytes: None,
+        segs: built.classic.segs,
+        subsectors: built.classic.subsectors,
+        nodes: built.classic.nodes,
+        split_vertices: Some(built.classic.split_vertices),
+        new_vertices: None,
+        gl_segs: Some(built.run.seg_count),
+        minisegs: Some(built.run.minisegs),
+        gl_vertices: Some(built.run.new_vertices),
+        warnings: built.classic.warnings,
         edit,
     }
 }
@@ -1191,7 +1434,7 @@ fn nodes_build_run(
 ) -> Result<NodesBuildReport, CyberError> {
     let variant = Variant::parse(args.variant.as_deref())?;
     let split_cost = args.split_cost.unwrap_or(DEFAULT_SPLIT_COST);
-    match variant.check()? {
+    match variant.check() {
         Implemented::Classic => {
             let name = common::resolve_map_name(session, args.map.as_deref())?;
             let (built, report) = session.edit_map(name, "build nodes", |map| {
@@ -1206,6 +1449,14 @@ fn nodes_build_run(
                 install_extended_nodes(map, split_cost, compress)
             })?;
             Ok(extended_built(built, edit_result_fragment(&report)))
+        }
+        Implemented::Gl => {
+            let name = common::resolve_map_name(session, args.map.as_deref())?;
+            let merged = session.merged();
+            let (built, report) = session.edit("build nodes", |wad| {
+                gl_edit_step(wad, &merged, name, split_cost)
+            })?;
+            Ok(gl_built(built, edit_result_fragment(&report)))
         }
     }
 }
@@ -1229,7 +1480,7 @@ where
 impl Cyberdemon {
     /// Reports the node-builder output of one map.
     #[tool(
-        description = "Reads a map's node-builder output: the BSP tree built from its geometry. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\", \"layer:N\"). Returns {map, format, bytes (size of the lump the format was read from), segs, subsectors, nodes, extra_vertices (fraction-precise vertices an extended run adds to VERTEXES), root (index of the root node, the last one), depth (node levels on the longest root-to-leaf path), gl {present, magic (GL_VERT's four-byte magic, e.g. \"gNd2\"), lumps {name: size}}}. format: \"none\" (no node bytes; counts 0), \"vanilla\" (the SEGS/SSECTORS/NODES record lumps), \"xnod\"/\"znod\" (ZDoom extended data in NODES or ZNODES; znod is zlib-compressed after the magic), or a GL magic (\"xgln\", \"zgln\", \"xgl2\", \"zgl2\", \"xgl3\", \"zgl3\"): GL data and GL magics inside NODES are reported with their size and never parsed, so their counts are null. Missing or empty lumps are not errors. detail \"full\" additionally publishes {format, extra_vertices, segs, subsectors, nodes} as a JSON asset named <MAP>_nodes.json and attaches \"asset\" {url, filename, mime, size}; nothing-parsed publishes nothing. A malformed node lump is format_error."
+        description = "Reads a map's node-builder output: the BSP tree built from its geometry. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\", \"layer:N\"). Returns {map, format, bytes (size of the lump the format was read from), segs, subsectors, nodes, extra_vertices (fraction-precise vertices an extended run adds to VERTEXES), root (index of the root node, the last one), depth (node levels on the longest root-to-leaf path), gl {present, magic (GL_VERT's four-byte magic, e.g. \"gNd2\"), segs, subsectors, nodes, vertices (record counts of a glBSP v2 run, null for other magics), lumps {name: size}}}. format: \"none\" (no node bytes; counts 0), \"vanilla\" (the SEGS/SSECTORS/NODES record lumps), \"xnod\"/\"znod\" (ZDoom extended data in NODES or ZNODES; znod is zlib-compressed after the magic), or a GL magic (\"xgln\", \"zgln\", \"xgl2\", \"zgl2\", \"xgl3\", \"zgl3\"): GL data and GL magics inside NODES are reported with their size and never parsed, so their counts are null. Missing or empty lumps are not errors. detail \"full\" additionally publishes {format, extra_vertices, segs, subsectors, nodes} as a JSON asset named <MAP>_nodes.json and attaches \"asset\" {url, filename, mime, size}; nothing-parsed publishes nothing. A malformed node lump is format_error."
     )]
     fn get_nodes(
         &self,
@@ -1305,7 +1556,7 @@ impl Cyberdemon {
 
     /// Rebuilds a map's BSP node tree (vanilla or ZDoom extended lumps).
     #[tool(
-        description = "Rebuilds a map's BSP node tree from its current geometry and writes it, as a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). variant selects the layout: \"classic\" (the default) writes the vanilla SEGS/SSECTORS/NODES lumps, which vanilla Doom needs to play the map and every port can use, but only for binary maps; \"extended\" writes ZDoom's single extended lump - fraction-precise (16.16) split vertices and 32-bit child indices - into NODES for a binary map (with SEGS and SSECTORS emptied, which ZDoom ignores) or into a ZNODES lump between TEXTMAP and ENDMAP for a UDMF map (dropping a stale NODES/SEGS/SSECTORS run there); \"gl\" (glBSP GL_* run) is not implemented yet and fails unsupported. classic on a UDMF map is invalid_argument (UDMF maps use extended nodes). compress (default true) zlib-compresses the extended lump behind the ZNOD magic; false stores it raw behind XNOD. split_cost (default 8) is what the builder charges per seg a candidate partition splits: raise it to avoid cutting segs, lower it to prefer cutting over imbalance. The builder turns every linedef side into a seg, recursively splits the map on partition lines taken from the segs, and stops at convex subsectors. Classic seg endpoints that fall between vertices append new vertices after the existing ones (split_vertices counts them): they are invisible to every other tool and the next geometry edit strips them when it invalidates the nodes. An extended build never touches VERTEXES - its split points live inside the lump (new_vertices counts them) - so it is the layout for ZDoom-family ports, big maps and UDMF. Building is a generated product, not geometry, so nodes_invalidated reports false; any later geometry edit (move_vertex, add_sector, ...) empties these lumps and you build again. Returns {variant, segs, subsectors, nodes (0 when the whole map is one subsector), warnings (one note per subsector spanning several sectors), map, nodes_invalidated, copied_to_working}; classic adds split_vertices, extended adds format (\"ZNOD\" or \"XNOD\"), bytes (the written lump's size) and new_vertices. A map with no linedef sides is invalid_argument; past the vanilla limits (65535 vertices, an i16/u16 field, 32767 nodes or subsectors) is limit_exceeded naming variant \"extended\"; a stuck region is internal. Unknown map is not_found, an unparsable block is format_error. Run get_nodes to inspect the result; see skill/reference/nodes.md."
+        description = "Rebuilds a map's BSP node tree from its current geometry and writes it, as a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). variant selects the layout: \"classic\" (the default) writes the vanilla SEGS/SSECTORS/NODES lumps, which vanilla Doom needs to play the map and every port can use, but only for binary maps; \"extended\" writes ZDoom's single extended lump - fraction-precise (16.16) split vertices and 32-bit child indices - into NODES for a binary map (with SEGS and SSECTORS emptied, which ZDoom ignores) or into a ZNODES lump between TEXTMAP and ENDMAP for a UDMF map (dropping a stale NODES/SEGS/SSECTORS run there); \"gl\" writes the classic run AND the glBSP v2 GL_* block (miniseg-closed subsectors for OpenGL ports: GZDoom, Crispy GL, Woof), placed right after the map block of the working archive and replaced whole on a rebuild. classic or gl on a UDMF map is invalid_argument (UDMF maps use extended nodes). compress (default true) zlib-compresses the extended lump behind the ZNOD magic; false stores it raw behind XNOD. split_cost (default 8) is what the builder charges per seg a candidate partition splits: raise it to avoid cutting segs, lower it to prefer cutting over imbalance. The builder turns every linedef side into a seg, recursively splits the map on partition lines taken from the segs, and stops at convex subsectors. Classic seg endpoints that fall between vertices append new vertices after the existing ones (split_vertices counts them): they are invisible to every other tool and the next geometry edit strips them when it invalidates the nodes. An extended build never touches VERTEXES - its split points live inside the lump (new_vertices counts them) - so it is the layout for ZDoom-family ports, big maps and UDMF. Building is a generated product, not geometry, so nodes_invalidated reports false; any later geometry edit (move_vertex, add_sector, ...) empties these lumps and you build again. Returns {variant, segs, subsectors, nodes (0 when the whole map is one subsector), warnings (one note per subsector spanning several sectors), map, nodes_invalidated, copied_to_working}; classic adds split_vertices, extended adds format (\"ZNOD\" or \"XNOD\"), bytes (the written lump's size) and new_vertices; gl adds gl_segs (GL_SEGS records, real and mini), minisegs (the linedef-0xFFFF filler) and gl_vertices (fraction points in GL_VERT), and keeps split_vertices from the classic run it writes alongside. A map with no linedef sides is invalid_argument; past the vanilla limits (65535 vertices, an i16/u16 field, 32767 nodes or subsectors) is limit_exceeded naming variant \"extended\"; for gl also a GL_VERT index past 32767 or a seg endpoint outside its 16.16 range; a stuck region is internal. Undo takes the GL block back with the map. Unknown map is not_found, an unparsable block is format_error. Run get_nodes to inspect the result; see skill/reference/nodes.md."
     )]
     fn build_nodes(
         &self,
@@ -1323,17 +1574,18 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        BuildBlockmapParams, BuildNodesParams, BuildRejectParams, Detail, GlInfo, Implemented,
-        NodeData, RejectMode, Request, Variant, blockmap_build_run, blockmap_summary,
-        empty_blockmap_report, find_lump, gl_info, install_lump, json_bytes, lump_magic,
-        nodes_asset_body, nodes_build_run, nodes_outcome, parse_detail, parse_mode, parse_scope,
-        read_node_data, reject_build_run,
+        BuildBlockmapParams, BuildNodesParams, BuildRejectParams, Detail, GL_NODES_RECORD,
+        GL_SEGS_RECORD, GlInfo, Implemented, NodeData, RejectMode, Request, Variant,
+        blockmap_build_run, blockmap_summary, empty_blockmap_report, find_lump, gl_info,
+        gl_lump_names, install_lump, json_bytes, lump_magic, nodes_asset_body, nodes_build_run,
+        nodes_outcome, nodes_run, parse_detail, parse_mode, parse_scope, read_node_data,
+        reject_build_run, whole_records,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::bytes::Writer;
-    use crate::wad::classify::{MapFormat, analyze};
+    use crate::wad::classify::{MapBlock, MapFormat, analyze};
     use crate::wad::map::Blockmap;
     use crate::wad::map::Map;
     use crate::wad::map::nodes;
@@ -1526,6 +1778,10 @@ mod tests {
         let gl = GlInfo {
             present: false,
             magic: None,
+            segs: None,
+            subsectors: None,
+            nodes: None,
+            vertices: None,
             lumps: alloc::collections::BTreeMap::new(),
         };
         let (none, none_set) = nodes_outcome(name("MAP01"), NodeData::Empty, gl.clone());
@@ -1606,7 +1862,7 @@ mod tests {
         assert_eq!(info.magic.as_deref(), Some("gNd5"), "the GL_VERT magic");
         assert_eq!(info.lumps.len(), 3, "header and two members");
         assert_eq!(info.lumps.get("GL_VERT").copied(), Some(12), "GL_VERT size");
-        let block_without_gl = super::MapBlock { gl: None, ..block };
+        let block_without_gl = MapBlock { gl: None, ..block };
         assert!(
             !gl_info(&dir, &block_without_gl).present,
             "no run, no report"
@@ -1659,13 +1915,12 @@ mod tests {
             lump("NODES", &node_bytes()),
         ]);
         let (report, publish) =
-            super::nodes_run(&session, &request(None, Scope::Merged, Detail::Summary))
-                .expect("runs");
+            nodes_run(&session, &request(None, Scope::Merged, Detail::Summary)).expect("runs");
         assert_eq!(report.map, name("MAP01"), "the map travels");
         assert_eq!(report.format, "vanilla", "the parsed layout");
         assert_eq!(report.segs, Some(1), "one seg");
         assert!(publish.is_none(), "summary publishes nothing");
-        let (full, held) = super::nodes_run(
+        let (full, held) = nodes_run(
             &session,
             &request(Some("map01"), Scope::Merged, Detail::Full),
         )
@@ -1679,18 +1934,17 @@ mod tests {
     #[test]
     fn nodes_run_refuses_an_undecodable_block() {
         let session = block_session(vec![lump("NODES", b"123")]);
-        let broken = super::nodes_run(&session, &request(None, Scope::Merged, Detail::Summary))
+        let broken = nodes_run(&session, &request(None, Scope::Merged, Detail::Summary))
             .expect_err("3 bytes are no NODES record");
         assert_eq!(broken.code(), "format_error", "malformed nodes code");
-        let missing = super::nodes_run(
+        let missing = nodes_run(
             &session,
             &request(Some("MAP09"), Scope::Merged, Detail::Summary),
         )
         .expect_err("MAP09 is in no archive");
         assert_eq!(missing.code(), "not_found", "unknown map code");
-        let bad_scope =
-            super::nodes_run(&session, &request(None, Scope::Layer(4), Detail::Summary))
-                .expect_err("layer 4 is not loaded");
+        let bad_scope = nodes_run(&session, &request(None, Scope::Layer(4), Detail::Summary))
+            .expect_err("layer 4 is not loaded");
         assert_eq!(bad_scope.code(), "not_found", "unloaded layer code");
     }
 
@@ -2163,21 +2417,16 @@ mod tests {
         );
         assert_eq!(Variant::parse(Some("GL")).expect("gl"), Variant::Gl);
         assert_eq!(
-            Variant::Classic.check().expect("classic is implemented"),
+            Variant::Classic.check(),
             Implemented::Classic,
             "classic builds"
         );
         assert_eq!(
-            Variant::Extended.check().expect("extended is implemented"),
+            Variant::Extended.check(),
             Implemented::Extended,
             "extended builds"
         );
-        let error = Variant::Gl.check().expect_err("gl is not here yet");
-        assert_eq!(error.code(), "unsupported", "gl refuses");
-        assert!(
-            error.to_string().contains("classic"),
-            "the hint names classic: {error}"
-        );
+        assert_eq!(Variant::Gl.check(), Implemented::Gl, "gl builds");
         let bad = Variant::parse(Some("znodes")).expect_err("not a variant");
         assert_eq!(bad.code(), "invalid_argument", "bad variant code");
         let message = bad.to_string();
@@ -2490,17 +2739,171 @@ mod tests {
         let missing = nodes_build_run(&mut session, &build_params(Some("MAP09"), None, None))
             .expect_err("no MAP09 anywhere");
         assert_eq!(missing.code(), "not_found", "unknown map code");
-        let refusal = nodes_build_run(&mut session, &build_params(None, Some("gl"), None))
-            .expect_err("the gl variant is not here yet");
-        assert_eq!(refusal.code(), "unsupported", "gl variant code");
-        assert!(
-            refusal.to_string().contains("classic"),
-            "the hint names classic: {refusal}"
-        );
         let weird = nodes_build_run(&mut session, &build_params(None, Some("znodes"), None))
             .expect_err("not a variant");
         assert_eq!(weird.code(), "invalid_argument", "unknown variant code");
         assert!(session.working().is_empty(), "no refusal wrote anything");
         assert!(session.undo_labels().is_empty(), "and none was recorded");
+    }
+
+    /// The directory names of an archive, in order.
+    fn lump_names(session: &Session) -> Vec<String> {
+        session
+            .working()
+            .lumps
+            .iter()
+            .map(|lump| lump.name.to_string())
+            .collect()
+    }
+
+    /// The `MAP01` block of the working archive.
+    fn working_block(session: &Session) -> MapBlock {
+        let analysis = analyze(&session.working().lumps);
+        analysis
+            .maps
+            .iter()
+            .rev()
+            .find(|block| block.name == name("MAP01"))
+            .expect("the block was copied in")
+            .clone()
+    }
+
+    #[test]
+    fn gl_build_writes_classic_lumps_and_a_gl_block_right_after_the_map() {
+        let mut session = l_room_session();
+        let report = nodes_build_run(&mut session, &build_params(None, Some("gl"), None))
+            .expect("the L room gl-builds");
+        assert_eq!(report.variant, "gl", "the echo");
+        assert_eq!(report.segs, 7, "the classic run is written alongside");
+        assert_eq!(report.subsectors, 2, "two leaves");
+        assert_eq!(report.nodes, 1, "one cut");
+        assert_eq!(
+            report.split_vertices,
+            Some(1),
+            "the cut point joined VERTEXES"
+        );
+        assert_eq!(report.gl_segs, Some(9), "seven real segs plus two minisegs");
+        assert_eq!(
+            report.minisegs,
+            Some(2),
+            "one per side of the doorway plane"
+        );
+        assert_eq!(
+            report.gl_vertices,
+            Some(0),
+            "the classic run appended (128, 0), so the GL build reuses a map vertex"
+        );
+        assert!(
+            report.format.is_none() && report.bytes.is_none(),
+            "no extended keys"
+        );
+        let names = lump_names(&session);
+        let head = names
+            .iter()
+            .position(|lump| lump == "GL_MAP01")
+            .expect("the marker opens the run");
+        assert_eq!(
+            head,
+            working_block(&session).end,
+            "right after the map block"
+        );
+        let run_end = head.checked_add(6).expect("six lumps fit");
+        assert_eq!(
+            &names[head..run_end],
+            [
+                "GL_MAP01", "GL_VERT", "GL_SEGS", "GL_SSECT", "GL_NODES", "GL_PVS"
+            ],
+            "the full run in glBSP order"
+        );
+        assert_eq!(
+            working_block(&session).gl,
+            Some((head, run_end)),
+            "analyze attaches it"
+        );
+    }
+
+    #[test]
+    fn a_second_gl_build_replaces_the_block_and_undo_removes_it() {
+        let mut session = l_room_session();
+        nodes_build_run(&mut session, &build_params(None, Some("GL"), None)).expect("first");
+        let first_names = lump_names(&session);
+        nodes_build_run(&mut session, &build_params(None, Some("gl"), None)).expect("second");
+        let second_names = lump_names(&session);
+        assert_eq!(
+            first_names, second_names,
+            "the block was replaced, not duplicated"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["build nodes", "build nodes"],
+            "each build is one undo step"
+        );
+        session.undo().expect("undo the second build");
+        assert_eq!(
+            lump_names(&session),
+            first_names,
+            "the first build stands again"
+        );
+        session.undo().expect("undo the first build too");
+        assert!(
+            lump_names(&session)
+                .iter()
+                .all(|lump| !lump.starts_with("GL_")),
+            "undo took the whole GL run away: {:?}",
+            lump_names(&session)
+        );
+    }
+
+    #[test]
+    fn a_long_map_name_marks_the_gl_run_gl_level() {
+        let names = gl_lump_names(name("CUSTOMMA")).expect("eight-char names parse");
+        assert_eq!(names[0].to_string(), "GL_LEVEL", "the fallback marker");
+        let short = gl_lump_names(name("E1M1")).expect("episode names fit");
+        assert_eq!(short[0].to_string(), "GL_E1M1", "embedded when it fits");
+    }
+
+    #[test]
+    fn gl_refuses_a_udmf_block_without_writing() {
+        let mut session = udmf_room_session();
+        let error = nodes_build_run(&mut session, &build_params(None, Some("gl"), None))
+            .expect_err("no classic run in a TEXTMAP");
+        assert_eq!(
+            error.code(),
+            "invalid_argument",
+            "the classic half is impossible"
+        );
+        assert!(
+            error.to_string().contains("UDMF maps use extended nodes"),
+            "the shared hint travels: {error}"
+        );
+        assert!(session.working().is_empty(), "nothing was written");
+        assert!(session.undo_labels().is_empty(), "and nothing was recorded");
+    }
+
+    #[test]
+    fn a_gl_builds_read_back_through_get_nodes_counts() {
+        let mut session = l_room_session();
+        let built = nodes_build_run(&mut session, &build_params(None, Some("gl"), None))
+            .expect("the build runs");
+        let request = Request {
+            map: None,
+            scope: Scope::Merged,
+            detail: Detail::Summary,
+        };
+        let (report, _publish) = nodes_run(&session, &request).expect("the read works");
+        assert_eq!(report.format, "vanilla", "the classic run reads as always");
+        assert!(report.gl.present, "the GL block is attached");
+        assert_eq!(report.gl.magic.as_deref(), Some("gNd2"), "the v2 magic");
+        assert_eq!(report.gl.segs, built.gl_segs, "the counts agree: GL_SEGS");
+        assert_eq!(report.gl.subsectors, Some(2), "GL_SSECT rows");
+        assert_eq!(report.gl.nodes, Some(1), "GL_NODES rows");
+        assert_eq!(report.gl.vertices, Some(0), "GL_VERT rows: none needed");
+    }
+
+    #[test]
+    fn whole_records_counts_only_whole_rows() {
+        assert_eq!(whole_records(20, GL_SEGS_RECORD), Some(2), "two seg rows");
+        assert_eq!(whole_records(21, GL_SEGS_RECORD), None, "a trailing byte");
+        assert_eq!(whole_records(0, GL_NODES_RECORD), Some(0), "empty is whole");
     }
 }

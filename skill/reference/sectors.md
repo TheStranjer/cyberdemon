@@ -1,7 +1,8 @@
 # Sector tools
 
 Creating, changing and removing the sectors of a map:
-`create_sector_from_loop`, `add_sector`, `edit_sector` and `remove_sector`.
+`create_sector_from_loop`, `carve_void`, `add_sector`, `edit_sector` and
+`remove_sector`.
 A sector is one contiguous 3-D region: its floor and ceiling heights, the
 two flat textures, the light level, the effect number (`special`) and the
 `tag` linedef actions match.
@@ -67,70 +68,112 @@ call add_sector {"map": "MAP01"}
 `{map?, points? | vertices?, floor_height? = 0, ceiling_height? = 128,
 floor_flat? = "FLOOR4_8", ceiling_flat? = "CEIL3_5", light? = 160,
 special? = 0, tag? = 0, wall_texture? = "STARTAN3", upper_texture?,
-lower_texture?, outer_sector? = "auto"}` → `{sector, vertices_created,
-linedefs_created, linedefs_reused, sidedefs_created, two_sided, map,
+lower_texture?, outer_sector? = "auto", keep_interior? = false}` →
+`{sector, vertices_created, linedefs_created, sidedefs_created,
+linedef_map, removed_linedefs, empty_sectors, notes, map,
 nodes_invalidated: true, copied_to_working}`
 
-The draw-a-room tool: one call turns a closed corner loop into a new
-sector with all its boundary walls, in one undoable step.
+The draw-a-room tool: one call turns a closed corner polygon into a new
+sector with all its boundary walls, in one undoable step. Every drawing
+goes through the shared geometry engine, so touched walls are split at
+T-junctions and crossings, painted-over walls vanish, and no two linedefs
+are ever left crossing or overlapping.
 
-- **The loop, exactly one form** (both or neither is `invalid_argument`):
-  `points: [{x, y}, ...]` — at least 3 corners, implicitly closed (a
-  trailing repeat of the first point is dropped); a vertex already at
-  exactly a corner's coordinates is reused, the rest are created; or
-  `vertices: [i, ...]` — at least 3 existing vertex indices.
-- **Orientation is fixed for you**: the ring is walked clockwise so every
-  front side faces into the room (`Doom` puts the front on the right of
-  `v1` to `v2`). Degenerate rings are `invalid_argument`: a repeated
-  corner, zero area (collinear corners) or a self-intersecting loop. An
-  unknown vertex index or `outer_sector` index is `not_found`.
+- **The polygon, exactly one form** (both or neither is
+  `invalid_argument`): `points: [{x, y}, ...]` — at least 3 corners,
+  implicitly closed; a vertex already at exactly a corner's coordinates is
+  reused, the rest are created; or `vertices: [i, ...]` — at least 3
+  existing vertex indices. A repeated corner or the closing repeat is
+  dropped for you.
+- **Degenerate polygons are `invalid_argument`**: zero area (collinear
+  corners) or a self-intersecting ring. An unknown vertex or
+  `outer_sector` index is `not_found`.
 - **Sector and textures**: the sector fields are `add_sector`'s, with its
   defaults and format rules. `wall_texture` dresses the `middle` of new
   one-sided walls; `upper_texture`/`lower_texture` (each defaulting to
-  `wall_texture`) dress the `upper`/`lower` faces of new two-sided
-  transitions, on both sides. On binary maps coordinates must fit `i16`
-  and names 8 characters.
-- **Existing walls are reused, never duplicated**: a linedef running with
-  an edge has its front side pointed at the new sector; one running
-  against the edge is taken over from its back, and if it has no back it
-  opens into two-sided (blocking cleared, its front `middle` moved onto
-  free `upper`/`lower` faces).
-- **`outer_sector`** decides what brand-new walls face outside: an
+  `wall_texture`) dress a new two-sided face where the neighbour's
+  ceiling (`upper`) or floor (`lower`) differs. On binary maps coordinates
+  must fit `i16` and names 8 characters.
+- **Existing walls are split, never duplicated**: a wall the polygon
+  touches mid-span is cut; the piece along the boundary turns two-sided
+  against the new sector (blocking cleared, and a one-sided wall opening
+  moves its `middle` onto its free `upper`/`lower` faces), keeping its
+  texture, `special`, `tag` and `args` on every piece with `x_offset`
+  shifted to hold the texture in place. Every front side faces into the
+  room (`Doom` puts the front on the right of `v1` to `v2`).
+- **`outer_sector`** decides what brand-new edges face outside:
+  `"auto"` (the default) opens each edge onto the sector found just
+  outside it, so a room drawn inside another becomes a platform with that
+  room across its walls while edges along the void stay one-sided; an
   existing sector index turns every new edge two-sided against it;
-  `"auto"` (the default) opens each edge onto the sector found two units
-  just left of the edge midpoint, so edges along the void stay one-sided;
   `"none"` keeps every new wall a blocking single line.
-- `two_sided` lists the loop lines the call left two-sided (ones it
-  opened backwards, and new ones given an outer back side).
+- **`keep_interior`** (default `false`) leaves existing sectors that sit
+  strictly inside the polygon (a pillar, an inner room) untouched: only
+  the area of the sectors the boundary touches is repainted. With it off,
+  everything inside is overwritten and any sector buried this way is
+  reported in `empty_sectors`/`notes` (kept, not deleted).
 
-Worked example — an adjacent room sharing room 0's north wall, then a
-raised platform inside room 0 (the two-room fixture):
+**Indices move.** The whole map's linedefs, sidedefs and vertices are
+rebuilt from the arrangement, so their indices can change; sector indices
+are stable. `linedef_map` maps every old linedef index onto the new index
+of its first surviving piece (`null` when it vanished), `removed_linedefs`
+lists the old indices that died, `vertices_created`/`linedefs_created`/
+`sidedefs_created` report the brand-new rows and `empty_sectors` the
+sectors left without a boundary. Look things up by index with
+`assemble_map` after the call, not before.
+
+Worked example — an adjacent room sharing room 0's north wall (the
+two-room fixture):
 
 ```json
 call create_sector_from_loop {"points": [{"x": 0, "y": 256}, {"x": 256, "y": 256},
                                          {"x": 256, "y": 512}, {"x": 0, "y": 512}]}
--> {"sector": 2, "vertices_created": [6, 7], "linedefs_created": [7, 8, 9],
-    "linedefs_reused": [1], "sidedefs_created": [8, 9, 10, 11],
-    "two_sided": [1], "map": "MAP01", "nodes_invalidated": true,
-    "copied_to_working": true}
+-> {"sector": 2, "vertices_created": [6, 7], "linedefs_created": [2, 4, 7],
+    "sidedefs_created": [2, 4, 5, 9], "linedef_map": [0, 3, 5, 1, 8, 9, 6],
+    "removed_linedefs": [], "empty_sectors": [], "notes": [],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
-Sector 2 sits above the hall; linedef 1 (the shared wall) now opens
-two-sided, and `assemble_map` shows `neighbors: [0]` on sector 2. The two
-free corners became vertices 6 and 7. The platform:
+Sector 2 sits above the hall. The old north wall (linedef 1) became new
+linedef 3 (`linedef_map[1] == 3`), now two-sided with a fresh back side
+facing the room; the hall keeps index 0 and `assemble_map` shows
+`neighbors: [0]` on sector 2. The two free corners are vertices 6 and 7.
+
+## `carve_void`
+
+`{map?, points? | vertices?}` → `{sector: null, vertices_created,
+linedefs_created, sidedefs_created, linedef_map, removed_linedefs,
+empty_sectors, removed_sectors_empty, notes, map, nodes_invalidated:
+true, copied_to_working}`
+
+Carves a closed polygon of **solid rock** out of a map in one undoable
+step: the area holds no sector, so surrounding sectors gain one-sided
+walls along it and everything the polygon covers (linedefs, sector area,
+sidedefs) vanishes from it. Walls it touches mid-span are split. Use it
+to punch a pillar into a room, or to cut one room away from another.
+
+- **The polygon** follows `create_sector_from_loop`: exactly one of
+  `points` (at least 3) or `vertices`; degenerate polygons are
+  `invalid_argument` and an unknown vertex is `not_found`.
+- **Textures**: each new wall wears the facing sector's own `middle`
+  texture from its nearest original wall; a sector that has none gets the
+  session theme's `Wall` texture (`STARTAN3` when the theme names none).
+- **`removed_sectors_empty`** (same list as `empty_sectors`) reports the
+  sectors the carve painted out of existence; they stay in the map —
+  clear them with `remove_sector cascade: true` if you meant it.
+- The same index-mapping caveat applies: read the new indices from
+  `linedef_map` and `assemble_map`.
 
 ```json
-call create_sector_from_loop {"points": [{"x": 64, "y": 64}, {"x": 192, "y": 64},
-                                         {"x": 192, "y": 192}, {"x": 64, "y": 192}],
-                              "floor_height": 8, "ceiling_height": 192,
-                              "upper_texture": "COMP1"}
+call carve_void {"points": [{"x": 96, "y": 96}, {"x": 160, "y": 96},
+                            {"x": 160, "y": 160}, {"x": 96, "y": 160}]}
+-> {"sector": null, "linedefs_created": [3, 4, 5, 6],
+    "removed_linedefs": [], "removed_sectors_empty": [],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
-Every edge probes room 0 outside, so all four new lines are two-sided
-against it, their ledge faces dressed with `COMP1` above (and
-`wall_texture` below by default). Verify with `assemble_map` (the platform
-sector's `neighbors` is `[0]`) or `render_topdown`, then `build_nodes`
-before a vanilla play test.
+A pillar of rock in the middle of the hall, its four walls each wearing
+the hall's `WALL1`.
 
 ## `edit_sector`
 

@@ -80,7 +80,7 @@ impl Labeler for LayerLabeler<'_> {
 
 /// One vertex scaled to sample coordinates.
 #[inline]
-fn scale_point(point: Pt) -> ScaledPt {
+pub(crate) fn scale_point(point: Pt) -> ScaledPt {
     (
         i128::from(point.0).saturating_mul(SAMPLE_SCALE),
         i128::from(point.1).saturating_mul(SAMPLE_SCALE),
@@ -90,7 +90,7 @@ fn scale_point(point: Pt) -> ScaledPt {
 /// Whether the edge `low`→`high` straddles the horizontal ray at `y`.
 #[must_use]
 #[inline]
-const fn spans(low: ScaledPt, high: ScaledPt, y: i128) -> bool {
+pub(crate) const fn spans(low: ScaledPt, high: ScaledPt, y: i128) -> bool {
     (low.1 > y) != (high.1 > y)
 }
 
@@ -98,7 +98,7 @@ const fn spans(low: ScaledPt, high: ScaledPt, y: i128) -> bool {
 /// left of `point` (the edge must straddle the ray's height).
 #[must_use]
 #[inline]
-const fn crosses_ray(from: ScaledPt, to: ScaledPt, point: ScaledPt) -> bool {
+pub(crate) const fn crosses_ray(from: ScaledPt, to: ScaledPt, point: ScaledPt) -> bool {
     let (from_x, from_y) = from;
     let (to_x, to_y) = to;
     let (point_x, point_y) = point;
@@ -111,7 +111,7 @@ const fn crosses_ray(from: ScaledPt, to: ScaledPt, point: ScaledPt) -> bool {
 
 /// Even-odd containment of a scaled point in an integer polygon, either
 /// winding; fewer than three vertices is never inside.
-fn contains_point(polygon: &[Pt], point: ScaledPt) -> bool {
+pub(crate) fn contains_point(polygon: &[Pt], point: ScaledPt) -> bool {
     let Some(first) = polygon.first().copied() else {
         return false;
     };

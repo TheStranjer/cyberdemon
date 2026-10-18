@@ -4,7 +4,11 @@ Turning external picture files into lumps: the patch importer
 `import_image_as_patch` (alias `import_png_as_patch`), the flat importer
 `import_image_as_flat` (alias `import_png_as_flat`), the sprite importer
 `import_image_as_sprite` (alias `import_png_as_sprite`) and the
-byte-for-byte `import_image_as_raw`. Where the graphics tools
+byte-for-byte `import_image_as_raw`. The preview pipeline `process_image`
+runs image operations over a picture and publishes the result so you can
+look at it before committing, and `create_texture_from_image` turns one
+photo into a working wall texture (patch + `PNAMES` + definition) in a
+single undoable step. Where the graphics tools
 (`reference/graphics.md`) *publish* session pictures outward, these tools
 bring pictures *in*, as one undoable edit each (`undo` steps them back;
 `save_wad` writes them out).
@@ -281,3 +285,189 @@ result — is identical.
 - For a vanilla sprite use `import_image_as_sprite` (its name carries the
   frames and rotations an engine reads); a raw `PNG` in the sprites region
   only works for ports that read them.
+
+## Image operations (`ops`)
+
+`process_image` and `create_texture_from_image` take an `ops` array: a
+list of image operations applied **in order** to the decoded picture. Each
+object carries an `op` tag naming the operation plus its parameters; every
+edge an op produces must stay within `1..=4096` and a bad parameter fails
+with `invalid_argument` naming the op index and field (e.g.
+`ops[2].width`), the first failing op stopping the chain. This is the
+canonical operation reference.
+
+- `crop` — cut out a rectangle; it must lie fully inside the picture.
+  `{ "op": "crop", "x": 0, "y": 0, "width": 64, "height": 64 }` (`x`/`y`
+  the top-left corner, `width`/`height` `1..=4096`).
+- `fit` — resize to exactly `width` x `height` with one `mode`:
+  `"stretch"` ignores the aspect ratio, `"cover"` scales until both edges
+  cover the target and centre-crops, `"contain"` scales until both edges
+  fit and centres on a canvas. `filter` is `"nearest"`, `"bilinear"` or
+  `"area"` (default `area`: footprint-averaging shrink, bilinear grow);
+  `background` (`#RRGGBBAA`/`#RRGGBB`, default transparent) fills the
+  `contain` canvas.
+  `{ "op": "fit", "width": 128, "height": 128, "mode": "cover" }`.
+- `rotate` — turn clockwise a quarter, half or three-quarter turn.
+  `{ "op": "rotate", "quarter_turns": 1 }` (`1..=3`).
+- `flip` — mirror horizontally and/or vertically.
+  `{ "op": "flip", "horizontal": true, "vertical": false }`.
+- `auto_levels` — stretch the luminance range of opaque pixels to full
+  scale. `clip_percent` (`0..=10`, default `1`) is the share of pixels
+  allowed below the low and above the high cut.
+  `{ "op": "auto_levels", "clip_percent": 2 }`.
+- `adjust` — per-channel tone correction. `brightness` (`-255..=255`,
+  default `0`, added after contrast), `contrast` (`0..=400` percent about
+  mid grey, default `100`) and `saturation` (`0..=400`, default `100`).
+  `{ "op": "adjust", "contrast": 120, "saturation": 80 }`.
+- `color_key` — make every pixel whose maximum channel difference to
+  `color` fits within `tolerance` fully transparent. `color` is
+  `#RRGGBBAA`/`#RRGGBB` (the `#` optional); `tolerance` is `0..=255`
+  (default `0`). `{ "op": "color_key", "color": "#00FFFF", "tolerance": 16 }`.
+- `trim` — crop to the bounding box of pixels reaching `alpha_threshold`
+  (default `128`), then add `padding` transparent pixels on every side
+  (default `0`). `{ "op": "trim", "padding": 4 }`.
+- `remove_background` — flood fill from the border and make every reached
+  pixel matching the background colour transparent (unlike `color_key`,
+  interior regions of that colour survive). `tolerance` is `0..=255`
+  (default `32`); `color` defaults to the average colour of the dominant
+  border bucket. `{ "op": "remove_background", "color": "#00FF00" }`.
+- `make_tileable` — blend each edge into its opposite half-period shift so
+  the result tiles seamlessly. `band` is the blend width in pixels
+  (default `width / 4` horizontally and `height / 4` vertically,
+  `1..=length / 2` on every enabled axis); `horizontal` and `vertical`
+  switch the two axes (both default `true`).
+  `{ "op": "make_tileable", "band": 16 }`.
+- `threshold` — binarize every opaque pixel to black or white by its
+  luminance. `level` is `0..=255` or omitted for the Otsu-picked cut;
+  `invert` swaps the two classes (default `false`).
+  `{ "op": "threshold", "level": 128 }`.
+
+## `process_image`
+
+- Purpose: run the `ops` over a picture and publish the result so you can
+  **look at it before committing** — it changes no archive and records no
+  undo step. Decode, `ops`, quantize (optional), publish two `PNG` assets:
+  `processed` (the full `RGBA` picture after `ops`) and `quantized` (the
+  indexed result rendered back through the palette, transparency as alpha).
+  The `processed` `URL` is itself a valid `source` for any import tool, so
+  you can preview, re-edit and only then commit.
+- Arguments:
+  - `source` (string, required): the picture to process — absolute path,
+    `file://` URI, `http(s)://` URL or this server's asset/upload `URL`
+    (a previously published asset `URL` included).
+  - `ops` (array, optional, default none): the operations above, applied in
+    order.
+  - `dither` (string, optional, default `"floyd_steinberg"`): the palette
+    quantization of the `quantized` preview — `"none"`, `"floyd_steinberg"`
+    or `"ordered"`.
+  - `palette` (integer, optional, default 0): the `PLAYPAL` entry to
+    quantize against; a session with no `PLAYPAL` or a past-the-end index
+    is `not_found`.
+  - `transparency` (object, optional): the same object the import pipeline
+    takes (default `{mode: "alpha", threshold: 128}`); which source pixels
+    are transparent in the `quantized` preview.
+  - `quantize` (boolean, optional, default `true`): when `false` only the
+    `processed` `PNG` is published and the three measures answer `null`.
+- Returns:
+
+  ```json
+  {
+    "width": 64, "height": 64,
+    "steps": [ { "op": "crop", "x": 0, "y": 0, "width": 64, "height": 64 } ],
+    "processed": { "url": "...", "filename": "MYART-processed.png", "mime": "image/png", "size": 210 },
+    "quantized": { "url": "...", "filename": "MYART-quantized.png", "mime": "image/png", "size": 180 },
+    "colors_used": 42, "max_color_error": 30, "transparent_pixels": 250
+  }
+  ```
+
+  `steps` is one measurement object per applied op in order;
+  `colors_used`, `max_color_error` and `transparent_pixels` describe the
+  quantization (`0` error means the source was already palette-exact) and
+  answer `null` when `quantize` is `false`.
+- Errors: `invalid_argument` (a bad op parameter, naming `ops[i].field`,
+  or a bad `transparency`), `format_error` / `unsupported` (bytes that are
+  no readable image), `not_found` (missing `source`, missing `PLAYPAL`, bad
+  palette index).
+- `create_texture_from_image` below commits a whole wall texture in one
+  step; for a lone patch, flat or sprite use the import tools with the
+  `processed` `URL` as `source`.
+
+## `create_texture_from_image`
+
+- Purpose: **one photo to a working wall texture** — it processes the
+  picture, settles a tiling-friendly size, quantizes it opaquely, stores a
+  patch lump, lists it in `PNAMES` and defines a single-patch
+  `TEXTURE1`/`TEXTURE2` record, all as **one** undoable edit labelled
+  `create_texture NAME` (`save_wad` writes it; a single `undo` removes
+  patch, `PNAMES` entry and definition together).
+- Arguments:
+  - `source` (string, required): the picture, as in `process_image`.
+  - `name` (string, required): the texture name, 1 to 8 printable ASCII
+    characters, uppercased.
+  - `patch_name` (string, optional, default `name`): the patch lump to
+    store the picture under.
+  - `width` / `height` (integers, optional): the texture size. A `width`
+    must be a power of two in `16..=1024` (a bad one is `invalid_argument`
+    naming the nearest valid widths) and a `height` `1..=1024`. A missing
+    edge follows the picture's aspect ratio rounded to a multiple of `8`
+    (a derived `width` to the nearest valid power of two). With **neither**
+    given, a processed picture whose `width` is a power of two in `16..=1024`
+    and `height` at most `1024` keeps its size; any other is fit to
+    `128x128` and `notes` says so.
+  - `fit` (string, optional, default `"cover"`): `cover`, `contain` or
+    `stretch` for that automatic resize step (an `area`-filtered `fit` op).
+  - `tileable` (boolean, optional, default `false`): append a
+    `make_tileable` op blending opposite edges.
+  - `ops`, `dither`, `palette`: as in `process_image` (your `ops` run
+    before the automatic resize/tiling).
+  - `target` (string, optional): `"TEXTURE1"` or `"TEXTURE2"`
+    (case-insensitive); unset means the lump that already defines `name`,
+    else `TEXTURE1`.
+  - `assign_role` (string, optional): a theme **wall** role (e.g. `"wall"`)
+    to point at the new texture afterwards. A flat or unknown role is
+    `invalid_argument` and nothing is written. Theme state is session
+    state, so `undo` does not roll the override back (the result notes say);
+    clear it with `set_texture_theme overrides`.
+  - `replace` (boolean, optional, default `false`): redefine an existing
+    texture of this name in place and allow overriding a layer-held patch
+    name.
+- Size: walls are opaque — pixels whose alpha is below `128` become the
+  palette colour nearest to black and a `warning` counts them (for a masked
+  patch use `import_image_as_patch`).
+- Collisions refuse **before anything is written**: a patch lump
+  `patch_name` a lower (`IWAD` or resource) layer holds and the working
+  archive does not is `already_exists` (`pass patch_name` for another, or
+  `replace=true` to write a working override), and a `name` the merged view
+  already defines is `already_exists` unless `replace=true`.
+- Returns:
+
+  ```json
+  {
+    "texture": "MYTEX", "patch": "MYTEX", "width": 128, "height": 128,
+    "lump": "TEXTURE1",
+    "steps": [ { "op": "fit", ... } ],
+    "colors_used": 60, "max_color_error": 24,
+    "notes": ["resized to 128x128; pass width/height to choose"],
+    "warnings": [],
+    "preview": { "url": "...", "filename": "MYTEX_texture.png", ... },
+    "role": null,
+    "next_steps": [
+      "apply with edit_sidedef (texture fields) or auto_texture mode retexture after assign_role",
+      "render_view to see it in place"
+    ]
+  }
+  ```
+
+  `preview` is the composited texture's `PNG`; `steps` is one measurement
+  object per applied op (your `ops` first, then the automatic ones); `role`
+  echoes an `assign_role` that landed.
+- Errors: `invalid_argument` (a bad name, a width that is no power of two,
+  a bad height, an unknown `target` or `assign_role`, a failing op),
+  `format_error` / `unsupported` (bytes that are no readable image),
+  `not_found` (missing `source`, missing `PLAYPAL`, bad palette index),
+  `already_exists` (a layer-held `patch_name` or a defined `name` without
+  `replace`).
+- Look at the result with `list_textures` (the definition), `get_patch` (the
+  stored lump) and `get_asset_url prefer=texture` (the same composited
+  preview), then apply it with `edit_sidedef` or dress a map with it via
+  `auto_texture mode=retexture` after `assign_role`.

@@ -21,9 +21,22 @@
 //! region already serves. The patch lifecycle tools of
 //! [`crate::tools::patches`] stage and place their lumps on these same
 //! pieces.
+//!
+//! [`Cyberdemon::process_image`] runs the shared [`processed`] helper -
+//! [`crate::gfx::ops::apply_ops`] over the decoded picture - and publishes
+//! the RGBA and the palette-quantized result as `PNG` assets without
+//! touching any archive, so a caller can look at a pipeline before
+//! committing it. [`Cyberdemon::create_texture_from_image`] commits the
+//! whole wall side in one [`crate::session::Session::edit`]: [`texture`]
+//! settles a tiling-friendly size, quantizes the picture opaquely, stores
+//! the patch, grows `PNAMES` and defines the `TEXTURE1`/`TEXTURE2` record
+//! through the [`crate::tools::textures`] internals, optionally pointing a
+//! theme wall role at the result.
 
 pub(in crate::tools) mod image_pipeline;
+pub(in crate::tools) mod processed;
 mod sprite;
+mod texture;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -47,8 +60,14 @@ use crate::tools::imports::image_pipeline::{
     DEFAULT_PALETTE, ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched,
     build_patch, chosen_name, parse_import, put_lump,
 };
+use crate::tools::imports::processed::{
+    PROCESS_TOOL_DESCRIPTION, ProcessImageParams, process_image_run,
+};
 use crate::tools::imports::sprite::{
     ALIASED_SPRITE_TOOL_DESCRIPTION, ImportSpriteParams, SPRITE_TOOL_DESCRIPTION, sprite_imported,
+};
+use crate::tools::imports::texture::{
+    CREATE_TEXTURE_TOOL_DESCRIPTION, CreateTextureParams, create_texture_run,
 };
 use crate::tools::ok;
 use crate::tools::palette::load_palette;
@@ -715,6 +734,24 @@ impl Cyberdemon {
             Ok(report) => ok(&report),
             Err(error) => fail(&error),
         }
+    }
+
+    /// Runs the image-processing pipeline and publishes the result.
+    #[tool(description = PROCESS_TOOL_DESCRIPTION)]
+    async fn process_image(
+        &self,
+        Parameters(args): Parameters<ProcessImageParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        process_image_run(self.state(), &args).await
+    }
+
+    /// Builds a whole wall texture from one picture in one undoable step.
+    #[tool(description = CREATE_TEXTURE_TOOL_DESCRIPTION)]
+    async fn create_texture_from_image(
+        &self,
+        Parameters(args): Parameters<CreateTextureParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        create_texture_run(self.state(), &args).await
     }
 }
 

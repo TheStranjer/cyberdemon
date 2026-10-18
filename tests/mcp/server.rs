@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 84] = [
+    const EXPECTED_TOOLS: [&str; 85] = [
         "add_lump",
         "add_patch",
         "add_sector",
@@ -156,6 +156,7 @@ mod tests {
         "render_topdown",
         "reorder_lumps",
         "replace_lump",
+        "replace_patch",
         "save_wad",
         "search_lumps",
         "set_active_map",
@@ -340,6 +341,31 @@ mod tests {
         );
         assert_required(&add_patch, "name");
         assert_required(&add_patch, "source");
+    }
+
+    /// `replace_patch` flattens the same picture parameters, keeps both
+    /// required fields - and carries neither `add_to_pnames` nor `replace`:
+    /// the list is never touched and the overwrite is what the tool does.
+    #[tokio::test]
+    async fn replace_patch_flattens_the_picture_parameters_and_drops_the_other_flags() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let replace = schema_of(tool_named(&tools, "replace_patch"));
+        assert_flattens(
+            &replace,
+            &["name", "source", "offsets", "palette", "transparency"],
+        );
+        assert_required(&replace, "name");
+        assert_required(&replace, "source");
+        let properties = replace.get("properties").expect("a properties object");
+        assert!(
+            properties.get("add_to_pnames").is_none(),
+            "PNAMES is never written: {replace}"
+        );
+        assert!(
+            properties.get("replace").is_none(),
+            "the tool always replaces: {replace}"
+        );
     }
 
     #[tokio::test]

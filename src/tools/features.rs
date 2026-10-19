@@ -46,6 +46,16 @@
 //! `wall` (above) roles resolved exactly like a door's skins ([`theme_wall`],
 //! [`validate_texture_name`]). The whole window is one undoable edit.
 //!
+//! `add_stairs` runs the pure [`crate::wad::map::features::stairs`]
+//! engine as one [`crate::session::Session::edit_map`] step:
+//! [`plan_stairs`] divides the straight `from` to `to` path into evenly
+//! rising step rectangles (each one's ceiling probed from the sector
+//! under it, [`MIN_HEADROOM`] enforced), [`build_stairs`] paints them
+//! bottom-up with [`apply_overlay`] [`Paint::Sector`], and every riser
+//! face wears the theme's `step` role ([`theme_texture`],
+//! [`validate_texture_name`]). The created step sectors and their
+//! floors come back in path order.
+//!
 //! The two sector-special tools stay on this side of the `features` group
 //! because they answer the same question the feature tables answer: what
 //! number makes a plain map element do something. Both are one
@@ -75,6 +85,9 @@
 //! [`boundary_lines`]: crate::wad::map::features::boundary_lines
 //! [`apply_window`]: crate::wad::map::features::apply_window
 //! [`MIN_OPENING`]: crate::wad::map::features::MIN_OPENING
+//! [`plan_stairs`]: crate::wad::map::features::plan_stairs
+//! [`build_stairs`]: crate::wad::map::features::build_stairs
+//! [`MIN_HEADROOM`]: crate::wad::map::features::MIN_HEADROOM
 //! [`theme_wall`]: theme_wall
 //! [`choose_wall`]: choose_wall
 //! [`carve_strip`]: carve_strip
@@ -102,10 +115,11 @@ use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
     DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, LightEffect,
-    SecretEdit, SwitchAction, VertexPair, WindowHeights, WindowSides, WindowTextures, apply_door,
-    apply_window, boundary_lines, door_rect, door_segment, door_specials, door_wall, light_special,
-    longest_boundary, nearest_boundary, next_free_tag, outward_depth, project_onto_line,
-    secret_edit, switch_special, void_strip, window_record,
+    PaintedStep, SecretEdit, StairSpec, SwitchAction, VertexPair, WindowHeights, WindowSides,
+    WindowTextures, apply_door, apply_window, boundary_lines, build_stairs, door_rect,
+    door_segment, door_specials, door_wall, light_special, longest_boundary, nearest_boundary,
+    next_free_tag, outward_depth, project_onto_line, secret_edit, switch_special, void_strip,
+    window_record,
 };
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
@@ -1238,6 +1252,114 @@ fn add_window_run(
     })
 }
 
+/// The `add_stairs` default step width in map units.
+const DEFAULT_STAIR_WIDTH: i32 = 64_i32;
+/// The `add_stairs` default step climb in map units.
+const DEFAULT_STEP_HEIGHT: i32 = 16_i32;
+
+/// Arguments for [`Cyberdemon::add_stairs`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddStairsParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The path's lower end, `{x, y}`: a point inside the area the stairs
+    /// climb from (its sector's floor is the default `floor_from`).
+    from: DoorPointParam,
+    /// The path's higher end, `{x, y}`: a point inside the area the
+    /// stairs climb into (its sector's floor is the default `floor_to`).
+    to: DoorPointParam,
+    /// The width of every step across the path in map units (default 64).
+    #[serde(default)]
+    width: Option<i32>,
+    /// The climb of one step in map units, `1..=24` (default 16).
+    #[serde(default)]
+    step_height: Option<i32>,
+    /// A fixed tread depth in map units (optional: by default the steps
+    /// divide the path evenly); the path must be `steps * step_depth`
+    /// long, ± 8 units.
+    #[serde(default)]
+    step_depth: Option<i32>,
+    /// The lower floor in map units (optional: the sector at `from`).
+    #[serde(default)]
+    floor_from: Option<i32>,
+    /// The higher floor in map units (optional: the sector at `to`).
+    #[serde(default)]
+    floor_to: Option<i32>,
+}
+
+/// Structured result of [`Cyberdemon::add_stairs`].
+#[derive(Serialize)]
+struct StairsReport {
+    /// The created step sectors with their floors, in path order.
+    steps: Vec<PaintedStep>,
+    /// How many steps were built.
+    count: usize,
+    /// The resolved lower floor.
+    floor_from: i32,
+    /// The resolved higher floor.
+    floor_to: i32,
+    /// The per-step climb the division used.
+    step_height: i32,
+    /// The step width in map units.
+    width: i32,
+    /// What the paints reported (emptied sectors, dropped lines).
+    notes: Vec<String>,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Everything [`add_stairs_run`] hands the pure stair engine.
+fn stair_spec(args: &AddStairsParams) -> StairSpec {
+    StairSpec {
+        from: point_of(args.from),
+        to: point_of(args.to),
+        width: args.width.unwrap_or(DEFAULT_STAIR_WIDTH),
+        step_height: args.step_height.unwrap_or(DEFAULT_STEP_HEIGHT),
+        step_depth: args.step_depth,
+        floor_from: args.floor_from,
+        floor_to: args.floor_to,
+    }
+}
+
+/// The texture the steps' risers wear: the session theme's `step` role,
+/// validated for the map's format.
+///
+/// # Errors
+///
+/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+fn stair_riser(session: &Session, format: MapFormat) -> Result<String, CyberError> {
+    let themed = theme_texture(session, Role::Step)?;
+    validate_texture_name(&themed, format)
+}
+
+/// `add_stairs`' work: resolve the map, the riser texture and the spec,
+/// then run the whole staircase as one [`crate::session::Session::edit_map`]
+/// step.
+fn add_stairs_run(
+    session: &mut Session,
+    args: &AddStairsParams,
+) -> Result<StairsReport, CyberError> {
+    let spec = stair_spec(args);
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let format = current_map(session, name)?.format;
+    let riser = stair_riser(session, format)?;
+    let (built, report) =
+        session.edit_map(name, "add stairs", |map| build_stairs(map, &spec, &riser))?;
+    Ok(StairsReport {
+        count: built.steps.len(),
+        floor_from: built.floor_from,
+        floor_to: built.floor_to,
+        step_height: spec.step_height,
+        width: spec.width,
+        steps: built.steps,
+        notes: built.notes,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// The canonical wire name of `action`.
 const fn action_name(action: SwitchAction) -> &'static str {
     match action {
@@ -2119,6 +2241,20 @@ impl Cyberdemon {
         )
     }
 
+    /// Builds a working staircase over a height change in one undoable edit.
+    #[tool(
+        description = "Builds a working staircase over a height change in one undoable edit: the straight path from `from` to `to` is divided into evenly rising step rectangles and painted onto the map bottom-up, each becoming a new sector. from: {x, y} is the lower end (a point in the area you climb from) and to: {x, y} the higher one; a point in no sector is invalid_argument naming it. floor_from and floor_to default to the floors of the sectors at those points (explicit values override). The step count is ceil(|floor_to - floor_from| / step_height) and the step floors rise evenly from floor_from to floor_to, so the top step lands exactly on floor_to; both ends at one floor is invalid_argument. step_height (default 16) must be 1..=24 - the player's maximum step - or invalid_argument; width (default 64) must be positive and is the step's measure across the path. Each step's ceiling is the ceiling of the sector under it; a step whose ceiling sits less than 72 map units over its floor refuses with invalid_argument saying \"not enough headroom\", and nothing at all is painted. step_depth (optional) fixes every tread: the path length must then equal the step count times step_depth, +/-8 map units, else invalid_argument states the required length and the depth that would divide the path evenly; without it the steps fill the path. The risers (the lower and upper faces the height differences create) wear the session theme's `step` role, validated for the map's format. This is geometry: nodes_invalidated is true, so run build_nodes before vanilla play. Returns {steps: [{sector, floor_height, ceiling_height}] (in path order, from first), count, floor_from, floor_to, step_height, width, notes, map, nodes_invalidated, copied_to_working} and one undo (labelled \"add stairs\") rolls the whole staircase back. Look at it with render_topdown and render_view and check it with validate_map."
+    )]
+    fn add_stairs(
+        &self,
+        Parameters(args): Parameters<AddStairsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| add_stairs_run(session, &args)),
+        )
+    }
+
     /// Mounts a working switch on a wall chunk in one undoable edit.
     #[tool(
         description = "Mounts a working switch on a wall in one undoable edit: a width-wide panel chunk isolated as its own linedef, wearing the theme's switch texture and a use action. linedef: N is the wall. at: {x, y} optionally centres the panel there (a point off the wall is projected onto it); without it the panel sits at the wall's midpoint. width (default 32) is the panel: a longer wall is split so the chunk becomes its own linedef (the result's linedef names it and split is true), a line already exactly that chunk is dressed as it stands (split false), and a wall too short for the width is invalid_argument naming its available length. action (case-insensitive) picks what it does: open_door (opens the tagged door, closing it after its wait: Doom S1 103, SR 61 when repeatable; Hexen Door_Open 11 speed 16), raise_floor (raises the tagged floor to the highest neighbouring floor: S1 18, SR 69; Floor_RaiseToNearest 25 speed 8), lower_floor (lowers it to the lowest neighbouring floor: S1 23, SR 60; Floor_LowerToLowest 21 speed 8), exit (ends the level: S1 11; Portal 243) or secret_exit (ends it through the secret exit: S1 51; Portal 244). An unknown action is invalid_argument listing all five. open_door, raise_floor and lower_floor require target_sector - the sector they act on: missing or out of range is invalid_argument naming it. The sector's existing tag is what the line answers with; an untagged sector (tag 0) is stamped with a fresh unused tag (the reported tag), so an add_door remote door is triggered by passing its door_sector: the tags match. exit and secret_exit ignore target_sector and repeatable (the Doom family ships no SR exit and a level change fires once). repeatable (default false) picks the SR specials in the Doom family and adds repeatspecial activation in the Hexen family, whose switch lines also get their activation field replaced with playeruse (a Doom-family line keeps its flags). The panel texture comes from the session's theme: the switch role, or exit_switch for the level-changing actions; the isolated line's front middle wears it, and a line with no front sidedef is invalid_argument (see add_sidedef). Result: {linedef, split, action, special, tag, texture} plus the standard edit fragment; nodes_invalidated is true when the wall had to be split (the map's geometry changed)."
@@ -2181,14 +2317,15 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddDoorParams, AddExitParams, AddSwitchParams, AddWindowParams, BuiltWindow, Chosen,
-        DoorPointParam, DoorSkins, DoorSpec, DoorStyle, Dress, ExitKind, Groups, LIGHT_MAX,
-        LIGHT_MIN, LightSpec, MarkSecretParams, Placed, SecretSpec, SetLightParams, SwitchSpec,
-        Target, WindowHeights, WindowSkins, WindowSpec, action_name, action_names, action_of,
-        build_door, build_switch, build_walk_over_exit, build_window, centroid, check_light_level,
-        choose_between, choose_linedef, door_groups, door_record, dress_door, dress_switch,
-        effect_names, effect_of, half_axis, isolate_chunk, kind_name, kind_of, mark_secrets,
-        out_of_range, recess_depth, sector_selection, set_lights, side_sector, strip_face_lost,
+        AddDoorParams, AddExitParams, AddStairsParams, AddSwitchParams, AddWindowParams,
+        BuiltWindow, Chosen, DoorPointParam, DoorSkins, DoorSpec, DoorStyle, Dress, ExitKind,
+        Groups, LIGHT_MAX, LIGHT_MIN, LightSpec, MarkSecretParams, Placed, SecretSpec,
+        SetLightParams, StairSpec, SwitchSpec, Target, WindowHeights, WindowSkins, WindowSpec,
+        action_name, action_names, action_of, build_door, build_stairs, build_switch,
+        build_walk_over_exit, build_window, centroid, check_light_level, choose_between,
+        choose_linedef, door_groups, door_record, dress_door, dress_switch, effect_names,
+        effect_of, half_axis, isolate_chunk, kind_name, kind_of, mark_secrets, out_of_range,
+        recess_depth, sector_selection, set_lights, side_sector, stair_spec, strip_face_lost,
         strip_wall, style_name, style_names, style_of, switch_cut, switch_role, switch_span,
         switch_tag, target_of, track_role, walk_over_special,
     };
@@ -3844,5 +3981,95 @@ mod tests {
         );
         assert!(message.contains("sector 42 is out of range"), "{message}");
         assert_eq!(special_of(&map, 0), 0_i32, "a refusal wrote nothing");
+    }
+
+    /// An `add_stairs` request parsed from `json`.
+    fn stairs_args(json: &str) -> AddStairsParams {
+        from_str(json).expect("test stairs requests parse")
+    }
+
+    #[test]
+    fn add_stairs_params_read_the_wire_shape() {
+        let full = stairs_args(
+            r#"{"from": {"x": 64, "y": 128}, "to": {"x": 448, "y": 128},
+                "width": 96, "step_height": 12, "step_depth": 48,
+                "floor_from": 0, "floor_to": 64, "map": "MAP01"}"#,
+        );
+        assert_eq!(full.from, DoorPointParam { x: 64, y: 128 });
+        assert_eq!(full.to, DoorPointParam { x: 448, y: 128 });
+        assert_eq!(full.width, Some(96_i32));
+        assert_eq!(full.step_height, Some(12_i32));
+        assert_eq!(full.step_depth, Some(48_i32));
+        assert_eq!(full.floor_from, Some(0_i32));
+        assert_eq!(full.floor_to, Some(64_i32));
+        assert_eq!(full.map.as_deref(), Some("MAP01"));
+        let minimal = stairs_args(r#"{"from": {"x": 0, "y": 0}, "to": {"x": 128, "y": 0}}"#);
+        assert!(
+            minimal.width.is_none()
+                && minimal.step_height.is_none()
+                && minimal.step_depth.is_none()
+                && minimal.floor_from.is_none()
+                && minimal.floor_to.is_none()
+                && minimal.map.is_none(),
+            "the defaults stand aside"
+        );
+        assert!(
+            from_str::<AddStairsParams>(r#"{"to": {"x": 1, "y": 1}}"#).is_err(),
+            "from is required"
+        );
+        assert!(
+            from_str::<AddStairsParams>(r#"{"from": {"x": 1, "y": 1}}"#).is_err(),
+            "to is required"
+        );
+    }
+
+    #[test]
+    fn stair_spec_defaults_fill_the_wire_gaps() {
+        let plain = stairs_args(r#"{"from": {"x": 64, "y": 128}, "to": {"x": 448, "y": 128}}"#);
+        let filled = stair_spec(&plain);
+        assert_eq!(filled.width, 64_i32, "the documented width default");
+        assert_eq!(filled.step_height, 16_i32, "and step height");
+        assert_eq!(
+            (
+                filled.step_depth,
+                filled.floor_from,
+                filled.floor_to,
+                filled.from,
+                filled.to
+            ),
+            (
+                None,
+                None,
+                None,
+                Point { x: 64, y: 128 },
+                Point { x: 448, y: 128 }
+            ),
+            "the open choices stay open for the pure engine"
+        );
+        let tuned = stairs_args(
+            r#"{"from": {"x": 0, "y": 0}, "to": {"x": 96, "y": 0},
+                "width": 32, "step_height": 8}"#,
+        );
+        let given = stair_spec(&tuned);
+        assert_eq!((given.width, given.step_height), (32_i32, 8_i32), "kept");
+    }
+
+    #[test]
+    fn the_stair_engine_draws_on_the_door_fixture_map() {
+        let mut map = two_rooms();
+        let stairs = StairSpec {
+            from: Point { x: 64, y: 128 },
+            to: Point { x: 448, y: 128 },
+            width: 64_i32,
+            step_height: 16_i32,
+            step_depth: None,
+            floor_from: None,
+            floor_to: None,
+        };
+        let built = build_stairs(&mut map, &stairs, "STEP1").expect("0 to 32 in two steps");
+        assert_eq!(built.floor_from, 0_i32, "probed from the hall");
+        assert_eq!(built.floor_to, 32_i32, "and from the raised room");
+        assert_eq!(built.steps.len(), 2_usize, "two 16-unit steps");
+        assert_eq!(map.sectors.len(), 4_usize, "two rooms and two new steps");
     }
 }

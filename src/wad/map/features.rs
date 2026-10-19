@@ -13,17 +13,22 @@
 //! [`DoorLineSetup`] shape the door engine writes. [`window`] is the
 //! pure window core: [`window::window_record`] computes the strip
 //! sector's sill/lintel heights and [`window::apply_window`] closes off
-//! the drawn strip with two-sided blocking view lines. [`specials`] is
-//! the sector-special side of the same idea: [`secret_edit`] folds the
-//! secret flag of each flag family into a sector's current special and
-//! [`light_special`] does the same for a [`LightEffect`], keeping every bit
-//! outside the family's basic-type field. Like the rest of
-//! [`crate::wad`] this is pure model arithmetic and
-//! table lookup: no sessions, no archives, no MCP.
+//! the drawn strip with two-sided blocking view lines. [`stairs`] is
+//! the pure stair core: [`stairs::plan_stairs`] divides a straight path
+//! into [`stairs::StairStep`] rectangles whose floors rise evenly
+//! between the endpoint sectors (headroom tested before anything is
+//! drawn) and [`stairs::build_stairs`] paints them bottom-up through the
+//! overlay engine. [`specials`] is the sector-special side of the same
+//! idea: [`secret_edit`] folds the secret flag of each flag family into
+//! a sector's current special and [`light_special`] does the same for a
+//! [`LightEffect`], keeping every bit outside the family's basic-type
+//! field. Like the rest of [`crate::wad`] this is pure model arithmetic
+//! and table lookup: no sessions, no archives, no MCP.
 
 pub mod doors;
 pub mod place;
 pub mod specials;
+pub mod stairs;
 pub mod switches;
 pub mod window;
 
@@ -37,6 +42,10 @@ pub use place::{
 pub use specials::{
     BOOM_SECRET_BIT, DOOM_SECRET_SPECIAL, GENERALIZED_SECTOR_MIN, HEXEN_SECRET_BIT, LightEffect,
     SecretEdit, light_special, secret_edit,
+};
+pub use stairs::{
+    DEPTH_TOLERANCE, MAX_STEP_HEIGHT, MIN_HEADROOM, MIN_STEP_HEIGHT, PaintedStep, StairBuild,
+    StairPlan, StairSpec, StairStep, build_stairs, plan_stairs,
 };
 pub use switches::{SwitchAction, switch_special};
 pub use window::{

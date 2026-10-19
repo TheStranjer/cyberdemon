@@ -150,6 +150,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `carve_void`             | `reference/sectors.md`  |
 | `add_door`               | `reference/features.md` |
 | `add_window`             | `reference/features.md` |
+| `add_stairs`             | `reference/features.md` |
 | `add_switch`             | `reference/features.md` |
 | `add_exit`               | `reference/features.md` |
 | `mark_secret`            | `reference/features.md` |
@@ -246,7 +247,8 @@ merged view an engine would see. Building a level starts with `create_map`
 one); `reference/maps.md` covers the block management tools. Draw whole
 rooms in one call with `create_sector_from_loop`, and carve solid rock out
 of the map with `carve_void` (`reference/sectors.md`). Put working doors in
-with `add_door`, glaze the rooms' shared walls with `add_window`, wire
+with `add_door`, glaze the rooms' shared walls with `add_window`, climb
+height changes with `add_stairs`, wire
 their triggers with `add_switch`, and end the level
 with `add_exit` — a switch panel or walk-over lines; hide a room with
 `mark_secret` and give it flickering or strobing light with

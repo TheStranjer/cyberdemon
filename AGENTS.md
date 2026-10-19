@@ -229,6 +229,8 @@ src/
                   (void strip, recess paint, `apply_door`; `add_window`
                   reuses the door placement engines and the
                   `features::window` core for its raised blocking strip;
+                  `add_stairs` runs the `features::stairs` core (plan,
+                  then bottom-up `Paint::Sector` paints) as one step;
                   the `add_switch`/`add_exit` tickets grow in place here, and
                   the `mark_secret`/`set_light_effect` tools are the two
                   special-bit steps over `features::specials`);
@@ -313,6 +315,9 @@ src/
                   `map/features/window.rs` the pure window core
                   (`window_record`'s sill/lintel heights and
                   `apply_window`'s two-sided blocking boundary dressing),
+                  `map/features/stairs.rs` the pure stair core
+                  (`plan_stairs`' even step division and headroom test
+                  and `build_stairs`' bottom-up overlay paints),
                   `map/features/switches.rs` the switch action table and
                   `map/features/specials.rs` the pure sector-special builders
                   (`secret_edit`'s per-family secret bit and `light_special`'s

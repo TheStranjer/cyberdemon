@@ -2,7 +2,8 @@
 
 Complete game structures built on a map you have already drawn.
 `add_door` cuts working doors; `add_window` glazes the walls between
-rooms; `add_switch` mounts the triggers that fire
+rooms; `add_stairs` climbs a height change with evenly rising steps;
+`add_switch` mounts the triggers that fire
 tagged sectors — including a `remote` door's; `add_exit` ends the level,
 from a switch or by walking over a line. `mark_secret` and
 `set_light_effect` are the two smallest: whole-sector edits of
@@ -155,6 +156,63 @@ call add_window {"between": [0, 1]}
     "lintel": 24,
     "notes": ["carved a 16-unit void strip along the shared boundary of
               sectors 0 and 1: the window strip spans it"],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
+## `add_stairs`
+
+`{map?, from: {x, y}, to: {x, y}, width? = 64, step_height? = 16,
+step_depth?, floor_from?, floor_to?}` → `{steps: [{sector,
+floor_height, ceiling_height}], count, floor_from, floor_to,
+step_height, width, notes, map, nodes_invalidated, copied_to_working}`
+
+Builds a working staircase over a height change: the straight path from
+`from` (in the lower area) to `to` (in the higher) is divided into
+evenly rising step rectangles, painted on bottom-up, each becoming its
+own sector — all in one `undo` step (label `add stairs`).
+
+**The ends**: `from` and `to` must each lie inside a sector; a point in
+no sector is `invalid_argument` naming it. `floor_from` and `floor_to`
+default to the floors of the sectors at those points (explicit values
+override). The count is `ceil(|floor_to - floor_from| / step_height)`
+and the step floors rise evenly from `floor_from` to `floor_to`, so the
+top step lands exactly on `floor_to`. Both ends at one floor is
+`invalid_argument` (nothing to climb), and so is a zero-length path.
+
+**The steps**: `step_height` (default 16) must be `1..=24` — the
+player's maximum single step — or `invalid_argument`; `width` (default
+64) must be positive and is each step's measure across the path. Each
+step's ceiling is the ceiling of the sector under it, and that ceiling
+must sit at least **72 map units** over the step's new floor: a step
+that leaves less says *"not enough headroom"* (`invalid_argument`) and
+nothing at all is painted. A path that crosses solid rock (a step
+centre in no sector) or is shorter than its step count refuses the same
+way, before any drawing.
+
+**`step_depth`** (optional) fixes every tread: the path length must
+then equal `count * step_depth`, ± 8 map units, else `invalid_argument`
+states the required length *and* the depth that would divide this path
+evenly. Without it the steps fill the path.
+
+**Textures**: the risers — the `lower`/`upper` faces every height
+difference creates — wear the session theme's `step` role
+(`reference/themes.md`), validated for the map's format. Each step
+sector copies the base sector under it: flats and light included, but
+`special` and `tag` are 0 (stairs are inert; the geometry is the
+walkable part).
+
+**After the call**: geometry changed, so `nodes_invalidated` is true —
+run `build_nodes` before playing in vanilla `Doom`. `steps` names the
+created sectors with their heights, in path order (`from` first). Look
+at the result with `render_topdown` and `render_view`, and check it with
+`validate_map` (a clean staircase keeps it clean).
+
+```json
+call add_stairs {"from": {"x": 64, "y": 128}, "to": {"x": 448, "y": 128}}
+-> {"steps": [{"sector": 2, "floor_height": 16, "ceiling_height": 160},
+              {"sector": 3, "floor_height": 32, "ceiling_height": 160}],
+    "count": 2, "floor_from": 0, "floor_to": 32, "step_height": 16,
+    "width": 64, "notes": [],
     "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
@@ -361,6 +419,7 @@ call set_light_effect {"sectors": [7], "effect": "flicker", "light": 176}
 
 ## Growth points
 
-- All six feature tools (`add_door`, `add_window`, `add_switch`,
-  `add_exit`, `mark_secret`, `set_light_effect`) are in place.
-  Lower-level control stays with the `edit_*` groups and `run_batch`.
+- All seven feature tools (`add_door`, `add_window`, `add_stairs`,
+  `add_switch`, `add_exit`, `mark_secret`, `set_light_effect`) are in
+  place. Lower-level control stays with the `edit_*` groups and
+  `run_batch`.

@@ -230,7 +230,7 @@ fn key_color(text: Option<&str>) -> Result<[u8; 3], CyberError> {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for a preset outside the four names.
-fn parse_offset_mode(value: OffsetsParam) -> Result<OffsetMode, CyberError> {
+pub(in crate::tools) fn parse_offset_mode(value: OffsetsParam) -> Result<OffsetMode, CyberError> {
     match value {
         OffsetsParam::Preset(text) => parse_offset_preset(&text),
         OffsetsParam::Point { x, y } => Ok(OffsetMode::Explicit { left: x, top: y }),
@@ -379,7 +379,7 @@ fn grab_of(bytes: &[u8]) -> Result<Option<GrabOffsets>, CyberError> {
 }
 
 /// The drawing offsets the parameters ask for, before the `i16` check.
-fn resolve_offsets(
+pub(in crate::tools) fn resolve_offsets(
     mode: Option<&OffsetMode>,
     grab: Option<GrabOffsets>,
     default: OffsetDefault,
@@ -419,7 +419,7 @@ fn as_offset(value: u32) -> i32 {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the field out of range.
-fn to_i16_offsets(pair: GrabOffsets) -> Result<(i16, i16), CyberError> {
+pub(in crate::tools) fn to_i16_offsets(pair: GrabOffsets) -> Result<(i16, i16), CyberError> {
     let (left, top) = pair;
     Ok((
         fit_offset("left_offset", left)?,

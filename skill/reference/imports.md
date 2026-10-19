@@ -6,9 +6,13 @@ Turning external picture files into lumps: the patch importer
 `import_image_as_sprite` (alias `import_png_as_sprite`) and the
 byte-for-byte `import_image_as_raw`. The preview pipeline `process_image`
 runs image operations over a picture and publishes the result so you can
-look at it before committing, and `create_texture_from_image` turns one
-photo into a working wall texture (patch + `PNAMES` + definition) in a
-single undoable step. Where the graphics tools
+look at it before committing, and three one-shot creators commit a whole
+finished resource in a single undoable step:
+`create_texture_from_image` (wall texture: patch + `PNAMES` +
+definition), `create_flat_from_image` (a `64x64` floor/ceiling flat,
+optionally tileable and assigned to a theme flat role) and
+`create_sprite_from_image` (background-stripped, trimmed, scaled sprite
+lumps, one call per frame set). Where the graphics tools
 (`reference/graphics.md`) *publish* session pictures outward, these tools
 bring pictures *in*, as one undoable edit each (`undo` steps them back;
 `save_wad` writes them out).
@@ -388,8 +392,9 @@ canonical operation reference.
   or a bad `transparency`), `format_error` / `unsupported` (bytes that are
   no readable image), `not_found` (missing `source`, missing `PLAYPAL`, bad
   palette index).
-- `create_texture_from_image` below commits a whole wall texture in one
-  step; for a lone patch, flat or sprite use the import tools with the
+- `create_texture_from_image`, `create_flat_from_image` and
+  `create_sprite_from_image` below commit a whole resource in one step;
+  for a lone patch, flat or sprite use the import tools with the
   `processed` `URL` as `source`.
 
 ## `create_texture_from_image`
@@ -471,3 +476,145 @@ canonical operation reference.
   stored lump) and `get_asset_url prefer=texture` (the same composited
   preview), then apply it with `edit_sidedef` or dress a map with it via
   `auto_texture mode=retexture` after `assign_role`.
+
+## `create_flat_from_image`
+
+- Purpose: **one photo to a working floor/ceiling flat** — it processes
+  the picture (the same `ops`/`dither`/`palette` parameters
+  `process_image` takes), fits it to `64x64`, optionally blends opposite
+  edges, quantizes it opaquely and stores the raw index plane in the
+  working archive's **flats** region (`F_START`/`F_END` markers created
+  there when missing), all as **one** undoable edit labelled
+  `create_flat NAME` (`save_wad` writes it; one `undo` removes the flat).
+- Why always `64x64`: vanilla engines tile floors and ceilings at that
+  size, so the processed picture is *always* fit to the square (an
+  oversized source is cropped by `cover`, letterboxed by `contain`,
+  distorted by `stretch`; `import_image_as_flat` keeps other shapes when
+  you need them).
+- Arguments:
+  - `source` (string, required): the picture; a `process_image`
+    `processed` URL is a valid source.
+  - `name` (string, required): the flat lump name, 1 to 8 printable ASCII
+    characters, uppercased. Nothing is derived from the file.
+  - `fit` (string, optional, default `"cover"`): how the picture maps
+    onto the square. `contain` pads with transparency, which quantizes to
+    the palette colour nearest to black (flats store no transparency).
+  - `tileable` (boolean, optional, default `true`): append a
+    `make_tileable` op with a 16-pixel band so neighbouring tiles meet
+    without seams. Pass `false` to keep the edges exactly as drawn.
+  - `ops`, `dither`, `palette`: as in `process_image`; your `ops` run
+    before the automatic fit.
+  - `assign_role` (string, optional): a theme **flat** role (`floor`,
+    `ceiling`, `light_ceiling`, `outdoor_ceiling`, `door_floor`,
+    `lift_floor`, `teleport_floor`, `liquid_floor`) to point at the new
+    flat afterwards. A wall role or unknown name is `invalid_argument`
+    and nothing is written. Theme state is session state, so `undo` does
+    not roll the override back (the result warns); clear it with
+    `set_texture_theme overrides`.
+  - `replace` (boolean, optional, default `false`): see the collision
+    rule below.
+- Collisions refuse **before anything is written**, stricter than the
+  plain flat importer because flats are used *by name* everywhere: a
+  working `flats` lump of this name is `already_exists` unless
+  `replace=true` overwrites it in place, and a flat this name only the
+  `IWAD` or a resource layer holds is `already_exists` too — "this would
+  override <name> everywhere it is used; pass replace to do that or
+  choose another name". `replace=true` accepts the override and the
+  result answers `overrides_existing: true`.
+- Returns:
+
+  ```json
+  {
+    "flat": "MYFLOOR",
+    "steps": [ { "op": "fit", ... }, { "op": "make_tileable", ... } ],
+    "colors_used": 210, "max_color_error": 24,
+    "overrides_existing": false,
+    "preview": { "url": "...", "filename": "MYFLOOR_flat.png", ... },
+    "role": null,
+    "warnings": [],
+    "next_steps": [ "edit_sector floor_flat/ceiling_flat", "auto_texture mode retexture after assign_role" ]
+  }
+  ```
+
+  `steps` is one measurement object per applied op (yours first, then the
+  automatic `fit` and `make_tileable`); `preview` is the stored flat's
+  picture as the flat decoder reads it back; pixels whose alpha is below
+  `128` stay opaque and a `warning` counts them.
+- Look at it with `list_flats`/`get_flat`, assign it with `edit_sector`
+  (`floor_flat`/`ceiling_flat`) or dress a whole map with
+  `auto_texture mode=retexture` after `assign_role`.
+
+## `create_sprite_from_image`
+
+- Purpose: **one drawing to working sprite lumps** — it processes the
+  picture, removes the border background, trims the empty margin, scales
+  it to a sprite-sized height, quantizes it with alpha holes and stores
+  the `Doom` column/post patch in the working archive's **sprites**
+  region (`S_START`/`S_END` markers created there when missing), all as
+  **one** undoable edit labelled `create_sprite NAME` (one `undo` removes
+  every lump the call wrote).
+- Naming follows `import_image_as_sprite` exactly (see *Sprite naming*
+  above — the reminder: `PPPPFN`/`PPPPFNFN`, nothing derived from the
+  file), with one addition: `frames` (an array of frame letters, e.g.
+  `["A","B","C","D"]`) writes the **same final image once per letter** at
+  the given `rotation` — the static-replacement form. `frames` goes with
+  `sprite` and is `invalid_argument` together with `name` or `frame`.
+- Arguments:
+  - `source` (string, required): the picture; a `process_image`
+    `processed` URL is a valid source.
+  - `name`, or `sprite` with `frame`/`frames`/`rotation`/
+    `mirror_rotation`: the three naming forms above.
+  - `remove_background` (boolean, optional, default `true`): flood-clear
+    pixels matching the border background colour from the edges inwards,
+    so a drawing on white loses the white but keeps enclosed white
+    details (unlike `color_key`).
+  - `background_tolerance` (integer, optional, default `32`): per-channel
+    match distance; `background_color` (`#RRGGBB`/`#RRGGBBAA`, optional)
+    forces the colour instead of detecting the dominant border bucket.
+  - `trim` (boolean, optional, default `true`): crop to the bounding box
+    of pixels at alpha `128` or above, padding `0`.
+  - `height` (integer, optional, `1..=512`): the final pixel height,
+    aspect kept (a `contain` fit with the `area` filter). Without it, a
+    picture taller than 256 px is scaled to 128 tall and `notes` says
+    "scaled to 128 px tall; pass height to choose" — a sane default for
+    a standing monster, not a law: pass `height` to choose.
+  - `offsets`: the forms the shared parameters document, but resolved
+    against the **final** trimmed picture; the default `center_bottom`
+    puts the sprite's feet on its origin (why: floor-standing sprites are
+    drawn with the origin at the feet). `grAb` chunks are not consulted —
+    the pipeline may have moved the picture.
+  - `ops`, `dither`, `palette`: as in `process_image`; your `ops` run
+    first, then background removal, trim and the height fit.
+    Transparency is fixed to alpha below `128`.
+  - `replace` (boolean, optional, default `false`): overwrite working
+    sprites of these names; a same-name lump only a read-only layer holds
+    becomes an override, and rotations other lumps already serve are
+    reported as `warnings`, never refusals.
+- Returns:
+
+  ```json
+  {
+    "lumps": ["TROOA1", "TROOB1"],
+    "width": 20, "height": 40,
+    "left_offset": 10, "top_offset": 40,
+    "steps": [ { "op": "remove_background", ... }, { "op": "trim", ... }, { "op": "fit", ... } ],
+    "colors_used": 12, "transparent_pixels": 380,
+    "preview": { "url": "...", "filename": "TROOA1_sprite.png", ... },
+    "warnings": [], "notes": [],
+    "next_steps": [ "a new thing type needs a definition: edit_decorate (ZDoom ports) or edit_dehacked to repoint an existing type's frames" ]
+  }
+  ```
+
+  `lumps` lists every name written, `preview` is the first lump decoded
+  back through the sprite decoder.
+- Errors: `invalid_argument` (naming conflicts — both selectors, `frame`
+  with `frames`, `frames` with `name` or without `sprite`, an empty
+  list — a `height` outside `1..=512`, a bad `background_color`, and a
+  picture background removal and trim empty entirely: "the whole image
+  was removed as background; lower background_tolerance or set
+  remove_background false"), `format_error`/`unsupported` (bytes that are
+  no readable image), `not_found` (missing `source`, missing `PLAYPAL`,
+  bad palette index), `already_exists` (a working twin without `replace`).
+- After it lands, `get_sprite`/`list_sprites` read the lumps back; a new
+  monster or decoration still needs a definition — `edit_decorate`
+  (ZDoom-family) or `edit_dehacked` to repoint an existing type's frames.

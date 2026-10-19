@@ -243,7 +243,9 @@ const fn hexen_door(style: DoorStyle) -> DoorLineSetup {
     }
 }
 
-/// A validated room line: the two sides and whether they must swap.
+/// A validated room line: the two sides and whether the line must turn
+/// around so the room ends up on its geometric front (right of `v1` to
+/// `v2`).
 #[derive(Clone, Copy, Debug)]
 struct RoomPlan {
     /// Index in [`Map::linedefs`] of the line.
@@ -252,7 +254,9 @@ struct RoomPlan {
     room_side: usize,
     /// Index in [`Map::sidedefs`] of the side facing the door sector.
     door_side: usize,
-    /// Whether the front side is the door's and the two must swap.
+    /// Whether the front sidedef is the door's and the line must be
+    /// turned around: `v1`/`v2` swap with `front`/`back` so the room's
+    /// sidedef keeps the Doom convention (front on the line's right).
     flip: bool,
 }
 
@@ -263,6 +267,9 @@ struct JambPlan {
     line: usize,
     /// Index in [`Map::sidedefs`] of the side facing the door sector.
     door_side: usize,
+    /// Whether that side is the back and the line's vertices must swap
+    /// with it, keeping the door sector on the geometric front.
+    flip: bool,
 }
 
 /// Every [`DoorSides`] reference of one [`apply_door`] call, checked and
@@ -299,9 +306,13 @@ struct DoorAction<'dress> {
 /// [`DoorLineSetup::special`], [`DoorLineSetup::tag`],
 /// [`DoorLineSetup::args`] and — in the `Hexen` family — the activation
 /// bits of [`DoorLineSetup::flags_activation`] (the old activation field
-/// is replaced, never merged). Every jamb line of
+/// is replaced, never merged). A flipped line swaps `v1`/`v2` with the
+/// sides, so the room's sidedef keeps the Doom convention of being on
+/// the line's right (what the renderer draws and the `Doom` use lines
+/// fire from). Every jamb line of
 /// [`DoorSides::jamb_lines`] is made one-sided with its front facing the
-/// door sector: blocking, lower-unpegged (the `dontpegbottom` bit, which
+/// door sector (its vertices swap when the door's side was the back):
+/// blocking, lower-unpegged (the `dontpegbottom` bit, which
 /// pins the track to the floor) and wearing [`DoorTextures::track`] as
 /// its `middle`.
 ///
@@ -429,7 +440,8 @@ fn plan_room_line(map: &Map, line: usize, door_sector: usize) -> Result<RoomPlan
 
 /// Resolve one jamb line: the side that stays as front, which is the
 /// door-facing one of a two-sided line or the front of an already
-/// one-sided one.
+/// one-sided one, and whether the line must turn around so that side
+/// keeps the Doom convention of being on the line's right.
 fn plan_jamb_line(map: &Map, line: usize, door_sector: usize) -> Result<JambPlan, CyberError> {
     let linedef = line_at(map, line, "jamb")?;
     match (linedef.front, linedef.back) {
@@ -438,18 +450,23 @@ fn plan_jamb_line(map: &Map, line: usize, door_sector: usize) -> Result<JambPlan
                 side_sector(map, line, front)? == door_sector,
                 side_sector(map, line, back)? == door_sector,
             );
-            let door_side = match at_door {
-                (true, false) => front,
-                (false, true) => back,
+            let (door_side, flip) = match at_door {
+                (true, false) => (front, false),
+                (false, true) => (back, true),
                 _ => return Err(jamb_not_at_door(line, door_sector)),
             };
-            Ok(JambPlan { line, door_side })
+            Ok(JambPlan {
+                line,
+                door_side,
+                flip,
+            })
         }
         (Some(front), None) => {
             if side_sector(map, line, front)? == door_sector {
                 Ok(JambPlan {
                     line,
                     door_side: front,
+                    flip: false,
                 })
             } else {
                 Err(jamb_not_at_door(line, door_sector))
@@ -518,6 +535,7 @@ fn dress_room_line(map: &mut Map, room: &RoomPlan, action: &DoorAction<'_>) {
     if let Some(linedef) = map.linedefs.get_mut(room.line) {
         if room.flip {
             core::mem::swap(&mut linedef.front, &mut linedef.back);
+            core::mem::swap(&mut linedef.v1, &mut linedef.v2);
         }
         linedef.special = action.setup.special;
         linedef.tag = action.setup.tag;
@@ -539,6 +557,9 @@ fn dress_room_line(map: &mut Map, room: &RoomPlan, action: &DoorAction<'_>) {
 /// indices were checked by [`plan_door`]).
 fn dress_jamb_line(map: &mut Map, jamb: JambPlan, textures: &DoorTextures) {
     if let Some(linedef) = map.linedefs.get_mut(jamb.line) {
+        if jamb.flip {
+            core::mem::swap(&mut linedef.v1, &mut linedef.v2);
+        }
         linedef.front = Some(jamb.door_side);
         linedef.back = None;
         linedef.flags = (linedef.flags | BLOCKING_BIT | DONTPEG_BOTTOM_BIT) & !TWO_SIDED_BIT;
@@ -572,9 +593,12 @@ mod tests {
         }
     }
 
-    /// A two-sided line between sidedefs `front` and `back`.
+    /// A two-sided line between sidedefs `front` and `back`, running
+    /// from vertex 0 to vertex 1.
     fn two_sided(front: usize, back: usize) -> Linedef {
         Linedef {
+            v1: 0_usize,
+            v2: 1_usize,
             front: Some(front),
             back: Some(back),
             flags: 4_u32,
@@ -582,9 +606,12 @@ mod tests {
         }
     }
 
-    /// A blocking one-sided line with front sidedef `front`.
+    /// A blocking one-sided line with front sidedef `front`, running
+    /// from vertex 0 to vertex 1.
     fn one_sided(front: usize) -> Linedef {
         Linedef {
+            v1: 0_usize,
+            v2: 1_usize,
             front: Some(front),
             flags: 1_u32,
             ..Default::default()
@@ -786,9 +813,26 @@ mod tests {
             "the correct front stays the front"
         );
         assert_eq!(
+            (
+                map.linedefs.first().expect("line 0").v1,
+                map.linedefs.first().expect("line 0").v2
+            ),
+            (0_usize, 1_usize),
+            "an unflipped line keeps its vertices"
+        );
+        assert_eq!(
             map.linedefs.get(1).expect("line 1").front,
             Some(3_usize),
             "the backwards line is flipped to face the room"
+        );
+        assert_eq!(
+            (
+                map.linedefs.get(1).expect("line 1").v1,
+                map.linedefs.get(1).expect("line 1").v2
+            ),
+            (1_usize, 0_usize),
+            "the flip turns the line around too, so the room sidedef keeps the Doom \
+             convention of sitting right of v1 to v2"
         );
         assert_eq!(map.sidedefs.first().expect("side").upper, "DOOR7");
         assert_eq!(map.sidedefs.get(3).expect("side").upper, "DOOR7");
@@ -817,6 +861,11 @@ mod tests {
             "the door-facing side becomes the front"
         );
         assert_eq!(swinging.back, None, "the room side is dropped");
+        assert_eq!(
+            (swinging.v1, swinging.v2),
+            (1_usize, 0_usize),
+            "the door side was the back, so the jamb turns around with it"
+        );
         assert_eq!(
             swinging.flags,
             1_u32 | 16_u32,

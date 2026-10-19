@@ -1,15 +1,18 @@
-//! Map-feature tools: `add_door` and `add_switch` (see the `features`
-//! router on [`crate::server::Cyberdemon`]).
+//! Map-feature tools: `add_door`, `add_switch` and `add_exit` (see the
+//! `features` router on [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
-//! drawn map. It grows in place: `add_exit` joins this same router in a
-//! later ticket and reuses this file's machinery — the [`DoorSpec`]
-//! pipeline runs inside one [`crate::session::Session::edit_map`]
-//! step, [`theme_skin`] resolves role textures through
-//! [`crate::tools::themes::theme_texture`], and the tag a
-//! [`DoorStyle::Remote`] door mints with [`next_free_tag`] is exactly
-//! what `add_switch` looks for: pointing a switch's `target_sector` at
-//! that door closes the remote loop.
+//! drawn map: the [`DoorSpec`] pipeline runs inside one
+//! [`crate::session::Session::edit_map`] step, [`theme_skin`] resolves
+//! role textures through [`crate::tools::themes::theme_texture`], and
+//! the tag a [`DoorStyle::Remote`] door mints with [`next_free_tag`] is
+//! exactly what `add_switch` looks for: pointing a switch's
+//! `target_sector` at that door closes the remote loop. `add_exit`
+//! finishes the level with the same machinery: its `switch` kind hands
+//! the shared [`run_switch_step`] body the `exit`/`secret_exit` action,
+//! and its `walk_over` kind dresses every two-sided boundary of a
+//! sector with the family's walk-over level-end special as one
+//! [`build_walk_over_exit`] edit step.
 //!
 //! `add_switch` composes the same pure engines: [`project_onto_line`]
 //! and [`door_segment`] fit the panel to the wall,
@@ -178,6 +181,29 @@ struct AddSwitchParams {
     /// and adds `repeatspecial`. Ignored by the exit actions).
     #[serde(default)]
     repeatable: bool,
+}
+
+/// Arguments for [`Cyberdemon::add_exit`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddExitParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// How the level ends: `switch` (an exit switch on `linedef`) or
+    /// `walk_over` (every two-sided boundary of `sector`).
+    kind: String,
+    /// Whether this is the map's secret exit (default false).
+    #[serde(default)]
+    secret: bool,
+    /// The wall to mount the exit switch on (required by `switch`,
+    /// ignored by `walk_over`).
+    #[serde(default)]
+    linedef: Option<usize>,
+    /// The sector whose boundaries trigger the exit (required by
+    /// `walk_over`, ignored by `switch`).
+    #[serde(default)]
+    sector: Option<usize>,
 }
 
 /// The wall the parameters name, already checked for "exactly one".
@@ -1191,13 +1217,18 @@ fn build_switch(map: &mut Map, spec: &SwitchSpec) -> Result<PlacedSwitch, CyberE
     })
 }
 
-/// `add_switch`'s work: resolve the parameters, then run the whole
-/// switch as one [`crate::session::Session::edit_map`] step.
-fn add_switch_run(
+/// The shared switch step's outcome: what was placed and the standard
+/// `map`/`nodes_invalidated`/`copied_to_working` edit fragment.
+type Switched = (PlacedSwitch, JsonMap<String, Value>);
+
+/// The body both switch-mounting tools share: resolve the map, the
+/// format-validated panel texture and the target tag, then run the
+/// whole switch as one [`crate::session::Session::edit_map`] step.
+fn run_switch_step(
     session: &mut Session,
     args: &AddSwitchParams,
-) -> Result<SwitchReport, CyberError> {
-    let action = action_of(&args.action)?;
+    action: SwitchAction,
+) -> Result<Switched, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let format = current_map(session, name)?.format;
     let texture = validate_texture_name(&theme_texture(session, switch_role(action))?, format)?;
@@ -1212,10 +1243,223 @@ fn add_switch_run(
     };
     let label = format!("add {} switch", action_name(action));
     let (placed, report) = session.edit_map(name, &label, |map| build_switch(map, &spec))?;
-    Ok(SwitchReport {
-        placed,
+    Ok((placed, edit_result_fragment(&report)))
+}
+
+/// `add_switch`'s work: parse the action and run the shared body.
+fn add_switch_run(
+    session: &mut Session,
+    args: &AddSwitchParams,
+) -> Result<SwitchReport, CyberError> {
+    let action = action_of(&args.action)?;
+    let (placed, edit) = run_switch_step(session, args, action)?;
+    Ok(SwitchReport { placed, edit })
+}
+
+/// How [`Cyberdemon::add_exit`] triggers the level end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExitKind {
+    /// A wall switch carrying the exit action (the shared switch body).
+    Switch,
+    /// Every two-sided boundary of a sector, crossed by the player.
+    WalkOver,
+}
+
+/// The canonical wire name of `kind`.
+const fn kind_name(kind: ExitKind) -> &'static str {
+    match kind {
+        ExitKind::Switch => "switch",
+        ExitKind::WalkOver => "walk_over",
+    }
+}
+
+/// The [`ExitKind`] `text` names (case-insensitive), or the refusal
+/// listing both.
+fn kind_of(text: &str) -> Result<ExitKind, CyberError> {
+    let wanted = text.to_ascii_lowercase();
+    [ExitKind::Switch, ExitKind::WalkOver]
+        .into_iter()
+        .find(|kind| kind_name(*kind) == wanted)
+        .ok_or_else(|| {
+            invalid(&format!(
+                "kind {text:?} is not an exit kind: pass \"switch\" (an exit switch on \
+                 linedef) or \"walk_over\" (every two-sided boundary of sector)"
+            ))
+        })
+}
+
+/// The walk-over exit special flag family `family` installs for a
+/// normal or `secret` level end: the `Doom` family's `W1` 52/124, the
+/// `Hexen` family's portal 243/244.
+const fn walk_over_special(family: FlagFamily, secret: bool) -> i32 {
+    match family {
+        FlagFamily::Doom => {
+            if secret {
+                124_i32
+            } else {
+                52_i32
+            }
+        }
+        FlagFamily::Hexen => {
+            if secret {
+                244_i32
+            } else {
+                243_i32
+            }
+        }
+    }
+}
+
+/// Whether `line` is two-sided (both sides resolving to sectors) with
+/// `sector` opening on either of them.
+fn sector_boundary(map: &Map, line: &Linedef, sector: usize) -> bool {
+    let front = side_sector(map, line.front);
+    let back = side_sector(map, line.back);
+    front.is_some() && back.is_some() && (front == Some(sector) || back == Some(sector))
+}
+
+/// The lines [`build_walk_over_exit`] dressed and the special they carry.
+#[derive(Debug)]
+struct WalkOverExit {
+    /// The level-end special installed on every boundary line.
+    special: i32,
+    /// Indices of the two-sided lines that now end the level.
+    lines: Vec<usize>,
+}
+
+/// Set one boundary line's level-end special; in the `Hexen` family
+/// clear its activation field to the `playercross` value (the field's
+/// zero), keeping the other flag bits, the tag and the args.
+fn mark_walk_over(map: &mut Map, index: usize, special: i32, hexen: bool) {
+    if let Some(line) = map.linedefs.get_mut(index) {
+        line.special = special;
+        if hexen {
+            line.flags &= !ACTIVATION_MASK;
+        }
+    }
+}
+
+/// Dress every two-sided boundary of `sector` with the family's
+/// walk-over level end. The `Doom` family's `W1` 52/124 read the line's
+/// tag as the destination map number, so existing tags stay as they are
+/// (a plain 0 ends the game, or the secret level on 124).
+fn build_walk_over_exit(
+    map: &mut Map,
+    sector: usize,
+    secret: bool,
+) -> Result<WalkOverExit, CyberError> {
+    if map.sectors.get(sector).is_none() {
+        return Err(out_of_range("sector", sector, map.sectors.len()));
+    }
+    let special = walk_over_special(map.flag_family(), secret);
+    let hexen = map.flag_family() == FlagFamily::Hexen;
+    let lines: Vec<usize> = map
+        .linedefs
+        .iter()
+        .enumerate()
+        .filter(|&(_, line)| sector_boundary(map, line, sector))
+        .map(|(index, _line)| index)
+        .collect();
+    if lines.is_empty() {
+        return Err(invalid(&format!(
+            "sector {sector} has no two-sided boundary to walk over: draw a shared wall \
+             to the next sector (add_door, or create_sector_from_loop overlapping it) or \
+             trigger the exit with kind \"switch\" instead"
+        )));
+    }
+    for index in &lines {
+        mark_walk_over(map, *index, special, hexen);
+    }
+    Ok(WalkOverExit { special, lines })
+}
+
+/// Structured result of [`Cyberdemon::add_exit`].
+#[derive(Serialize)]
+struct ExitReport {
+    /// The canonical trigger name: `switch` or `walk_over`.
+    kind: &'static str,
+    /// Indices of the linedefs carrying the level-end action.
+    lines: Vec<usize>,
+    /// The line special installed on them.
+    special: i32,
+    /// Whether this is the map's secret exit.
+    secret: bool,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The `switch` kind: the shared [`run_switch_step`] body with the
+/// exit action on the required `linedef`.
+fn exit_via_switch(session: &mut Session, args: &AddExitParams) -> Result<ExitReport, CyberError> {
+    let Some(linedef) = args.linedef else {
+        return Err(invalid(
+            "kind \"switch\" requires linedef: the index of the wall to mount the exit \
+             switch on (assemble_map lists the linedefs)",
+        ));
+    };
+    let action = if args.secret {
+        SwitchAction::SecretExit
+    } else {
+        SwitchAction::Exit
+    };
+    let wire = AddSwitchParams {
+        map: args.map.clone(),
+        linedef,
+        at: None,
+        width: None,
+        action: action_name(action).to_owned(),
+        target_sector: None,
+        repeatable: false,
+    };
+    let (placed, edit) = run_switch_step(session, &wire, action)?;
+    Ok(ExitReport {
+        kind: kind_name(ExitKind::Switch),
+        lines: vec![placed.linedef],
+        special: placed.special,
+        secret: args.secret,
+        edit,
+    })
+}
+
+/// The `walk_over` kind: one [`build_walk_over_exit`] edit step over
+/// the sector's boundaries.
+fn exit_via_walkover(
+    session: &mut Session,
+    args: &AddExitParams,
+) -> Result<ExitReport, CyberError> {
+    let Some(sector) = args.sector else {
+        return Err(invalid(
+            "kind \"walk_over\" requires sector: the index of the sector whose two-sided \
+             boundaries the player crosses to end the level (get_map_summary lists the \
+             sectors)",
+        ));
+    };
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let label = if args.secret {
+        "add secret walk_over exit"
+    } else {
+        "add walk_over exit"
+    };
+    let secret = args.secret;
+    let (built, report) =
+        session.edit_map(name, label, |map| build_walk_over_exit(map, sector, secret))?;
+    Ok(ExitReport {
+        kind: kind_name(ExitKind::WalkOver),
+        lines: built.lines,
+        special: built.special,
+        secret,
         edit: edit_result_fragment(&report),
     })
+}
+
+/// `add_exit`'s work: parse the trigger kind and run its path, each a
+/// single [`crate::session::Session::edit_map`] step.
+fn add_exit_run(session: &mut Session, args: &AddExitParams) -> Result<ExitReport, CyberError> {
+    match kind_of(&args.kind)? {
+        ExitKind::Switch => exit_via_switch(session, args),
+        ExitKind::WalkOver => exit_via_walkover(session, args),
+    }
 }
 
 /// Hand an outcome to the client as the documented structured result.
@@ -1262,6 +1506,20 @@ impl Cyberdemon {
                 .with_session(|session| add_switch_run(session, &args)),
         )
     }
+
+    /// Ends the level from a wall switch or a walk-over line in one undoable edit.
+    #[tool(
+        description = "Places a level end in one undoable edit, as an exit switch on a wall or as lines the player walks over. kind (required, case-insensitive) picks the trigger. \"switch\" is the add_switch code path with the exit action: linedef (required; missing is invalid_argument naming it) is the wall the panel mounts on, the panel width defaults to 32 (a longer wall is split and the reported lines name the new chunk), it wears the theme's exit_switch texture, and the Doom family gets S1 11 (51 when secret) with the line answering tag 0 - the Hexen family gets Portal 243 (244) with playeruse activation. \"walk_over\" dresses a whole sector: sector (required; missing is invalid_argument naming it) - every two-sided linedef that has the sector on either side becomes the level end. The Doom family gets W1 52 (124 when secret); vanilla reads such a line's tag as the destination map number, so each line's existing tag is kept (0 ends the game, or the secret level on 124; set a destination with edit_linedef). The Hexen family gets special 243 (244) with its activation field set to playercross (cross, not use: the field's zero value); the lines' other flag bits, tags and args stay. An unknown kind is invalid_argument listing both. secret (default false) picks the map's secret exit for either kind. kind switch ignores sector; kind walk_over ignores linedef, textures nothing and changes no geometry, so its nodes_invalidated is false. A walk-over sector with no two-sided boundary is invalid_argument naming it. Returns {kind, lines, special, secret, map, nodes_invalidated, copied_to_working}: lines are the linedefs carrying the action, special the installed number. Look at the result with render_topdown (action lines render blue) and check it with validate_map."
+    )]
+    fn add_exit(
+        &self,
+        Parameters(args): Parameters<AddExitParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| add_exit_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1269,12 +1527,13 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddDoorParams, AddSwitchParams, Chosen, DoorSkins, DoorSpec, DoorStyle, Dress, Groups,
-        Placed, SwitchSpec, Target, action_name, action_names, action_of, build_door, build_switch,
-        centroid, choose_between, choose_linedef, door_groups, door_record, dress_door,
-        dress_switch, half_axis, isolate_chunk, out_of_range, recess_depth, side_sector,
-        strip_face_lost, strip_wall, style_name, style_names, style_of, switch_cut, switch_role,
-        switch_span, switch_tag, target_of, track_role,
+        AddDoorParams, AddExitParams, AddSwitchParams, Chosen, DoorSkins, DoorSpec, DoorStyle,
+        Dress, ExitKind, Groups, Placed, SwitchSpec, Target, action_name, action_names, action_of,
+        build_door, build_switch, build_walk_over_exit, centroid, choose_between, choose_linedef,
+        door_groups, door_record, dress_door, dress_switch, half_axis, isolate_chunk, kind_name,
+        kind_of, out_of_range, recess_depth, side_sector, strip_face_lost, strip_wall, style_name,
+        style_names, style_of, switch_cut, switch_role, switch_span, switch_tag, target_of,
+        track_role, walk_over_special,
     };
     use crate::error::CyberError;
     use crate::themes::Role;
@@ -2209,5 +2468,116 @@ mod tests {
         let setup = switch_special(FlagFamily::Doom, SwitchAction::OpenDoor, false, 1_i32);
         let message = refuse(&dress_switch(&mut map, 99, &setup, "SW1STRTN").unwrap_err());
         assert!(message.contains("linedef 99"), "{message}");
+    }
+
+    /// An `add_exit` request parsed from `json`.
+    fn exit_args(json: &str) -> AddExitParams {
+        from_str(json).expect("test exit requests parse")
+    }
+
+    #[test]
+    fn exit_kinds_round_trip_and_refuse_unknown_names() {
+        for kind in [ExitKind::Switch, ExitKind::WalkOver] {
+            assert_eq!(kind_of(kind_name(kind)).expect("canonical"), kind);
+            assert_eq!(
+                kind_of(&kind_name(kind).to_ascii_uppercase()).expect("case-insensitive"),
+                kind
+            );
+        }
+        let message = refuse(&kind_of("stairs").unwrap_err());
+        assert!(
+            message.contains("\"switch\"") && message.contains("\"walk_over\""),
+            "the refusal names both triggers: {message}"
+        );
+    }
+
+    #[test]
+    fn add_exit_params_read_the_wire_shape() {
+        let mounted = exit_args(r#"{"kind": "switch", "linedef": 3, "secret": true}"#);
+        assert_eq!(mounted.linedef, Some(3_usize));
+        assert!(mounted.secret, "the flag arrives");
+        assert_eq!(mounted.sector, None, "walk_over's selector stands aside");
+        assert_eq!(mounted.map, None, "the map defaults like the other tools");
+        let walked = exit_args(r#"{"kind": "walk_over", "sector": 1}"#);
+        assert_eq!(walked.sector, Some(1_usize));
+        assert!(!walked.secret, "the normal exit by default");
+        assert!(
+            from_str::<AddExitParams>(r#"{"sector": 1}"#).is_err(),
+            "the kind is required"
+        );
+    }
+
+    #[test]
+    fn walk_over_specials_follow_the_family_and_secrecy() {
+        assert_eq!(walk_over_special(FlagFamily::Doom, false), 52_i32);
+        assert_eq!(walk_over_special(FlagFamily::Doom, true), 124_i32);
+        assert_eq!(walk_over_special(FlagFamily::Hexen, false), 243_i32);
+        assert_eq!(walk_over_special(FlagFamily::Hexen, true), 244_i32);
+    }
+
+    #[test]
+    fn a_walk_over_exit_dresses_every_boundary_of_the_sector() {
+        let mut map = two_rooms();
+        if let Some(line) = map.linedefs.get_mut(2) {
+            line.tag = 3_i32;
+        }
+        let built = build_walk_over_exit(&mut map, 0_usize, false).expect("sector 0's boundary");
+        assert_eq!(built.lines, vec![2_usize], "the one shared two-sided line");
+        assert_eq!(built.special, 52_i32, "the W1 exit");
+        let line = map.linedefs.get(2).expect("the boundary");
+        assert_eq!(line.special, 52_i32, "the line carries it");
+        assert_eq!(line.tag, 3_i32, "the vanilla destination tag survives");
+        assert_eq!(line.flags, 4_u32, "a Doom line's flags stay as they were");
+        let from_behind =
+            build_walk_over_exit(&mut map, 1_usize, true).expect("sector 1 shares the line");
+        assert_eq!(from_behind.lines, vec![2_usize], "either side counts");
+        assert_eq!(from_behind.special, 124_i32, "the secret W1");
+    }
+
+    #[test]
+    fn a_hexen_walk_over_exit_sets_the_cross_activation() {
+        let mut map = two_rooms();
+        map.format = MapFormat::Hexen;
+        if let Some(line) = map.linedefs.get_mut(2) {
+            line.flags = 4_u32 | 0x400_u32 | 0x200_u32;
+        }
+        let built = build_walk_over_exit(&mut map, 0_usize, true).expect("a Hexen exit");
+        assert_eq!(built.special, 244_i32, "the secret Portal");
+        let line = map.linedefs.get(2).expect("the boundary");
+        assert_eq!(line.special, 244_i32);
+        assert_eq!(
+            line.flags,
+            4_u32 | 0x200_u32,
+            "the activation field clears to playercross (its zero value); twosided and \
+             repeatspecial keep their bits"
+        );
+    }
+
+    #[test]
+    fn walk_over_exits_refuse_bad_sectors_and_bare_rooms() {
+        let mut map = two_rooms();
+        let missing = refuse(&build_walk_over_exit(&mut map, 99_usize, false).unwrap_err());
+        assert!(missing.contains("sector 99 is out of range"), "{missing}");
+        let mut lonely = one_room();
+        let bare = refuse(&build_walk_over_exit(&mut lonely, 0_usize, false).unwrap_err());
+        assert!(
+            bare.contains("sector 0 has no two-sided boundary"),
+            "{bare}"
+        );
+        assert_eq!(lonely.linedefs.len(), 4, "a refusal wrote nothing");
+        assert_eq!(lonely.sectors.len(), 1, "and drew nothing");
+    }
+
+    #[test]
+    fn one_sided_lines_never_take_the_walk_over_action() {
+        let mut map = two_rooms();
+        let solid = 6_usize;
+        let built = build_walk_over_exit(&mut map, 1_usize, false).expect("room 1's boundary");
+        assert_eq!(
+            built.lines,
+            vec![2_usize],
+            "the hall-facing step line only, not room 1's own walls"
+        );
+        assert_eq!(map.linedefs.get(solid).expect("a wall").special, 0_i32);
     }
 }

@@ -12,18 +12,26 @@
 //! target's tag, the fresh tag minted onto an untagged sector, the
 //! whole-wall exit switch needing no split (`SW1EXIT`), the `Hexen`
 //! `Door_Open`/`Portal` use lines, and the switch closing a `remote`
-//! door's loop with exactly the tag `add_door` reported.
+//! door's loop with exactly the tag `add_door` reported. And `add_exit`:
+//! the level-ending switch on a named wall, the walk-over exit dressing
+//! every two-sided boundary of a sector with 52/124 (`Doom`) or
+//! `playercross` 243/244 (`Hexen`), the destination tag kept on the
+//! `W1` line, and the missing-`linedef`/missing-`sector`/bad-`kind`
+//! refusals; a fullbright `render_view` through the theme override
+//! shows the built door's `DOOR1` face from the room it opens.
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
+    use cyberdemon::gfx::codec::decode_image;
+    use cyberdemon::gfx::image::RgbaImage;
     use rmcp::RoleClient;
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
     use crate::fixtures::{iwad_features, iwad_l_room, pwad_map_formats};
-    use crate::support::{call, call_err, connect};
+    use crate::support::{call, call_err, connect, http_get};
 
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
@@ -152,6 +160,18 @@ mod tests {
     async fn refuse_switch(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
         let (code, message) = call_err(client, "add_switch", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+    }
+
+    /// Requires `add_exit` to reject `args` with `invalid_argument`
+    /// naming `needle`.
+    async fn refuse_exit(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "add_exit", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -835,5 +855,260 @@ mod tests {
             "closed until a player uses the switch"
         );
         validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn an_exit_switch_mounts_on_the_wall_it_names() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "add_exit",
+            json!({"kind": "switch", "linedef": 0_i32}),
+        )
+        .await;
+        assert_eq!(result["kind"], json!("switch"), "the trigger echoes");
+        assert_eq!(result["secret"], json!(false), "the normal exit");
+        assert_eq!(
+            result["lines"],
+            json!([7_i32]),
+            "the split chunk carries it"
+        );
+        assert_eq!(result["special"], json!(11_i32), "the S1 exit");
+        assert_eq!(result["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(true),
+            "the wall split is new geometry"
+        );
+        let line = working_linedef(&client, "MAP01", 7_usize).await;
+        assert_eq!(line["special"], json!(11_i32), "the chunk carries the exit");
+        assert_eq!(line["tag"], json!(0_i32), "a switch exit acts on no tag");
+        assert_eq!(
+            line["front"]["middle"],
+            json!("SW1EXIT"),
+            "the theme's exit panel"
+        );
+        validate_clean(&client, "MAP01").await;
+        let second = features_loaded(dir.path()).await;
+        let secret = call(
+            &second,
+            "add_exit",
+            json!({"kind": "switch", "linedef": 0_i32, "secret": true}),
+        )
+        .await;
+        assert_eq!(secret["special"], json!(51_i32), "the S1 secret exit");
+        assert_eq!(secret["secret"], json!(true), "echoed back");
+        assert_eq!(secret["lines"], json!([7_i32]), "the same wall chunk shape");
+        validate_clean(&second, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn a_walk_over_exit_dresses_every_boundary_of_the_sector() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "add_exit",
+            json!({"kind": "walk_over", "sector": 0_i32}),
+        )
+        .await;
+        assert_eq!(result["kind"], json!("walk_over"), "the trigger echoes");
+        assert_eq!(
+            result["lines"],
+            json!([2_i32]),
+            "the sector's only two-sided line, not its one-sided walls"
+        );
+        assert_eq!(result["special"], json!(52_i32), "the W1 exit");
+        assert_eq!(result["secret"], json!(false));
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(false),
+            "dressing lines is not new geometry"
+        );
+        assert_eq!(result["copied_to_working"], json!(true));
+        let step = working_linedef(&client, "MAP01", 2_usize).await;
+        assert_eq!(step["special"], json!(52_i32), "the boundary carries it");
+        assert_eq!(step["tag"], json!(0_i32), "a plain line's tag stays plain");
+        let from_behind = call(
+            &client,
+            "add_exit",
+            json!({"kind": "walk_over", "sector": 1_i32}),
+        )
+        .await;
+        assert_eq!(
+            from_behind["lines"],
+            json!([2_i32]),
+            "sector 1 shares the line, so it counts from either side"
+        );
+        validate_clean(&client, "MAP01").await;
+        let secret = call(
+            &client,
+            "add_exit",
+            json!({"kind": "walk_over", "sector": 0_i32, "secret": true}),
+        )
+        .await;
+        assert_eq!(secret["special"], json!(124_i32), "the W1 secret exit");
+        assert_eq!(secret["secret"], json!(true), "echoed back");
+        let line = working_linedef(&client, "MAP01", 2_usize).await;
+        assert_eq!(line["special"], json!(124_i32), "the line now ends the map");
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn a_walk_over_exit_keeps_a_vanilla_destination_tag() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(
+            &client,
+            "edit_linedef",
+            json!({"index": 2_i32, "tag": 3_i32}),
+        )
+        .await;
+        let result = call(
+            &client,
+            "add_exit",
+            json!({"kind": "walk_over", "sector": 0_i32}),
+        )
+        .await;
+        assert_eq!(result["special"], json!(52_i32));
+        let line = working_linedef(&client, "MAP01", 2_usize).await;
+        assert_eq!(line["special"], json!(52_i32), "the W1 exit");
+        assert_eq!(
+            line["tag"],
+            json!(3_i32),
+            "vanilla 52 reads the line's tag as the destination map, so it survives"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hexen_walk_over_exit_crosses_the_boundary() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "add_exit",
+            json!({"map": "MAP04", "kind": "walk_over", "sector": 0_i32}),
+        )
+        .await;
+        assert_eq!(result["special"], json!(243_i32), "the Portal exit line");
+        assert_eq!(result["lines"], json!([2_i32]), "the shared boundary");
+        assert_eq!(result["secret"], json!(false));
+        let line = working_linedef(&client, "MAP04", 2_usize).await;
+        assert_eq!(line["special"], json!(243_i32));
+        let names = flag_names(&line);
+        assert!(
+            names.contains(&"playercross"),
+            "the activation field reads as a cross: {names:?}"
+        );
+        assert!(!names.contains(&"playeruse"), "not a use line: {names:?}");
+        let secret = call(
+            &client,
+            "add_exit",
+            json!({"map": "MAP04", "kind": "walk_over", "sector": 1_i32, "secret": true}),
+        )
+        .await;
+        assert_eq!(secret["special"], json!(244_i32), "the secret Portal");
+        assert_eq!(secret["secret"], json!(true), "echoed back");
+        let again = working_linedef(&client, "MAP04", 2_usize).await;
+        assert_eq!(
+            again["special"],
+            json!(244_i32),
+            "the same line, from room 1"
+        );
+        assert!(flag_names(&again).contains(&"playercross"), "still cross");
+    }
+
+    #[tokio::test]
+    async fn exit_arguments_are_validated() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_exit(&client, json!({"kind": "switch"}), "linedef").await;
+        refuse_exit(&client, json!({"kind": "walk_over"}), "sector").await;
+        refuse_exit(
+            &client,
+            json!({"kind": "stairs", "linedef": 0_i32}),
+            "is not an exit kind",
+        )
+        .await;
+        refuse_exit(
+            &client,
+            json!({"kind": "walk_over", "sector": 99_i32}),
+            "sector 99 is out of range",
+        )
+        .await;
+        refuse_exit(
+            &client,
+            json!({"kind": "switch", "linedef": 999_i32}),
+            "linedef 999 is out of range",
+        )
+        .await;
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            code, "not_found",
+            "no refused exit even copied the block into the working archive"
+        );
+        let lonely = l_room_loaded(dir.path()).await;
+        refuse_exit(
+            &lonely,
+            json!({"kind": "walk_over", "sector": 0_i32}),
+            "no two-sided boundary",
+        )
+        .await;
+    }
+
+    /// Fetch and decode a render report's PNG asset.
+    async fn rendered_image(report: &Value) -> RgbaImage {
+        let url = report["asset"]["url"].as_str().expect("an asset url");
+        let (base, rest) = url.split_once("/assets/").expect("an asset url");
+        let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
+        assert_eq!(status, 200, "the asset serves: {url}");
+        decode_image(&body).expect("the view is a readable PNG")
+    }
+
+    /// The number of pixels of `image` that are exactly `color`.
+    fn count_pixels(image: &RgbaImage, color: [u8; 4]) -> usize {
+        (0..image.height)
+            .flat_map(|row| (0..image.width).map(move |col| (col, row)))
+            .filter(|&(col, row)| image.get(col, row) == Some(color))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_themed_door_face_shows_from_the_room_it_opens() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let theme = call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"door": "DOOR1"}}),
+        )
+        .await;
+        assert_eq!(
+            theme["roles"]["door"]["texture"],
+            json!("DOOR1"),
+            "the override stands for the role"
+        );
+        call(&client, "add_door", json!({"between": [0_i32, 1_i32]})).await;
+        let report = call(
+            &client,
+            "render_view",
+            json!({
+                "map": "MAP01", "x": 64_i64, "y": 128_i64, "angle": 0_i64,
+                "width": 160_u64, "height": 100_u64, "lighting": "fullbright",
+            }),
+        )
+        .await;
+        let image = rendered_image(&report).await;
+        assert!(
+            count_pixels(&image, [178_u8, 77, 178, 255]) > 0,
+            "the closed door's DOOR1 face (the fixture patch's index 170, one fake-contrast \
+             step darker) shows from room 0 across the doorway"
+        );
     }
 }

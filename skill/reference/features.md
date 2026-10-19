@@ -2,15 +2,15 @@
 
 Complete game structures built on a map you have already drawn.
 `add_door` cuts working doors; `add_switch` mounts the triggers that fire
-tagged sectors — including a `remote` door's. `add_exit` will join the
-group later.
+tagged sectors — including a `remote` door's; `add_exit` ends the level,
+from a switch or by walking over a line.
 
 A **feature is ordinary map elements plus the action that makes them do
 something**: `add_door` draws the doorway geometry (through the same
 overlay engine as `create_sector_from_loop`), installs the line special
 and tags, and dresses it with textures — all in one undoable step. Draw
-your rooms first (`reference/sectors.md`), then add the doors and their
-switches.
+your rooms first (`reference/sectors.md`), then add the doors, their
+switches and the exit.
 
 ## `add_door`
 
@@ -83,9 +83,10 @@ upper of every room-facing side), `door_track` the jambs
 `door_floor` the recess floor (room A's flat when the theme names none).
 `texture` and `track_texture` override, validated for the map's format.
 The jambs become one-sided, blocking, floor-pinned track walls; every
-room-facing line is flipped to front its own room (front-only use in the
-`Doom` family), cleared of its blocking bit and top-pegged so the face
-rides the rising ceiling.
+room-facing line is reversed — its sides and its `v1`/`v2` swap together,
+so its front (the line's right, where `Doom` use actions fire and where
+the renderer draws) faces its own room — cleared of its blocking bit and
+top-pegged so the face rides the rising ceiling.
 
 **After the call**: the geometry changed, so `nodes_invalidated` is true
 — run `build_nodes` (or `build_all_nodes`) before playing the map in
@@ -169,7 +170,48 @@ call add_switch {"linedef": 7, "action": "open_door", "target_sector": 2}
     "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
+## `add_exit`
+
+`{map?, kind, secret? = false, linedef?, sector?}` → `{kind, lines,
+special, secret, map, nodes_invalidated, copied_to_working}`
+
+Places the level end in one undoable edit, either as an exit switch on a
+wall or as lines the player crosses. `kind` (required, case-insensitive)
+picks the trigger; `secret` (default false) picks the map's secret exit.
+
+**`kind: "switch"`** is exactly `add_switch` with the `exit` (or
+`secret_exit`) action: `linedef` (required — missing or out of range is
+`invalid_argument` naming it) is the wall the panel mounts on, at the
+default 32-unit width, wearing the theme's `exit_switch` texture. The
+Doom family gets `S1` 11 (51); the Hexen family gets `Portal` 243 (244)
+with `playeruse` activation. `sector` is ignored.
+
+**`kind: "walk_over"`** dresses a whole sector: `sector` (required —
+missing or out of range is `invalid_argument` naming it) — **every
+two-sided linedef with the sector on either side** becomes a level-end
+line. A sector with no two-sided boundary is refused with a hint. The
+Doom family gets `W1` 52 (124); such a line's tag is the destination map
+number in vanilla, so each line's existing tag is **kept** untouched (0
+ends the game, or the secret level on 124 — set a real destination with
+`edit_linedef`). The Hexen family gets special 243 (244) with its
+activation field set to `playercross` — cross, not use; the lines' other
+flag bits, tags and args stay. `linedef` is ignored, and nothing is
+re-textured.
+
+The result reports `kind`, the installed `special`, the `secret` flag and
+`lines`: the one linedef for the switch kind (new when the wall was
+split), every dressed boundary for `walk_over`. Switch-kind edits set
+`nodes_invalidated` only when they split; walk-over edits are property
+changes and never do.
+
+```json
+call add_exit {"kind": "walk_over", "sector": 1, "secret": true}
+-> {"kind": "walk_over", "lines": [2], "special": 124, "secret": true,
+    "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
+```
+
 ## Growth points
 
-- `add_exit` will place level-end switches and lines by the same role
-  defaults (`exit_switch`).
+- All three feature tools (`add_door`, `add_switch`, `add_exit`) are in
+  place. Lower-level control stays with the `edit_*` groups and
+  `run_batch`.

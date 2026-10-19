@@ -2399,6 +2399,69 @@ mod tests {
     }
 
     #[test]
+    fn generalized_unknown_and_negative_specials_share_one_grouped_warning() {
+        let mut map = line_map(&[
+            (0x2F80_i32, 2_i32, ZERO_ARGS, 0_u32),
+            (999_i32, 3_i32, ZERO_ARGS, 1_u32),
+            (-5_i32, 4_i32, ZERO_ARGS, 0_u32),
+            (0_i32, 0_i32, ZERO_ARGS, 2_u32),
+        ]);
+        let there = linedefs_to_hexen(&mut map, true).expect("the table parses");
+        assert_eq!(there.translated, 0, "no line reached the rule 5 rewrite");
+        assert_eq!(
+            there.untranslated,
+            vec![
+                Untranslated {
+                    linedef: 0,
+                    special: 0x2F80,
+                },
+                Untranslated {
+                    linedef: 1,
+                    special: 999,
+                },
+                Untranslated {
+                    linedef: 2,
+                    special: -5,
+                },
+            ],
+            "the generalized, the table-unknown and the negative special each lose their line"
+        );
+        assert_eq!(
+            there.warnings.len(),
+            1,
+            "the three losses share one warning"
+        );
+        assert_eq!(
+            there.warnings[0],
+            "3 linedefs had Doom specials with no ZDoom translation (indices 0, 1, 2): they \
+             were set to 0",
+            "the grouped warning names every index and the total"
+        );
+        let carried: Vec<(i32, i32, i32)> = map
+            .linedefs
+            .iter()
+            .map(|line| {
+                (
+                    line.special,
+                    line.tag,
+                    line.args.first().copied().unwrap_or(0_i32),
+                )
+            })
+            .collect();
+        assert_eq!(
+            carried,
+            vec![
+                (121_i32, 0_i32, 2_i32),
+                (121_i32, 0_i32, 3_i32),
+                (121_i32, 0_i32, 4_i32),
+                (0_i32, 0_i32, 0_i32)
+            ],
+            "every cleared tag rides on as a Line_SetIdentification id, and the plain line \
+             stands untouched"
+        );
+    }
+
+    #[test]
     fn byte_limited_refuses_actions_the_hexen_bytes_cannot_hold() {
         let mut narrow = line_map(&[(100_i32, 5_i32, ZERO_ARGS, 0_u32)]);
         let there = linedefs_to_hexen(&mut narrow, true).expect("the table parses");

@@ -149,7 +149,8 @@ pub struct Rendered {
     /// Zero when the pass drew nothing.
     pub masked_columns: usize,
     /// Sprites the transparent pass painted at least one pixel of. Zero
-    /// while nothing builds [`crate::render::sprites::SpriteItem`]s.
+    /// unless [`render_frame`] was given [`crate::render::sprites::SpriteItem`]s
+    /// that gained pixels.
     pub sprites_drawn: usize,
     /// Per-pixel perpendicular depth in map units, row-major
     /// `width * height`, written for every wall and plane pixel;
@@ -158,21 +159,64 @@ pub struct Rendered {
     pub depth: Vec<i64>,
 }
 
+/// The raster one [`render_frame`] paints, with the caller's sprite
+/// layers folded into its transparent pass.
+///
+/// The column walk collects its own [`MaskedMiddle`] list;
+/// [`ViewFrame::sprites`] carries the [`crate::render::sprites::SpriteItem`]s
+/// a caller resolved from the map's things before the cast. The plain
+/// [`render_view`] is this frame with no sprites.
+#[derive(Debug)]
+pub struct ViewFrame {
+    /// Raster width in pixels.
+    pub width: u32,
+    /// Raster height in pixels.
+    pub height: u32,
+    /// The prepared sprite items, folded into the transparent pass.
+    pub sprites: Vec<sprites::SpriteItem>,
+}
+
 /// Renders the 3D view of `scene` from `camera` onto a `width` by
-/// `height` raster.
+/// `height` raster, with no sprite layers in the transparent pass.
 ///
 /// The caller is expected to have checked that the camera lies inside a
 /// sector (`crate::render::camera_sector`); a camera in no sector simply
 /// gets no sector data to fill with and renders what the hits still
-/// cover. After the column walk the collected [`MaskedMiddle`] list, any
-/// [`crate::render::sprites::SpriteItem`] the caller has prepared and the
-/// [`Rendered::depth`] buffer go through the render module's transparent
-/// pass, so the view shows masked middle textures and sprites painted far
-/// to near through one ordering and depth-tested against a buffer the
-/// result still carries.
+/// cover. After the column walk the collected [`MaskedMiddle`] list and
+/// the [`Rendered::depth`] buffer go through the render module's
+/// transparent pass; [`render_frame`] is the same cast with prepared
+/// [`crate::render::sprites::SpriteItem`]s folded into that pass.
 #[must_use]
 #[inline]
 pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) -> Rendered {
+    render_frame(
+        scene,
+        camera,
+        ViewFrame {
+            width,
+            height,
+            sprites: Vec::new(),
+        },
+    )
+}
+
+/// Renders the 3D view of `scene` from `camera` onto `frame`'s raster,
+/// folding [`ViewFrame::sprites`] into the transparent pass.
+///
+/// The same cast as [`render_view`]: after the column walk the collected
+/// [`MaskedMiddle`] list, the caller's [`crate::render::sprites::SpriteItem`]s
+/// and the [`Rendered::depth`] buffer go through the render module's
+/// transparent pass, so the view shows masked middle textures and sprites
+/// painted far to near through one ordering and depth-tested against a
+/// buffer the result still carries.
+#[must_use]
+#[inline]
+pub fn render_frame(scene: &Scene, camera: &ViewCamera, frame: ViewFrame) -> Rendered {
+    let ViewFrame {
+        width,
+        height,
+        mut sprites,
+    } = frame;
     let caster = Caster::new(scene, camera, width, height);
     let mut canvas = Canvas::new(width, height, caster.background);
     let rows = i64::from(canvas.height());
@@ -191,10 +235,6 @@ pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) 
         };
         caster.draw_column(&mut walk);
     }
-    // Sprite items join this list when the view starts resolving things
-    // to patches; until then the merged pass draws the masked middles
-    // alone and the sprite count stays zero.
-    let mut sprites: Vec<sprites::SpriteItem> = Vec::new();
     let counts = sprites::draw_transparent(
         &sprites::Pass::new(scene, &caster.proj),
         &mut sprites::Frame::new(&mut canvas, &depth),

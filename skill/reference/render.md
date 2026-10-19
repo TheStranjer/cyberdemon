@@ -338,7 +338,9 @@ do not apply, `show_things` does.
     (dead corpses, chandeliers) hang from the ceiling instead. Things
     outside every sector, or within 4 units of the camera, are skipped.
     A sprite lump the session lacks adds one `missing sprite NAME` line
-    to `problems` and the rest of the frame still renders.
+    to `problems` (a lump that is no readable picture adds one
+    `unreadable sprite NAME` line), and the rest of the frame still
+    renders.
 - Current limitations: sprites and masked textures paint opaque (no
   translucency), fullbright sprite frames are not swapped in, and there
   are no 3D floors, slopes or portals.

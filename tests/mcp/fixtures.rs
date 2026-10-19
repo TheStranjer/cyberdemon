@@ -581,6 +581,48 @@ pub fn grate_map() -> Map {
     }
 }
 
+/// The masked-middle fixture map with the sprite pass's occluder and
+/// mouthpieces: [`two_room_textured_map`] as `MAP03`, sealed by walls.
+///
+/// Its two-sided step line becomes a pair of one-sided `WALL1` walls
+/// closing the hall at `x = 256`, and two `POSS` former humans (sprite
+/// lumps this fixture `IWAD` does not carry) stand in the back room
+/// behind those walls.
+///
+/// The fixture camera's whole east sight line stops at the sealed step
+/// line, so the `MAP01` imp and both `POSS` things dress sprite items the
+/// depth test drops; the wall itself paints where the sprite would show.
+///
+/// # Panics
+///
+/// Panics if the fixture map lacks its step line's sidedefs.
+#[must_use]
+#[inline]
+pub fn blocked_view_map() -> Map {
+    let mut map = two_room_textured_map();
+    map.name = parsed("MAP03");
+    map.things.push(spawn(3004, 384, 64, 180));
+    map.things.push(spawn(3004, 384, 192, 180));
+    let hall_side = map
+        .sidedefs
+        .get_mut(2)
+        .expect("the fixture map has a sidedef 2");
+    *hall_side = side("-", "-", "WALL1", 0);
+    let room_side = map
+        .sidedefs
+        .get_mut(3)
+        .expect("the fixture map has a sidedef 3");
+    *room_side = side("-", "-", "WALL1", 1);
+    let seal = map
+        .linedefs
+        .get_mut(2)
+        .expect("the fixture map has a linedef 2");
+    seal.flags = 1;
+    seal.back = None;
+    map.linedefs.push(solid_line(1, 4, 3));
+    map
+}
+
 /// The `CHECKER` fixture flat: `64x64`, left half palette index 10, right
 /// half index 20.
 fn checker_flat() -> Vec<u8> {
@@ -598,14 +640,17 @@ fn sky_texture() -> Vec<u8> {
 }
 
 /// An `IWAD` for the textured-view tests: `MAP01` as
-/// [`two_room_textured_map`] and `MAP02` as [`grate_map`], plus the
-/// pictures they draw with.
+/// [`two_room_textured_map`], `MAP02` as [`grate_map`] and `MAP03` as
+/// [`blocked_view_map`], plus the pictures they draw with.
 ///
 /// The flat region holds `FLOOR1`, the two-tone `CHECKER`, the `F_SKY1`
 /// stand-in and the uniform `SKY1` sky; the patch region and texture
 /// records dress the walls like the plain fixture `IWAD` does and add
 /// the `GRATEP` patch and `GRATE` texture the masked-middle view test
-/// reads, in this fixture's own `PNAMES`/`TEXTURE1` copies.
+/// reads, in this fixture's own `PNAMES`/`TEXTURE1` copies. A sprites
+/// region of its own carries a single `TROOA1` (`8x16` of palette index
+/// 50, offsets `4`/`16`) for the view tests' imp; no other sprite name
+/// exists here, which is what makes `POSS` and `PLAY` report as missing.
 ///
 /// # Panics
 ///
@@ -618,6 +663,7 @@ pub fn iwad_view_textures(dir: &Path) -> PathBuf {
     map.name = parsed("MAP01");
     lumps.extend(write_doom_map(&map).expect("the fixture map serializes"));
     lumps.extend(write_doom_map(&grate_map()).expect("the grate map serializes"));
+    lumps.extend(write_doom_map(&blocked_view_map()).expect("the blocked map serializes"));
     lumps.push(marker("F_START"));
     lumps.push(lump("FLOOR1", vec![1_u8; FLAT_BYTES]));
     lumps.push(lump("CHECKER", checker_flat()));
@@ -632,6 +678,9 @@ pub fn iwad_view_textures(dir: &Path) -> PathBuf {
     lumps.push(lump("STEPP1", patch(16, 8, 150_u8)));
     lumps.push(lump("GRATEP", grate_patch()));
     lumps.push(marker("P_END"));
+    lumps.push(marker("S_START"));
+    lumps.push(lump("TROOA1", patch_with(8, 16, 50_u8, (4_i16, 16_i16))));
+    lumps.push(marker("S_END"));
     lumps.push(lump("PNAMES", view_pnames()));
     lumps.push(lump("TEXTURE1", view_texture1()));
     write_iwad(dir, "iwad-view-textures.wad", lumps)

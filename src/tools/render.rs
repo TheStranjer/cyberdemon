@@ -26,10 +26,14 @@
 //!
 //! [`Cyberdemon::render_view`] casts a first-person frame: it prepares a
 //! [`crate::render::Scene`] (map, palette, `COLORMAP`, textures, flats,
-//! sky) under the session lock with the call's setting overrides, runs
-//! the integer column caster in [`crate::render::view`], and publishes
-//! the gamma-corrected `PNG` like its siblings. The report counts the
-//! screen columns the caster's masked-middle transparent pass painted.
+//! sky) under the session lock with the call's setting overrides, dresses
+//! the map's things as [`crate::render::sprites::SpriteItem`]s through the
+//! session's definitions and sprite resolvers, runs the integer column
+//! caster in [`crate::render::view`] with those items, and publishes the
+//! gamma-corrected `PNG` like its siblings. The report counts the layers
+//! the transparent pass painted: masked-middle screen columns and sprites.
+
+use std::collections::{HashMap, HashSet};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -38,25 +42,31 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::server::AssetRef;
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::{Definitions, ThingDef, session_definitions};
 use crate::error::CyberError;
-use crate::fixed::{Angle, mul_div_round, rotate_point};
+use crate::fixed::{Angle, FRACBITS, mul_div_round, rotate_point};
 use crate::gfx::codec::encode_png;
 use crate::gfx::palette::Palette;
+use crate::gfx::patch::Patch;
+use crate::gfx::sprite_rotation::rotation_for;
+use crate::render::sprites::SpriteItem;
+use crate::render::view::ONE_16;
 use crate::render::{
     AutomapColors, Canvas, Edge, PlayerMark, Pt, RenderSettings, Rgba, Stroke, Switch,
-    TopdownStyle, ViewCamera, Window, automap_color, build_scene, camera_sector, check_pitch,
-    default_eye_z, gamma_table, paint_automap_lines, paint_player_arrow, paint_thing_dots,
-    render_view, scale_down, side_sector, thing_visual,
+    TopdownStyle, ViewCamera, ViewFrame, Window, automap_color, build_scene, camera_sector,
+    check_pitch, default_eye_z, gamma_table, paint_automap_lines, paint_player_arrow,
+    paint_thing_dots, render_frame, scale_down, side_sector, thing_visual,
 };
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::defs::collect::custom_sources;
+use crate::tools::graphics::resolve::load_sprite_cached;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::tools::palette::load_palette;
 use crate::tools::{fail, ok};
+use crate::wad::LumpName;
 use crate::wad::map::geometry;
 use crate::wad::map::{Linedef, Map, Thing, Vertex};
 
@@ -1463,19 +1473,216 @@ fn view_settings(session: &Session, args: &RenderViewParams) -> Result<RenderSet
     Ok(settings)
 }
 
-/// The session half of one `render_view` call: the scene, the camera's
-/// sector and the resolved eye height, all read under the session lock.
+/// The raw 16.16 depth a sprite may not stand nearer to the camera than:
+/// nearer than four map units, and its projection would tower over (or
+/// miss) the frame absurdly, so the thing is skipped.
+const SPRITE_MIN_TZ16: i128 = 4_i128.saturating_mul(ONE_16);
+
+/// A thing's placement, in the units the sprite pass reads.
+#[derive(Clone, Copy, Debug)]
+struct SpriteSpot {
+    /// Thing `x`, in map units.
+    x: i64,
+    /// Thing `y`, in map units.
+    y: i64,
+    /// Spawn height offset, in map units.
+    z: i32,
+    /// Facing in degrees.
+    angle: i32,
+}
+
+impl SpriteSpot {
+    /// The spot `mark` stands on.
+    fn of(mark: &Thing) -> Self {
+        Self {
+            x: i64::from(mark.x),
+            y: i64::from(mark.y),
+            z: mark.z,
+            angle: mark.angle,
+        }
+    }
+}
+
+/// The session half of one `render_view` sprite pass: the definitions
+/// that dress the things, the camera basis they project through, the
+/// per-render patch cache and everything the walk has produced. One of
+/// these lives exactly one render, which is what keeps the decode-each-
+/// lump-once cache local to it.
+struct SpriteWiring<'defs> {
+    /// The session's thing definitions.
+    defs: &'defs Definitions,
+    /// Camera `x`, in map units.
+    cam_x: i64,
+    /// Camera `y`, in map units.
+    cam_y: i64,
+    /// The camera forward `x` (its angle's cosine), raw 16.16.
+    forward_x: i128,
+    /// The camera forward `y` (its angle's sine), raw 16.16.
+    forward_y: i128,
+    /// Sprite lump patches decoded this render, by lump name.
+    cache: HashMap<LumpName, Patch>,
+    /// Sprite names a `problems` line has already reported.
+    reported: HashSet<String>,
+    /// Problem lines for sprite names that would not load.
+    problems: Vec<String>,
+    /// The prepared items, in thing order.
+    items: Vec<SpriteItem>,
+}
+
+impl<'defs> SpriteWiring<'defs> {
+    /// The wiring for `camera`: `defs` dress the map's things, and the
+    /// camera's position and facing project and rotate them.
+    fn new(defs: &'defs Definitions, camera: &ViewCamera) -> Self {
+        let facing = Angle::from_degrees(i64::from(camera.angle));
+        Self {
+            defs,
+            cam_x: i64::from(camera.x),
+            cam_y: i64::from(camera.y),
+            forward_x: i128::from(facing.cos().0),
+            forward_y: i128::from(facing.sin().0),
+            cache: HashMap::new(),
+            reported: HashSet::new(),
+            problems: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+
+    /// The definition that sprites `mark`; a thing the definitions do
+    /// not know, or whose def carries no sprite, reads as `None`.
+    fn definition(&self, mark: &Thing) -> Option<&'defs ThingDef> {
+        let defs = self.defs;
+        u32::try_from(mark.kind)
+            .ok()
+            .and_then(|kind| defs.thing(kind))
+            .filter(|def| !def.sprite.is_empty())
+    }
+
+    /// `spot`'s camera-relative offsets: `dot(rel, right)` and
+    /// `dot(rel, forward)` in raw 16.16 map units, forward `(cos, sin)`
+    /// and right `(sin, -cos)`, the forward one positive in front of the
+    /// camera.
+    fn project(&self, spot: &SpriteSpot) -> (i128, i128) {
+        let rel_x = i128::from(spot.x.saturating_sub(self.cam_x)).saturating_mul(ONE_16);
+        let rel_y = i128::from(spot.y.saturating_sub(self.cam_y)).saturating_mul(ONE_16);
+        let right16 = rel_x
+            .saturating_mul(self.forward_y)
+            .saturating_sub(rel_y.saturating_mul(self.forward_x))
+            .checked_shr(FRACBITS)
+            .unwrap_or(0_i128);
+        let depth16 = rel_x
+            .saturating_mul(self.forward_x)
+            .saturating_add(rel_y.saturating_mul(self.forward_y))
+            .checked_shr(FRACBITS)
+            .unwrap_or(0_i128);
+        (right16, depth16)
+    }
+
+    /// The sprite patch at the spot's bucketed rotation, decoded once per
+    /// lump for the whole render; a sprite name that will not load
+    /// reports itself once and dresses nothing.
+    fn patch(&mut self, session: &Session, def: &ThingDef, spot: &SpriteSpot) -> Option<Patch> {
+        let rotation = rotation_for((self.cam_x, self.cam_y), (spot.x, spot.y), spot.angle);
+        match load_sprite_cached(session, def, rotation, &mut self.cache) {
+            Ok(sprite) => Some(sprite.patch),
+            Err(error) => {
+                let missing = matches!(error, CyberError::NotFound(_));
+                self.report(&def.sprite, missing);
+                None
+            }
+        }
+    }
+
+    /// One problem line per sprite name: `missing` words a lump the
+    /// session serves no picture for; the alternative words a picture
+    /// that is no readable image.
+    fn report(&mut self, name: &str, missing: bool) {
+        if !self.reported.insert(name.to_owned()) {
+            return;
+        }
+        let word = if missing { "missing" } else { "unreadable" };
+        self.problems.push(format!("{word} sprite {name}"));
+    }
+
+    /// Adds `mark` to the render when the definitions dress it, it
+    /// stands at least [`SPRITE_MIN_TZ16`] ahead of the camera inside a
+    /// sector, and its sprite loads; the sector's light shades the whole
+    /// sprite, standing things anchor on the sector's floor plus the
+    /// spawn `z` and hanging ones under the ceiling by the patch height.
+    fn add(&mut self, session: &Session, map: &Map, mark: &Thing) {
+        let Some(def) = self.definition(mark) else {
+            return;
+        };
+        let spot = SpriteSpot::of(mark);
+        let (right16, depth16) = self.project(&spot);
+        if depth16 < SPRITE_MIN_TZ16 {
+            return;
+        }
+        let Some(sector) = geometry::point_in_sector(map, spot.x, spot.y) else {
+            return;
+        };
+        let Some(row) = map.sectors.get(sector) else {
+            return;
+        };
+        let Some(patch) = self.patch(session, def, &spot) else {
+            return;
+        };
+        let base = if def.hanging {
+            i64::from(row.ceiling_height).saturating_sub(i64::from(patch.image.height))
+        } else {
+            i64::from(row.floor_height).saturating_add(i64::from(spot.z))
+        };
+        let left_offset16 = i128::from(patch.left_offset).saturating_mul(ONE_16);
+        let top_offset16 = i128::from(patch.top_offset).saturating_mul(ONE_16);
+        self.items.push(SpriteItem {
+            image: patch.image,
+            left_offset16,
+            top_offset16,
+            x: spot.x,
+            y: spot.y,
+            base,
+            light: row.light,
+            tx16: right16,
+            tz16: depth16,
+        });
+    }
+}
+
+/// The session half of one `render_view` sprite pass: the map's things
+/// dressed as sprite items for the transparent pass, and the problem
+/// lines naming the sprite names the session could not dress with.
+fn view_sprites(
+    session: &Session,
+    scene: &crate::render::Scene,
+    defs: &Definitions,
+    camera: &ViewCamera,
+) -> (Vec<SpriteItem>, Vec<String>) {
+    let mut wiring = SpriteWiring::new(defs, camera);
+    for mark in &scene.map.things {
+        wiring.add(session, &scene.map, mark);
+    }
+    (wiring.items, wiring.problems)
+}
+
+/// The session half of one `render_view` call: the scene, the placed
+/// camera, the sprite items and their problem lines, all read under the
+/// session lock.
 struct PreparedView {
     /// The prepared scene (its settings carry the resolved overrides).
     scene: crate::render::Scene,
     /// The sector index holding the camera.
     sector: usize,
-    /// The resolved eye height in map units.
-    z: i32,
+    /// The effective camera: resolved `z`, defaulted `angle` and
+    /// `pitch`, the settings' `fov`.
+    camera: ViewCamera,
+    /// The sprite items for the transparent pass.
+    sprites: Vec<SpriteItem>,
+    /// Problem lines for sprite names the session could not load.
+    sprite_problems: Vec<String>,
 }
 
 /// Reads the view's inputs under the session lock: the map, the settings
-/// with overrides, the scene, and the camera placed in a sector.
+/// with overrides, the scene, the camera placed in a sector, and the
+/// things dressed as sprites while the settings ask for them.
 ///
 /// # Errors
 ///
@@ -1496,13 +1703,34 @@ fn load_view(state: &AppState, args: &RenderViewParams) -> Result<PreparedView, 
             ))
         })?;
         let z = args.z.unwrap_or_else(|| default_eye_z(&scene, sector));
-        Ok(PreparedView { scene, sector, z })
+        let camera = ViewCamera {
+            x: args.x,
+            y: args.y,
+            z,
+            angle: args.angle.unwrap_or(0_i32),
+            pitch: args.pitch.unwrap_or(0_i32),
+            fov: settings.fov,
+        };
+        let (sprites, sprite_problems) = if settings.show_sprites.is_on() {
+            let (sources, _notes) = custom_sources(session)?;
+            let defs = session_definitions(session_game(session), &sources)?;
+            view_sprites(session, &scene, &defs, &camera)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        Ok(PreparedView {
+            scene,
+            sector,
+            camera,
+            sprites,
+            sprite_problems,
+        })
     })
 }
 
 /// [`Cyberdemon::render_view`]'s result: the effective camera, the frame
-/// size, the transparent pass's column count, the scene's problems and
-/// the published `PNG` asset.
+/// size, the transparent pass's counts, the scene's and sprite pass's
+/// problems and the published `PNG` asset.
 #[derive(Serialize)]
 struct ViewReport {
     /// The rendered map's name.
@@ -1513,10 +1741,16 @@ struct ViewReport {
     width: u32,
     /// Output height in pixels.
     height: u32,
-    /// Screen columns the masked-middle transparent pass painted at
-    /// least one pixel in; `0` when it drew nothing.
+    /// Sprites the transparent pass painted at least one pixel of; `0`
+    /// when it drew none, which is also what a turned-off `show_sprites`
+    /// setting reports.
+    sprites_drawn: u32,
+    /// Screen columns the transparent pass painted at least one masked
+    /// pixel in; a column carrying several masked items counts once.
+    /// `0` when it drew nothing.
     masked_columns: usize,
-    /// What the scene could not load, one line per item.
+    /// What the scene and the sprite pass could not load, one line per
+    /// item.
     problems: Vec<String>,
     /// The published view.
     asset: AssetRef,
@@ -1541,7 +1775,8 @@ struct CameraReport {
     sector: usize,
 }
 
-/// `render_view`'s work: resolve, cast, gamma, encode, publish.
+/// `render_view`'s work: resolve, dress the things, cast, gamma, encode,
+/// publish.
 ///
 /// # Errors
 ///
@@ -1550,16 +1785,18 @@ struct CameraReport {
 fn view_report(state: &AppState, args: &RenderViewParams) -> Result<ViewReport, CyberError> {
     let prepared = load_view(state, args)?;
     let settings = prepared.scene.settings.clone();
-    let camera = ViewCamera {
-        x: args.x,
-        y: args.y,
-        z: prepared.z,
-        angle: args.angle.unwrap_or(0_i32),
-        pitch: args.pitch.unwrap_or(0_i32),
-        fov: settings.fov,
-    };
-    let mut rendered = render_view(&prepared.scene, &camera, settings.width, settings.height);
+    let camera = prepared.camera;
+    let mut rendered = render_frame(
+        &prepared.scene,
+        &camera,
+        ViewFrame {
+            width: settings.width,
+            height: settings.height,
+            sprites: prepared.sprites,
+        },
+    );
     let masked_columns = rendered.masked_columns;
+    let sprites_drawn = u32::try_from(rendered.sprites_drawn).unwrap_or(u32::MAX);
     rendered.canvas.apply_gamma(&gamma_table(settings.gamma));
     let png = encode_png(&rendered.canvas.to_rgba_image(), None)?;
     let asset = state.publish(
@@ -1567,6 +1804,8 @@ fn view_report(state: &AppState, args: &RenderViewParams) -> Result<ViewReport, 
         PNG_MIME,
         png,
     )?;
+    let mut problems = prepared.scene.problems;
+    problems.extend(prepared.sprite_problems);
     Ok(ViewReport {
         map: prepared.scene.map.name.to_string(),
         camera: CameraReport {
@@ -1580,8 +1819,9 @@ fn view_report(state: &AppState, args: &RenderViewParams) -> Result<ViewReport, 
         },
         width: settings.width,
         height: settings.height,
+        sprites_drawn,
         masked_columns,
-        problems: prepared.scene.problems,
+        problems,
         asset,
     })
 }
@@ -1718,7 +1958,7 @@ impl Cyberdemon {
 
     /// Renders a first-person 3D view as a `PNG` asset.
     #[tool(
-        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG asset; returns {map, camera, width, height, masked_columns, problems, asset}. The camera stands at x/y map units with eye height z (default: the camera sector's floor + Doom's 41), faces angle degrees counter-clockwise from east (0 east, 90 north), looks pitch degrees up from level (positive looks up, -60..=60), through fov degrees of horizontal field of view (10..=170) onto width x height pixels. fov, width and height default to the render settings; lighting (\"doom\" | \"flat\" | \"fullbright\") overrides the settings' lighting for this call only. Walls draw the linedef's upper/middle/lower textures with their offsets and Doom's pegging flags, floors and ceilings draw their flats textured, aligned to the world grid like Doom (an F_SKY1 plane draws the sky texture instead, scrolled by the view angle and always full bright; with the sky render option off, sky surfaces show the background colour), all shaded through the COLORMAP by sector light, fake contrast and view depth. Two-sided lines whose faced side carries a middle texture show it as a see-through masked middle (transparent texels let the geometry behind show); masked_columns counts the screen columns that pass painted. The result's camera object echoes the effective camera and names the sector holding it; problems lists pictures the scene could not load. Errors: invalid_argument when x/y lies in no sector (the refusal says so), for pitch/fov outside their range, an edge outside 16..=4096 or over the pixel cap, and an unknown lighting name; not_found when no map resolves or the session has no PLAYPAL."
+        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG asset; returns {map, camera, width, height, sprites_drawn, masked_columns, problems, asset}. The camera stands at x/y map units with eye height z (default: the camera sector's floor + Doom's 41), faces angle degrees counter-clockwise from east (0 east, 90 north), looks pitch degrees up from level (positive looks up, -60..=60), through fov degrees of horizontal field of view (10..=170) onto width x height pixels. fov, width and height default to the render settings; lighting (\"doom\" | \"flat\" | \"fullbright\") overrides the settings' lighting for this call only. Walls draw the linedef's upper/middle/lower textures with their offsets and Doom's pegging flags, floors and ceilings draw their flats textured, aligned to the world grid like Doom (an F_SKY1 plane draws the sky texture instead, scrolled by the view angle and always full bright; with the sky render option off, sky surfaces show the background colour), all shaded through the COLORMAP by sector light, fake contrast and view depth. Two-sided lines whose faced side carries a middle texture show it as a see-through masked middle (transparent texels let the geometry behind show); masked_columns counts the screen columns that pass painted. While the show_sprites render setting is on, every thing whose definition carries a sprite draws its patch as a distance-scaled billboard in the same transparent pass: Doom's eight-rotation bucketing picks the frame from the viewing angle and the thing's facing (mirror-pair lumps flip automatically), it stands on its sector's floor plus its spawn z (hanging things under the ceiling instead), and it shows only where nearer than the opaque geometry; things outside every sector or closer than 4 units to the camera draw nothing, and a sprite name whose lumps the session lacks or cannot decode adds one `missing sprite NAME` or `unreadable sprite NAME` line to problems without failing the call; sprites_drawn counts the sprites the pass painted at least one pixel of. The result's camera object echoes the effective camera and names the sector holding it; problems lists pictures the scene could not load. Errors: invalid_argument when x/y lies in no sector (the refusal says so), for pitch/fov outside their range, an edge outside 16..=4096 or over the pixel cap, and an unknown lighting name; not_found when no map resolves or the session has no PLAYPAL."
     )]
     fn render_view(
         &self,
@@ -2573,5 +2813,120 @@ mod tests {
             "the player-start dot"
         );
         assert_eq!(canvas.pixel(5, 5), Some([0, 0, 0, 255]), "black ground");
+    }
+
+    use super::{Definitions, ONE_16, SPRITE_MIN_TZ16, SpriteSpot, SpriteWiring};
+    use crate::render::ViewCamera;
+
+    /// A camera standing at `x`/`y`, facing `angle` degrees.
+    fn view_camera(x: i32, y: i32, angle: i32) -> ViewCamera {
+        ViewCamera {
+            x,
+            y,
+            z: 41_i32,
+            angle,
+            pitch: 0_i32,
+            fov: 90_u32,
+        }
+    }
+
+    /// `value` map units in raw 16.16.
+    fn raw16(value: i64) -> i128 {
+        i128::from(value).saturating_mul(ONE_16)
+    }
+
+    /// The wiring over the embedded `Doom II` tables, due east from
+    /// `(64, 128)` like the view fixture camera.
+    fn east_wiring(defs: &Definitions) -> SpriteWiring<'_> {
+        SpriteWiring::new(defs, &view_camera(64, 128, 0))
+    }
+
+    #[test]
+    fn sprite_projection_measures_forward_and_right_from_the_camera() {
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let east = east_wiring(&defs);
+        let imp = SpriteSpot {
+            x: 384,
+            y: 128,
+            z: 0,
+            angle: 180,
+        };
+        assert_eq!(
+            east.project(&imp),
+            (0_i128, raw16(320)),
+            "straight east of the east-facing camera"
+        );
+        let south_side = SpriteSpot { y: 64, ..imp };
+        assert_eq!(
+            east.project(&south_side),
+            (raw16(64), raw16(320)),
+            "south of the view axis is positive right when facing east"
+        );
+        let north = SpriteWiring::new(&defs, &view_camera(64, 128, 90));
+        assert_eq!(
+            north.project(&imp),
+            (raw16(320), 0_i128),
+            "due east of a north-facing camera is all right-offset and no depth"
+        );
+    }
+
+    #[test]
+    fn the_skip_line_is_four_map_units_of_forward_depth() {
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let east = east_wiring(&defs);
+        let near = SpriteSpot {
+            x: 67,
+            y: 128,
+            z: 0,
+            angle: 0,
+        };
+        let far = SpriteSpot { x: 68, ..near };
+        assert!(
+            east.project(&near).1 < SPRITE_MIN_TZ16,
+            "three units ahead is under the line"
+        );
+        assert!(
+            east.project(&far).1 >= SPRITE_MIN_TZ16,
+            "four units ahead is not"
+        );
+    }
+
+    #[test]
+    fn only_a_known_kind_with_a_sprite_dresses_a_thing() {
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let east = east_wiring(&defs);
+        let imp = east
+            .definition(&spawn(3001, 384, 128, 180))
+            .expect("the imp carries a sprite");
+        assert_eq!(
+            (imp.sprite.as_str(), imp.frame, imp.hanging),
+            ("TROO", 'A', false)
+        );
+        assert!(
+            east.definition(&spawn(-1, 0, 0, 0)).is_none(),
+            "a negative kind dresses nothing"
+        );
+        assert!(
+            east.definition(&spawn(4_000_000, 0, 0, 0)).is_none(),
+            "an unknown kind dresses nothing"
+        );
+    }
+
+    #[test]
+    fn sprite_problem_lines_dedup_per_sprite_name() {
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let mut wiring = east_wiring(&defs);
+        wiring.report("POSS", true);
+        wiring.report("POSS", true);
+        wiring.report("POSS", false);
+        wiring.report("HEAD", false);
+        assert_eq!(
+            wiring.problems,
+            [
+                "missing sprite POSS".to_owned(),
+                "unreadable sprite HEAD".to_owned(),
+            ],
+            "one line per name and the first failure's word wins"
+        );
     }
 }

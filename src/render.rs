@@ -41,7 +41,8 @@ pub use topdown::{
     scale_down, side_sector, thing_visual,
 };
 pub use view::{
-    Fraction, MAX_PITCH, MIN_PITCH, MaskedMiddle, Rendered, ViewCamera, check_pitch, render_view,
+    Fraction, MAX_PITCH, MIN_PITCH, MaskedMiddle, Rendered, ViewCamera, ViewFrame, check_pitch,
+    render_frame, render_view,
 };
 
 /// The brightest input value of an 8-bit channel.

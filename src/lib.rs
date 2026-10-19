@@ -20,6 +20,7 @@ pub mod fixed;
 pub mod geom;
 pub mod gfx;
 pub mod music;
+pub mod plan;
 pub mod render;
 pub mod server;
 pub mod session;

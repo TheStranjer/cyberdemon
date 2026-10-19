@@ -289,13 +289,16 @@ do not apply, `show_things` does.
   {"map": "MAP01",
    "camera": {"x": 64, "y": 128, "z": 41, "angle": 0, "pitch": 0,
               "fov": 90, "sector": 0},
-   "width": 160, "height": 100, "problems": ["missing sky SKY1"],
+   "width": 160, "height": 100,
+   "sprites_drawn": 1, "masked_columns": 0,
+   "problems": ["missing sky SKY1"],
    "asset": {"url": "http://localhost:PORT/assets/ID/MAP01_view.png", ...}}
   ```
 
-  `camera` echoes the effective camera — the resolved `z` and the index
+  The result's `camera` object echoes the effective camera — the resolved `z` and the index
   of the sector holding it — so you can re-find the exact viewpoint.
-  The `gamma` render setting is applied to the output.
+  `sprites_drawn` and `masked_columns` count the layers the transparent
+  pass painted. The `gamma` render setting is applied to the output.
 - What it draws: linedef faces with their `upper`/`middle`/`lower`
   textures, including texture offsets, Doom's pegging flags (one-sided
   middles hang from the ceiling; upper bands sit on the far ceiling,
@@ -314,9 +317,31 @@ do not apply, `show_things` does.
   colour; an upper wall between two sky ceilings is not drawn, so the
   sky shows through. A `-` texture draws nothing and leaves the
   background.
-- Current limitations: masked middle textures on two-sided lines are
-  not drawn yet, so switch and door lines look open; things and sprites
-  are not drawn yet.
+- See-through layers paint last, **far to near** over the solid frame,
+  each pixel drawn only where its layer is nearer than the wall behind
+  it (the opaque depth buffer; it is read, never overwritten):
+  - **Masked middle textures**: every two-sided line whose faced side
+    carries a non-`-` middle texture (fences, grates, chain-link,
+    door windows) draws that texture over the still-open window rows,
+    from the view column the line shows. It hangs from the lower of the
+    two ceilings, or — with the linedef's lower-unpegged bit (16) —
+    stands on the higher floor. It is never tiled vertically: texture
+    rows outside its height are left open, and transparent texels show
+    the geometry behind.
+  - **Sprites** (while the `show_sprites` setting is on): things whose
+    game or custom definition carries a sprite draw their patch, scaled
+    by distance and centred on `W/2 + tx·k`. The vanilla eight-rotation
+    bucketing picks the frame from the viewing angle and the thing's
+    facing, and mirror-pair lumps (`TROOA2A8`) flip automatically, so
+    walking around a monster turns it. A sprite stands on the floor of
+    the sector holding the thing plus its spawn `z`; hanging things
+    (dead corpses, chandeliers) hang from the ceiling instead. Things
+    outside every sector, or within 4 units of the camera, are skipped.
+    A sprite lump the session lacks adds one `missing sprite NAME` line
+    to `problems` and the rest of the frame still renders.
+- Current limitations: sprites and masked textures paint opaque (no
+  translucency), fullbright sprite frames are not swapped in, and there
+  are no 3D floors, slopes or portals.
 - Errors: `invalid_argument` when `x`/`y` lies in no sector ("camera is
   outside the map"), when `pitch` or `fov` is outside its range, for an
   edge outside the resolution ranges or over the pixel cap, and for an

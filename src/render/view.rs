@@ -14,10 +14,12 @@
 //! plane draws the sky texture instead, bucketed by the column's ray
 //! angle and placed with `Doom`'s 320x200 sky rows, full bright (or the
 //! background when the sky switch is off). Masked middle textures seen
-//! through two-sided lines are collected in [`Rendered::masked`] instead
-//! of drawn. Every painted pixel also records its perpendicular depth in
-//! map units in [`Rendered::depth`] (background and sky keep `i64::MAX`),
-//! the buffer the masked and sprite passes will depth-test against.
+//! through two-sided lines are collected, fully keyed, mapped, placed,
+//! lit and stamped with the exact ray parameter, in [`Rendered::masked`]
+//! instead of drawn. Every painted pixel also records its perpendicular
+//! depth in map units in [`Rendered::depth`] (background and sky keep
+//! `i64::MAX`), the buffer the masked and sprite passes will depth-test
+//! against.
 //!
 //! All maths is integer. The camera's `cos`/`sin` are 16.16
 //! ([`crate::fixed::Angle`]), column directions are scaled by `2^32`, and
@@ -91,8 +93,12 @@ pub struct ViewCamera {
     pub fov: u32,
 }
 
-/// A masked middle texture seen through a two-sided line, collected for
-/// the transparent pass that will draw it.
+/// A masked middle texture seen through a two-sided line.
+///
+/// Carries everything the transparent pass needs to draw it without
+/// re-walking the column: the texture key and its wrapped column, the
+/// mapped top and vertical shift, the lighting and fake contrast, the
+/// exact ray parameter, and the depth and window rows to respect.
 #[derive(Clone, Debug)]
 pub struct MaskedMiddle {
     /// The screen column the part sits in.
@@ -107,6 +113,21 @@ pub struct MaskedMiddle {
     pub bottom: i64,
     /// The perpendicular depth of the crossing, raw 16.16 map units.
     pub depth16: i128,
+    /// The [`Scene::textures`] key of the texture to draw.
+    pub texture: String,
+    /// The texture column at the crossing, already wrapped, in texels.
+    pub texcol: u32,
+    /// The world height (raw 16.16) whose texture row is `v = 0`.
+    pub tex_top16: i128,
+    /// Vertical texture shift, raw 16.16.
+    pub y_off16: i128,
+    /// The sector light level shading the face.
+    pub light: i32,
+    /// The fake-contrast orientation of the linedef.
+    pub dir: WallDir,
+    /// The exact ray parameter of the crossing, for the height at each
+    /// row.
+    pub t: Fraction,
 }
 
 /// The picture one render produced, plus the data the next pass needs.
@@ -169,8 +190,12 @@ fn pixel_area(canvas: &Canvas) -> usize {
 
 /// An exact fraction `n / d` with a positive denominator: a column ray's
 /// parameter `t` and a hit's position `s` along its linedef.
+///
+/// Public so [`MaskedMiddle`] can carry a crossing's exact ray parameter
+/// to the render module's other passes; the arithmetic stays the column
+/// caster's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Fraction {
+pub struct Fraction {
     /// Numerator.
     n: i128,
     /// Denominator, always positive.
@@ -966,11 +991,27 @@ impl<'scene> Caster<'scene> {
     }
 
     /// Remembers the middle texture seen through this transparent
-    /// crossing, for the masked pass that will draw it.
+    /// crossing, mapped, placed, lit and stamped with the exact ray
+    /// parameter, for the masked pass that will draw it.
+    ///
+    /// A crossing whose middle names a texture the scene lacks carries
+    /// nothing drawable, so it collects nothing.
     fn collect_masked(&self, walk: &mut Walk<'_>, visit: &Visit<'_>) {
-        if visit.side.middle.is_none() {
+        let Some(key) = visit.side.middle.as_ref() else {
             return;
-        }
+        };
+        let Some(image) = self.scene.textures.get(key) else {
+            return;
+        };
+        let near = &visit.side.plane;
+        let far = visit.far_side.map_or(near, |side| &side.plane);
+        let top = masked_tex_top(
+            near,
+            far,
+            i64::from(image.height),
+            visit.edge.lower_unpegged,
+        );
+        let u16 = texture_u16(visit);
         walk.masked.push(MaskedMiddle {
             column: u32::try_from(walk.column).unwrap_or(u32::MAX),
             line: visit.edge.line,
@@ -978,6 +1019,13 @@ impl<'scene> Caster<'scene> {
             top: walk.window.top,
             bottom: walk.window.bottom,
             depth16: self.proj.depth16(visit.t),
+            texture: key.to_owned(),
+            texcol: wrap16(u16, i128::from(image.width)),
+            tex_top16: i128::from(top).saturating_mul(ONE_16),
+            y_off16: i128::from(visit.side.y_offset).saturating_mul(ONE_16),
+            light: near.light,
+            dir: visit.edge.dir,
+            t: visit.t,
         });
     }
 }
@@ -1081,22 +1129,44 @@ fn tex_top(plan: &FacePlan<'_>) -> i64 {
     if unpegged { unpegged_top } else { pegged }
 }
 
+/// The world height whose texture row is `v = 0` for a masked middle.
+///
+/// Differs from a drawn middle's [`Slot::Middle`] pegging: pegged, the
+/// texture hangs from the lower of the two sectors' ceilings; with the
+/// linedef's lower-unpegged bit (16) its bottom stands on the higher of
+/// the two floors, `tex_height` below the top.
+fn masked_tex_top(near: &Plane<'_>, far: &Plane<'_>, tex_height: i64, lower_unpegged: bool) -> i64 {
+    if lower_unpegged {
+        near.floor.max(far.floor).saturating_add(tex_height)
+    } else {
+        near.ceil.min(far.ceil)
+    }
+}
+
+/// The raw-16.16 horizontal texture position at a hit.
+///
+/// The distance along `v1 -> v2` at `s`, measured from `v2` for a
+/// back-side facing, plus the faced sidedef's x shift: one mapping for
+/// drawn faces and collected masked middles alike.
+fn texture_u16(visit: &Visit<'_>) -> i128 {
+    let along = visit.s.times(visit.edge.len16);
+    let base = if visit.front {
+        along
+    } else {
+        visit.edge.len16.saturating_sub(along)
+    };
+    base.saturating_add(i128::from(visit.side.x_offset).saturating_mul(ONE_16))
+}
+
 /// Builds the mapped, shaded wall run from `plan`.
 fn part<'plan>(plan: &'plan FacePlan<'plan>) -> Part<'plan> {
     let visit = plan.visit;
     let side = visit.side;
-    let along = visit.s.times(visit.edge.len16);
-    let u16 = if visit.front {
-        along
-    } else {
-        visit.edge.len16.saturating_sub(along)
-    }
-    .saturating_add(i128::from(side.x_offset).saturating_mul(ONE_16));
     Part {
         image: plan.image,
         top: plan.span.0,
         bottom: plan.span.1,
-        texcol: wrap16(u16, i128::from(plan.image.width)),
+        texcol: wrap16(texture_u16(visit), i128::from(plan.image.width)),
         tex_top16: i128::from(tex_top(plan)).saturating_mul(ONE_16),
         y_off16: i128::from(side.y_offset).saturating_mul(ONE_16),
         light: side.plane.light,
@@ -1207,8 +1277,8 @@ mod tests {
 
     use super::{
         DIRECTION_SCALE, Edge, FacePlan, Fraction, MAX_PITCH, MIN_PITCH, ONE_16, Plane, Projection,
-        Slot, ViewCamera, check_pitch, flat_texel, focal_length, pierce, plane_point, render_view,
-        sky_column, tex_top, texture_key, wall_dir, wrap16,
+        Slot, ViewCamera, check_pitch, flat_texel, focal_length, masked_tex_top, pierce,
+        plane_point, render_view, sky_column, tex_top, texture_key, texture_u16, wall_dir, wrap16,
     };
     use crate::fixed::Angle;
     use crate::gfx::image::IndexedImage;
@@ -1673,6 +1743,64 @@ mod tests {
         )
     }
 
+    /// A [`super::Visit`] over `parts` at `s = 1/4`, facing the asked-for
+    /// side, for the mapping helper.
+    fn step_visit<'fix>(
+        parts: &'fix (Edge, super::Side<'fix>, super::Side<'fix>),
+        front: bool,
+    ) -> super::Visit<'fix> {
+        super::Visit {
+            edge: &parts.0,
+            side_index: 0,
+            side: &parts.1,
+            far_side: Some(&parts.2),
+            t: frac(12, 10),
+            s: frac(1, 4),
+            front,
+            y_ceil: 0,
+            y_floor: 0,
+            y_far_ceil: None,
+            y_far_floor: None,
+        }
+    }
+
+    #[test]
+    fn texture_u_measures_from_the_faced_end_and_adds_the_shift() {
+        let parts = step_parts(false);
+        let front = texture_u16(&step_visit(&parts, true));
+        assert_eq!(front, raw(64), "a quarter along the 256-long line");
+        let back = texture_u16(&step_visit(&parts, false));
+        assert_eq!(back, raw(192), "a quarter measured from v2 backwards");
+        let mut shifted = parts;
+        shifted.1.x_offset = 10;
+        assert_eq!(
+            texture_u16(&step_visit(&shifted, true)),
+            raw(74),
+            "the sidedef's x shift rides along"
+        );
+    }
+
+    #[test]
+    fn masked_tops_hang_from_the_low_ceiling_and_stand_on_the_high_floor() {
+        let (pegged, near, far) = step_parts(false);
+        assert_eq!(
+            masked_tex_top(&near.plane, &far.plane, 32_i64, pegged.lower_unpegged),
+            96,
+            "pegged hangs from the lower ceiling: near 0/128, far 32/96"
+        );
+        let (unpegged, near_base, far_base) = step_parts(true);
+        assert_eq!(
+            masked_tex_top(
+                &near_base.plane,
+                &far_base.plane,
+                32_i64,
+                unpegged.lower_unpegged
+            ),
+            64,
+            "lower-unpegged stands on the higher floor 32 plus the 32-tall texture"
+        );
+    }
+
     #[test]
     fn wrapped_texture_coordinates_stay_in_the_image() {
         assert_eq!(wrap16(raw(3), 64), 3, "a plain column");
@@ -2017,5 +2145,125 @@ mod tests {
             rendered.depth.iter().all(|slot| *slot == i64::MAX),
             "nothing painted means nothing nearer than the horizon"
         );
+    }
+
+    /// [`box_map`] split by a two-sided line at `x = 256` running
+    /// `(256,256) -> (256,0)`: sidedef 4 (sector 0) carries the `middle`
+    /// texture with an 8-unit y shift, sidedef 5 opens sector 1, whose
+    /// planes match sector 0's, so the crossing is transparent with no
+    /// upper or lower band.
+    fn divider_map(middle: &str) -> Map {
+        let mut map = box_map();
+        map.vertices.extend([
+            Vertex {
+                x: 256,
+                y: 256,
+                ..Default::default()
+            },
+            Vertex {
+                x: 256,
+                y: 0,
+                ..Default::default()
+            },
+        ]);
+        map.linedefs.push(Linedef {
+            v1: 5,
+            v2: 6,
+            flags: 1_u32,
+            front: Some(4),
+            back: Some(5),
+            ..Default::default()
+        });
+        map.sidedefs.push(Sidedef {
+            upper: "-".to_owned(),
+            lower: "-".to_owned(),
+            middle: middle.to_owned(),
+            sector: 0,
+            y_offset: 8,
+            ..Default::default()
+        });
+        map.sidedefs.push(Sidedef {
+            upper: "-".to_owned(),
+            lower: "-".to_owned(),
+            middle: "-".to_owned(),
+            sector: 1,
+            ..Default::default()
+        });
+        map.sectors.push(Sector {
+            floor_height: 0,
+            ceiling_height: 128,
+            floor_flat: "FLOOR1".to_owned(),
+            ceiling_flat: "CEIL3".to_owned(),
+            light: 255,
+            ..Default::default()
+        });
+        map
+    }
+
+    /// [`box_scene`] with the [`divider_map`]'s split and a 100x128
+    /// `MIDBAR` texture to go through it.
+    fn divider_scene(middle: &str) -> Scene {
+        let mut scene = box_scene();
+        scene.map = divider_map(middle);
+        scene
+            .textures
+            .insert("MIDBAR".to_owned(), solid(100, 128, 90));
+        scene
+    }
+
+    /// The camera straight down [`divider_scene`]'s middle, due east
+    /// from `(64, 128)` at eye 41.
+    fn divider_camera() -> ViewCamera {
+        ViewCamera {
+            y: 128,
+            ..box_camera()
+        }
+    }
+
+    #[test]
+    fn a_masked_middle_carries_its_key_mapping_depth_and_window() {
+        let scene = divider_scene("MIDBAR");
+        let rendered = render_view(&scene, &divider_camera(), 33, 64);
+        let entries: Vec<_> = rendered
+            .masked
+            .iter()
+            .filter(|entry| entry.column == 16)
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the divider is the centre column's only transparent crossing"
+        );
+        let entry = entries.first().expect("the centre crossing");
+        assert_eq!(entry.line, 4, "the crossing is the divider");
+        assert_eq!(entry.side, 4, "faced from its front side");
+        assert_eq!(entry.texture, "MIDBAR", "the scene-textures key");
+        assert_eq!(
+            entry.texcol, 28,
+            "the mid-segment 128 units along wraps inside the 100-wide bar"
+        );
+        assert_eq!(entry.tex_top16, raw(128), "pegged to the lower ceiling");
+        assert_eq!(entry.y_off16, raw(8), "the sidedef's vertical shift");
+        assert_eq!(entry.depth16, raw(192), "t * focal2 is the depth");
+        assert_eq!(
+            entry.t.cmp_value(frac(64, 11)),
+            Ordering::Equal,
+            "the ray parameter stays exact"
+        );
+        assert_eq!(entry.light, 255_i32, "the faced sector's light");
+        assert_eq!(entry.dir, WallDir::NorthSouth, "the divider's contrast");
+        assert_eq!((entry.top, entry.bottom), (24, 35), "the open window");
+    }
+
+    #[test]
+    fn a_two_sided_line_with_no_or_missing_middle_collects_nothing() {
+        for middle in ["-", "NOSUCH"] {
+            let scene = divider_scene(middle);
+            let rendered = render_view(&scene, &divider_camera(), 33, 64);
+            assert!(
+                rendered.masked.is_empty(),
+                "`{middle}` on a two-sided line collects nothing"
+            );
+        }
     }
 }

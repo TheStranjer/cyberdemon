@@ -122,12 +122,16 @@ src/
                   shared automap line map: `Doom` classification and
                   colours (RGB defaults plus `PLAYPAL` entries), thing
                   visuals, and the square `Window` mapping the minimap
-                  frames with, and `render/view.rs` the 3D-view column
+                  frames with, `render/view.rs` the 3D-view column
                   caster: 16.16 camera trig, exact `i128` ray/segment
                   fractions, the sorted portal column walk (textured
                   upper/middle/lower faces with pegging, world-aligned
                   textured planes, a view-angled sky, a per-pixel depth
-                  buffer) and the masked-middle collection for the next pass.
+                  buffer) and the masked-middle collection, and
+                  `render/sprites.rs` the transparent pass: thing sprites
+                  projected through the eight-rotation bucketing and the
+                  masked middles painted far to near, depth-tested
+                  against the caster's buffer.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions

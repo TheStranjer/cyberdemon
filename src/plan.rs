@@ -10,6 +10,7 @@
 //! measurement and validation only.
 
 pub mod connectors;
+pub mod emit;
 pub mod model;
 pub mod walls;
 

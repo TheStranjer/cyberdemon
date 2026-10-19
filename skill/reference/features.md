@@ -1,7 +1,8 @@
 # Map feature tools
 
 Complete game structures built on a map you have already drawn.
-`add_door` cuts working doors; `add_switch` mounts the triggers that fire
+`add_door` cuts working doors; `add_window` glazes the walls between
+rooms; `add_switch` mounts the triggers that fire
 tagged sectors — including a `remote` door's; `add_exit` ends the level,
 from a switch or by walking over a line. `mark_secret` and
 `set_light_effect` are the two smallest: whole-sector edits of
@@ -104,6 +105,56 @@ call add_door {"between": [0, 1]}
     "style": "normal", "tag": null,
     "notes": ["carved a 16-unit void strip along the shared boundary of
               sectors 0 and 1: the door recess spans it"],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
+## `add_window`
+
+`{map?, between: [sectorA, sectorB] | linedef: N, at?: {x, y}, width? =
+64, sill? = 32, lintel? = 24}` → `{window_sector, lines, width, sill,
+lintel, notes, map, nodes_invalidated, copied_to_working}`
+
+Glazes a working window into a wall: a raised view strip between two
+rooms that nobody can walk through, as one `undo` step. **Placement
+mirrors `add_door` exactly** — same `between`/`linedef` pair (exactly one,
+both or neither is `invalid_argument`), same optional `at` centre, same
+`width` (default 64; a window wider than its wall names the wall's
+available length), and between touching rooms the same 16-unit **void
+strip** is carved along the *whole* shared boundary first (the `notes`
+say so) before the window strip spans it. A one-sided wall reaches to the
+first sector behind it (the same 256-unit outward ray and "no room behind
+this wall" refusals as `add_door`). Sector A lends the strip its flats
+and light.
+
+**The heights are the taste parameters**: the window sector's floor is
+`max(floorA, floorB) + sill` and its ceiling is `min(ceilA, ceilB) -
+lintel` (defaults `sill: 32`, `lintel: 24`). The opening (ceiling minus
+floor) must be **at least 16 map units** or the call fails
+`invalid_argument` stating the minimum — and nothing at all is drawn, not
+even the void strip. Its `special` and `tag` are 0: a window is inert.
+
+**Nobody walks through**: the window's room-facing lines come out
+two-sided (both rooms see through) with the `blocking` flag set, so
+engines that read blocking on two-sided lines stop players and monsters
+there; vanilla keeps them out on the sill height alone (a 32-unit step is
+impassable). Their room sides wear the theme's `window_sill` role as the
+`lower` (the band under the glass) and its `wall` role as the `upper`
+(the band over it), validated for the map's format; the window-facing
+sides stay clear, and the strip's end plugs are one-sided walls in the
+wall texture.
+
+**After the call**: geometry changed, so `nodes_invalidated` is true —
+run `build_nodes` before playing in vanilla `Doom`. `window_sector` is
+the strip, `lines` the two-sided blocking view lines; check the result
+with `assemble_map` and `render_topdown`, and it keeps `validate_map`
+clean.
+
+```json
+call add_window {"between": [0, 1]}
+-> {"window_sector": 2, "lines": [4, 10], "width": 64, "sill": 32,
+    "lintel": 24,
+    "notes": ["carved a 16-unit void strip along the shared boundary of
+              sectors 0 and 1: the window strip spans it"],
     "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
@@ -310,6 +361,6 @@ call set_light_effect {"sectors": [7], "effect": "flicker", "light": 176}
 
 ## Growth points
 
-- All five feature tools (`add_door`, `add_switch`, `add_exit`,
-  `mark_secret`, `set_light_effect`) are in place. Lower-level control
-  stays with the `edit_*` groups and `run_batch`.
+- All six feature tools (`add_door`, `add_window`, `add_switch`,
+  `add_exit`, `mark_secret`, `set_light_effect`) are in place.
+  Lower-level control stays with the `edit_*` groups and `run_batch`.

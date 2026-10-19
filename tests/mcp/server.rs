@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 121] = [
+    const EXPECTED_TOOLS: [&str; 122] = [
         "add_door",
         "add_exit",
         "add_linedef",
@@ -91,6 +91,7 @@ mod tests {
         "add_switch",
         "add_thing",
         "add_vertex",
+        "add_window",
         "align_textures",
         "assemble_map",
         "auto_texture",

@@ -10,9 +10,12 @@
 //! cut and the [`BoundaryStrip`] and [`door_rect`] polygons to draw.
 //! [`switches`] is the pure switch action table of [`switch_special`]:
 //! the specials a wall switch installs per flag family, in the same
-//! [`DoorLineSetup`] shape the door engine writes. [`specials`] is the
-//! sector-special side of the same idea: [`secret_edit`] folds the secret
-//! flag of each flag family into a sector's current special and
+//! [`DoorLineSetup`] shape the door engine writes. [`window`] is the
+//! pure window core: [`window::window_record`] computes the strip
+//! sector's sill/lintel heights and [`window::apply_window`] closes off
+//! the drawn strip with two-sided blocking view lines. [`specials`] is
+//! the sector-special side of the same idea: [`secret_edit`] folds the
+//! secret flag of each flag family into a sector's current special and
 //! [`light_special`] does the same for a [`LightEffect`], keeping every bit
 //! outside the family's basic-type field. Like the rest of
 //! [`crate::wad`] this is pure model arithmetic and
@@ -22,6 +25,7 @@ pub mod doors;
 pub mod place;
 pub mod specials;
 pub mod switches;
+pub mod window;
 
 pub use doors::{
     DoorLineSetup, DoorSides, DoorStyle, DoorTextures, apply_door, door_specials, next_free_tag,
@@ -35,3 +39,7 @@ pub use specials::{
     SecretEdit, light_special, secret_edit,
 };
 pub use switches::{SwitchAction, switch_special};
+pub use window::{
+    MIN_OPENING, WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines,
+    window_heights, window_record,
+};

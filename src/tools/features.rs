@@ -1,5 +1,5 @@
-//! Map-feature tools: `add_door`, `add_switch`, `add_exit`, `mark_secret`
-//! and `set_light_effect` (see the `features` router on
+//! Map-feature tools: `add_door`, `add_window`, `add_switch`, `add_exit`,
+//! `mark_secret` and `set_light_effect` (see the `features` router on
 //! [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
@@ -33,6 +33,19 @@
 //! strip that separates touching rooms and the door recess itself are one
 //! [`apply_overlay`] paint each, all of it inside a single undoable edit.
 //!
+//! `add_window` reuses `add_door`'s placement step for step: the same
+//! [`choose_wall`]/[`carve_strip`]/[`strip_wall`] machinery picks the wall
+//! and, between touching rooms, carves the 16-unit void strip first, and
+//! [`door_wall`]-[`door_rect`] fit the window rectangle that one
+//! [`apply_overlay`] [`Paint::Sector`] then paints. The pure
+//! [`crate::wad::map::features`] window engine does the rest:
+//! [`window_record`] computes the sill/lintel heights (and refuses an
+//! opening under [`MIN_OPENING`]), [`boundary_lines`] finds the drawn
+//! strip's room-facing lines and [`apply_window`] blocks them off,
+//! dressing their room sides with the theme's `window_sill` (below) and
+//! `wall` (above) roles resolved exactly like a door's skins ([`theme_wall`],
+//! [`validate_texture_name`]). The whole window is one undoable edit.
+//!
 //! The two sector-special tools stay on this side of the `features` group
 //! because they answer the same question the feature tables answer: what
 //! number makes a plain map element do something. Both are one
@@ -58,6 +71,14 @@
 //! [`apply_door`]: crate::wad::map::features::apply_door
 //! [`switch_special`]: crate::wad::map::features::switch_special
 //! [`next_free_tag`]: crate::wad::map::features::next_free_tag
+//! [`window_record`]: crate::wad::map::features::window_record
+//! [`boundary_lines`]: crate::wad::map::features::boundary_lines
+//! [`apply_window`]: crate::wad::map::features::apply_window
+//! [`MIN_OPENING`]: crate::wad::map::features::MIN_OPENING
+//! [`theme_wall`]: theme_wall
+//! [`choose_wall`]: choose_wall
+//! [`carve_strip`]: carve_strip
+//! [`strip_wall`]: strip_wall
 //! [`apply_overlay`]: crate::wad::map::overlay::apply_overlay
 //! [`OverlayResult::linedef_map`]: crate::wad::map::overlay::OverlayResult
 
@@ -81,9 +102,10 @@ use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
     DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, LightEffect,
-    SecretEdit, SwitchAction, VertexPair, apply_door, door_rect, door_segment, door_specials,
-    door_wall, light_special, longest_boundary, nearest_boundary, next_free_tag, outward_depth,
-    project_onto_line, secret_edit, switch_special, void_strip,
+    SecretEdit, SwitchAction, VertexPair, WindowHeights, WindowSides, WindowTextures, apply_door,
+    apply_window, boundary_lines, door_rect, door_segment, door_specials, door_wall, light_special,
+    longest_boundary, nearest_boundary, next_free_tag, outward_depth, project_onto_line,
+    secret_edit, switch_special, void_strip, window_record,
 };
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
@@ -94,9 +116,14 @@ use crate::wad::name::LumpName;
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
 const DEFAULT_WIDTH: i32 = 64_i32;
+/// The `add_window` default sill height above the higher room floor.
+const DEFAULT_SILL: i32 = 32_i32;
+/// The `add_window` default lintel depth below the lower room ceiling.
+const DEFAULT_LINTEL: i32 = 24_i32;
 /// The `add_switch` default panel width in map units: one switch face.
 const DEFAULT_SWITCH_WIDTH: i32 = 32_i32;
-/// The void strip `add_door` carves between touching rooms, in map units.
+/// The void strip `add_door` and `add_window` carve between touching
+/// rooms, in map units.
 const STRIP_THICKNESS: i32 = 16_i32;
 /// How far the outward ray may search for the room behind a one-sided wall.
 const MAX_DEPTH: i32 = 256_i32;
@@ -151,6 +178,41 @@ struct AddDoorParams {
     /// coloured row for the locked styles).
     #[serde(default)]
     track_texture: Option<String>,
+}
+
+/// Arguments for [`Cyberdemon::add_window`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddWindowParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The two rooms the window looks between, as `[sectorA, sectorB]`:
+    /// exactly one of `between` and `linedef`. Sector A lends the strip
+    /// its flats and light.
+    #[serde(default)]
+    between: Option<[usize; 2]>,
+    /// The wall to cut, as a linedef index: exactly one of `between` and
+    /// `linedef`. A two-sided line behaves like `between` on its two
+    /// sectors; a one-sided one opens towards the space its front faces.
+    #[serde(default)]
+    linedef: Option<usize>,
+    /// Where along the wall to centre the cut, `{x, y}` (optional: the cut
+    /// centres on the wall's midpoint; `between` picks the shared line
+    /// nearest here).
+    #[serde(default)]
+    at: Option<DoorPointParam>,
+    /// The window's opening width in map units (default 64).
+    #[serde(default)]
+    width: Option<i32>,
+    /// How far the window floor sits above the higher room floor, in map
+    /// units (default 32).
+    #[serde(default)]
+    sill: Option<i32>,
+    /// How far the window ceiling sits below the lower room ceiling, in
+    /// map units (default 24).
+    #[serde(default)]
+    lintel: Option<i32>,
 }
 
 /// One `at` point of the feature tools.
@@ -424,15 +486,21 @@ const fn track_role(style: DoorStyle) -> Role {
 }
 
 /// The `between`/`linedef` parameter pair as one [`Target`]: refuses
-/// unless exactly one of the two was passed.
-fn target_of(args: &AddDoorParams) -> Result<Target, CyberError> {
-    match (args.between, args.linedef) {
+/// unless exactly one of the two was passed. `joins` phrases what the two
+/// sectors are for the message ("the door joins", "the window looks
+/// between").
+fn target_of(
+    between: Option<[usize; 2]>,
+    linedef: Option<usize>,
+    joins: &str,
+) -> Result<Target, CyberError> {
+    match (between, linedef) {
         (Some([a, b]), None) => Ok(Target::Between { a, b }),
         (None, Some(line)) => Ok(Target::Linedef(line)),
-        _ => Err(invalid(
-            "pass exactly one of between ([sectorA, sectorB] for the two rooms the door \
-             joins) and linedef (the wall to cut)",
-        )),
+        _ => Err(invalid(&format!(
+            "pass exactly one of between ([sectorA, sectorB] for the two rooms {joins}) \
+             and linedef (the wall to cut)",
+        ))),
     }
 }
 
@@ -619,10 +687,10 @@ fn choose_linedef(map: &Map, line: usize, at: Option<Point>) -> Result<Chosen, C
 }
 
 /// The wall the parameters pick, validated against `map`.
-fn choose_wall(map: &Map, spec: &DoorSpec) -> Result<Chosen, CyberError> {
-    match spec.target {
-        Target::Between { a, b } => choose_between(map, a, b, spec.at),
-        Target::Linedef(line) => choose_linedef(map, line, spec.at),
+fn choose_wall(map: &Map, target: Target, centre: Option<Point>) -> Result<Chosen, CyberError> {
+    match target {
+        Target::Between { a, b } => choose_between(map, a, b, centre),
+        Target::Linedef(line) => choose_linedef(map, line, centre),
     }
 }
 
@@ -653,13 +721,15 @@ fn to_pts(points: &[Point]) -> Vec<Pt> {
 /// Carve the void strip along the whole shared boundary of the chosen
 /// wall's sectors, and report the notes the carve left.
 ///
-/// Touching rooms would share their wall with the door recess itself: the
-/// strip (thickness [`STRIP_THICKNESS`]) turns them apart so the recess
-/// has a real space to slide in.
+/// Touching rooms would share their wall with the feature drawn across
+/// it: the strip (thickness [`STRIP_THICKNESS`]) turns them apart so the
+/// recess or window has a real space to span. `wall` dresses the bare
+/// edges and `spanner` names the thing that spans the strip in the note.
 fn carve_strip(
     map: &mut Map,
     chosen: &Chosen,
-    skins: &DoorSkins,
+    wall: &str,
+    spanner: &str,
 ) -> Result<Vec<String>, CyberError> {
     let (a, b) = (chosen.room_a, chosen.room_b);
     let boundary = longest_boundary(map, a, b).ok_or_else(|| {
@@ -669,10 +739,10 @@ fn carve_strip(
         ))
     })?;
     let strip = void_strip(map, &boundary, STRIP_THICKNESS)?;
-    let drawn = overlay::apply_overlay(map, &void_request(&strip.polygon, &skins.wall))?;
+    let drawn = overlay::apply_overlay(map, &void_request(&strip.polygon, wall))?;
     let mut notes = vec![format!(
         "carved a {STRIP_THICKNESS}-unit void strip along the shared boundary of sectors \
-         {a} and {b}: the door recess spans it"
+         {a} and {b}: {spanner} spans it"
     )];
     notes.extend(drawn.notes);
     Ok(notes)
@@ -864,10 +934,10 @@ fn door_floor(map: &Map, door: usize) -> String {
 /// rooms apart, fit and paint the recess, split its boundary into doors
 /// and jambs, and dress it with the style's action.
 fn build_door(map: &mut Map, spec: &DoorSpec) -> Result<BuiltDoor, CyberError> {
-    let mut chosen = choose_wall(map, spec)?;
+    let mut chosen = choose_wall(map, spec.target, spec.at)?;
     let mut notes = Vec::new();
     if chosen.touching {
-        notes = carve_strip(map, &chosen, &spec.skins)?;
+        notes = carve_strip(map, &chosen, &spec.skins.wall, "the door recess")?;
         let room = chosen.room_a;
         chosen.wall = strip_wall(map, room, chosen.centre).ok_or_else(|| strip_face_lost(room))?;
     }
@@ -953,7 +1023,7 @@ fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
 /// one [`crate::session::Session::edit_map`] step.
 fn add_door_run(session: &mut Session, args: &AddDoorParams) -> Result<DoorReport, CyberError> {
     let style = style_of(args.style.as_deref().unwrap_or(DEFAULT_STYLE))?;
-    let target = target_of(args)?;
+    let target = target_of(args.between, args.linedef, "the door joins")?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let format = current_map(session, name)?.format;
     let skins = theme_skin(session, style, args, format)?;
@@ -970,6 +1040,200 @@ fn add_door_run(session: &mut Session, args: &AddDoorParams) -> Result<DoorRepor
     Ok(DoorReport {
         built,
         style: style_name(style),
+        edit: edit_result_fragment(&report),
+    })
+}
+
+/// The theme-resolved textures a window wears.
+#[derive(Debug)]
+struct WindowSkins {
+    /// The sill band: the room-side `lower` under the opening.
+    sill: String,
+    /// The wall band: the room-side `upper`, and the strip's plug walls.
+    wall: String,
+}
+
+/// Everything [`build_window`] needs once the wire parameters resolved.
+#[derive(Debug)]
+struct WindowSpec {
+    /// The wall the window is cut into.
+    target: Target,
+    /// The requested cut centre, if any.
+    at: Option<Point>,
+    /// The window width in map units.
+    width: i32,
+    /// The vertical trim of the opening.
+    trim: WindowHeights,
+    /// The textures to dress with.
+    skins: WindowSkins,
+}
+
+/// The drawn window strip, ready to dress, and what the paint reported.
+#[derive(Debug)]
+struct Drawn {
+    /// Index of the window sector the strip became.
+    sector: usize,
+    /// The two-sided room-facing lines [`boundary_lines`] found.
+    lines: Vec<usize>,
+    /// What the paint reported.
+    notes: Vec<String>,
+}
+
+/// What one [`build_window`] step did, as the tool reports it.
+#[derive(Debug, Serialize)]
+struct BuiltWindow {
+    /// Index of the window sector the strip became.
+    window_sector: usize,
+    /// Indices of the two-sided blocking lines around the glass.
+    lines: Vec<usize>,
+    /// What the drawings reported, plus the void-strip note.
+    notes: Vec<String>,
+}
+
+/// Structured result of [`Cyberdemon::add_window`].
+#[derive(Serialize)]
+struct WindowReport {
+    /// What the step built, inlined next to the trim echo.
+    #[serde(flatten)]
+    built: BuiltWindow,
+    /// The window width in map units.
+    width: i32,
+    /// The sill height the record used.
+    sill: i32,
+    /// The lintel height the record used.
+    lintel: i32,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The textures a window wears: the theme's `window_sill` and `wall`
+/// roles, validated for the map's format (the same resolution pattern
+/// [`theme_skin`] runs for a door).
+///
+/// # Errors
+///
+/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+fn window_skins(session: &Session, format: MapFormat) -> Result<WindowSkins, CyberError> {
+    let sill = theme_texture(session, Role::WindowSill)?;
+    let wall = theme_wall(session)?;
+    Ok(WindowSkins {
+        sill: validate_texture_name(&sill, format)?,
+        wall: validate_texture_name(&wall, format)?,
+    })
+}
+
+/// The window rectangle to paint: the cut fitted to the wall (a window
+/// too wide for it refuses with the wall's available length, before any
+/// drawing), grown across the carved strip or the outward ray's recess
+/// exactly as [`place_rect`] does for a door.
+fn place_window(map: &Map, chosen: &Chosen, spec: &WindowSpec) -> Result<Vec<Point>, CyberError> {
+    let wall = door_wall(map, chosen.wall, Some(chosen.centre), spec.width)?;
+    let normal = outward_normal(map, chosen.wall).ok_or_else(|| wall_lost(chosen.wall))?;
+    if chosen.touching {
+        return Ok(door_rect(&wall, normal, STRIP_THICKNESS, true));
+    }
+    let depth = outward_depth(map, wall.linedef, wall.point, MAX_DEPTH)
+        .map_or_else(|| Err(no_room()), |hit| Ok(hit.0))?;
+    let rect = door_rect(&wall, normal, depth, false);
+    require_landing(map, &rect)?;
+    Ok(rect)
+}
+
+/// Paint the window rectangle as the new sector and find the room-facing
+/// lines the paint created; the wall must still stand for the strip's
+/// near edge to be where [`place_window`] fitted it.
+fn draw_window(
+    map: &mut Map,
+    chosen: &Chosen,
+    record: &Sector,
+    spec: &WindowSpec,
+) -> Result<Drawn, CyberError> {
+    let rect = place_window(map, chosen, spec)?;
+    let request = OverlayRequest {
+        polygon: to_pts(&rect),
+        paint: Paint::Sector(record.clone()),
+        keep_interior: false,
+        textures: WallTextures {
+            wall: spec.skins.wall.clone(),
+            upper: spec.skins.wall.clone(),
+            lower: spec.skins.sill.clone(),
+        },
+        outside: Outside::Original,
+    };
+    let drawn = overlay::apply_overlay(map, &request)?;
+    require_wall_survives(&drawn, chosen.wall)?;
+    let sector = drawn.sector.ok_or_else(window_sector_lost)?;
+    Ok(Drawn {
+        sector,
+        lines: boundary_lines(map, sector),
+        notes: drawn.notes,
+    })
+}
+
+/// The whole window as one map edit: choose the wall, check the opening
+/// before anything is written, carve the touching rooms apart, fit and
+/// paint the strip, then block off every room-facing line it created.
+fn build_window(map: &mut Map, spec: &WindowSpec) -> Result<BuiltWindow, CyberError> {
+    let mut chosen = choose_wall(map, spec.target, spec.at)?;
+    let record = window_record(map, chosen.room_a, chosen.room_b, spec.trim)?;
+    let mut notes = Vec::new();
+    if chosen.touching {
+        notes = carve_strip(map, &chosen, &spec.skins.wall, "the window strip")?;
+        let room = chosen.room_a;
+        chosen.wall = strip_wall(map, room, chosen.centre).ok_or_else(|| strip_face_lost(room))?;
+    }
+    let drawn = draw_window(map, &chosen, &record, spec)?;
+    notes.extend(drawn.notes);
+    let sides = WindowSides {
+        window_sector: drawn.sector,
+        room_lines: drawn.lines.clone(),
+    };
+    let textures = WindowTextures {
+        sill: spec.skins.sill.clone(),
+        wall: spec.skins.wall.clone(),
+    };
+    apply_window(map, &sides, &textures)?;
+    Ok(BuiltWindow {
+        window_sector: drawn.sector,
+        lines: drawn.lines,
+        notes,
+    })
+}
+
+/// The server-bug refusal for a window paint that reported no sector.
+fn window_sector_lost() -> CyberError {
+    CyberError::Internal("the window strip paint reported no sector (server bug)".to_owned())
+}
+
+/// `add_window`'s work: resolve the parameters, then run the whole window
+/// as one [`crate::session::Session::edit_map`] step.
+fn add_window_run(
+    session: &mut Session,
+    args: &AddWindowParams,
+) -> Result<WindowReport, CyberError> {
+    let target = target_of(args.between, args.linedef, "the window looks between")?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let format = current_map(session, name)?.format;
+    let skins = window_skins(session, format)?;
+    let trim = WindowHeights {
+        sill: args.sill.unwrap_or(DEFAULT_SILL),
+        lintel: args.lintel.unwrap_or(DEFAULT_LINTEL),
+    };
+    let width = args.width.unwrap_or(DEFAULT_WIDTH);
+    let spec = WindowSpec {
+        target,
+        at: args.at.map(point_of),
+        width,
+        trim,
+        skins,
+    };
+    let (built, report) = session.edit_map(name, "add window", |map| build_window(map, &spec))?;
+    Ok(WindowReport {
+        built,
+        width,
+        sill: trim.sill,
+        lintel: trim.lintel,
         edit: edit_result_fragment(&report),
     })
 }
@@ -1841,6 +2105,20 @@ impl Cyberdemon {
         )
     }
 
+    /// Cuts a working window into a map in one undoable edit.
+    #[tool(
+        description = "Cuts a working window into a map in one undoable edit: a raised view strip between two rooms that nobody can walk through. Placement mirrors add_door exactly. Name the wall exactly one way (both or neither is invalid_argument): between: [sectorA, sectorB] for the two rooms the window looks between (they must share a two-sided boundary; sector A lends the strip its flats and light) or linedef: N for the wall to cut (a two-sided line behaves like between on its two sectors; a one-sided line opens a strip towards the space its front faces). at: {x, y} optionally centres the cut there (between picks the shared line nearest here; a point off the wall is projected onto it). width (default 64) is the opening in map units: a window wider than its wall is invalid_argument naming the available length. The window sector's floor is max(floorA, floorB) + sill and its ceiling is min(ceilA, ceilB) - lintel, with defaults sill 32 and lintel 24; the opening (ceiling minus floor) must be at least 16 map units, else invalid_argument stating the minimum - and nothing is drawn. Between touching rooms a 16-unit void strip is carved along their WHOLE shared boundary first (the notes say so), then the window strip spans it, so each room gets a real wall face to the glass; a one-sided wall's strip reaches to the first sector behind it (the same outward ray up to 256 units and the same \"no room behind this wall\" refusals as add_door). The window's room-facing lines become two-sided with the blocking flag (bit 1) SET so nobody walks through - vanilla keeps actors out on the sill height alone; ports that read blocking on two-sided lines stop them there too. Their room sides wear the theme's window_sill role below the opening and its wall role above it; the window-facing sides stay clear and the strip's end plugs are one-sided walls in the wall texture. The sector copies room A's flats and light; its special and tag are 0. Out-of-range sector or linedef indices are invalid_argument. Geometry changes, so the node lumps are invalidated (run build_nodes before playing the map in vanilla Doom). Returns {window_sector, lines, width, sill, lintel, notes, map, nodes_invalidated, copied_to_working}: lines are the two-sided blocking view lines. Look at the result with render_topdown and render_view and check it with validate_map."
+    )]
+    fn add_window(
+        &self,
+        Parameters(args): Parameters<AddWindowParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| add_window_run(session, &args)),
+        )
+    }
+
     /// Mounts a working switch on a wall chunk in one undoable edit.
     #[tool(
         description = "Mounts a working switch on a wall in one undoable edit: a width-wide panel chunk isolated as its own linedef, wearing the theme's switch texture and a use action. linedef: N is the wall. at: {x, y} optionally centres the panel there (a point off the wall is projected onto it); without it the panel sits at the wall's midpoint. width (default 32) is the panel: a longer wall is split so the chunk becomes its own linedef (the result's linedef names it and split is true), a line already exactly that chunk is dressed as it stands (split false), and a wall too short for the width is invalid_argument naming its available length. action (case-insensitive) picks what it does: open_door (opens the tagged door, closing it after its wait: Doom S1 103, SR 61 when repeatable; Hexen Door_Open 11 speed 16), raise_floor (raises the tagged floor to the highest neighbouring floor: S1 18, SR 69; Floor_RaiseToNearest 25 speed 8), lower_floor (lowers it to the lowest neighbouring floor: S1 23, SR 60; Floor_LowerToLowest 21 speed 8), exit (ends the level: S1 11; Portal 243) or secret_exit (ends it through the secret exit: S1 51; Portal 244). An unknown action is invalid_argument listing all five. open_door, raise_floor and lower_floor require target_sector - the sector they act on: missing or out of range is invalid_argument naming it. The sector's existing tag is what the line answers with; an untagged sector (tag 0) is stamped with a fresh unused tag (the reported tag), so an add_door remote door is triggered by passing its door_sector: the tags match. exit and secret_exit ignore target_sector and repeatable (the Doom family ships no SR exit and a level change fires once). repeatable (default false) picks the SR specials in the Doom family and adds repeatspecial activation in the Hexen family, whose switch lines also get their activation field replaced with playeruse (a Doom-family line keeps its flags). The panel texture comes from the session's theme: the switch role, or exit_switch for the level-changing actions; the isolated line's front middle wears it, and a line with no front sidedef is invalid_argument (see add_sidedef). Result: {linedef, split, action, special, tag, texture} plus the standard edit fragment; nodes_invalidated is true when the wall had to be split (the map's geometry changed)."
@@ -1903,10 +2181,11 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddDoorParams, AddExitParams, AddSwitchParams, Chosen, DoorSkins, DoorSpec, DoorStyle,
-        Dress, ExitKind, Groups, LIGHT_MAX, LIGHT_MIN, LightSpec, MarkSecretParams, Placed,
-        SecretSpec, SetLightParams, SwitchSpec, Target, action_name, action_names, action_of,
-        build_door, build_switch, build_walk_over_exit, centroid, check_light_level,
+        AddDoorParams, AddExitParams, AddSwitchParams, AddWindowParams, BuiltWindow, Chosen,
+        DoorPointParam, DoorSkins, DoorSpec, DoorStyle, Dress, ExitKind, Groups, LIGHT_MAX,
+        LIGHT_MIN, LightSpec, MarkSecretParams, Placed, SecretSpec, SetLightParams, SwitchSpec,
+        Target, WindowHeights, WindowSkins, WindowSpec, action_name, action_names, action_of,
+        build_door, build_switch, build_walk_over_exit, build_window, centroid, check_light_level,
         choose_between, choose_linedef, door_groups, door_record, dress_door, dress_switch,
         effect_names, effect_of, half_axis, isolate_chunk, kind_name, kind_of, mark_secrets,
         out_of_range, recess_depth, sector_selection, set_lights, side_sector, strip_face_lost,
@@ -2159,18 +2438,24 @@ mod tests {
     fn exactly_one_of_between_and_linedef_resolves() {
         let pair = args(r#"{"between": [0, 1]}"#);
         assert!(matches!(
-            target_of(&pair).expect("between"),
+            target_of(pair.between, pair.linedef, "the door joins").expect("between"),
             Target::Between { a: 0, b: 1 }
         ));
         let single = args(r#"{"linedef": 4}"#);
         assert!(matches!(
-            target_of(&single).expect("linedef"),
+            target_of(single.between, single.linedef, "the door joins").expect("linedef"),
             Target::Linedef(4)
         ));
         let both = args(r#"{"between": [0, 1], "linedef": 4}"#);
-        assert!(refuse(&target_of(&both).unwrap_err()).contains("exactly one"));
+        assert!(
+            refuse(&target_of(both.between, both.linedef, "the door joins").unwrap_err())
+                .contains("exactly one")
+        );
         let neither = args("{}");
-        assert!(refuse(&target_of(&neither).unwrap_err()).contains("exactly one"));
+        assert!(
+            refuse(&target_of(neither.between, neither.linedef, "the door joins").unwrap_err())
+                .contains("exactly one")
+        );
     }
 
     #[test]
@@ -2522,6 +2807,239 @@ mod tests {
         let built = build_door(&mut map, &spec).expect("the off-centre door builds");
         assert_eq!(built.lines.len(), 2);
         assert_eq!(built.jambs.len(), 2);
+    }
+
+    /// The skins the tests dress windows with.
+    fn window_skins() -> WindowSkins {
+        WindowSkins {
+            sill: "STEP1".to_owned(),
+            wall: "WALL1".to_owned(),
+        }
+    }
+
+    /// A `add_window` request parsed from `json`.
+    fn window_args(json: &str) -> AddWindowParams {
+        from_str(json).expect("test window requests parse")
+    }
+
+    /// A default-trim window spec over `target`.
+    fn window_spec(target: Target) -> WindowSpec {
+        WindowSpec {
+            target,
+            at: None,
+            width: 64_i32,
+            trim: WindowHeights {
+                sill: 32_i32,
+                lintel: 24_i32,
+            },
+            skins: window_skins(),
+        }
+    }
+
+    /// The sidedef index of the room-facing side of a window view line:
+    /// the side that does not belong to window sector `window`.
+    fn room_side_of(map: &Map, line: &Linedef, window: usize) -> usize {
+        if side_sector(map, line.front) == Some(window) {
+            line.back.expect("the room side")
+        } else {
+            line.front.expect("the room side")
+        }
+    }
+
+    /// The sidedef index of the strip-facing side of a window view line:
+    /// the side that belongs to window sector `window`.
+    fn strip_side_of(map: &Map, line: &Linedef, window: usize) -> usize {
+        if side_sector(map, line.front) == Some(window) {
+            line.front.expect("the strip side")
+        } else {
+            line.back.expect("the strip side")
+        }
+    }
+
+    /// Requires every reported window line to be a two-sided blocking
+    /// view line with the sill below and the wall above on its room
+    /// side, and the strip side clear; returns the room sectors.
+    fn expect_window_lines(map: &Map, built: &BuiltWindow, window: usize) -> Vec<usize> {
+        assert!(!built.lines.is_empty(), "the window has view lines");
+        let mut rooms = Vec::new();
+        for index in &built.lines {
+            let line = map.linedefs.get(*index).expect("a view line");
+            assert!(line.front.is_some() && line.back.is_some(), "two-sided");
+            assert_ne!(line.flags & 4_u32, 0_u32, "the two-sided bit stands");
+            assert_ne!(line.flags & 1_u32, 0_u32, "blocking: nobody walks through");
+            let room = map
+                .sidedefs
+                .get(room_side_of(map, line, window))
+                .expect("the room side");
+            assert_eq!(room.lower, "STEP1", "the sill under the opening");
+            assert_eq!(room.upper, "WALL1", "the wall over it");
+            let strip = map
+                .sidedefs
+                .get(strip_side_of(map, line, window))
+                .expect("the strip side");
+            assert_eq!(strip.upper, "-", "from inside the window the line is open");
+            assert_eq!(strip.lower, "-", "and stays open below");
+            rooms.push(room.sector);
+        }
+        rooms
+    }
+
+    #[test]
+    fn a_window_between_touching_rooms_is_spanned_and_blocked() {
+        let mut map = two_rooms();
+        let built = build_window(&mut map, &window_spec(Target::Between { a: 0, b: 1 }))
+            .expect("a window between the rooms");
+        assert_eq!(built.window_sector, 2, "the third sector");
+        let window = map.sectors.get(2).expect("the window sector");
+        assert_eq!(window.floor_height, 64_i32, "max(0, 32) + 32");
+        assert_eq!(window.ceiling_height, 104_i32, "min(128, 128) - 24");
+        assert_eq!(window.special, 0_i32, "no effect");
+        assert_eq!(window.tag, 0_i32, "untagged");
+        assert_eq!(window.floor_flat, "FLOOR1", "room A's flats");
+        assert_eq!(window.ceiling_flat, "CEIL1", "and ceiling flat");
+        assert_eq!(window.light, 176_i32, "and light");
+        assert!(
+            built
+                .notes
+                .iter()
+                .any(|note| note.contains("void strip") && note.contains("window strip")),
+            "the strip note: {:?}",
+            built.notes
+        );
+        let rooms = expect_window_lines(&map, &built, 2_usize);
+        assert_eq!(built.lines.len(), 2, "one view line per room");
+        assert!(
+            rooms.contains(&0_usize) && rooms.contains(&1_usize),
+            "both rooms see the glass: {rooms:?}"
+        );
+    }
+
+    #[test]
+    fn the_window_trims_move_the_opening() {
+        let mut map = two_rooms();
+        let spec = WindowSpec {
+            trim: WindowHeights {
+                sill: 40_i32,
+                lintel: 8_i32,
+            },
+            ..window_spec(Target::Between { a: 0, b: 1 })
+        };
+        let built = build_window(&mut map, &spec).expect("a taller window");
+        let window = map.sectors.get(built.window_sector).expect("the window");
+        assert_eq!(window.floor_height, 72_i32, "max(0, 32) + 40");
+        assert_eq!(window.ceiling_height, 120_i32, "min(128, 128) - 8");
+    }
+
+    #[test]
+    fn a_too_small_opening_refuses_before_anything_is_carved() {
+        let mut map = two_rooms();
+        let spec = WindowSpec {
+            trim: WindowHeights {
+                sill: 90_i32,
+                lintel: 24_i32,
+            },
+            ..window_spec(Target::Between { a: 0, b: 1 })
+        };
+        let message = refuse(&build_window(&mut map, &spec).unwrap_err());
+        assert!(message.contains("at least 16"), "{message}");
+        assert_eq!(map, two_rooms(), "not even the void strip was carved");
+    }
+
+    #[test]
+    fn a_window_wider_than_the_wall_names_the_available_length() {
+        let mut map = two_rooms();
+        let spec = WindowSpec {
+            width: 300_i32,
+            ..window_spec(Target::Between { a: 0, b: 1 })
+        };
+        let message = refuse(&build_window(&mut map, &spec).unwrap_err());
+        assert!(message.contains("256 map units long"), "{message}");
+        assert_eq!(map.sectors.len(), 2, "no sector was drawn");
+    }
+
+    #[test]
+    fn a_one_sided_window_spans_to_the_room_behind() {
+        let mut map = room_and_hall();
+        let built = build_window(&mut map, &window_spec(Target::Linedef(0)))
+            .expect("the ray finds the hall");
+        let window = map.sectors.get(built.window_sector).expect("the window");
+        assert_eq!(
+            (window.floor_height, window.ceiling_height),
+            (32_i32, 104_i32),
+            "room A's own heights on both sides of the trim"
+        );
+        let rooms = expect_window_lines(&map, &built, built.window_sector);
+        assert_eq!(
+            built.lines.len(),
+            3,
+            "the bay: the hall and both split sides"
+        );
+        assert!(
+            rooms.contains(&1_usize),
+            "the hall looks through: {rooms:?}"
+        );
+    }
+
+    #[test]
+    fn a_one_sided_window_wall_with_nothing_behind_refuses() {
+        let mut map = one_room();
+        let message =
+            refuse(&build_window(&mut map, &window_spec(Target::Linedef(0))).unwrap_err());
+        assert!(
+            message.contains("no room behind this wall within 256 units"),
+            "{message}"
+        );
+        assert_eq!(map, one_room(), "nothing was drawn");
+    }
+
+    #[test]
+    fn window_targets_are_validated_like_the_door_s() {
+        let checked = two_rooms();
+        let message = refuse(&choose_between(&checked, 0, 42, None).unwrap_err());
+        assert!(message.contains("sector 42 is out of range"), "{message}");
+        let mut map = two_rooms();
+        map.format = MapFormat::Hexen;
+        let built = build_window(&mut map, &window_spec(Target::Between { a: 0, b: 1 }))
+            .expect("a Hexen map windows the same way");
+        let rooms = expect_window_lines(&map, &built, built.window_sector);
+        assert_eq!(rooms.len(), 2, "both rooms face the glass");
+        for index in &built.lines {
+            let line = map.linedefs.get(*index).expect("a view line");
+            assert_eq!(line.special, 0_i32, "a window carries no action");
+        }
+    }
+
+    #[test]
+    fn add_window_params_read_the_wire_shape() {
+        let full = window_args(
+            r#"{"between": [0, 1], "at": {"x": 64, "y": 0}, "width": 96,
+                "sill": 48, "lintel": 0, "map": "MAP01"}"#,
+        );
+        assert_eq!(full.between, Some([0_usize, 1_usize]));
+        assert_eq!(full.at, Some(DoorPointParam { x: 64, y: 0 }));
+        assert_eq!(full.width, Some(96_i32));
+        assert_eq!(full.sill, Some(48_i32));
+        assert_eq!(full.lintel, Some(0_i32));
+        assert_eq!(full.map.as_deref(), Some("MAP01"));
+        let minimal = window_args(r#"{"linedef": 2}"#);
+        assert_eq!(minimal.width, None, "the defaults stand");
+        assert_eq!(minimal.sill, None);
+        assert_eq!(minimal.lintel, None);
+        assert_eq!(minimal.at, None);
+        let neither = window_args("{}");
+        let message = refuse(
+            &target_of(neither.between, neither.linedef, "the window looks between").unwrap_err(),
+        );
+        assert!(message.contains("exactly one"), "{message}");
+        assert!(
+            message.contains("the window looks between"),
+            "the window wording: {message}"
+        );
+        let both = window_args(r#"{"between": [0, 1], "linedef": 2}"#);
+        assert!(
+            refuse(&target_of(both.between, both.linedef, "the window looks between").unwrap_err())
+                .contains("exactly one")
+        );
     }
 
     /// A `add_switch` request parsed from `json`.

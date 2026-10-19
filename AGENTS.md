@@ -226,8 +226,10 @@ src/
                   `tools/features.rs` is the `features` group: `add_door`
                   composes the `wad::map::features` door core and the
                   overlay engine into one `Session::edit_map` step
-                  (void strip, recess paint, `apply_door`; the
-                  `add_switch`/`add_exit` tickets grow in place here, and
+                  (void strip, recess paint, `apply_door`; `add_window`
+                  reuses the door placement engines and the
+                  `features::window` core for its raised blocking strip;
+                  the `add_switch`/`add_exit` tickets grow in place here, and
                   the `mark_secret`/`set_light_effect` tools are the two
                   special-bit steps over `features::specials`);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
@@ -308,6 +310,9 @@ src/
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
                   action table, `apply_door`'s doorway dressing and `next_free_tag`),
                   `map/features/place.rs` the door placement geometry,
+                  `map/features/window.rs` the pure window core
+                  (`window_record`'s sill/lintel heights and
+                  `apply_window`'s two-sided blocking boundary dressing),
                   `map/features/switches.rs` the switch action table and
                   `map/features/specials.rs` the pure sector-special builders
                   (`secret_edit`'s per-family secret bit and `light_special`'s

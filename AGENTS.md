@@ -300,12 +300,22 @@ src/
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and
                   shifts, and the removal-engine join),
-                  `map/convert.rs` the pure within-flag-family format
-                  conversion (`Target`, `convert_map`, `Conversion`) behind
-                  `convert_map_format`, `map/features.rs` +
+                  `map/convert.rs` the pure within- and cross-flag-family
+                  format conversion (`Target`, `convert_map`, `Conversion`)
+                  behind `convert_map_format`, `map/features.rs` +
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
                   action table, `apply_door`'s doorway dressing and `next_free_tag`),
-                  and `map/validate.rs` +
+                  `map/xlat.rs` the pure
+                  Doom↔ZDoom linedef-special translation tables
+                  (`XlatFlags`, `XlatRow`, `parse_xlat_table` and the
+                  embedded-table lookups `xlat_rows`, `rows_for_doom` and
+                  `rows_for_zspecial`) and the cross-family stages the
+                  conversion's `ToHexen`/`FromHexen` directions run:
+                  `linedefs_to_hexen`/`linedefs_from_hexen` returning
+                  `LinesReport`, and `things_to_hexen`,
+                  `things_from_hexen`, `sectors_to_hexen`,
+                  `sectors_from_hexen` returning `FieldReport`, and
+                  `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
                   model and the `CHECKS` pipeline (`references`,
@@ -328,6 +338,12 @@ data/
                   `src/defs/dehacked.rs`; `defs/dehacked_edit.rs` is the
                   line-oriented DeHackEd/BEX patch parser and editor behind
                   the scripts tools.
+  xlat/           TSV translation tables embedded in the binary (each file
+                  under the 64 KiB `large_include_file` budget), parsed by
+                  `src/wad/map/xlat.rs`. `doom_to_zdoom.tsv` is the 141-row
+                  Doom→ZDoom linedef-special table with `doom`,
+                  `activation`, `zspecial`, `name` and `args` columns, the
+                  args column naming the line-tag slot with `tag`.
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness plus a probe server speaking

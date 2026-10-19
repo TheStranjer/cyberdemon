@@ -18,7 +18,8 @@
 //! from a map's geometry. [`geometry`] answers the pure integer shape
 //! questions over a decoded map: sector boundaries, point containment,
 //! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
-//! a decoded map in another layout inside one flag family, the pure step
+//! a decoded map in another layout, inside one flag family mechanically and
+//! across the two families through the [`xlat`] table, the pure step
 //! behind `convert_map_format`. [`overlay`] paints one polygon onto a
 //! decoded map through [`arrange`](fn@crate::geom::arrange), the pure room-drawing and
 //! void-carving step behind `create_sector_from_loop` and `carve_void`.
@@ -36,7 +37,9 @@
 //! pure map-health checks behind `validate_map`: reference integrity,
 //! line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
-//! rows.
+//! rows. [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
+//! translation table (rows, flags and lookups) and the cross-family thing,
+//! sector and linedef stages [`convert`] runs.
 
 pub mod blockmap;
 pub mod build_blockmap;
@@ -57,6 +60,7 @@ pub mod stats;
 pub mod transform;
 pub mod udmf_map;
 pub mod validate;
+pub mod xlat;
 
 mod common;
 

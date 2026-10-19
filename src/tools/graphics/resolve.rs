@@ -1,9 +1,10 @@
 //! The shared graphic-resource resolvers: a lump name in, decoded pixels
 //! out.
 //!
-//! `load_flat`, `load_patch`, `load_texture`, `load_sprite` and
-//! `load_sprite_lump` implement how an engine finds one picture in the
-//! merged view - the flats region first for a flat, the patches region
+//! `load_flat`, `load_patch`, `load_texture`, `load_sprite`,
+//! `load_sprite_cached` and `load_sprite_lump` implement how an engine
+//! finds one picture in the merged view - the flats region first for a
+//! flat, the patches region
 //! then any loose lump for a patch (a `PNAMES` component may sit
 //! anywhere), the `TEXTURE2` then `TEXTURE1` definition (with a `TX_`
 //! patch as fallback) for a composite texture, the sprite regions
@@ -17,6 +18,9 @@
 //! `crate::tools::assets` dispatches to all of them, so name resolution
 //! is written once.
 
+use std::collections::HashMap;
+
+use crate::defs::ThingDef;
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, is_png};
 use crate::gfx::composite::{Component, Composite, compose};
@@ -323,6 +327,34 @@ pub(in crate::tools) fn load_sprite(
     Ok(Sprite::of(row.name, stored, serving))
 }
 
+/// The sprite image for one rotation of a thing definition's sprite, with
+/// one patch decode per lump name across a whole render: the same
+/// resolution [`load_sprite`] does, but the serving lump's patch comes
+/// from `cache` when an earlier thing already decoded it. A mirrored
+/// serving flips a copy, so the cache keeps every patch exactly as
+/// stored and one lump serves its direct and mirrored rotations from a
+/// single decode.
+///
+/// # Errors
+///
+/// [`load_sprite`]'s errors.
+pub(in crate::tools) fn load_sprite_cached(
+    session: &Session,
+    def: &ThingDef,
+    rotation: u8,
+    cache: &mut HashMap<LumpName, Patch>,
+) -> Result<Sprite, CyberError> {
+    let wanted = Request::new(&def.sprite, def.frame, rotation)?;
+    let rows = sprite_rows(session)?;
+    let (row, serving) = find_rotation(&rows, &wanted).ok_or_else(|| wanted.missing())?;
+    if let Some(patch) = cache.get(&row.name) {
+        return Ok(Sprite::of(row.name, patch.clone(), serving));
+    }
+    let stored = decode_patch_bytes(session, &row.lump.data)?;
+    cache.insert(row.name, stored.clone());
+    Ok(Sprite::of(row.name, stored, serving))
+}
+
 /// The patch stored in the lump `name`, served exactly as stored: no
 /// rotation rules and no flipping, so `TROOA2A8` answers with its own
 /// image. A whole sprite name is looked for in the sprite regions first,
@@ -539,12 +571,13 @@ pub(in crate::tools) fn lump_bytes(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     use super::{
         Place, Request, Serving, clamp_offset, decode_patch_bytes, find_rotation, load_flat,
-        load_patch, load_sprite, load_sprite_lump, load_texture, locate, lump_bytes, merged_rows,
-        mirror_patch, not_found, sprite_rows,
+        load_patch, load_sprite, load_sprite_cached, load_sprite_lump, load_texture, locate,
+        lump_bytes, merged_rows, mirror_patch, not_found, sprite_rows,
     };
     use crate::error::CyberError;
     use crate::gfx::codec::encode_png;
@@ -891,6 +924,33 @@ mod tests {
         ]);
         let error = load_sprite(&session, "TROO", 'A', 3).expect_err("junk is not a patch");
         assert_eq!(code(&error), "format_error", "undecodable sprite code");
+    }
+
+    #[test]
+    fn the_render_cache_decodes_each_lump_once_and_stores_it_unflipped() {
+        let session = session();
+        let defs = crate::defs::definitions_for(crate::wad::game::Game::Doom2)
+            .expect("the embedded tables are valid");
+        let imp = defs.thing(3001).expect("the embedded imp");
+        let mut cache = HashMap::new();
+        let first = load_sprite_cached(&session, imp, 8, &mut cache).expect("A2A8 flips");
+        let second = load_sprite_cached(&session, imp, 8, &mut cache).expect("from cache");
+        assert!(
+            first.mirrored && second.mirrored,
+            "rotation 8 serves flipped"
+        );
+        assert_eq!(
+            (second.patch.left_offset, second.patch.image.get(3, 0)),
+            (3, Some((5, true))),
+            "the cached copy flips the same way the decoded one did"
+        );
+        let stored = cache.get(&name("TROOA2A8")).expect("the lump is cached");
+        assert_eq!(
+            (stored.left_offset, stored.image.get(0, 0)),
+            (1, Some((5, true))),
+            "the cache holds the patch as stored, not as served"
+        );
+        assert_eq!(cache.len(), 1, "one decode serves both calls");
     }
 
     #[test]

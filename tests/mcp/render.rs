@@ -5,9 +5,9 @@
 //! highlights and error codes, `render_minimap`' compact automap
 //! square: its window fit, palette colours, zoom, player arrow and
 //! errors, and `render_view`' first-person frame: camera echo, textured
-//! walls, textured planes, the sky texture, pitch, lighting and error
-//! codes. The `build_scene` preparations the 3D view uses are checked here
-//! too.
+//! walls, textured planes, the sky texture, the masked-middle and sprite
+//! transparent pass, pitch, lighting and error codes. The `build_scene`
+//! preparations the 3D view uses are checked here too.
 
 #[cfg(test)]
 mod tests {
@@ -1001,6 +1001,11 @@ mod tests {
         let report = call(&client, "render_view", view_args(&Value::Null)).await;
         assert_eq!(report["map"], json!("MAP01"), "the rendered map");
         assert_eq!(
+            report["masked_columns"],
+            json!(0_u64),
+            "the plain fixture map masks nothing"
+        );
+        assert_eq!(
             report["camera"],
             json!({
                 "x": 64_i64, "y": 128_i64, "z": 41_i64, "angle": 0_i64,
@@ -1215,6 +1220,211 @@ mod tests {
             dark.get(80, 0).expect("a pixel"),
             [0_u8, 0, 0, 255],
             "with the sky switch off the sky ceiling reads the background colour"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_paints_a_masked_grate_and_shows_the_far_flat_through_its_hole() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let report = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "map": "MAP02" })),
+        )
+        .await;
+        assert_eq!(
+            report["camera"]["sector"],
+            json!(0_u64),
+            "the camera stands in the hall before the grate"
+        );
+        let masked = report["masked_columns"]
+            .as_u64()
+            .expect("masked_columns is a number");
+        assert!(masked >= 1, "the transparent pass painted {masked} columns");
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            image.get(70, 10).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "the grate's texel left of the hole paints palette 70, fullbright"
+        );
+        assert_eq!(
+            image.get(72, 10).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "and the texel right of it"
+        );
+        assert_eq!(
+            image.get(71, 9).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "and one above"
+        );
+        assert_eq!(
+            image.get(71, 11).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "and one below"
+        );
+        assert_eq!(
+            image.get(71, 10).expect("a pixel"),
+            [1_u8, 254, 1, 255],
+            "the GRATEP hole lets the FLOOR1 flat of the far ceiling show through"
+        );
+    }
+
+    /// Palette index 50 of the fixture `PLAYPAL`: the colour of every
+    /// texel of the view fixture's `TROOA1` under full bright.
+    const IMP_GREEN: [u8; 4] = [50_u8, 205, 50, 255];
+
+    #[tokio::test]
+    async fn render_view_draws_the_imp_sprite_near_the_view_centre() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let report = call(&client, "render_view", view_args(&Value::Null)).await;
+        let drawn = report["sprites_drawn"]
+            .as_u64()
+            .expect("sprites_drawn is a number");
+        assert!(drawn >= 1, "the imp's sprite painted: {drawn}");
+        assert_eq!(
+            report["masked_columns"],
+            json!(0_u64),
+            "a sprite paints no masked column: MAP01 masks nothing"
+        );
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            image.get(80, 50).expect("a pixel"),
+            IMP_GREEN,
+            "the sprite stands in front of the far wall, on the horizon row"
+        );
+        assert_eq!(
+            image.get(80, 52).expect("a pixel"),
+            IMP_GREEN,
+            "and below the horizon, where it hid the hall floor"
+        );
+        let green = count_pixels(&image, IMP_GREEN);
+        assert!(
+            green >= 4,
+            "the patch covers a small block at the centre: {green}"
+        );
+    }
+
+    #[tokio::test]
+    async fn show_sprites_off_drops_the_imp_from_the_view() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        call(
+            &client,
+            "set_render_options",
+            json!({ "show_sprites": false }),
+        )
+        .await;
+        let report = call(&client, "render_view", view_args(&Value::Null)).await;
+        assert_eq!(
+            report["sprites_drawn"],
+            json!(0_u64),
+            "the switch draws no sprite at all"
+        );
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            count_pixels(&image, IMP_GREEN),
+            0,
+            "no sprite texel lands anywhere"
+        );
+        assert_eq!(
+            image.get(80, 50).expect("a pixel"),
+            [108_u8, 147, 108, 255],
+            "the far wall keeps the centre column where the sprite stood"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wall_between_camera_and_thing_hides_the_sprite_behind_it() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let report = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "map": "MAP03" })),
+        )
+        .await;
+        assert_eq!(
+            report["sprites_drawn"],
+            json!(0_u64),
+            "the sealed hall depth-tests every sprite out"
+        );
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            count_pixels(&image, IMP_GREEN),
+            0,
+            "the imp paints no pixel from behind the wall"
+        );
+        assert_eq!(
+            image.get(80, 50).expect("a pixel"),
+            [108_u8, 147, 108, 255],
+            "the WALL1 face that seals the hall paints the centre column it hides behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_sprite_lumps_are_reported_once_per_sprite_name() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let report = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "map": "MAP03" })),
+        )
+        .await;
+        let problems = report["problems"].as_array().expect("problems is a list");
+        let sprite_lines: Vec<&str> = problems
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|line| line.ends_with("POSS") || line.ends_with("TROO"))
+            .collect();
+        assert_eq!(
+            sprite_lines,
+            ["missing sprite POSS"],
+            "the two POSS things report one line and the present TROO none: {problems:?}"
+        );
+    }
+
+    /// The `masked_columns` count of a `render_view` report.
+    fn masked_of(report: &Value) -> u64 {
+        report["masked_columns"]
+            .as_u64()
+            .expect("masked_columns is a number")
+    }
+
+    #[tokio::test]
+    async fn masked_columns_stay_independent_of_the_sprite_switch() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let on = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "map": "MAP02" })),
+        )
+        .await;
+        call(
+            &client,
+            "set_render_options",
+            json!({ "show_sprites": false }),
+        )
+        .await;
+        let off = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "map": "MAP02" })),
+        )
+        .await;
+        assert!(masked_of(&on) >= 1, "the grate masks columns");
+        assert_eq!(
+            masked_of(&on),
+            masked_of(&off),
+            "the sprite switch moves no masked column"
+        );
+        assert_eq!(
+            on["sprites_drawn"],
+            json!(0_u64),
+            "MAP02's only thing stands on the camera and draws nothing"
         );
     }
 

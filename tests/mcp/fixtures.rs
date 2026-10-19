@@ -275,6 +275,60 @@ fn patch_with(width: usize, height: usize, fill: u8, offsets: (i16, i16)) -> Vec
     bytes
 }
 
+/// One hand-built `Doom` patch post: `topdelta`, length, pad, the pixel
+/// bytes and the trailing pad.
+fn post(top: u8, pixels: &[u8]) -> Vec<u8> {
+    let length = u8::try_from(pixels.len()).expect("test posts stay within one post");
+    let mut bytes = vec![top, length, 0_u8];
+    bytes.extend_from_slice(pixels);
+    bytes.push(0_u8);
+    bytes
+}
+
+/// The `GRATEP` fixture patch: `16x16` of uniform palette index 70 with
+/// a `2x2` transparent hole at texels `(7,7)` and `(8,8)`. The hole
+/// columns carry two posts whose gap leaves rows 7 and 8 uncovered, and
+/// pixels no post covers decode transparent, exactly like the codec's
+/// own hand-built tests encode clear texels.
+fn grate_patch() -> Vec<u8> {
+    let side = 16_usize;
+    let mut columns: Vec<Vec<u8>> = Vec::new();
+    for x in 0..side {
+        let mut column = Vec::new();
+        if (7..9).contains(&x) {
+            column.extend_from_slice(&post(0, &[70_u8; 7]));
+            column.extend_from_slice(&post(9, &[70_u8; 7]));
+        } else {
+            column.extend_from_slice(&post(0, &[70_u8; 16]));
+        }
+        column.push(0xFF_u8);
+        columns.push(column);
+    }
+    let directory_end = 8_usize
+        .checked_add(columns.len().checked_mul(4).expect("test width fits"))
+        .expect("test directory fits");
+    let mut bytes = Vec::new();
+    for field in [side, side] {
+        let stored = u16::try_from(field).expect("test patch fields fit");
+        bytes.extend_from_slice(&stored.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0_i16.to_le_bytes());
+    bytes.extend_from_slice(&0_i16.to_le_bytes());
+    let mut offset = directory_end;
+    for column in &columns {
+        bytes.extend_from_slice(
+            &i32::try_from(offset)
+                .expect("test offsets fit")
+                .to_le_bytes(),
+        );
+        offset = offset.checked_add(column.len()).expect("test offsets fit");
+    }
+    for column in &columns {
+        bytes.extend_from_slice(column);
+    }
+    bytes
+}
+
 /// The `columns` by `rows` grid of `PNAMES` index `patch_index`, tiled with
 /// `step` origins `(x, y)`, in row-major record order.
 fn tile(patch_index: u16, columns: usize, rows: usize, step: (i16, i16)) -> Vec<PatchRef> {
@@ -333,29 +387,70 @@ fn pnames() -> Vec<u8> {
         .expect("fixture patch names are valid")
 }
 
-/// The fixture `TEXTURE1`: `WALL1` (64x128, `WALLP1` tiled) and `STEP1`
-/// (64x32, `STEPP1` tiled), the textures [`two_room_map`] dresses with.
+/// The two wall textures the fixture `TEXTURE1` lumps define: `WALL1`
+/// (64x128, `WALLP1` tiled) and `STEP1` (64x32, `STEPP1` tiled), the
+/// textures [`two_room_map`] dresses with.
+fn wall_textures() -> Vec<TextureDef> {
+    vec![
+        TextureDef {
+            name: "WALL1".to_owned(),
+            flags_raw: 0,
+            width: 64,
+            height: 128,
+            patches: tile(0, 4, 8, (16_i16, 16_i16)),
+        },
+        TextureDef {
+            name: "STEP1".to_owned(),
+            flags_raw: 0,
+            width: 64,
+            height: 32,
+            patches: tile(1, 4, 4, (16_i16, 8_i16)),
+        },
+    ]
+}
+
+/// The fixture `TEXTURE1`: the wall textures [`two_room_map`] dresses with.
 fn texture1() -> Vec<u8> {
     let lump = TextureLump {
         layout: TextureLayout::Doom,
-        textures: vec![
-            TextureDef {
-                name: "WALL1".to_owned(),
-                flags_raw: 0,
-                width: 64,
-                height: 128,
-                patches: tile(0, 4, 8, (16_i16, 16_i16)),
-            },
-            TextureDef {
-                name: "STEP1".to_owned(),
-                flags_raw: 0,
-                width: 64,
-                height: 32,
-                patches: tile(1, 4, 4, (16_i16, 8_i16)),
-            },
-        ],
+        textures: wall_textures(),
     };
     write_texture_lump(&lump).expect("the fixture texture lump serializes")
+}
+
+/// The view fixture's `PNAMES`: the two wall patches plus the `GRATEP`
+/// masked-middle patch, in index order. The count-sensitive tests read
+/// the plain fixture's [`pnames`], so the view iwad keeps its own copy.
+fn view_pnames() -> Vec<u8> {
+    write_pnames(&[
+        "WALLP1".to_owned(),
+        "STEPP1".to_owned(),
+        "GRATEP".to_owned(),
+    ])
+    .expect("fixture patch names are valid")
+}
+
+/// The view fixture's `TEXTURE1`: the two wall textures plus `GRATE`
+/// (`16x16`, one `GRATEP` at the origin), the masked middle
+/// [`grate_map`] dresses its divider line with.
+fn view_texture1() -> Vec<u8> {
+    let mut textures = wall_textures();
+    textures.push(TextureDef {
+        name: "GRATE".to_owned(),
+        flags_raw: 0,
+        width: 16,
+        height: 16,
+        patches: vec![PatchRef {
+            patch: 2,
+            x: 0,
+            y: 0,
+        }],
+    });
+    let lump = TextureLump {
+        layout: TextureLayout::Doom,
+        textures,
+    };
+    write_texture_lump(&lump).expect("the view fixture texture lump serializes")
 }
 
 /// Serialize `wad` into `file` inside `dir` and return the path.
@@ -434,6 +529,100 @@ pub fn two_room_textured_map() -> Map {
     map
 }
 
+/// The masked-middle fixture map: two equal-height triangular rooms
+/// split by a diagonal, see-through `GRATE` divider.
+///
+/// The hall (sector 0, light 160) holds the fixture camera at
+/// `(64, 128)` facing east, straight at the divider line whose faced
+/// side carries the `GRATE` middle with its `2x2` transparent hole. The
+/// diagonal is neither north-south nor east-west, so `Doom`'s fake
+/// contrast leaves the texels' palette indices untouched even under
+/// full bright. Behind the divider lies the back room (sector 1, light
+/// 192): its `FLOOR1` ceiling flat shows through the hole and its
+/// `WALL1` east wall, one contrast step darker, bands below.
+#[must_use]
+#[inline]
+pub fn grate_map() -> Map {
+    Map {
+        name: parsed("MAP02"),
+        format: MapFormat::Doom,
+        things: vec![spawn(1, 64, 128, 0)],
+        vertices: vec![
+            vertex(0, 0),
+            vertex(0, 256),
+            vertex(512, 0),
+            vertex(512, 256),
+        ],
+        linedefs: vec![
+            solid_line(0, 1, 0),
+            Linedef {
+                v1: 1,
+                v2: 2,
+                flags: 4,
+                front: Some(1),
+                back: Some(2),
+                ..Default::default()
+            },
+            solid_line(2, 0, 3),
+            solid_line(1, 3, 4),
+            solid_line(3, 2, 5),
+        ],
+        sidedefs: vec![
+            side("-", "-", "WALL1", 0),
+            side("-", "-", "GRATE", 0),
+            side("-", "-", "-", 1),
+            side("-", "-", "WALL1", 0),
+            side("-", "-", "WALL1", 1),
+            side("-", "-", "WALL1", 1),
+        ],
+        sectors: vec![room(0, 128, 160, 0), room(0, 128, 192, 0)],
+        other: node_lumps(),
+        ..Default::default()
+    }
+}
+
+/// The masked-middle fixture map with the sprite pass's occluder and
+/// mouthpieces: [`two_room_textured_map`] as `MAP03`, sealed by walls.
+///
+/// Its two-sided step line becomes a pair of one-sided `WALL1` walls
+/// closing the hall at `x = 256`, and two `POSS` former humans (sprite
+/// lumps this fixture `IWAD` does not carry) stand in the back room
+/// behind those walls.
+///
+/// The fixture camera's whole east sight line stops at the sealed step
+/// line, so the `MAP01` imp and both `POSS` things dress sprite items the
+/// depth test drops; the wall itself paints where the sprite would show.
+///
+/// # Panics
+///
+/// Panics if the fixture map lacks its step line's sidedefs.
+#[must_use]
+#[inline]
+pub fn blocked_view_map() -> Map {
+    let mut map = two_room_textured_map();
+    map.name = parsed("MAP03");
+    map.things.push(spawn(3004, 384, 64, 180));
+    map.things.push(spawn(3004, 384, 192, 180));
+    let hall_side = map
+        .sidedefs
+        .get_mut(2)
+        .expect("the fixture map has a sidedef 2");
+    *hall_side = side("-", "-", "WALL1", 0);
+    let room_side = map
+        .sidedefs
+        .get_mut(3)
+        .expect("the fixture map has a sidedef 3");
+    *room_side = side("-", "-", "WALL1", 1);
+    let seal = map
+        .linedefs
+        .get_mut(2)
+        .expect("the fixture map has a linedef 2");
+    seal.flags = 1;
+    seal.back = None;
+    map.linedefs.push(solid_line(1, 4, 3));
+    map
+}
+
 /// The `CHECKER` fixture flat: `64x64`, left half palette index 10, right
 /// half index 20.
 fn checker_flat() -> Vec<u8> {
@@ -451,11 +640,17 @@ fn sky_texture() -> Vec<u8> {
 }
 
 /// An `IWAD` for the textured-view tests: `MAP01` as
-/// [`two_room_textured_map`], plus the pictures it draws with.
+/// [`two_room_textured_map`], `MAP02` as [`grate_map`] and `MAP03` as
+/// [`blocked_view_map`], plus the pictures they draw with.
 ///
 /// The flat region holds `FLOOR1`, the two-tone `CHECKER`, the `F_SKY1`
 /// stand-in and the uniform `SKY1` sky; the patch region and texture
-/// records dress the walls like the plain fixture `IWAD` does.
+/// records dress the walls like the plain fixture `IWAD` does and add
+/// the `GRATEP` patch and `GRATE` texture the masked-middle view test
+/// reads, in this fixture's own `PNAMES`/`TEXTURE1` copies. A sprites
+/// region of its own carries a single `TROOA1` (`8x16` of palette index
+/// 50, offsets `4`/`16`) for the view tests' imp; no other sprite name
+/// exists here, which is what makes `POSS` and `PLAY` report as missing.
 ///
 /// # Panics
 ///
@@ -467,6 +662,8 @@ pub fn iwad_view_textures(dir: &Path) -> PathBuf {
     let mut map = two_room_textured_map();
     map.name = parsed("MAP01");
     lumps.extend(write_doom_map(&map).expect("the fixture map serializes"));
+    lumps.extend(write_doom_map(&grate_map()).expect("the grate map serializes"));
+    lumps.extend(write_doom_map(&blocked_view_map()).expect("the blocked map serializes"));
     lumps.push(marker("F_START"));
     lumps.push(lump("FLOOR1", vec![1_u8; FLAT_BYTES]));
     lumps.push(lump("CHECKER", checker_flat()));
@@ -479,9 +676,13 @@ pub fn iwad_view_textures(dir: &Path) -> PathBuf {
         patch_with(16, 16, 100_u8, (-2_i16, -14_i16)),
     ));
     lumps.push(lump("STEPP1", patch(16, 8, 150_u8)));
+    lumps.push(lump("GRATEP", grate_patch()));
     lumps.push(marker("P_END"));
-    lumps.push(lump("PNAMES", pnames()));
-    lumps.push(lump("TEXTURE1", texture1()));
+    lumps.push(marker("S_START"));
+    lumps.push(lump("TROOA1", patch_with(8, 16, 50_u8, (4_i16, 16_i16))));
+    lumps.push(marker("S_END"));
+    lumps.push(lump("PNAMES", view_pnames()));
+    lumps.push(lump("TEXTURE1", view_texture1()));
     write_iwad(dir, "iwad-view-textures.wad", lumps)
 }
 

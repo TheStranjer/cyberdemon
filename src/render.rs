@@ -15,14 +15,17 @@
 //! [`view`] casts the columns of the 3D view: exact `i128` ray
 //! parameters, a sorted portal walk per column, textured walls,
 //! world-aligned textured planes and a sky texture, plus the per-pixel
-//! depth buffer the masked and sprite passes will need. Nothing here
-//! knows about MCP; the `render` tool
+//! depth buffer, and [`sprites`] then paints the transparent pass over
+//! it: the masked middles the walk collected and the sprite patches a
+//! caller prepared, sorted far to near in one ordering and depth-tested
+//! against that buffer. Nothing here knows about MCP; the `render` tool
 //! group is the only caller that talks to clients.
 
 pub mod canvas;
 pub mod light;
 pub mod scene;
 pub mod settings;
+pub mod sprites;
 pub mod topdown;
 pub mod view;
 
@@ -38,7 +41,8 @@ pub use topdown::{
     scale_down, side_sector, thing_visual,
 };
 pub use view::{
-    MAX_PITCH, MIN_PITCH, MaskedMiddle, Rendered, ViewCamera, check_pitch, render_view,
+    Fraction, MAX_PITCH, MIN_PITCH, MaskedMiddle, Rendered, ViewCamera, ViewFrame, check_pitch,
+    render_frame, render_view,
 };
 
 /// The brightest input value of an 8-bit channel.

@@ -5,9 +5,9 @@
 //! highlights and error codes, `render_minimap`' compact automap
 //! square: its window fit, palette colours, zoom, player arrow and
 //! errors, and `render_view`' first-person frame: camera echo, textured
-//! walls, textured planes, the sky texture, pitch, lighting and error
-//! codes. The `build_scene` preparations the 3D view uses are checked here
-//! too.
+//! walls, textured planes, the sky texture, the masked-middle
+//! transparent pass, pitch, lighting and error codes. The `build_scene`
+//! preparations the 3D view uses are checked here too.
 
 #[cfg(test)]
 mod tests {
@@ -1001,6 +1001,11 @@ mod tests {
         let report = call(&client, "render_view", view_args(&Value::Null)).await;
         assert_eq!(report["map"], json!("MAP01"), "the rendered map");
         assert_eq!(
+            report["masked_columns"],
+            json!(0_u64),
+            "the plain fixture map masks nothing"
+        );
+        assert_eq!(
             report["camera"],
             json!({
                 "x": 64_i64, "y": 128_i64, "z": 41_i64, "angle": 0_i64,
@@ -1215,6 +1220,53 @@ mod tests {
             dark.get(80, 0).expect("a pixel"),
             [0_u8, 0, 0, 255],
             "with the sky switch off the sky ceiling reads the background colour"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_view_paints_a_masked_grate_and_shows_the_far_flat_through_its_hole() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = sky_room_client(dir.path()).await;
+        let report = call(
+            &client,
+            "render_view",
+            view_args(&json!({ "map": "MAP02" })),
+        )
+        .await;
+        assert_eq!(
+            report["camera"]["sector"],
+            json!(0_u64),
+            "the camera stands in the hall before the grate"
+        );
+        let masked = report["masked_columns"]
+            .as_u64()
+            .expect("masked_columns is a number");
+        assert!(masked >= 1, "the transparent pass painted {masked} columns");
+        let image = rendered_image(&report).await;
+        assert_eq!(
+            image.get(70, 10).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "the grate's texel left of the hole paints palette 70, fullbright"
+        );
+        assert_eq!(
+            image.get(72, 10).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "and the texel right of it"
+        );
+        assert_eq!(
+            image.get(71, 9).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "and one above"
+        );
+        assert_eq!(
+            image.get(71, 11).expect("a pixel"),
+            [70_u8, 185, 70, 255],
+            "and one below"
+        );
+        assert_eq!(
+            image.get(71, 10).expect("a pixel"),
+            [1_u8, 254, 1, 255],
+            "the GRATEP hole lets the FLOOR1 flat of the far ceiling show through"
         );
     }
 

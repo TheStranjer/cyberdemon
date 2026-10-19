@@ -28,7 +28,8 @@
 //! [`crate::render::Scene`] (map, palette, `COLORMAP`, textures, flats,
 //! sky) under the session lock with the call's setting overrides, runs
 //! the integer column caster in [`crate::render::view`], and publishes
-//! the gamma-corrected `PNG` like its siblings.
+//! the gamma-corrected `PNG` like its siblings. The report counts the
+//! screen columns the caster's masked-middle transparent pass painted.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -1500,7 +1501,8 @@ fn load_view(state: &AppState, args: &RenderViewParams) -> Result<PreparedView, 
 }
 
 /// [`Cyberdemon::render_view`]'s result: the effective camera, the frame
-/// size, the scene's problems and the published `PNG` asset.
+/// size, the transparent pass's column count, the scene's problems and
+/// the published `PNG` asset.
 #[derive(Serialize)]
 struct ViewReport {
     /// The rendered map's name.
@@ -1511,6 +1513,9 @@ struct ViewReport {
     width: u32,
     /// Output height in pixels.
     height: u32,
+    /// Screen columns the masked-middle transparent pass painted at
+    /// least one pixel in; `0` when it drew nothing.
+    masked_columns: usize,
     /// What the scene could not load, one line per item.
     problems: Vec<String>,
     /// The published view.
@@ -1554,6 +1559,7 @@ fn view_report(state: &AppState, args: &RenderViewParams) -> Result<ViewReport, 
         fov: settings.fov,
     };
     let mut rendered = render_view(&prepared.scene, &camera, settings.width, settings.height);
+    let masked_columns = rendered.masked_columns;
     rendered.canvas.apply_gamma(&gamma_table(settings.gamma));
     let png = encode_png(&rendered.canvas.to_rgba_image(), None)?;
     let asset = state.publish(
@@ -1574,6 +1580,7 @@ fn view_report(state: &AppState, args: &RenderViewParams) -> Result<ViewReport, 
         },
         width: settings.width,
         height: settings.height,
+        masked_columns,
         problems: prepared.scene.problems,
         asset,
     })
@@ -1711,7 +1718,7 @@ impl Cyberdemon {
 
     /// Renders a first-person 3D view as a `PNG` asset.
     #[tool(
-        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG asset; returns {map, camera, width, height, problems, asset}. The camera stands at x/y map units with eye height z (default: the camera sector's floor + Doom's 41), faces angle degrees counter-clockwise from east (0 east, 90 north), looks pitch degrees up from level (positive looks up, -60..=60), through fov degrees of horizontal field of view (10..=170) onto width x height pixels. fov, width and height default to the render settings; lighting (\"doom\" | \"flat\" | \"fullbright\") overrides the settings' lighting for this call only. Walls draw the linedef's upper/middle/lower textures with their offsets and Doom's pegging flags, floors and ceilings draw their flats textured, aligned to the world grid like Doom (an F_SKY1 plane draws the sky texture instead, scrolled by the view angle and always full bright; with the sky render option off, sky surfaces show the background colour), all shaded through the COLORMAP by sector light, fake contrast and view depth. The result's camera object echoes the effective camera and names the sector holding it; problems lists pictures the scene could not load. Errors: invalid_argument when x/y lies in no sector (the refusal says so), for pitch/fov outside their range, an edge outside 16..=4096 or over the pixel cap, and an unknown lighting name; not_found when no map resolves or the session has no PLAYPAL."
+        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG asset; returns {map, camera, width, height, masked_columns, problems, asset}. The camera stands at x/y map units with eye height z (default: the camera sector's floor + Doom's 41), faces angle degrees counter-clockwise from east (0 east, 90 north), looks pitch degrees up from level (positive looks up, -60..=60), through fov degrees of horizontal field of view (10..=170) onto width x height pixels. fov, width and height default to the render settings; lighting (\"doom\" | \"flat\" | \"fullbright\") overrides the settings' lighting for this call only. Walls draw the linedef's upper/middle/lower textures with their offsets and Doom's pegging flags, floors and ceilings draw their flats textured, aligned to the world grid like Doom (an F_SKY1 plane draws the sky texture instead, scrolled by the view angle and always full bright; with the sky render option off, sky surfaces show the background colour), all shaded through the COLORMAP by sector light, fake contrast and view depth. Two-sided lines whose faced side carries a middle texture show it as a see-through masked middle (transparent texels let the geometry behind show); masked_columns counts the screen columns that pass painted. The result's camera object echoes the effective camera and names the sector holding it; problems lists pictures the scene could not load. Errors: invalid_argument when x/y lies in no sector (the refusal says so), for pitch/fov outside their range, an edge outside 16..=4096 or over the pixel cap, and an unknown lighting name; not_found when no map resolves or the session has no PLAYPAL."
     )]
     fn render_view(
         &self,

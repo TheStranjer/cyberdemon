@@ -16,9 +16,10 @@
 //! parameters, a sorted portal walk per column, textured walls,
 //! world-aligned textured planes and a sky texture, plus the per-pixel
 //! depth buffer, and [`sprites`] then paints the transparent pass over
-//! the masked middles the walk collected: sorted far to near and
-//! depth-tested against that buffer. Nothing here knows about MCP; the
-//! `render` tool group is the only caller that talks to clients.
+//! it: the masked middles the walk collected and the sprite patches a
+//! caller prepared, sorted far to near in one ordering and depth-tested
+//! against that buffer. Nothing here knows about MCP; the `render` tool
+//! group is the only caller that talks to clients.
 
 pub mod canvas;
 pub mod light;

@@ -16,10 +16,12 @@
 //! background when the sky switch is off). Masked middle textures seen
 //! through two-sided lines are collected, fully keyed, mapped, placed,
 //! lit and stamped with the exact ray parameter, in [`Rendered::masked`]
-//! and then painted by the render module's transparent pass far to near.
-//! Every painted pixel also records its perpendicular depth in map units
-//! in [`Rendered::depth`] (background and sky keep `i64::MAX`), the
-//! buffer that pass depth-tests against without ever writing it.
+//! and then painted by the render module's transparent pass far to near,
+//! in one ordering with the [`crate::render::sprites::SpriteItem`]s a
+//! caller has prepared for it. Every painted pixel also records its
+//! perpendicular depth in map units in [`Rendered::depth`] (background
+//! and sky keep `i64::MAX`), the buffer that pass depth-tests against
+//! without ever writing it.
 //!
 //! All maths is integer. The camera's `cos`/`sin` are 16.16
 //! ([`crate::fixed::Angle`]), column directions are scaled by `2^32`, and
@@ -146,6 +148,9 @@ pub struct Rendered {
     /// pixel in; a column carrying several masked items counts once.
     /// Zero when the pass drew nothing.
     pub masked_columns: usize,
+    /// Sprites the transparent pass painted at least one pixel of. Zero
+    /// while nothing builds [`crate::render::sprites::SpriteItem`]s.
+    pub sprites_drawn: usize,
     /// Per-pixel perpendicular depth in map units, row-major
     /// `width * height`, written for every wall and plane pixel;
     /// background and sky pixels keep `i64::MAX`. Internal to the
@@ -159,10 +164,12 @@ pub struct Rendered {
 /// The caller is expected to have checked that the camera lies inside a
 /// sector (`crate::render::camera_sector`); a camera in no sector simply
 /// gets no sector data to fill with and renders what the hits still
-/// cover. After the column walk the collected [`MaskedMiddle`] list and
-/// the [`Rendered::depth`] buffer go through the render module's
-/// transparent pass, so the view shows masked middle textures painted
-/// far to near, depth-tested against a buffer the result still carries.
+/// cover. After the column walk the collected [`MaskedMiddle`] list, any
+/// [`crate::render::sprites::SpriteItem`] the caller has prepared and the
+/// [`Rendered::depth`] buffer go through the render module's transparent
+/// pass, so the view shows masked middle textures and sprites painted far
+/// to near through one ordering and depth-tested against a buffer the
+/// result still carries.
 #[must_use]
 #[inline]
 pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) -> Rendered {
@@ -184,15 +191,21 @@ pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) 
         };
         caster.draw_column(&mut walk);
     }
-    let masked_columns = sprites::draw_masked(
+    // Sprite items join this list when the view starts resolving things
+    // to patches; until then the merged pass draws the masked middles
+    // alone and the sprite count stays zero.
+    let mut sprites: Vec<sprites::SpriteItem> = Vec::new();
+    let counts = sprites::draw_transparent(
         &sprites::Pass::new(scene, &caster.proj),
         &mut sprites::Frame::new(&mut canvas, &depth),
         &mut masked,
+        &mut sprites,
     );
     Rendered {
         canvas,
         masked,
-        masked_columns,
+        masked_columns: counts.masked_columns,
+        sprites_drawn: counts.sprites_drawn,
         depth,
     }
 }
@@ -220,8 +233,9 @@ pub struct Fraction {
 impl Fraction {
     /// Builds `num / den` from raw cross products, normalising the sign;
     /// `None` for a zero denominator (a parallel ray) or a negation that
-    /// cannot be taken.
-    fn new(num: i128, den: i128) -> Option<Self> {
+    /// cannot be taken. Crate-visible so the render module's passes can
+    /// build one for a projected item.
+    pub(crate) fn new(num: i128, den: i128) -> Option<Self> {
         match den.cmp(&0_i128) {
             Ordering::Equal => None,
             Ordering::Less => Some(Self {
@@ -279,8 +293,10 @@ const fn quot(a: i128, b: i128) -> i128 {
 
 /// The projection constants of one camera and raster. The transparent
 /// pass in the render module's `sprites` reads rows back through
-/// [`Self::height_at`], so the type and that one method are
-/// crate-visible; everything else stays the column caster's own.
+/// [`Self::height_at`] and projects sprites from [`Self::focal2`],
+/// [`Self::horizon16`], [`Self::eye16`] and the raster size, so the type
+/// and those methods are crate-visible; everything else stays the column
+/// caster's own.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Projection {
     /// Raster width in pixels.
@@ -302,8 +318,9 @@ pub(crate) struct Projection {
 impl Projection {
     /// Builds the projection of `camera` over a `width` by `height`
     /// raster: `focal2 = width * cot(fov/2)` in 16.16 and
-    /// `horizon = height/2 + (focal2/2) * tan(pitch)`.
-    fn new(camera: &ViewCamera, width: u32, height: u32) -> Self {
+    /// `horizon = height/2 + (focal2/2) * tan(pitch)`. Crate-visible so
+    /// the render module's sprite pass can project an item on its own.
+    pub(crate) fn new(camera: &ViewCamera, width: u32, height: u32) -> Self {
         let facing = Angle::from_degrees(i64::from(camera.angle));
         let half = Angle::from_millidegrees(i64::from(camera.fov).saturating_mul(500_i64));
         let focal2 = focal_length(i64::from(width), half);
@@ -370,6 +387,33 @@ impl Projection {
     /// The perpendicular depth in map units, raw 16.16, at `t`.
     const fn depth16(&self, t: Fraction) -> i128 {
         t.times(self.focal2)
+    }
+
+    /// Raster width in pixels, for a pass that projects an item into it.
+    pub(crate) const fn width(&self) -> i64 {
+        self.width
+    }
+
+    /// Raster height in pixels.
+    pub(crate) const fn height(&self) -> i64 {
+        self.height
+    }
+
+    /// Twice the focal length, raw 16.16 pixels: with a sprite's depth it
+    /// gives the pass its pixels-per-map-unit scale, `focal2 / (2 * tz)`.
+    pub(crate) const fn focal2(&self) -> i128 {
+        self.focal2
+    }
+
+    /// The horizon row, raw 16.16 pixels.
+    pub(crate) const fn horizon16(&self) -> i128 {
+        self.horizon
+    }
+
+    /// The eye height, raw 16.16 map units: what a sprite's world height
+    /// is measured against.
+    pub(crate) fn eye16(&self) -> i128 {
+        i128::from(self.z).saturating_mul(ONE_16)
     }
 
     /// The ray parameter of the plane at world `height` seen at screen
@@ -1303,7 +1347,7 @@ mod tests {
     use crate::fixed::Angle;
     use crate::gfx::image::IndexedImage;
     use crate::gfx::palette::Palette;
-    use crate::render::sprites::{Frame, Pass, draw_masked};
+    use crate::render::sprites::{Frame, Pass, draw_transparent};
     use crate::render::{Canvas, Lighting, RenderSettings, Scene, Switch, WallDir};
     use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
@@ -2330,6 +2374,28 @@ mod tests {
     /// transparent pass's row maths.
     fn pass_projection() -> Projection {
         Projection::new(&box_camera(), 32, 64)
+    }
+
+    /// Draws `masked` through the merged transparent pass with no sprites
+    /// in the list, and answers with the screen columns it painted: the
+    /// column count these fixtures check.
+    fn draw_masked(pass: &Pass<'_>, frame: &mut Frame<'_>, masked: &mut [MaskedMiddle]) -> usize {
+        draw_transparent(pass, frame, masked, &mut []).masked_columns
+    }
+
+    #[test]
+    fn the_view_reports_what_the_transparent_pass_covered() {
+        let scene = divider_scene("MIDBAR");
+        let rendered = render_view(&scene, &divider_camera(), 33, 64);
+        assert!(
+            rendered.masked_columns >= 1,
+            "the divider's masked middles reached the pass: {}",
+            rendered.masked_columns
+        );
+        assert_eq!(
+            rendered.sprites_drawn, 0,
+            "no caller builds sprite items yet, so the count stays zero"
+        );
     }
 
     #[test]

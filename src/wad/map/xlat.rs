@@ -866,18 +866,21 @@ fn sector_from_hexen(area: &mut Sector, changed: &mut usize) -> bool {
 /// trigger tag replacing the row's `tag` slot, and the row's activation
 /// moves to the `Hexen` activation field plus the `repeatspecial` and
 /// `monsteractivate` bits; the tag has then found its home and leaves
-/// [`Linedef::tag`]. A special with no row — or, under `byte_limited`,
-/// one whose action number, arguments or tag exceed a binary `Hexen`
-/// byte — translates to nothing: the special clears to 0, the line joins
-/// [`LinesReport::untranslated`] and its tag stays as the line id for
-/// [`linedefs_from_hexen`] to read back as a trigger tag. A tag with no
-/// argument slot to enter (a row without a `tag` slot) stays a line id
-/// the same way: `UDMF` carries it in the tag field, while a binary
-/// `Hexen` target has no room for one next to a special and drops it
-/// with a warning naming the line. `Doom`'s `passuse` bit, whose value
-/// `repeatspecial` owns in the `Hexen` family, moves to the line's
-/// `extra` bag under the `passuse` key. Sidedefs, sectors, vertices and
-/// things stand untouched.
+/// [`Linedef::tag`]. A special with no row translates to nothing: the
+/// special clears to 0, the line joins [`LinesReport::untranslated`] and
+/// one grouped warning names the lost lines. Under `byte_limited` a row
+/// whose action number, one of whose arguments or whose `tag` slot value
+/// exceeds a binary `Hexen` byte is refused the same way, except that the
+/// line earns its own warning naming the action it would have run and the
+/// field too wide to store; a `UDMF` target keeps that action. Every
+/// cleared line keeps its tag as the line id for [`linedefs_from_hexen`]
+/// to read back as a trigger tag, and so does a tag with no argument slot
+/// to enter (a row without a `tag` slot): `UDMF` carries it in the tag
+/// field, while a binary `Hexen` target has no room for one next to a
+/// special and drops it with a warning naming the line. `Doom`'s `passuse`
+/// bit, whose value `repeatspecial` owns in the `Hexen` family, moves to
+/// the line's `extra` bag under the `passuse` key. Sidedefs, sectors,
+/// vertices and things stand untouched.
 ///
 /// # Errors
 ///
@@ -885,37 +888,93 @@ fn sector_from_hexen(area: &mut Sector, changed: &mut usize) -> bool {
 #[inline]
 pub fn linedefs_to_hexen(map: &mut Map, byte_limited: bool) -> Result<LinesReport, CyberError> {
     let mut report = LinesReport::default();
+    let mut unmatched: Vec<usize> = Vec::new();
     for (index, line) in map.linedefs.iter_mut().enumerate() {
         let old = line.special;
         let tag = line.tag;
         share_passuse(line);
-        let row = if old == 0_i32 {
-            None
-        } else {
-            rows_for_doom(old)?.into_iter().next()
-        };
-        let usable = row.filter(|found| !byte_limited || fits_bytes(found, tag));
-        if let Some(found) = usable {
-            apply_hexen(line, found, tag);
-            report.translated = report.translated.saturating_add(1_usize);
-        } else {
-            note_forward_loss(line, old, index, &mut report);
+        let row = row_for(old)?;
+        match forward_line(line, tag, row, byte_limited) {
+            Forward::Applied => report.translated = report.translated.saturating_add(1_usize),
+            Forward::NoRow => {
+                note_forward_loss(line, old, index, &mut report);
+                unmatched.push(index);
+            }
+            Forward::TooWide { row: vetoed, field } => {
+                note_forward_loss(line, old, index, &mut report);
+                let warning = too_wide_note(index, old, vetoed, &field);
+                report.warnings.push(warning);
+            }
+            Forward::Plain => {}
         }
         keep_line_id(line, index, byte_limited, &mut report.warnings);
     }
-    if !report.untranslated.is_empty() {
-        let lost: Vec<usize> = report
-            .untranslated
-            .iter()
-            .map(|gone| gone.linedef)
-            .collect();
+    if !unmatched.is_empty() {
         report.warnings.push(linedef_warning(
             "Doom specials with no ZDoom translation",
             "they were set to 0",
-            &lost,
+            &unmatched,
         ));
     }
     Ok(report)
+}
+
+/// The first embedded row translating `special`: `None` for the plain
+/// special 0 and for a special the table does not cover.
+///
+/// # Errors
+///
+/// [`rows_for_doom`]' [`CyberError::Internal`] for malformed embedded data.
+fn row_for(special: i32) -> Result<Option<&'static XlatRow>, CyberError> {
+    if special == 0_i32 {
+        return Ok(None);
+    }
+    Ok(rows_for_doom(special)?.into_iter().next())
+}
+
+/// What one line's forward translation did with the row found for it.
+enum Forward {
+    /// The line carried no special to translate.
+    Plain,
+    /// The row's translated shape was written onto the line.
+    Applied,
+    /// No row covers the line's special.
+    NoRow,
+    /// A row covers the special, but a binary `Hexen` byte cannot store
+    /// `field`, one of the values the row would have written.
+    TooWide {
+        /// The vetoed row, for the warning's action name and number.
+        row: &'static XlatRow,
+        /// The out-of-range value, already phrased as the field it is.
+        field: String,
+    },
+}
+
+/// Translate one line by the table `row` found for it: write the row's
+/// shape when the target can store every value, name the field a binary
+/// `Hexen` record cannot hold, and tell a plain line from a special the
+/// table does not cover.
+fn forward_line(
+    line: &mut Linedef,
+    tag: i32,
+    row: Option<&'static XlatRow>,
+    byte_limited: bool,
+) -> Forward {
+    let Some(found) = row else {
+        return if line.special == 0_i32 {
+            Forward::Plain
+        } else {
+            Forward::NoRow
+        };
+    };
+    let too_wide = byte_limited.then(|| wide_field(found, tag)).flatten();
+    too_wide.map_or_else(
+        || {
+            apply_hexen(line, found, tag);
+            Forward::Applied
+        },
+        |field| Forward::TooWide { row: found, field },
+    )
 }
 
 /// Keep the flag bits the families share; a `Doom` `passuse` bit moves to
@@ -929,13 +988,10 @@ fn share_passuse(line: &mut Linedef) {
     line.flags &= DOOM_FLAG_BITS;
 }
 
-/// Report one forward step's loss: a special the table did not carry
-/// clears to 0 and joins [`LinesReport::untranslated`]; a plain line has
-/// nothing to report.
+/// Report one forward step's loss: the special the stage could not carry
+/// across clears to 0 and joins [`LinesReport::untranslated`] with the
+/// `Doom` number it had.
 fn note_forward_loss(line: &mut Linedef, old: i32, index: usize, report: &mut LinesReport) {
-    if old == 0_i32 {
-        return;
-    }
     line.special = 0_i32;
     report.untranslated.push(Untranslated {
         linedef: index,
@@ -943,21 +999,52 @@ fn note_forward_loss(line: &mut Linedef, old: i32, index: usize, report: &mut Li
     });
 }
 
-/// Whether one row's translated shape fits binary `Hexen` byte fields:
-/// the action number and every argument value the line would carry, the
-/// tag taking its `tag` slot's place. Slots past [`XlatRow::arg_count`]
-/// hold the parser's zero padding, so checking all five is checking
-/// exactly the written template.
-fn fits_bytes(row: &XlatRow, tag: i32) -> bool {
-    let in_byte = |value: i32| (0_i32..=MAX_BYTE).contains(&value);
-    in_byte(row.zspecial)
-        && row.args.iter().enumerate().all(|(slot, &value)| {
-            in_byte(if row.tag_slot == Some(slot) {
-                tag
-            } else {
-                value
-            })
-        })
+/// Whether `value` is one a binary `Hexen` field stores in its byte.
+fn in_hexen_byte(value: i32) -> bool {
+    (0_i32..=MAX_BYTE).contains(&value)
+}
+
+/// The first translated value of `row` a binary `Hexen` byte cannot hold,
+/// phrased as the field it belongs to: the action number, then the five
+/// argument slots with the line's `tag` taking the row's `tag` slot's
+/// place. `None` when every value fits. Slots past [`XlatRow::arg_count`]
+/// hold the parser's zero padding, so checking all five is checking exactly
+/// the written template.
+fn wide_field(row: &XlatRow, tag: i32) -> Option<String> {
+    if !in_hexen_byte(row.zspecial) {
+        return Some("its action number".to_owned());
+    }
+    row.args
+        .iter()
+        .enumerate()
+        .find_map(|(slot, &value)| wide_slot(row, slot, value, tag))
+}
+
+/// One argument slot of `row` as the field a byte cannot hold: the slot the
+/// line's `tag` fills is named for the tag, any other for its own value.
+fn wide_slot(row: &XlatRow, slot: usize, value: i32, tag: i32) -> Option<String> {
+    let tagged = row.tag_slot == Some(slot);
+    let stored = if tagged { tag } else { value };
+    (!in_hexen_byte(stored)).then(|| {
+        if tagged {
+            format!("its tag {stored} in arg{slot}")
+        } else {
+            format!("its arg{slot} {stored}")
+        }
+    })
+}
+
+/// The per-line warning for a special the table covers but a binary `Hexen`
+/// record cannot store: the line, the `Doom` special, the action it
+/// translates to and the value too wide for one byte, with the target that
+/// would have kept it.
+fn too_wide_note(index: usize, old: i32, row: &XlatRow, field: &str) -> String {
+    format!(
+        "linedef {index} special {old} was set to 0: it translates to {} (ZDoom action {}), and \
+         {field} is more than a binary Hexen field can store (one byte, 0 to {MAX_BYTE}); convert \
+         to a UDMF Hexen-family map to keep the action",
+        row.name, row.zspecial
+    )
 }
 
 /// Write one matched row's translated shape onto the line: the template
@@ -1263,9 +1350,9 @@ const fn activation_field(flags: u32) -> u32 {
 mod tests {
     use super::{
         DOOM_TO_ZDOOM_TSV, FieldReport, LinesReport, MAX_ARGS, Untranslated, XlatFlags, XlatRow,
-        best_match, fits_bytes, linedefs_from_hexen, linedefs_to_hexen, parse_xlat_table,
-        rows_for_doom, rows_for_zspecial, sectors_from_hexen, sectors_to_hexen, things_from_hexen,
-        things_to_hexen, xlat_rows,
+        best_match, linedefs_from_hexen, linedefs_to_hexen, parse_xlat_table, rows_for_doom,
+        rows_for_zspecial, sectors_from_hexen, sectors_to_hexen, things_from_hexen,
+        things_to_hexen, too_wide_note, wide_field, xlat_rows,
     };
     use crate::wad::map::model::{Linedef, Map, Sector, Thing};
 
@@ -2487,21 +2574,64 @@ mod tests {
             [5_i32, 0_i32, 0_i32, 0_i32, 0_i32],
             "its tag rides on as the id"
         );
+        assert_eq!(there.warnings.len(), 1, "the vetoed line warns once");
+        let veto = there.warnings.first().expect("one warning");
+        assert!(
+            veto.contains("linedef 0 special 100 was set to 0")
+                && veto.contains("Stairs_BuildUpDoomCrush")
+                && veto.contains("ZDoom action 273")
+                && veto.contains("its action number")
+                && veto.contains("convert to a UDMF Hexen-family map"),
+            "the warning names the line, the action and the fix: {veto}"
+        );
         let door = rows_for_doom(26).expect("the table parses")[0];
         assert!(
-            fits_bytes(door, 9_i32),
+            wide_field(door, 9_i32).is_none(),
             "row 26's template fits the bytes with a narrow tag"
         );
-        assert!(
-            !fits_bytes(door, 300_i32),
+        assert_eq!(
+            wide_field(door, 300_i32).as_deref(),
+            Some("its tag 300 in arg4"),
             "the wide tag landing in its slot 4 vetoes the line"
         );
-        assert!(
-            !fits_bytes(door, -1_i32),
+        assert_eq!(
+            wide_field(door, -1_i32).as_deref(),
+            Some("its tag -1 in arg4"),
             "a negative tag never fits a u8 slot"
         );
         let stairs = rows_for_doom(100).expect("the table parses")[0];
-        assert!(!fits_bytes(stairs, 5_i32), "zspecial 273 is the veto here");
+        assert_eq!(
+            wide_field(stairs, 5_i32).as_deref(),
+            Some("its action number"),
+            "zspecial 273 is the veto here"
+        );
+    }
+
+    #[test]
+    fn a_wide_template_argument_is_named_by_its_own_veto_warning() {
+        let row = XlatRow {
+            doom: 200_i32,
+            activation: XlatFlags(0_u32),
+            zspecial: 50_i32,
+            name: "Wide_Action".to_owned(),
+            args: [0_i32, 300_i32, 0_i32, 0_i32, 0_i32],
+            arg_count: 2_usize,
+            tag_slot: None,
+        };
+        assert_eq!(
+            wide_field(&row, 7_i32).as_deref(),
+            Some("its arg1 300"),
+            "a template value over a byte is the veto, and a row without a tag slot never \
+             reads the line's tag"
+        );
+        let note = too_wide_note(4_usize, 200_i32, &row, "its arg1 300");
+        assert!(
+            note.contains("linedef 4 special 200 was set to 0")
+                && note.contains("Wide_Action")
+                && note.contains("ZDoom action 50")
+                && note.contains("its arg1 300 is more than a binary Hexen field can store"),
+            "{note}"
+        );
     }
 
     #[test]
@@ -2771,7 +2901,15 @@ mod tests {
             }],
             "the vetoed Doom special is reported"
         );
-        assert_eq!(there.warnings.len(), 1, "one grouped miss");
+        assert_eq!(there.warnings.len(), 1, "one veto warning, no grouped miss");
+        assert!(
+            there
+                .warnings
+                .first()
+                .is_some_and(|note| note.contains("special 100 was set to 0")),
+            "the line is told its own action is the problem: {:?}",
+            there.warnings
+        );
         let hexen = only_line(&entering);
         assert_eq!(hexen.special, 121_i32, "the cleared line carries its id");
         assert_eq!(

@@ -95,10 +95,16 @@ the `Hexen` family):
   trigger tag in the tag field, where a `UDMF` target carries it as the
   line id; a binary `Hexen` target has no room for an id next to a special,
   so there the tag drops with a warning naming the line.
-- A special with no row — and, for a binary `Hexen` target, any row whose
-  action number, args or tag do not fit one byte — becomes `special` 0 and
-  is listed in `untranslated` with a grouped warning. Its old tag rides on
-  as a line id (binary `Hexen` stores that in `Line_SetIdentification`).
+- A special the table does not cover becomes `special` 0, is listed in
+  `untranslated` and is counted in one grouped warning naming the lost
+  lines. Its old tag rides on as a line id (binary `Hexen` stores that in
+  `Line_SetIdentification`).
+- For a binary `Hexen` target, a row whose action number, one of whose
+  arguments or whose `tag` slot value is above `255` is refused the same
+  way — `special` 0 and one `untranslated` entry — but the line gets its
+  **own** warning naming the action it would have run and the field too
+  wide for one byte. Convert those lines to a `Hexen`-family `UDMF`
+  namespace instead, which stores them.
 - `Doom`'s `passuse` bit has no `Hexen` bit (512 is `repeatspecial`
   there): it moves to the line's `extra` fields under the `passuse` key. A
   `UDMF` target keeps the key; a binary target drops it, counted in

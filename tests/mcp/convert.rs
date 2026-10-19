@@ -9,11 +9,11 @@
 //! translations in both directions (the table trips into `UDMF` and into
 //! one-byte `Hexen` records, a row's activation arriving as `flag_names`,
 //! an action too wide for `Hexen` bytes clearing with an `untranslated`
-//! entry, ids restored as Doom tags, specials with no row reported
-//! `untranslated`), `dry_run` changing neither archive nor history and
-//! reporting the numbers the real step writes, one `undo` taking a whole
-//! conversion back, and every refusal: already-there, unknown map and
-//! malformed parameters.
+//! entry and its own warning, ids restored as Doom tags, specials with no
+//! row reported `untranslated`), `dry_run` changing neither archive nor
+//! history and reporting the numbers the real step writes, one `undo`
+//! taking a whole conversion back, and every refusal: already-there,
+//! unknown map and malformed parameters.
 
 #[cfg(test)]
 mod tests {
@@ -427,8 +427,10 @@ mod tests {
             "the line and its lost special are named"
         );
         assert!(
-            warns(&out, "no ZDoom translation"),
-            "the grouped warning follows: {out}"
+            warns(&out, "linedef 2 special 100 was set to 0")
+                && warns(&out, "Stairs_BuildUpDoomCrush")
+                && warns(&out, "convert to a UDMF Hexen-family map"),
+            "the line is told its own action is the one no byte can hold: {out}"
         );
         let cleared = linedef_row(&doomed, "MAP01", "working", 2_i32).await;
         assert_eq!(cleared["special"], 0_i32, "the line ends special 0");

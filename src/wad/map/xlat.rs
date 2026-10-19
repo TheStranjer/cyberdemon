@@ -24,8 +24,8 @@
 //! the [`Linedef`] specials in either direction, returning a
 //! [`LinesReport`] of the specials that made the trip and the ids, flags
 //! and values that could not. They are pure in-place stages over the
-//! format-neutral [`Map`], reserved for the cross-family wiring that
-//! follows this slice.
+//! format-neutral [`Map`], run by the cross-family directions of
+//! [`super::convert`].
 
 use core::str::FromStr as _;
 use std::sync::LazyLock;
@@ -1032,13 +1032,14 @@ fn keep_line_id(line: &mut Linedef, index: usize, byte_limited: bool, warnings: 
 /// the `Doom` family, running the embedded table best-effort in reverse.
 ///
 /// `source_udmf` says how the line ids reached the model. In a `UDMF`
-/// `Hexen`-family map [`Linedef::tag`] already holds the id, and a line
-/// carrying both an id and a special has nowhere to put the id once the
-/// translated special takes the `Doom` tag field, so the id drops with a
-/// warning naming the line while the special still gets its match
-/// attempt. A binary `Hexen` map stores the id in `Line_SetIdentification`
-/// (special 121): each such line folds to its id first, leaving a plain
-/// line whose tag simply stays and becomes the `Doom` trigger tag.
+/// `Hexen`-family map [`Linedef::tag`] already holds the id; a line whose
+/// special matches a row has nowhere to put that id once the translated
+/// special takes the `Doom` tag field, so the id drops with a warning
+/// naming the line. A line no row matches keeps its id, which simply
+/// stands on as the `Doom` trigger tag. A binary `Hexen` map stores the
+/// id in `Line_SetIdentification` (special 121): each such line folds to
+/// its id first, leaving a plain line whose tag simply stays and becomes
+/// the `Doom` trigger tag.
 ///
 /// A line with a special then looks for rows with [`rows_for_zspecial`]
 /// and matches each one field by field: the activation field, the repeat
@@ -1065,12 +1066,10 @@ pub fn linedefs_from_hexen(map: &mut Map, source_udmf: bool) -> Result<LinesRepo
     let mut report = LinesReport::default();
     let mut blocked: Vec<usize> = Vec::new();
     for (index, line) in map.linedefs.iter_mut().enumerate() {
-        if source_udmf {
-            note_busy_id(line, index, &mut report.warnings);
-        } else {
+        if !source_udmf {
             fold_line_id(line);
         }
-        restore_special(line, index, &mut report)?;
+        restore_special(line, index, source_udmf, &mut report)?;
         if line.flags & HEXEN_BLOCK_BITS != 0_u32 {
             blocked.push(index);
         }
@@ -1112,10 +1111,10 @@ const fn fold_line_id(line: &mut Linedef) {
     line.args = [0_i32, arg1, arg2, arg3, arg4];
 }
 
-/// Drop a `UDMF` line's id when the line also carries a special to
-/// translate: the `Doom` tag field holds the trigger tag the translated
-/// special needs, so the id has nowhere to ride on and a warning names
-/// the line. The special itself still gets its match attempt.
+/// Drop a `UDMF` line's id when a row matched its special: the `Doom` tag
+/// field holds the trigger tag the translated special needs, so the id has
+/// nowhere to ride on and a warning names the line. A line no row matches
+/// never reaches this: its id stands on as the `Doom` trigger tag.
 fn note_busy_id(line: &mut Linedef, index: usize, warnings: &mut Vec<String>) {
     let id = line.tag;
     if id == 0_i32 || line.special == 0_i32 {
@@ -1132,11 +1131,14 @@ fn note_busy_id(line: &mut Linedef, index: usize, warnings: &mut Vec<String>) {
 /// Run one line's special through the table in reverse: a plain line keeps
 /// its tag (a folded or homeless line id) as the `Doom` trigger tag, a
 /// matched row writes its `Doom` special, the argument in its `tag` slot
-/// as that tag and zeroed args, and anything else clears to 0 and joins
-/// [`LinesReport::untranslated`].
+/// as that tag and zeroed args (a `UDMF` source line's own id drops
+/// first, the field belongs to the translated trigger tag), and anything
+/// else clears to 0 and joins [`LinesReport::untranslated`] with its tag
+/// left standing as the trigger tag.
 fn restore_special(
     line: &mut Linedef,
     index: usize,
+    source_udmf: bool,
     report: &mut LinesReport,
 ) -> Result<(), CyberError> {
     let old = line.special;
@@ -1147,6 +1149,9 @@ fn restore_special(
     let found = best_match(&rows, line)
         .and_then(|(row_index, tag)| rows.get(row_index).copied().map(|row| (row, tag)));
     if let Some((row, tag)) = found {
+        if source_udmf {
+            note_busy_id(line, index, &mut report.warnings);
+        }
         line.special = row.doom;
         line.tag = tag;
         line.args = [0_i32; MAX_ARGS];
@@ -2171,10 +2176,10 @@ mod tests {
     }
 
     #[test]
-    fn a_busy_id_on_an_unmatched_line_warns_for_both_losses() {
+    fn an_unmatched_udmf_line_keeps_its_id_as_the_doom_trigger_tag() {
         let mut map = line_map(&[(10_i32, 4_i32, ZERO_ARGS, 0_u32)]);
         let back = linedefs_from_hexen(&mut map, true).expect("the table parses");
-        assert_eq!(only_line(&map).tag, 0_i32, "the id went first");
+        assert_eq!(only_line(&map).tag, 4_i32, "no row took the tag field");
         assert_eq!(
             only_line(&map).special,
             0_i32,
@@ -2188,21 +2193,32 @@ mod tests {
             }],
             "the special is reported"
         );
-        assert_eq!(
-            back.warnings.len(),
-            2,
-            "the busy-id line and the grouped miss"
-        );
+        assert_eq!(back.warnings.len(), 1, "only the grouped miss warns");
         assert!(
-            back.warnings[0].contains("linedef 0 line id 4"),
+            back.warnings[0].starts_with("1 linedefs had ZDoom specials"),
             "{}",
             back.warnings[0]
         );
-        assert!(
-            back.warnings[1].starts_with("1 linedefs had ZDoom specials"),
-            "{}",
-            back.warnings[1]
+    }
+
+    #[test]
+    fn a_set_identification_from_a_udmf_source_matches_no_row() {
+        // UDMF has no Line_SetIdentification: a zdoom line hand-written with
+        // special 121 is just a special the table carries no row for.
+        let mut map = line_map(&[(121_i32, 7_i32, ZERO_ARGS, 0_u32)]);
+        let back = linedefs_from_hexen(&mut map, true).expect("the table parses");
+        let doom = only_line(&map);
+        assert_eq!(doom.special, 0_i32, "the unmatched path clears the special");
+        assert_eq!(doom.tag, 7_i32, "its id stands on as the Doom tag");
+        assert_eq!(
+            back.untranslated,
+            vec![Untranslated {
+                linedef: 0,
+                special: 121
+            }],
+            "121 lands among the unmatched"
         );
+        assert_eq!(back.warnings.len(), 1, "only the grouped miss warns");
     }
 
     #[test]
@@ -2588,5 +2604,107 @@ mod tests {
             "{}",
             back.warnings[1]
         );
+    }
+
+    /// One row of the embedded table there and back: Doom `special`
+    /// `row.doom` with trigger tag 13 forward through `UDMF`, then reverse.
+    /// The special always comes back; the tag returns from the row's `tag`
+    /// slot when the row has one and ends 0 when it has none (the homeless
+    /// line id drops on the way back).
+    fn trip_table_row(row: &XlatRow) {
+        let mut map = line_map(&[(row.doom, 13_i32, ZERO_ARGS, 0_u32)]);
+        let there = linedefs_to_hexen(&mut map, false).expect("the table parses");
+        assert_eq!(there.translated, 1, "doom {} translated", row.doom);
+        assert!(
+            there.untranslated.is_empty() && there.warnings.is_empty(),
+            "the forward trip of row {} is lossless: {there:?}",
+            row.doom
+        );
+        let back = linedefs_from_hexen(&mut map, true).expect("the table parses");
+        assert_eq!(back.translated, 1, "doom {} came back", row.doom);
+        assert!(back.untranslated.is_empty(), "row {} found", row.doom);
+        let doom = only_line(&map);
+        assert_eq!(
+            doom.special, row.doom,
+            "row {} restores its own special",
+            row.doom
+        );
+        let wanted = if row.tag_slot.is_some() {
+            13_i32
+        } else {
+            0_i32
+        };
+        assert_eq!(doom.tag, wanted, "the tag of row {}", row.doom);
+        assert_eq!(doom.args, ZERO_ARGS, "the matched line zeroes its args");
+        assert_eq!(doom.flags, 0_u32, "the trigger bits were consumed");
+        let lost = back
+            .warnings
+            .iter()
+            .filter(|note| note.contains("line id 13 was dropped"))
+            .count();
+        if row.tag_slot.is_some() {
+            assert!(
+                back.warnings.is_empty(),
+                "lossless trip: {:?}",
+                back.warnings
+            );
+        } else {
+            assert_eq!(
+                lost, 1_usize,
+                "row {} carries its tag as a busy id: {:?}",
+                row.doom, back.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn every_table_row_round_trips_through_udmf() {
+        let rows = xlat_rows().expect("the embedded table parses");
+        for row in rows {
+            trip_table_row(row);
+        }
+        let tagless = rows.iter().filter(|row| row.tag_slot.is_none()).count();
+        assert_eq!(tagless, 6_usize, "the six arg-only rows have no tag slot");
+    }
+
+    #[test]
+    fn the_crushing_stairs_row_drops_its_wide_action_at_the_byte_limit() {
+        // Going in: binary Hexen has no byte for zspecial 273.
+        let mut entering = line_map(&[(100_i32, 13_i32, ZERO_ARGS, 0_u32)]);
+        let there = linedefs_to_hexen(&mut entering, true).expect("the table parses");
+        assert_eq!(there.translated, 0, "row 100's action does not fit a byte");
+        assert_eq!(
+            there.untranslated,
+            vec![Untranslated {
+                linedef: 0,
+                special: 100
+            }],
+            "the vetoed Doom special is reported"
+        );
+        assert_eq!(there.warnings.len(), 1, "one grouped miss");
+        let hexen = only_line(&entering);
+        assert_eq!(hexen.special, 121_i32, "the cleared line carries its id");
+        assert_eq!(
+            hexen.args,
+            [13_i32, 0_i32, 0_i32, 0_i32, 0_i32],
+            "the trigger tag rode on as the line id"
+        );
+        // Coming out: a line still carrying zdoom 273 that fits no row.
+        let mut leaving =
+            line_map(&[(273_i32, 13_i32, [1_i32, 2_i32, 3_i32, 4_i32, 5_i32], 0_u32)]);
+        let back = linedefs_from_hexen(&mut leaving, false).expect("the table parses");
+        assert_eq!(back.translated, 0, "neither row 100 nor row 127 accepts it");
+        assert_eq!(
+            back.untranslated,
+            vec![Untranslated {
+                linedef: 0,
+                special: 273
+            }],
+            "273 is reported leaving as well"
+        );
+        assert_eq!(back.warnings.len(), 1, "one grouped miss");
+        let doom = only_line(&leaving);
+        assert_eq!(doom.special, 0_i32, "the special ends 0");
+        assert_eq!(doom.tag, 13_i32, "its tag stands as the trigger tag");
     }
 }

@@ -18,7 +18,8 @@
 //! from a map's geometry. [`geometry`] answers the pure integer shape
 //! questions over a decoded map: sector boundaries, point containment,
 //! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
-//! a decoded map in another layout inside one flag family, the pure step
+//! a decoded map in another layout, inside one flag family mechanically and
+//! across the two families through the [`xlat`] table, the pure step
 //! behind `convert_map_format`. [`draw`] grows a closed corner loop into
 //! one new sector with its walls, the pure room-drawing step behind
 //! `create_sector_from_loop`. [`ops`] cuts one linedef at a point and welds
@@ -27,8 +28,8 @@
 //! behind `validate_map`: reference integrity, line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
 //! rows. [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
-//! translation table (rows, flags and lookups) reserved for cross-family
-//! conversion.
+//! translation table (rows, flags and lookups) and the cross-family thing,
+//! sector and linedef stages [`convert`] runs.
 
 pub mod blockmap;
 pub mod build_blockmap;

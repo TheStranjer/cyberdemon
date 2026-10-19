@@ -275,18 +275,19 @@ src/
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and
                   shifts, and the removal-engine join),
-                  `map/convert.rs` the pure within-flag-family format
-                  conversion (`Target`, `convert_map`, `Conversion`) behind
-                  `convert_map_format`, `map/xlat.rs` the pure
+                  `map/convert.rs` the pure within- and cross-flag-family
+                  format conversion (`Target`, `convert_map`, `Conversion`)
+                  behind `convert_map_format`, `map/xlat.rs` the pure
                   Doom↔ZDoom linedef-special translation tables
                   (`XlatFlags`, `XlatRow`, `parse_xlat_table` and the
                   embedded-table lookups `xlat_rows`, `rows_for_doom` and
-                  `rows_for_zspecial`) reserved for cross-family
-                  conversion, the pure thing-flag and sector-type
-                  cross-family stages (`things_to_hexen`,
+                  `rows_for_zspecial`) and the cross-family stages the
+                  conversion's `ToHexen`/`FromHexen` directions run:
+                  `linedefs_to_hexen`/`linedefs_from_hexen` returning
+                  `LinesReport`, and `things_to_hexen`,
                   `things_from_hexen`, `sectors_to_hexen`,
-                  `sectors_from_hexen` returning `FieldReport`) wired in
-                  by a later slice, and `map/validate.rs` +
+                  `sectors_from_hexen` returning `FieldReport`, and
+                  `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
                   model and the `CHECKS` pipeline (`references`,

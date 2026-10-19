@@ -23,7 +23,7 @@
 use crate::error::CyberError;
 
 /// Mask covering the `Hexen` linedef activation field.
-pub(super) const ACTIVATION_MASK: u32 = 0x1C00;
+pub(crate) const ACTIVATION_MASK: u32 = 0x1C00;
 /// Shift from an activation field value to its position in the flag bits.
 pub(super) const ACTIVATION_SHIFT: u32 = 10_u32;
 /// `Hexen` linedef bit letting monsters trigger special lines.

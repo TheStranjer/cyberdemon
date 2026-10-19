@@ -1,16 +1,23 @@
-//! Map-feature tools: `add_door` (see the `features` router on
-//! [`crate::server::Cyberdemon`]).
+//! Map-feature tools: `add_door` and `add_switch` (see the `features`
+//! router on [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
-//! drawn map. It grows in place: `add_switch` and `add_exit` join this
-//! same router in later tickets and reuse this file's machinery — the
-//! [`DoorSpec`] pipeline runs inside one [`crate::session::Session::edit_map`]
+//! drawn map. It grows in place: `add_exit` joins this same router in a
+//! later ticket and reuses this file's machinery — the [`DoorSpec`]
+//! pipeline runs inside one [`crate::session::Session::edit_map`]
 //! step, [`theme_skin`] resolves role textures through
 //! [`crate::tools::themes::theme_texture`], and the tag a
-//! [`DoorStyle::Remote`] door mints with [`next_free_tag`] is exactly what
-//! `add_switch` will look for. Until then a remote door stays inert: its
-//! sector carries the tag, the door is closed, and its lines carry no
-//! action.
+//! [`DoorStyle::Remote`] door mints with [`next_free_tag`] is exactly
+//! what `add_switch` looks for: pointing a switch's `target_sector` at
+//! that door closes the remote loop.
+//!
+//! `add_switch` composes the same pure engines: [`project_onto_line`]
+//! and [`door_segment`] fit the panel to the wall,
+//! [`crate::wad::map::ops::split_linedef`]
+//! isolates the chunk as its own linedef (skipped when the line already
+//! is exactly that chunk), [`switch_special`] is the per-family action
+//! table and [`next_free_tag`] mints the tag an untagged target sector
+//! answers with.
 //!
 //! `add_door` composes the pure engines: [`crate::wad::map::features`]
 //! selects the wall ([`longest_boundary`], [`nearest_boundary`]), fits
@@ -36,6 +43,7 @@
 //! [`point_in_sector`]: crate::wad::map::geometry::point_in_sector
 //! [`door_specials`]: crate::wad::map::features::door_specials
 //! [`apply_door`]: crate::wad::map::features::apply_door
+//! [`switch_special`]: crate::wad::map::features::switch_special
 //! [`next_free_tag`]: crate::wad::map::features::next_free_tag
 //! [`apply_overlay`]: crate::wad::map::overlay::apply_overlay
 //! [`OverlayResult::linedef_map`]: crate::wad::map::overlay::OverlayResult
@@ -59,18 +67,21 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
-    DoorSides, DoorStyle, DoorTextures, DoorWall, apply_door, door_rect, door_specials, door_wall,
-    longest_boundary, nearest_boundary, next_free_tag, outward_depth, project_onto_line,
-    void_strip,
+    DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, SwitchAction, VertexPair,
+    apply_door, door_rect, door_segment, door_specials, door_wall, longest_boundary,
+    nearest_boundary, next_free_tag, outward_depth, project_onto_line, switch_special, void_strip,
 };
+use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
-use crate::wad::map::ops::Point;
+use crate::wad::map::ops::{self, Point};
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::{Linedef, Map, Sector};
 use crate::wad::name::LumpName;
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
 const DEFAULT_WIDTH: i32 = 64_i32;
+/// The `add_switch` default panel width in map units: one switch face.
+const DEFAULT_SWITCH_WIDTH: i32 = 32_i32;
 /// The void strip `add_door` carves between touching rooms, in map units.
 const STRIP_THICKNESS: i32 = 16_i32;
 /// How far the outward ray may search for the room behind a one-sided wall.
@@ -128,13 +139,45 @@ struct AddDoorParams {
     track_texture: Option<String>,
 }
 
-/// One `at` point of [`Cyberdemon::add_door`].
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+/// One `at` point of the feature tools.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, JsonSchema)]
 struct DoorPointParam {
     /// `X` coordinate in map units.
     x: i32,
     /// `Y` coordinate in map units.
     y: i32,
+}
+
+/// Arguments for [`Cyberdemon::add_switch`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddSwitchParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The wall to mount the switch on, as a linedef index.
+    linedef: usize,
+    /// Where along the wall to centre the panel, `{x, y}` (optional: it
+    /// centres on the wall's midpoint; a point off the wall is projected
+    /// onto it).
+    #[serde(default)]
+    at: Option<DoorPointParam>,
+    /// The switch face's width in map units (default 32).
+    #[serde(default)]
+    width: Option<i32>,
+    /// What the switch does: `open_door`, `raise_floor`, `lower_floor`,
+    /// `exit` or `secret_exit`.
+    action: String,
+    /// The sector the switch acts on (required by the door and floor
+    /// actions, ignored by the exits). Its existing tag is the one the
+    /// line answers with; an untagged sector gets a fresh one.
+    #[serde(default)]
+    target_sector: Option<usize>,
+    /// Whether the line keeps working after use (default false: the
+    /// `S1` specials and plain `playeruse`; true picks the `SR` specials
+    /// and adds `repeatspecial`. Ignored by the exit actions).
+    #[serde(default)]
+    repeatable: bool,
 }
 
 /// The wall the parameters name, already checked for "exactly one".
@@ -894,6 +937,287 @@ fn add_door_run(session: &mut Session, args: &AddDoorParams) -> Result<DoorRepor
     })
 }
 
+/// The canonical wire name of `action`.
+const fn action_name(action: SwitchAction) -> &'static str {
+    match action {
+        SwitchAction::OpenDoor => "open_door",
+        SwitchAction::Exit => "exit",
+        SwitchAction::SecretExit => "secret_exit",
+        SwitchAction::RaiseFloor => "raise_floor",
+        SwitchAction::LowerFloor => "lower_floor",
+    }
+}
+
+/// Every action name, in [`SwitchAction::all`] order.
+fn action_names() -> Vec<&'static str> {
+    SwitchAction::all().map(action_name).to_vec()
+}
+
+/// The [`SwitchAction`] `text` names (case-insensitive), or the refusal
+/// listing every valid name.
+fn action_of(text: &str) -> Result<SwitchAction, CyberError> {
+    let wanted = text.to_ascii_lowercase();
+    SwitchAction::all()
+        .into_iter()
+        .find(|action| action_name(*action) == wanted)
+        .ok_or_else(|| {
+            invalid(&format!(
+                "action {text:?} is not a switch action: pass one of {}",
+                action_names().join(", ")
+            ))
+        })
+}
+
+/// The texture theme role the switch panel wears: the exit switch for
+/// the level-changing actions, the plain panel for the sector-moving
+/// ones.
+const fn switch_role(action: SwitchAction) -> Role {
+    match action {
+        SwitchAction::Exit | SwitchAction::SecretExit => Role::ExitSwitch,
+        SwitchAction::OpenDoor | SwitchAction::RaiseFloor | SwitchAction::LowerFloor => {
+            Role::Switch
+        }
+    }
+}
+
+/// Everything [`build_switch`] needs once the wire parameters resolved.
+#[derive(Debug)]
+struct SwitchSpec {
+    /// The wall to mount the panel on.
+    linedef: usize,
+    /// The requested panel centre, if any.
+    at: Option<Point>,
+    /// The panel width in map units.
+    width: i32,
+    /// The action to install.
+    action: SwitchAction,
+    /// The sector the switch acts on (sector-moving actions).
+    target_sector: Option<usize>,
+    /// Whether the line keeps working after use.
+    repeatable: bool,
+    /// The theme-resolved panel texture.
+    texture: String,
+}
+
+/// The [`Map`] endpoints of the wall switch `linedef`, refused with
+/// switch-role instructions when the index dangles or a vertex is gone
+/// ([`door_segment`] speaks of doors, so the wall is checked first).
+fn switch_span(map: &Map, index: usize) -> Result<(Point, Point), CyberError> {
+    let count = map.linedefs.len();
+    if index >= count {
+        return Err(out_of_range("linedef", index, count));
+    }
+    line_ends(map, index).ok_or_else(|| {
+        invalid(&format!(
+            "switch linedef {index} references a vertex the map does not hold: resolve \
+             its endpoints first"
+        ))
+    })
+}
+
+/// The `width`-wide panel chunk of the wall, centred on `at` (or the
+/// midpoint): [`project_onto_line`] and [`door_segment`] on a wall
+/// already checked for [`switch_span`], so only the width, zero-length
+/// and fit refusals can reach the caller.
+fn switch_cut(map: &Map, spec: &SwitchSpec) -> Result<(VertexPair, i32), CyberError> {
+    switch_span(map, spec.linedef)?;
+    if spec.width <= 0_i32 {
+        return Err(invalid(
+            "the switch width must be a positive number of map units (the default 32 \
+             covers one switch panel)",
+        ));
+    }
+    let centre = project_onto_line(map, spec.linedef, spec.at);
+    door_segment(map, spec.linedef, centre, spec.width)
+}
+
+/// The isolated panel chunk: which linedef carries it and whether the
+/// wall had to be cut.
+#[derive(Debug)]
+struct Chunk {
+    /// Index in [`Map::linedefs`] of the switch line.
+    line: usize,
+    /// Whether [`build_switch`] split the wall to isolate the chunk.
+    split: bool,
+}
+
+/// Make the `start`-`finish` chunk of linedef `linedef` its own linedef
+/// with [`ops::split_linedef`], cutting only where the chunk does not
+/// already meet an endpoint; the chunk keeps the wall's sides (split
+/// copies them) and the pieces beyond its ends stand aside.
+fn isolate_chunk(
+    map: &mut Map,
+    linedef: usize,
+    start: Point,
+    finish: Point,
+) -> Result<Chunk, CyberError> {
+    let (from, to) = switch_span(map, linedef)?;
+    let mut chunk = Chunk {
+        line: linedef,
+        split: false,
+    };
+    if start != from {
+        chunk.line = ops::split_linedef(map, chunk.line, Some(start))?.new_linedef;
+        chunk.split = true;
+    }
+    if finish != to {
+        ops::split_linedef(map, chunk.line, Some(finish))?;
+        chunk.split = true;
+    }
+    Ok(chunk)
+}
+
+/// The refusal for a sector-moving action that names no target sector.
+fn target_required(action: SwitchAction) -> CyberError {
+    invalid(&format!(
+        "the {} action needs target_sector: pass the index of the sector the switch \
+         moves (add_door reports the door sector of its remote door)",
+        action_name(action)
+    ))
+}
+
+/// The tag the switch line answers with: the target sector's existing
+/// one, or a fresh [`next_free_tag`] stamped onto the sector when it
+/// carries none. Exit actions level-end and act on no tag.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when a sector-moving action names no
+/// `target_sector` or an index past the map's sectors.
+fn switch_tag(map: &mut Map, spec: &SwitchSpec) -> Result<i32, CyberError> {
+    if !spec.action.needs_target() {
+        return Ok(0_i32);
+    }
+    let index = spec
+        .target_sector
+        .ok_or_else(|| target_required(spec.action))?;
+    let current = map
+        .sectors
+        .get(index)
+        .ok_or_else(|| out_of_range("sector", index, map.sectors.len()))?
+        .tag;
+    if current != 0_i32 {
+        return Ok(current);
+    }
+    let fresh = next_free_tag(map);
+    if let Some(sector) = map.sectors.get_mut(index) {
+        sector.tag = fresh;
+    }
+    Ok(fresh)
+}
+
+/// The front sidedef index of the switch `line`, when the line has one
+/// and the sidedef resolves.
+fn switch_side(map: &Map, line: usize) -> Option<usize> {
+    map.linedefs
+        .get(line)?
+        .front
+        .filter(|index| map.sidedefs.get(*index).is_some())
+}
+
+/// Write the action onto the isolated line and the panel onto its front
+/// side; the `Hexen` family replaces the activation field with the
+/// setup's `playeruse` bits, the `Doom` family keeps the line's flags.
+fn dress_switch(
+    map: &mut Map,
+    line: usize,
+    setup: &DoorLineSetup,
+    texture: &str,
+) -> Result<(), CyberError> {
+    let hexen = map.flag_family() == FlagFamily::Hexen;
+    let Some(side) = switch_side(map, line) else {
+        return Err(invalid(&format!(
+            "linedef {line} has no front sidedef to wear the switch: give the wall a \
+             front side facing the triggering room first (see add_sidedef)"
+        )));
+    };
+    if let Some(def) = map.linedefs.get_mut(line) {
+        def.special = setup.special;
+        def.tag = setup.tag;
+        def.args = setup.args;
+        if hexen {
+            def.flags = (def.flags & !ACTIVATION_MASK) | setup.flags_activation;
+        }
+    }
+    if let Some(worn) = map.sidedefs.get_mut(side) {
+        texture.clone_into(&mut worn.middle);
+    }
+    Ok(())
+}
+
+/// What one [`build_switch`] step did, as the tool reports it.
+#[derive(Debug, Serialize)]
+struct PlacedSwitch {
+    /// Index of the linedef carrying the switch (new when split).
+    linedef: usize,
+    /// Whether the wall was split to isolate the panel.
+    split: bool,
+    /// The canonical action name the switch got.
+    action: &'static str,
+    /// The line special installed.
+    special: i32,
+    /// The tag the line answers with (`0` for the exit actions).
+    tag: i32,
+    /// The panel texture installed on the front middle.
+    texture: String,
+}
+
+/// Structured result of [`Cyberdemon::add_switch`].
+#[derive(Serialize)]
+struct SwitchReport {
+    /// What the step installed, inlined next to the edit fragment.
+    #[serde(flatten)]
+    placed: PlacedSwitch,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The whole switch as one map edit: fit the chunk, isolate it, resolve
+/// the tag it answers with and dress the line with the table's action.
+fn build_switch(map: &mut Map, spec: &SwitchSpec) -> Result<PlacedSwitch, CyberError> {
+    let ((start, finish), _available) = switch_cut(map, spec)?;
+    let chunk = isolate_chunk(map, spec.linedef, start, finish)?;
+    let tag = switch_tag(map, spec)?;
+    let setup = switch_special(map.flag_family(), spec.action, spec.repeatable, tag);
+    dress_switch(map, chunk.line, &setup, &spec.texture)?;
+    Ok(PlacedSwitch {
+        linedef: chunk.line,
+        split: chunk.split,
+        action: action_name(spec.action),
+        special: setup.special,
+        tag,
+        texture: spec.texture.clone(),
+    })
+}
+
+/// `add_switch`'s work: resolve the parameters, then run the whole
+/// switch as one [`crate::session::Session::edit_map`] step.
+fn add_switch_run(
+    session: &mut Session,
+    args: &AddSwitchParams,
+) -> Result<SwitchReport, CyberError> {
+    let action = action_of(&args.action)?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let format = current_map(session, name)?.format;
+    let texture = validate_texture_name(&theme_texture(session, switch_role(action))?, format)?;
+    let spec = SwitchSpec {
+        linedef: args.linedef,
+        at: args.at.map(point_of),
+        width: args.width.unwrap_or(DEFAULT_SWITCH_WIDTH),
+        action,
+        target_sector: args.target_sector,
+        repeatable: args.repeatable,
+        texture,
+    };
+    let label = format!("add {} switch", action_name(action));
+    let (placed, report) = session.edit_map(name, &label, |map| build_switch(map, &spec))?;
+    Ok(SwitchReport {
+        placed,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// Hand an outcome to the client as the documented structured result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -924,6 +1248,20 @@ impl Cyberdemon {
                 .with_session(|session| add_door_run(session, &args)),
         )
     }
+
+    /// Mounts a working switch on a wall chunk in one undoable edit.
+    #[tool(
+        description = "Mounts a working switch on a wall in one undoable edit: a width-wide panel chunk isolated as its own linedef, wearing the theme's switch texture and a use action. linedef: N is the wall. at: {x, y} optionally centres the panel there (a point off the wall is projected onto it); without it the panel sits at the wall's midpoint. width (default 32) is the panel: a longer wall is split so the chunk becomes its own linedef (the result's linedef names it and split is true), a line already exactly that chunk is dressed as it stands (split false), and a wall too short for the width is invalid_argument naming its available length. action (case-insensitive) picks what it does: open_door (opens the tagged door, closing it after its wait: Doom S1 103, SR 61 when repeatable; Hexen Door_Open 11 speed 16), raise_floor (raises the tagged floor to the highest neighbouring floor: S1 18, SR 69; Floor_RaiseToNearest 25 speed 8), lower_floor (lowers it to the lowest neighbouring floor: S1 23, SR 60; Floor_LowerToLowest 21 speed 8), exit (ends the level: S1 11; Portal 243) or secret_exit (ends it through the secret exit: S1 51; Portal 244). An unknown action is invalid_argument listing all five. open_door, raise_floor and lower_floor require target_sector - the sector they act on: missing or out of range is invalid_argument naming it. The sector's existing tag is what the line answers with; an untagged sector (tag 0) is stamped with a fresh unused tag (the reported tag), so an add_door remote door is triggered by passing its door_sector: the tags match. exit and secret_exit ignore target_sector and repeatable (the Doom family ships no SR exit and a level change fires once). repeatable (default false) picks the SR specials in the Doom family and adds repeatspecial activation in the Hexen family, whose switch lines also get their activation field replaced with playeruse (a Doom-family line keeps its flags). The panel texture comes from the session's theme: the switch role, or exit_switch for the level-changing actions; the isolated line's front middle wears it, and a line with no front sidedef is invalid_argument (see add_sidedef). Result: {linedef, split, action, special, tag, texture} plus the standard edit fragment; nodes_invalidated is true when the wall had to be split (the map's geometry changed)."
+    )]
+    fn add_switch(
+        &self,
+        Parameters(args): Parameters<AddSwitchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| add_switch_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -931,15 +1269,20 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddDoorParams, Chosen, DoorSkins, DoorSpec, DoorStyle, Dress, Groups, Placed, Target,
-        build_door, centroid, choose_between, choose_linedef, door_groups, door_record, dress_door,
-        half_axis, out_of_range, recess_depth, side_sector, strip_face_lost, strip_wall,
-        style_name, style_names, style_of, target_of, track_role,
+        AddDoorParams, AddSwitchParams, Chosen, DoorSkins, DoorSpec, DoorStyle, Dress, Groups,
+        Placed, SwitchSpec, Target, action_name, action_names, action_of, build_door, build_switch,
+        centroid, choose_between, choose_linedef, door_groups, door_record, dress_door,
+        dress_switch, half_axis, isolate_chunk, out_of_range, recess_depth, side_sector,
+        strip_face_lost, strip_wall, style_name, style_names, style_of, switch_cut, switch_role,
+        switch_span, switch_tag, target_of, track_role,
     };
     use crate::error::CyberError;
     use crate::themes::Role;
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::features::SwitchAction;
     use crate::wad::map::features::door_wall;
+    use crate::wad::map::features::switch_special;
+    use crate::wad::map::flags::FlagFamily;
     use crate::wad::map::ops::Point;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
@@ -1541,5 +1884,330 @@ mod tests {
         let built = build_door(&mut map, &spec).expect("the off-centre door builds");
         assert_eq!(built.lines.len(), 2);
         assert_eq!(built.jambs.len(), 2);
+    }
+
+    /// A `add_switch` request parsed from `json`.
+    fn switch_args(json: &str) -> AddSwitchParams {
+        from_str(json).expect("test switch requests parse")
+    }
+
+    /// A 32-unit open-door switch spec on linedef `linedef`.
+    fn switch_spec(linedef: usize) -> SwitchSpec {
+        SwitchSpec {
+            linedef,
+            at: None,
+            width: 32_i32,
+            action: SwitchAction::OpenDoor,
+            target_sector: Some(1_usize),
+            repeatable: false,
+            texture: "SW1STRTN".to_owned(),
+        }
+    }
+
+    /// The coordinates of the vertex at [`Linedef`]'s `end` of `line`
+    /// (`"v1"` or `"v2"`).
+    fn line_vertex(map: &Map, line: usize, end: &str) -> Point {
+        let def = map.linedefs.get(line).expect("the linedef");
+        let index = if end == "v1" { def.v1 } else { def.v2 };
+        let vertex = map.vertices.get(index).expect("the vertex");
+        Point {
+            x: vertex.x,
+            y: vertex.y,
+        }
+    }
+
+    /// The front sidedef's `middle` texture of linedef `line`.
+    fn front_middle(map: &Map, line: usize) -> String {
+        let def = map.linedefs.get(line).expect("the linedef");
+        let side = def.front.expect("a front side");
+        map.sidedefs
+            .get(side)
+            .expect("the front sidedef")
+            .middle
+            .clone()
+    }
+
+    #[test]
+    fn switch_actions_round_trip_and_refuse_unknown_names() {
+        for action in SwitchAction::all() {
+            assert_eq!(action_of(action_name(action)).expect("canonical"), action);
+            assert_eq!(
+                action_of(&action_name(action).to_ascii_uppercase()).expect("case-insensitive"),
+                action
+            );
+        }
+        let message = refuse(&action_of("press").unwrap_err());
+        assert!(
+            message.contains("open_door, exit, secret_exit, raise_floor, lower_floor"),
+            "the refusal lists every name: {message}"
+        );
+        assert_eq!(
+            action_names().len(),
+            SwitchAction::all().len(),
+            "one name each"
+        );
+    }
+
+    #[test]
+    fn exit_actions_wear_the_exit_panel() {
+        assert_eq!(switch_role(SwitchAction::Exit), Role::ExitSwitch);
+        assert_eq!(switch_role(SwitchAction::SecretExit), Role::ExitSwitch);
+        for action in [
+            SwitchAction::OpenDoor,
+            SwitchAction::RaiseFloor,
+            SwitchAction::LowerFloor,
+        ] {
+            assert_eq!(switch_role(action), Role::Switch, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn add_switch_params_read_the_wire_shape() {
+        let args = switch_args(
+            r#"{"linedef": 3, "action": "raise_floor", "target_sector": 1,
+               "at": {"x": 64, "y": 0}, "width": 48, "repeatable": true}"#,
+        );
+        assert_eq!(args.linedef, 3_usize);
+        assert_eq!(args.action, "raise_floor");
+        assert_eq!(args.target_sector, Some(1_usize));
+        assert_eq!(args.width, Some(48_i32));
+        assert!(args.repeatable, "the flag arrives");
+        let minimal = switch_args(r#"{"linedef": 0, "action": "exit"}"#);
+        assert_eq!(minimal.at, None, "no centre asked");
+        assert_eq!(minimal.width, None, "the default width stands");
+        assert!(!minimal.repeatable, "one-shot by default");
+        assert!(
+            from_str::<AddSwitchParams>(r#"{"action": "exit"}"#).is_err(),
+            "the wall is required"
+        );
+        assert!(
+            from_str::<AddSwitchParams>(r#"{"linedef": 0}"#).is_err(),
+            "the action is required"
+        );
+    }
+
+    #[test]
+    fn a_switch_splits_the_wall_and_installs_the_action() {
+        let mut map = two_rooms();
+        let placed = build_switch(&mut map, &switch_spec(0)).expect("the west wall takes it");
+        assert_eq!(placed.linedef, 7_usize, "the first split is the chunk");
+        assert!(placed.split, "the long wall was cut");
+        assert_eq!(placed.action, "open_door", "echoed canonically");
+        assert_eq!(placed.special, 103_i32, "the S1 door action");
+        assert_eq!(placed.tag, 1_i32, "sector 1's own tag");
+        assert_eq!(placed.texture, "SW1STRTN", "what it wears");
+        assert_eq!(map.linedefs.len(), 9_usize, "two outer pieces");
+        assert_eq!(line_vertex(&map, 7, "v1"), Point { x: 0, y: 112 });
+        assert_eq!(line_vertex(&map, 7, "v2"), Point { x: 0, y: 144 });
+        let chunk = map.linedefs.get(7).expect("the chunk");
+        assert_eq!(chunk.special, 103_i32);
+        assert_eq!(chunk.tag, 1_i32, "the Doom line carries the tag");
+        assert_eq!(chunk.args, [0_i32; 5]);
+        assert_eq!(chunk.flags, 1_u32, "a Doom switch keeps the wall's flags");
+        assert_eq!(front_middle(&map, 7), "SW1STRTN", "the panel on the front");
+        assert_eq!(
+            front_middle(&map, 0),
+            "WALL1",
+            "the remaining wall is plain"
+        );
+        assert_eq!(front_middle(&map, 8), "WALL1", "and so is the other piece");
+    }
+
+    #[test]
+    fn an_exact_line_takes_the_switch_without_splitting() {
+        let mut map = two_rooms();
+        let spec = SwitchSpec {
+            width: 256_i32,
+            action: SwitchAction::Exit,
+            target_sector: None,
+            texture: "SW1EXIT".to_owned(),
+            ..switch_spec(0)
+        };
+        let placed = build_switch(&mut map, &spec).expect("the whole wall is the panel");
+        assert_eq!(placed.linedef, 0_usize, "the line stands as it is");
+        assert!(!placed.split, "nothing was cut");
+        assert_eq!(placed.special, 11_i32, "the S1 exit");
+        assert_eq!(placed.tag, 0_i32, "an exit acts on no tag");
+        assert_eq!(map.linedefs.len(), 7_usize, "no linedef was appended");
+        assert_eq!(front_middle(&map, 0), "SW1EXIT");
+    }
+
+    #[test]
+    fn an_untagged_target_sector_gets_a_fresh_tag() {
+        let mut map = two_rooms();
+        let spec = SwitchSpec {
+            target_sector: Some(0_usize),
+            ..switch_spec(0)
+        };
+        let placed = build_switch(&mut map, &spec).expect("sector 0 is untagged");
+        assert_eq!(placed.tag, 2_i32, "room 1's tag 1 was outgrown");
+        assert_eq!(
+            map.sectors.first().expect("target").tag,
+            2_i32,
+            "the tag was stamped onto the sector"
+        );
+        assert_eq!(
+            map.linedefs.get(7).expect("the chunk").tag,
+            2_i32,
+            "and answered by the line"
+        );
+    }
+
+    #[test]
+    fn targeted_actions_demand_their_sector() {
+        for action in [
+            SwitchAction::OpenDoor,
+            SwitchAction::RaiseFloor,
+            SwitchAction::LowerFloor,
+        ] {
+            let mut map = two_rooms();
+            let spec = SwitchSpec {
+                action,
+                target_sector: None,
+                ..switch_spec(0)
+            };
+            let message = refuse(&build_switch(&mut map, &spec).unwrap_err());
+            assert!(message.contains("target_sector"), "{action:?}: {message}");
+        }
+        let mut map = two_rooms();
+        let spec = SwitchSpec {
+            target_sector: Some(99_usize),
+            ..switch_spec(0)
+        };
+        let message = refuse(&build_switch(&mut map, &spec).unwrap_err());
+        assert!(message.contains("sector 99 is out of range"), "{message}");
+    }
+
+    #[test]
+    fn exits_ignore_their_parameters() {
+        let mut map = two_rooms();
+        let spec = SwitchSpec {
+            action: SwitchAction::SecretExit,
+            target_sector: Some(1_usize),
+            ..switch_spec(0)
+        };
+        let placed = build_switch(&mut map, &spec).expect("a secret exit switch");
+        assert_eq!(placed.special, 51_i32, "the S1 secret exit");
+        assert_eq!(placed.tag, 0_i32, "the given target is ignored");
+        assert_eq!(map.sectors.get(1).expect("sector 1").tag, 1_i32);
+    }
+
+    #[test]
+    fn a_switch_names_the_wall_it_cannot_take() {
+        let mut far_map = two_rooms();
+        let far = refuse(&build_switch(&mut far_map, &switch_spec(99)).unwrap_err());
+        assert!(far.contains("linedef 99 is out of range"), "{far}");
+        let mut broken_map = two_rooms();
+        broken_map.linedefs.get_mut(0).expect("the wall").v1 = 99;
+        let broken = refuse(&build_switch(&mut broken_map, &switch_spec(0)).unwrap_err());
+        assert!(broken.contains("references a vertex"), "{broken}");
+        let mut map = two_rooms();
+        let wide = SwitchSpec {
+            width: 300_i32,
+            ..switch_spec(0)
+        };
+        let over = refuse(&build_switch(&mut map, &wide).unwrap_err());
+        assert!(over.contains("256 map units long"), "{over}");
+        let thin = SwitchSpec {
+            width: 0_i32,
+            ..switch_spec(0)
+        };
+        let none = refuse(&build_switch(&mut map, &thin).unwrap_err());
+        assert!(none.contains("positive"), "{none}");
+        assert_eq!(map.linedefs.len(), 7_usize, "no refusal cut anything");
+    }
+
+    #[test]
+    fn switch_cut_and_span_check_the_wall_before_the_door_engine() {
+        let map = two_rooms();
+        let message = refuse(&switch_span(&map, 99).unwrap_err());
+        assert!(
+            message.contains("linedef 99 is out of range") && !message.contains("door"),
+            "switch words: {message}"
+        );
+        let spec = switch_spec(2);
+        let ((start, finish), available) = switch_cut(&map, &spec).expect("the step line");
+        assert_eq!(
+            start,
+            Point { x: 256, y: 144 },
+            "centred on the midpoint, running from v1 (256, 256) down"
+        );
+        assert_eq!(finish, Point { x: 256, y: 112 }, "toward v2");
+        assert_eq!(available, 256_i32, "the wall's length");
+    }
+
+    #[test]
+    fn isolate_chunk_cuts_only_where_the_chunk_does_not_meet_an_endpoint() {
+        let mut map = two_rooms();
+        let flush = isolate_chunk(
+            &mut map,
+            0_usize,
+            Point { x: 0, y: 0 },
+            Point { x: 0, y: 64 },
+        )
+        .expect("a chunk flush with v1");
+        assert_eq!(flush.line, 0_usize, "the original keeps the chunk");
+        assert!(flush.split, "one cut at finish");
+        assert_eq!(map.linedefs.len(), 8_usize, "only one piece was appended");
+    }
+
+    #[test]
+    fn a_frontless_line_refuses_the_panel() {
+        let mut map = two_rooms();
+        map.linedefs.get_mut(0).expect("the wall").front = None;
+        let message = refuse(&build_switch(&mut map, &switch_spec(0)).unwrap_err());
+        assert!(message.contains("no front sidedef"), "{message}");
+    }
+
+    #[test]
+    fn a_hexen_switch_acts_through_arguments_and_use_bits() {
+        let mut map = two_rooms();
+        map.format = MapFormat::Hexen;
+        let placed = build_switch(&mut map, &switch_spec(0)).expect("the west wall takes it");
+        assert_eq!(placed.special, 11_i32, "Door_Open");
+        assert_eq!(placed.tag, 1_i32, "the tag reported is the sector's");
+        let chunk = map.linedefs.get(7).expect("the chunk");
+        assert_eq!(chunk.tag, 0_i32, "a Hexen line carries no tag");
+        assert_eq!(
+            chunk.args,
+            [1_i32, 16_i32, 0_i32, 0_i32, 0_i32],
+            "tag in args[0], speed 16 in args[1]"
+        );
+        assert_eq!(chunk.flags, 1_u32 | 0x400_u32, "the wall stands, playeruse");
+        let mut again = two_rooms();
+        again.format = MapFormat::Hexen;
+        let spec = SwitchSpec {
+            repeatable: true,
+            ..switch_spec(0)
+        };
+        build_switch(&mut again, &spec).expect("a repeating switch");
+        assert_eq!(
+            again.linedefs.get(7).expect("the chunk").flags,
+            1_u32 | 0x600_u32,
+            "playeruse plus repeatspecial"
+        );
+    }
+
+    #[test]
+    fn switch_tag_mints_only_for_tagged_actions() {
+        let mut map = two_rooms();
+        let exit = SwitchSpec {
+            action: SwitchAction::Exit,
+            target_sector: None,
+            ..switch_spec(0)
+        };
+        assert_eq!(switch_tag(&mut map, &exit).expect("no tag needed"), 0_i32);
+        assert_eq!(
+            switch_tag(&mut map, &switch_spec(0)).expect("sector 1's own tag"),
+            1_i32
+        );
+    }
+
+    #[test]
+    fn dress_switch_refuses_a_line_the_map_does_not_hold() {
+        let mut map = two_rooms();
+        let setup = switch_special(FlagFamily::Doom, SwitchAction::OpenDoor, false, 1_i32);
+        let message = refuse(&dress_switch(&mut map, 99, &setup, "SW1STRTN").unwrap_err());
+        assert!(message.contains("linedef 99"), "{message}");
     }
 }

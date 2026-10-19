@@ -43,9 +43,9 @@ const REPEAT_SPECIAL_BIT: u32 = 0x200;
 /// The `Hexen` `playeruse` activation: field value 1 at bit 10.
 const PLAYER_USE_BITS: u32 = 0x400;
 /// The activation bits of a `Hexen` use line: `playeruse` alone.
-const USE: u32 = PLAYER_USE_BITS;
+pub(super) const USE: u32 = PLAYER_USE_BITS;
 /// `playeruse` plus `repeatspecial`: the line keeps working after use.
-const USE_REPEAT: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL_BIT;
+pub(super) const USE_REPEAT: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL_BIT;
 /// `playeruse`, `repeatspecial` and `monsteractivate`: monsters, too.
 const USE_REPEAT_MONSTER: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL_BIT | MONSTER_ACTIVATE;
 

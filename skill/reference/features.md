@@ -1,15 +1,16 @@
 # Map feature tools
 
 Complete game structures built on a map you have already drawn.
-`add_door` is the first member of this group; `add_switch` and `add_exit`
-will join it later (until then, wire a door's trigger with the low-level
-`edit_linedef` tools).
+`add_door` cuts working doors; `add_switch` mounts the triggers that fire
+tagged sectors — including a `remote` door's. `add_exit` will join the
+group later.
 
 A **feature is ordinary map elements plus the action that makes them do
 something**: `add_door` draws the doorway geometry (through the same
 overlay engine as `create_sector_from_loop`), installs the line special
 and tags, and dresses it with textures — all in one undoable step. Draw
-your rooms first (`reference/sectors.md`), then add the doors.
+your rooms first (`reference/sectors.md`), then add the doors and their
+switches.
 
 ## `add_door`
 
@@ -70,9 +71,10 @@ Unknown style names fail `invalid_argument` listing all seven.
 A **`remote` door is inert until a switch is added**: the recess is built
 closed and its sector tagged with a fresh unused tag (the result's
 `tag`, `null` for every other style — plain `Doom`-family doors act on
-the sector behind their line and need no tag). Point a switch or
-walkover at that tag (or an `ACS` script at the sector) when it exists;
-until then the door never moves.
+the sector behind their line and need no tag). Point an `add_switch` at
+it (pass this call's `door_sector` as the switch's `target_sector` and
+the tags match), or wire a walkover or an `ACS` script to that tag;
+until a trigger exists the door never moves.
 
 **Textures** default through the session's texture theme
 (`reference/themes.md`): the `door` role dresses the moving face (the
@@ -101,9 +103,73 @@ call add_door {"between": [0, 1]}
     "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
+## `add_switch`
+
+`{map?, linedef: N, at?: {x, y}, width? = 32, action, target_sector?,
+repeatable? = false}` → `{linedef, split, action, special, tag, texture,
+map, nodes_invalidated, copied_to_working}`
+
+Mounts a usable switch panel on a wall: it isolates a `width`-wide chunk
+of `linedef` as its own linedef (splitting the wall if needed), paints
+the theme's switch texture on its front middle, and installs a
+use-activated special that acts on a tagged sector — all in one `undo`
+step. This is the trigger a `remote` `add_door` waits for.
+
+**The wall**: `linedef: N` is required and must exist (`invalid_argument`
+naming it otherwise). `at: {x, y}` optionally centres the panel there (a
+point off the wall is projected onto it); without it the panel sits at
+the wall's midpoint. `width` (default 32, positive) is the panel; a wall
+too short for it fails `invalid_argument` naming the available length.
+When the wall is longer than the panel it is split so the chunk becomes
+its own linedef — the result's `linedef` names that new line and `split`
+is `true`; when the line already is exactly that chunk nothing is cut
+(`split` false, `linedef` is the one you passed). The front side must
+wear the panel: a wall with no front sidedef fails `invalid_argument`
+(give it one with `add_sidedef`).
+
+**Actions** — `action` (case-insensitive) is required; an unknown name
+fails `invalid_argument` listing all five:
+
+| Action          | What it does                                             | Sector? | `Doom` family | `Hexen` family              |
+|-----------------|----------------------------------------------------------|---------|---------------|-----------------------------|
+| `open_door`     | Opens the tagged door, closing it after its wait          | yes     | `S1` 103 / `SR` 61 | `Door_Open` 11 (speed 16) |
+| `raise_floor`   | Raises the tagged floor to the highest neighbouring floor | yes     | `S1` 18 / `SR` 69  | `Floor_RaiseToNearest` 25 (speed 8) |
+| `lower_floor`   | Lowers the tagged floor to the lowest neighbouring floor  | yes     | `S1` 23 / `SR` 60  | `Floor_LowerToLowest` 21 (speed 8)  |
+| `exit`          | Ends the level (normal exit)                              | no      | `S1` 11            | `Portal` 243                |
+| `secret_exit`   | Ends the level (secret exit)                              | no      | `S1` 51            | `Portal` 244                |
+
+**Targets**: the three sector-moving actions (`open_door`, `raise_floor`,
+`lower_floor`) require `target_sector` — the index of the sector they act
+on (missing or out of range is `invalid_argument`). The line answers with
+that sector's existing tag; an **untagged** sector (`tag 0`) is stamped
+with a fresh unused tag and the result's `tag` reports it. So `add_door`'s
+`remote` door is wired by passing its reported `door_sector` here — the
+tags match. The two exit actions act on no sector: `target_sector` and
+`repeatable` are ignored for them (a level change fires once, and the
+`Doom` family ships no repeatable exit).
+
+**Repeatable**: `repeatable` (default false) picks the `SR` specials in
+the `Doom` family and adds `repeatspecial` activation in the `Hexen`
+family; the `Hexen` line's activation field is replaced with `playeruse`
+(a `Doom`-family line keeps its flags).
+
+**Textures**: the panel comes from the session's texture theme
+(`reference/themes.md`) — the `switch` role, or `exit_switch` for the two
+exit actions. It is written to the isolated line's front middle.
+
+**After the call**: `nodes_invalidated` is true only when the wall was
+split (that changed geometry — run `build_nodes` before playing in
+vanilla `Doom`); a line already the right size is a property edit that
+keeps the nodes. `special`/`tag`/`texture` echo what was installed.
+
+```json
+call add_switch {"linedef": 7, "action": "open_door", "target_sector": 2}
+-> {"linedef": 42, "split": true, "action": "open_door", "special": 103,
+    "tag": 2, "texture": "SW1COMP",
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
 ## Growth points
 
-- `add_switch` will tag a wall face to raise a `remote` door (or any
-  tagged sector), matching the `tag` reported here.
 - `add_exit` will place level-end switches and lines by the same role
   defaults (`exit_switch`).

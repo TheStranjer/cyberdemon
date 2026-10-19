@@ -1022,6 +1022,7 @@ fn pnames_features() -> Vec<u8> {
         "WALLP1".to_owned(),
         "STEPP1".to_owned(),
         "DOORP1".to_owned(),
+        "SW1P1".to_owned(),
     ])
     .expect("fixture patch names are valid")
 }
@@ -1045,6 +1046,17 @@ fn track_texture(name: &str) -> TextureDef {
         width: 16,
         height: 128,
         patches: tile(2, 1, 8, (16_i16, 16_i16)),
+    }
+}
+
+/// A 32x128 switch panel `name` tiling the `SW1P1` patch.
+fn switch_texture(name: &str) -> TextureDef {
+    TextureDef {
+        name: name.to_owned(),
+        flags_raw: 0,
+        width: 32,
+        height: 128,
+        patches: tile(3, 2, 8, (16_i16, 16_i16)),
     }
 }
 
@@ -1075,6 +1087,8 @@ fn texture1_features() -> Vec<u8> {
             track_texture("DOORRED"),
             track_texture("DOORBLU"),
             track_texture("DOORYEL"),
+            switch_texture("SW1STRTN"),
+            switch_texture("SW1EXIT"),
         ],
     };
     write_texture_lump(&lump).expect("the fixture texture lump serializes")
@@ -1109,6 +1123,7 @@ pub fn iwad_features(dir: &Path) -> PathBuf {
     ));
     lumps.push(lump("STEPP1", patch(16, 8, 150_u8)));
     lumps.push(lump("DOORP1", patch(16, 16, 170_u8)));
+    lumps.push(lump("SW1P1", patch(32, 16, 200_u8)));
     lumps.push(marker("P_END"));
     lumps.push(lump("PNAMES", pnames_features()));
     lumps.push(lump("TEXTURE1", texture1_features()));

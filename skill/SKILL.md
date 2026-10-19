@@ -149,6 +149,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `create_sector_from_loop` | `reference/sectors.md` |
 | `carve_void`             | `reference/sectors.md`  |
 | `add_door`               | `reference/features.md` |
+| `add_switch`             | `reference/features.md` |
 | `add_vertex`             | `reference/vertices.md` |
 | `move_vertex`            | `reference/vertices.md` |
 | `remove_vertex`          | `reference/vertices.md` |
@@ -231,7 +232,8 @@ merged view an engine would see. Building a level starts with `create_map`
 one); `reference/maps.md` covers the block management tools. Draw whole
 rooms in one call with `create_sector_from_loop`, and carve solid rock out
 of the map with `carve_void` (`reference/sectors.md`). Put working doors in
-with `add_door` (`reference/features.md`).
+with `add_door` and wire their triggers with `add_switch`
+(`reference/features.md`).
 Editing a lump
 the `IWAD` or a resource layer owns creates an override in the working
 archive instead of failing (`replace_lump` reports it); such a lump cannot

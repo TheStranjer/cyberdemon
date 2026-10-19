@@ -1,6 +1,6 @@
-//! Map-feature tools: `add_door`, `add_window`, `add_switch`, `add_exit`,
-//! `mark_secret` and `set_light_effect` (see the `features` router on
-//! [`crate::server::Cyberdemon`]).
+//! Map-feature tools: `add_door`, `add_window`, `add_stairs`, `add_lift`,
+//! `add_switch`, `add_exit`, `mark_secret` and `set_light_effect` (see
+//! the `features` router on [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
 //! drawn map: the [`DoorSpec`] pipeline runs inside one
@@ -56,6 +56,19 @@
 //! [`validate_texture_name`]). The created step sectors and their
 //! floors come back in path order.
 //!
+//! `add_lift` runs the pure [`crate::wad::map::features::lift`] core as
+//! one [`crate::session::Session::edit_map`] step: the platform is an
+//! existing sector or a new one drawn from its polygon with
+//! [`apply_overlay`] [`Paint::Sector`] (copying the sector under its
+//! centre), [`build_lift`] finds its edges that face a lower neighbour,
+//! turns each so its front looks down at the player who triggers the
+//! ride, stamps a fresh [`next_free_tag`] on the sector and installs the
+//! [`lift_specials`] down-wait-up action on those lines. The platform's
+//! face and floor wear the theme's `lift_side` and `lift_floor` roles
+//! ([`theme_texture`], [`validate_texture_name`]), and a drop under
+//! [`MIN_LIFT_DROP`] is reported as a note (use stairs) rather than a
+//! refusal.
+//!
 //! The two sector-special tools stay on this side of the `features` group
 //! because they answer the same question the feature tables answer: what
 //! number makes a plain map element do something. Both are one
@@ -88,6 +101,9 @@
 //! [`plan_stairs`]: crate::wad::map::features::plan_stairs
 //! [`build_stairs`]: crate::wad::map::features::build_stairs
 //! [`MIN_HEADROOM`]: crate::wad::map::features::MIN_HEADROOM
+//! [`build_lift`]: crate::wad::map::features::build_lift
+//! [`lift_specials`]: crate::wad::map::features::lift_specials
+//! [`MIN_LIFT_DROP`]: crate::wad::map::features::MIN_LIFT_DROP
 //! [`theme_wall`]: theme_wall
 //! [`choose_wall`]: choose_wall
 //! [`carve_strip`]: carve_strip
@@ -114,12 +130,12 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
-    DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, LightEffect,
-    PaintedStep, SecretEdit, StairSpec, SwitchAction, VertexPair, WindowHeights, WindowSides,
-    WindowTextures, apply_door, apply_window, boundary_lines, build_stairs, door_rect,
-    door_segment, door_specials, door_wall, light_special, longest_boundary, nearest_boundary,
-    next_free_tag, outward_depth, project_onto_line, secret_edit, switch_special, void_strip,
-    window_record,
+    DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, LiftBuild,
+    LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep, SecretEdit, StairSpec,
+    SwitchAction, VertexPair, WindowHeights, WindowSides, WindowTextures, apply_door, apply_window,
+    boundary_lines, build_lift, build_stairs, door_rect, door_segment, door_specials, door_wall,
+    light_special, longest_boundary, nearest_boundary, next_free_tag, outward_depth,
+    project_onto_line, secret_edit, switch_special, void_strip, window_record,
 };
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
@@ -1360,6 +1376,177 @@ fn add_stairs_run(
     })
 }
 
+/// The `add_lift` default trigger style name.
+const DEFAULT_LIFT_STYLE: &str = "use_wall";
+
+/// Arguments for [`Cyberdemon::add_lift`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddLiftParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The outline of a new platform to draw, `{points: [{x, y}, ...]}`:
+    /// at least three corners, implicitly closed, and the sector under
+    /// its centre lends it the heights. Exactly one of `platform` and
+    /// `sector`.
+    #[serde(default)]
+    platform: Option<LiftPlatformParam>,
+    /// The index of the existing platform sector. Exactly one of
+    /// `platform` and `sector`.
+    #[serde(default)]
+    sector: Option<usize>,
+    /// The floor the platform lowers to in map units (optional: the
+    /// lowest neighbouring floor; it must sit below the platform's
+    /// floor).
+    #[serde(default)]
+    low_floor: Option<i32>,
+    /// How the ride is triggered from below (default `"use_wall"`,
+    /// case-insensitive): `use_wall` presses the platform's side wall or
+    /// `walk_trigger` crosses its edge.
+    #[serde(default)]
+    style: Option<String>,
+    /// Whether the activation lines keep working after use (default
+    /// true: the `SR`/`WR` specials and `repeatspecial`; false picks the
+    /// one-shot `S1`/`W1` specials and drops `repeatspecial`).
+    #[serde(default = "default_lift_repeatable")]
+    repeatable: bool,
+}
+
+/// Default [`AddLiftParams::repeatable`]: a lift rides back up on its
+/// own, so its lines repeat unless asked otherwise.
+const fn default_lift_repeatable() -> bool {
+    true
+}
+
+/// The `platform` parameter of [`Cyberdemon::add_lift`]: a new lift
+/// platform's outline.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LiftPlatformParam {
+    /// The polygon's corners, `{x, y}`, in order (at least three; the
+    /// last corner closes the ring).
+    points: Vec<DoorPointParam>,
+}
+
+/// The theme-resolved textures a lift wears.
+#[derive(Debug)]
+struct LiftSkins {
+    /// The platform's side: the `lower` band every activation edge shows
+    /// the lower area.
+    side: String,
+    /// The platform's floor flat.
+    floor_flat: String,
+}
+
+/// Structured result of [`Cyberdemon::add_lift`].
+#[derive(Serialize)]
+struct LiftReport {
+    /// What the step built, inlined next to the style echo and the edit
+    /// fragment.
+    #[serde(flatten)]
+    built: LiftBuild,
+    /// The canonical style name the lift got.
+    style: &'static str,
+    /// Whether the activation lines keep working after use.
+    repeatable: bool,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The canonical wire name of `style`.
+const fn lift_style_name(style: LiftStyle) -> &'static str {
+    match style {
+        LiftStyle::UseWall => "use_wall",
+        LiftStyle::WalkTrigger => "walk_trigger",
+    }
+}
+
+/// Every style name, in [`LiftStyle::all`] order.
+fn lift_style_names() -> Vec<&'static str> {
+    LiftStyle::all().map(lift_style_name).to_vec()
+}
+
+/// The [`LiftStyle`] `text` names (case-insensitive), or the refusal
+/// listing both.
+fn lift_style_of(text: &str) -> Result<LiftStyle, CyberError> {
+    let wanted = text.to_ascii_lowercase();
+    LiftStyle::all()
+        .into_iter()
+        .find(|style| lift_style_name(*style) == wanted)
+        .ok_or_else(|| {
+            invalid(&format!(
+                "style {text:?} is not a lift style: pass one of {}",
+                lift_style_names().join(", ")
+            ))
+        })
+}
+
+/// The `platform`/`sector` parameter pair as one [`LiftPlatform`]:
+/// refuses unless exactly one of the two was passed.
+fn lift_platform_of(
+    platform: Option<&LiftPlatformParam>,
+    sector: Option<usize>,
+) -> Result<LiftPlatform, CyberError> {
+    match (platform, sector) {
+        (Some(shape), None) => Ok(LiftPlatform::Draw(
+            shape
+                .points
+                .iter()
+                .map(|corner| (i64::from(corner.x), i64::from(corner.y)))
+                .collect(),
+        )),
+        (None, Some(index)) => Ok(LiftPlatform::Existing(index)),
+        _ => Err(invalid(
+            "pass exactly one of platform ({points: [{x, y}, ...]}: the outline of a \
+             new platform to draw) and sector (the index of the existing platform \
+             sector)",
+        )),
+    }
+}
+
+/// The textures a lift wears: the theme's `lift_side` and `lift_floor`
+/// roles, validated for the map's format (the same resolution pattern
+/// [`window_skins`] runs).
+///
+/// # Errors
+///
+/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+fn lift_skins(session: &Session, format: MapFormat) -> Result<LiftSkins, CyberError> {
+    let side = theme_texture(session, Role::LiftSide)?;
+    let floor_flat = theme_texture(session, Role::LiftFloor)?;
+    Ok(LiftSkins {
+        side: validate_texture_name(&side, format)?,
+        floor_flat: validate_texture_name(&floor_flat, format)?,
+    })
+}
+
+/// `add_lift`'s work: resolve the parameters, then run the whole lift as
+/// one [`crate::session::Session::edit_map`] step.
+fn add_lift_run(session: &mut Session, args: &AddLiftParams) -> Result<LiftReport, CyberError> {
+    let style = lift_style_of(args.style.as_deref().unwrap_or(DEFAULT_LIFT_STYLE))?;
+    let platform = lift_platform_of(args.platform.as_ref(), args.sector)?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let format = current_map(session, name)?.format;
+    let skins = lift_skins(session, format)?;
+    let spec = LiftSpec {
+        platform,
+        low_floor: args.low_floor,
+        style,
+        repeatable: args.repeatable,
+        side: skins.side,
+        floor_flat: skins.floor_flat,
+    };
+    let label = format!("add {} lift", lift_style_name(style));
+    let (built, report) = session.edit_map(name, &label, |map| build_lift(map, &spec))?;
+    Ok(LiftReport {
+        built,
+        style: lift_style_name(style),
+        repeatable: args.repeatable,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// The canonical wire name of `action`.
 const fn action_name(action: SwitchAction) -> &'static str {
     match action {
@@ -2255,6 +2442,20 @@ impl Cyberdemon {
         )
     }
 
+    /// Installs a working lift platform in one undoable edit.
+    #[tool(
+        description = "Installs a working lift in one undoable edit: a platform floor that drops to a lower level, waits, and rises back, triggered by players on the ground below. Name the platform exactly one way (both or neither is invalid_argument): sector: N (an existing sector that already stands at the high floor) or platform: {points: [{x, y}, ...]} (draw a new one: at least three corners, implicitly closed; it copies the floor, ceiling, flats and light of the sector under its centre through the same overlay engine as create_sector_from_loop, so draw it across the height change with its centre on the high side). The platform is the HIGH floor: it lowers to low_floor, which defaults to its lowest neighbouring sector's floor (get_map_summary lists neighbours) and must sit below the platform's floor or invalid_argument refuses (a platform with no neighbour must give low_floor). The platform is tagged with a fresh unused tag (the result's tag, one above every tag the map carries). add_lift dresses its activation lines: every two-sided edge of the platform that faces a sector lower than the platform becomes a trigger, oriented with its FRONT facing the lower area (the player uses/crosses it standing below), unblocked, wearing the theme's lift_side role on its low-facing lower band; the platform's floor flat becomes the theme's lift_floor role (both roles validated for the map's format). style (default use_wall, case-insensitive) picks the trigger: use_wall (press the platform's side) or walk_trigger (cross its edge); an unknown style is invalid_argument listing both. Doom family (binary Doom, UDMF doom/heretic/strife): the tagged sector's floor moves to the lowest neighbour and back, S1 21 / SR 62 for use_wall and W1 10 / WR 88 for walk_trigger, each answering with the platform tag on the line; repeatable (default true) picks SR/WR, false picks S1/W1. Hexen family (binary Hexen, other UDMF namespaces): every line is special 206 Plat_DownWaitUpStayLip, tag in args[0] (the line carries no tag), speed 32, delay 105, with the activation field replaced by playeruse for use_wall or cleared to playercross for walk_trigger, plus repeatspecial when repeatable. A drop under 64 map units still builds but adds a note (\"a lift is not needed; stairs or a step will do\") and points at add_stairs; it is not an error. Out-of-range sector, a too-short polygon, a centre in the void, an isolated platform with no low_floor, a low floor not below the platform, or an edge-less platform are all invalid_argument naming the fix, and the edit is not committed. Geometry changes (a drawn platform or reoriented edges) drop the block's node data, so nodes_invalidated is true: run build_nodes before playing in vanilla Doom. Returns {platform_sector, tag, lines, floor_height, low_floor, drop, style, repeatable, notes, map, nodes_invalidated, copied_to_working}; lines are the activation linedefs, floor_height the high floor, drop its distance above low_floor. One undo entry (labelled add use_wall lift or add walk_trigger lift) rolls the whole lift back. Look at it with render_topdown and render_view, and check it with validate_map."
+    )]
+    fn add_lift(
+        &self,
+        Parameters(args): Parameters<AddLiftParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| add_lift_run(session, &args)),
+        )
+    }
+
     /// Mounts a working switch on a wall chunk in one undoable edit.
     #[tool(
         description = "Mounts a working switch on a wall in one undoable edit: a width-wide panel chunk isolated as its own linedef, wearing the theme's switch texture and a use action. linedef: N is the wall. at: {x, y} optionally centres the panel there (a point off the wall is projected onto it); without it the panel sits at the wall's midpoint. width (default 32) is the panel: a longer wall is split so the chunk becomes its own linedef (the result's linedef names it and split is true), a line already exactly that chunk is dressed as it stands (split false), and a wall too short for the width is invalid_argument naming its available length. action (case-insensitive) picks what it does: open_door (opens the tagged door, closing it after its wait: Doom S1 103, SR 61 when repeatable; Hexen Door_Open 11 speed 16), raise_floor (raises the tagged floor to the highest neighbouring floor: S1 18, SR 69; Floor_RaiseToNearest 25 speed 8), lower_floor (lowers it to the lowest neighbouring floor: S1 23, SR 60; Floor_LowerToLowest 21 speed 8), exit (ends the level: S1 11; Portal 243) or secret_exit (ends it through the secret exit: S1 51; Portal 244). An unknown action is invalid_argument listing all five. open_door, raise_floor and lower_floor require target_sector - the sector they act on: missing or out of range is invalid_argument naming it. The sector's existing tag is what the line answers with; an untagged sector (tag 0) is stamped with a fresh unused tag (the reported tag), so an add_door remote door is triggered by passing its door_sector: the tags match. exit and secret_exit ignore target_sector and repeatable (the Doom family ships no SR exit and a level change fires once). repeatable (default false) picks the SR specials in the Doom family and adds repeatspecial activation in the Hexen family, whose switch lines also get their activation field replaced with playeruse (a Doom-family line keeps its flags). The panel texture comes from the session's theme: the switch role, or exit_switch for the level-changing actions; the isolated line's front middle wears it, and a line with no front sidedef is invalid_argument (see add_sidedef). Result: {linedef, split, action, special, tag, texture} plus the standard edit fragment; nodes_invalidated is true when the wall had to be split (the map's geometry changed)."
@@ -2317,17 +2518,18 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddDoorParams, AddExitParams, AddStairsParams, AddSwitchParams, AddWindowParams,
-        BuiltWindow, Chosen, DoorPointParam, DoorSkins, DoorSpec, DoorStyle, Dress, ExitKind,
-        Groups, LIGHT_MAX, LIGHT_MIN, LightSpec, MarkSecretParams, Placed, SecretSpec,
-        SetLightParams, StairSpec, SwitchSpec, Target, WindowHeights, WindowSkins, WindowSpec,
-        action_name, action_names, action_of, build_door, build_stairs, build_switch,
-        build_walk_over_exit, build_window, centroid, check_light_level, choose_between,
-        choose_linedef, door_groups, door_record, dress_door, dress_switch, effect_names,
-        effect_of, half_axis, isolate_chunk, kind_name, kind_of, mark_secrets, out_of_range,
-        recess_depth, sector_selection, set_lights, side_sector, stair_spec, strip_face_lost,
-        strip_wall, style_name, style_names, style_of, switch_cut, switch_role, switch_span,
-        switch_tag, target_of, track_role, walk_over_special,
+        AddDoorParams, AddExitParams, AddLiftParams, AddStairsParams, AddSwitchParams,
+        AddWindowParams, BuiltWindow, Chosen, DoorPointParam, DoorSkins, DoorSpec, DoorStyle,
+        Dress, ExitKind, Groups, LIGHT_MAX, LIGHT_MIN, LiftPlatform, LiftStyle, LightSpec,
+        MarkSecretParams, Placed, SecretSpec, SetLightParams, StairSpec, SwitchSpec, Target,
+        WindowHeights, WindowSkins, WindowSpec, action_name, action_names, action_of, build_door,
+        build_stairs, build_switch, build_walk_over_exit, build_window, centroid,
+        check_light_level, choose_between, choose_linedef, door_groups, door_record, dress_door,
+        dress_switch, effect_names, effect_of, half_axis, isolate_chunk, kind_name, kind_of,
+        lift_platform_of, lift_style_name, lift_style_names, lift_style_of, mark_secrets,
+        out_of_range, recess_depth, sector_selection, set_lights, side_sector, stair_spec,
+        strip_face_lost, strip_wall, style_name, style_names, style_of, switch_cut, switch_role,
+        switch_span, switch_tag, target_of, track_role, walk_over_special,
     };
     use crate::error::CyberError;
     use crate::themes::Role;
@@ -4071,5 +4273,87 @@ mod tests {
         assert_eq!(built.floor_to, 32_i32, "and from the raised room");
         assert_eq!(built.steps.len(), 2_usize, "two 16-unit steps");
         assert_eq!(map.sectors.len(), 4_usize, "two rooms and two new steps");
+    }
+
+    /// An `add_lift` request parsed from `json`.
+    fn lift_args(json: &str) -> AddLiftParams {
+        from_str(json).expect("test lift requests parse")
+    }
+
+    #[test]
+    fn lift_styles_round_trip_and_refuse_unknown_names() {
+        for style in LiftStyle::all() {
+            assert_eq!(
+                lift_style_of(lift_style_name(style)).expect("canonical"),
+                style
+            );
+            assert_eq!(
+                lift_style_of(&lift_style_name(style).to_ascii_uppercase())
+                    .expect("case-insensitive"),
+                style
+            );
+        }
+        let message = refuse(&lift_style_of("press").unwrap_err());
+        assert!(
+            message.contains("use_wall, walk_trigger"),
+            "the refusal lists both names: {message}"
+        );
+        assert_eq!(
+            lift_style_names().len(),
+            LiftStyle::all().len(),
+            "one name each"
+        );
+    }
+
+    #[test]
+    fn add_lift_params_read_the_wire_shape() {
+        let drawn = lift_args(
+            r#"{"platform": {"points": [{"x": 0, "y": 0}, {"x": 64, "y": 0}, {"x": 64, "y": 64}]},
+                "low_floor": -32, "style": "WALK_TRIGGER", "repeatable": false, "map": "MAP01"}"#,
+        );
+        assert_eq!(drawn.low_floor, Some(-32_i32), "the ride floor arrives");
+        assert_eq!(
+            drawn.style.as_deref(),
+            Some("WALK_TRIGGER"),
+            "as given text"
+        );
+        assert!(!drawn.repeatable, "the flag arrives");
+        assert_eq!(drawn.map.as_deref(), Some("MAP01"));
+        let shape = lift_platform_of(drawn.platform.as_ref(), drawn.sector).expect("a drawn one");
+        assert_eq!(
+            shape,
+            LiftPlatform::Draw(vec![(0_i64, 0_i64), (64_i64, 0_i64), (64_i64, 64_i64)]),
+            "the polygon widens to the arrangement grid"
+        );
+        let existing = lift_args(r#"{"sector": 3}"#);
+        assert_eq!(
+            lift_platform_of(existing.platform.as_ref(), existing.sector).expect("a sector"),
+            LiftPlatform::Existing(3_usize),
+            "the selector passes through"
+        );
+        assert!(existing.repeatable, "a lift repeats unless told otherwise");
+        assert!(existing.style.is_none(), "the default style stands aside");
+        assert!(existing.platform.is_none(), "and the drawing selector");
+    }
+
+    #[test]
+    fn exactly_one_of_platform_and_sector_resolves() {
+        let both = lift_args(r#"{"platform": {"points": []}, "sector": 1}"#);
+        let message = refuse(&lift_platform_of(both.platform.as_ref(), both.sector).unwrap_err());
+        assert!(message.contains("exactly one"), "{message}");
+        assert!(
+            message.contains("new platform to draw"),
+            "the refusal explains both: {message}"
+        );
+        let neither = lift_args("{}");
+        assert!(
+            refuse(&lift_platform_of(neither.platform.as_ref(), neither.sector).unwrap_err())
+                .contains("exactly one"),
+            "neither is refused too"
+        );
+        assert!(
+            from_str::<AddLiftParams>(r#"{"platform": {}}"#).is_err(),
+            "the polygon needs its points"
+        );
     }
 }

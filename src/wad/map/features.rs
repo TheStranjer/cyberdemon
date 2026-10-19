@@ -18,7 +18,12 @@
 //! into [`stairs::StairStep`] rectangles whose floors rise evenly
 //! between the endpoint sectors (headroom tested before anything is
 //! drawn) and [`stairs::build_stairs`] paints them bottom-up through the
-//! overlay engine. [`specials`] is the sector-special side of the same
+//! overlay engine. [`lift`] is the pure lift core: [`lift::lift_specials`]
+//! is the per-family down-wait-up action of a [`lift::LiftStyle`], and
+//! [`lift::build_lift`] finds the edges of a platform (an existing
+//! sector or a polygon folded over the map) that face lower neighbours,
+//! turns them to face the player below and dresses them with the action.
+//! [`specials`] is the sector-special side of the same
 //! idea: [`secret_edit`] folds the secret flag of each flag family into
 //! a sector's current special and [`light_special`] does the same for a
 //! [`LightEffect`], keeping every bit outside the family's basic-type
@@ -26,6 +31,7 @@
 //! and table lookup: no sessions, no archives, no MCP.
 
 pub mod doors;
+pub mod lift;
 pub mod place;
 pub mod specials;
 pub mod stairs;
@@ -34,6 +40,9 @@ pub mod window;
 
 pub use doors::{
     DoorLineSetup, DoorSides, DoorStyle, DoorTextures, apply_door, door_specials, next_free_tag,
+};
+pub use lift::{
+    LiftBuild, LiftPlatform, LiftSpec, LiftStyle, MIN_LIFT_DROP, build_lift, lift_specials,
 };
 pub use place::{
     BoundaryStrip, DoorWall, VertexPair, door_rect, door_segment, door_wall, longest_boundary,

@@ -3,6 +3,7 @@
 Complete game structures built on a map you have already drawn.
 `add_door` cuts working doors; `add_window` glazes the walls between
 rooms; `add_stairs` climbs a height change with evenly rising steps;
+`add_lift` drops the high floor so a player standing below can ride up;
 `add_switch` mounts the triggers that fire
 tagged sectors — including a `remote` door's; `add_exit` ends the level,
 from a switch or by walking over a line. `mark_secret` and
@@ -216,6 +217,81 @@ call add_stairs {"from": {"x": 64, "y": 128}, "to": {"x": 448, "y": 128}}
     "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
 ```
 
+## `add_lift`
+
+`{map?, platform: {points: [{x, y}, ...]} | sector: N, low_floor?,
+style? = "use_wall", repeatable? = true}` → `{platform_sector, tag,
+lines, floor_height, low_floor, drop, style, repeatable, notes, map,
+nodes_invalidated, copied_to_working}`
+
+Installs a working lift — a platform floor that drops to a lower level,
+waits, and rises back — in one `undo` step (label `add use_wall lift`
+or `add walk_trigger lift`). The player starts the ride from **below**.
+
+**The platform** (name it exactly one way; both or neither is
+`invalid_argument`):
+
+- `sector: N` — an existing sector that already stands at the high
+  floor. Out of range is `invalid_argument` naming it.
+- `platform: {points: [{x, y}, ...]}` — draw a **new** platform: at
+  least three corners, implicitly closed, painted with the same overlay
+  engine as `create_sector_from_loop`. It copies the floor, ceiling,
+  flats and light of the sector under its polygon centre, so draw it
+  across a height change with the centre on the high side (a centre in
+  the void is `invalid_argument`). The new sector's index comes back as
+  `platform_sector`.
+
+The platform is the **high floor**: it lowers to `low_floor`, which
+defaults to its lowest neighbouring sector's floor (`get_map_summary`
+lists neighbours) and must sit below the platform or the call is
+`invalid_argument`. A platform with no neighbour must pass `low_floor`
+explicitly.
+
+**The trigger** — `style` (default `use_wall`, case-insensitive) is
+`use_wall` (press the platform's side wall from below) or
+`walk_trigger` (cross its edge); an unknown style lists both.
+`repeatable` (default true) keeps the lines working. Every two-sided
+edge of the platform that faces a sector **lower** than the platform
+becomes an activation line, oriented with its **front** facing the
+lower area, unblocked, wearing the theme's `lift_side` role on its
+low-facing `lower` band; the platform's floor flat becomes the theme's
+`lift_floor` role (both validated for the map's format). A platform with
+no lower edge is `invalid_argument`. Everything is wired with a fresh
+unused tag (the result's `tag`) stamped on the platform sector.
+
+| Style          | `Doom` (once / repeat) | `Hexen` |
+|----------------|------------------------|---------|
+| `use_wall`     | `S1` 21 / `SR` 62      | `206` `Plat_DownWaitUpStayLip`, speed 32, delay 105, `playeruse` |
+| `walk_trigger` | `W1` 10 / `WR` 88      | same special, `playercross` |
+
+The `Doom` family moves the tagged sector's floor and back and carries
+the tag on the line; the `Hexen` family puts the tag in `args[0]` (its
+lines carry none) and replaces the whole trigger field, adding
+`repeatspecial` when `repeatable`.
+
+**A short drop is allowed**: below 64 map units of drop the lift still
+builds but adds the note *"a lift is not needed; stairs or a step will
+do"* — take `add_stairs` instead there (see `guides/design-rules.md`).
+It is not an error.
+
+**After the call**: `nodes_invalidated` is `true` when the platform was
+drawn or an edge had to turn around (a property-only lift keeps its
+nodes). `lines` are the activation linedefs, `floor_height` the high
+floor, `drop` its distance above `low_floor`. Look at it with
+`render_topdown` and `render_view`, check it with `validate_map`, and
+start the ride from elsewhere by wiring an `add_switch` to the reported
+tag.
+
+```json
+call add_lift {"sector": 1}
+-> {"platform_sector": 1, "tag": 2, "lines": [2], "floor_height": 32,
+    "low_floor": 0, "drop": 32, "style": "use_wall", "repeatable": true,
+    "notes": ["this lift would drop only 32 map units: a lift is not
+              needed; stairs or a step will do (below 64 the guide says
+              prefer add_stairs)"],
+    "map": "MAP01", "nodes_invalidated": false, "copied_to_working": true}
+```
+
 ## `add_switch`
 
 `{map?, linedef: N, at?: {x, y}, width? = 32, action, target_sector?,
@@ -419,7 +495,7 @@ call set_light_effect {"sectors": [7], "effect": "flicker", "light": 176}
 
 ## Growth points
 
-- All seven feature tools (`add_door`, `add_window`, `add_stairs`,
-  `add_switch`, `add_exit`, `mark_secret`, `set_light_effect`) are in
-  place. Lower-level control stays with the `edit_*` groups and
-  `run_batch`.
+- All eight feature tools (`add_door`, `add_window`, `add_stairs`,
+  `add_lift`, `add_switch`, `add_exit`, `mark_secret`,
+  `set_light_effect`) are in place. Lower-level control stays with the
+  `edit_*` groups and `run_batch`.

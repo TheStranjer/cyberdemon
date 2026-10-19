@@ -231,6 +231,9 @@ src/
                   `features::window` core for its raised blocking strip;
                   `add_stairs` runs the `features::stairs` core (plan,
                   then bottom-up `Paint::Sector` paints) as one step;
+                  `add_lift` runs the `features::lift` core (an existing
+                  or overlay-drawn platform, its lower-facing edges
+                  turned front-down and tagged) as one step;
                   the `add_switch`/`add_exit` tickets grow in place here, and
                   the `mark_secret`/`set_light_effect` tools are the two
                   special-bit steps over `features::specials`);
@@ -318,6 +321,11 @@ src/
                   `map/features/stairs.rs` the pure stair core
                   (`plan_stairs`' even step division and headroom test
                   and `build_stairs`' bottom-up overlay paints),
+                  `map/features/lift.rs` the pure lift core
+                  (`lift_specials`' per-family down-wait-up action and
+                  `build_lift`'s lower-facing edge selection,
+                  front-down orientation and platform tagging, with an
+                  optional `apply_overlay` platform draw),
                   `map/features/switches.rs` the switch action table and
                   `map/features/specials.rs` the pure sector-special builders
                   (`secret_edit`'s per-family secret bit and `light_special`'s

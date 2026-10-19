@@ -6,10 +6,14 @@
 //! intact, a `UDMF` block losing its `ZNODES` and `GL` run, what a lossy
 //! `UDMF` map reports when it becomes binary, `Line_SetIdentification`
 //! travelling through the `UDMF` line id, the cross-family `Doom` ↔ `Hexen`
-//! translations in both directions (table trips, ids restored as Doom tags,
-//! specials with no row reported `untranslated`), `dry_run` changing
-//! neither archive nor history, one `undo` taking a whole conversion back,
-//! and every refusal: already-there, unknown map and malformed parameters.
+//! translations in both directions (the table trips into `UDMF` and into
+//! one-byte `Hexen` records, a row's activation arriving as `flag_names`,
+//! an action too wide for `Hexen` bytes clearing with an `untranslated`
+//! entry, ids restored as Doom tags, specials with no row reported
+//! `untranslated`), `dry_run` changing neither archive nor history and
+//! reporting the numbers the real step writes, one `undo` taking a whole
+//! conversion back, and every refusal: already-there, unknown map and
+//! malformed parameters.
 
 #[cfg(test)]
 mod tests {
@@ -124,7 +128,7 @@ mod tests {
         summary.get("counts").cloned().unwrap_or(Value::Null)
     }
 
-    /// The undo labels a `get_session_info` result reports, newest first.
+    /// The undo labels a `get_session_info` result reports, oldest first.
     async fn undo_labels(client: &Client) -> Vec<String> {
         let info = call(client, "get_session_info", json!({})).await;
         info.get("undo")
@@ -163,6 +167,16 @@ mod tests {
             .clone()
     }
 
+    /// The `assemble_map` linedef row of index `index` in one block.
+    async fn linedef_row(client: &Client, name: &str, scope: &str, index: i32) -> Value {
+        let wanted = json!(index);
+        linedef_rows(client, name, scope)
+            .await
+            .into_iter()
+            .find(|line| line["index"] == wanted)
+            .unwrap_or_else(|| panic!("{name} has no linedef {index}"))
+    }
+
     /// The first linedef row of `assemble_map` for one block.
     async fn first_linedef(client: &Client, name: &str, scope: &str) -> Value {
         let lines = linedef_rows(client, name, scope).await;
@@ -180,6 +194,29 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .any(|note| note.contains(wanted))
+    }
+
+    /// Whether the `flag_names` of one `assemble_map` row carry every
+    /// name in `wanted`.
+    fn flag_names_contain(row: &Value, wanted: &[&str]) -> bool {
+        let names: Vec<&str> = row["flag_names"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no flag_names in {row}"))
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        wanted.iter().all(|name| names.contains(name))
+    }
+
+    /// The four cross-family report fields of one conversion result, for
+    /// comparing what a dry run says with what the real step did.
+    fn cross_family(result: &Value) -> Value {
+        json!({
+            "translated_specials": result["translated_specials"],
+            "untranslated": result["untranslated"],
+            "thing_flags_changed": result["thing_flags_changed"],
+            "sector_types_changed": result["sector_types_changed"],
+        })
     }
 
     /// Asserts one refusal message says the map already is in that layout.
@@ -268,7 +305,7 @@ mod tests {
         call(
             &client,
             "edit_linedef",
-            json!({ "map": "MAP01", "index": 2_i32, "special": 1_i32 }),
+            json!({ "map": "MAP01", "index": 2_i32, "special": 1_i32, "tag": 0_i32 }),
         )
         .await;
         let out = convert(
@@ -288,12 +325,12 @@ mod tests {
             "both things moved families"
         );
         assert_eq!(out["sector_types_changed"], 0_i32, "plain sectors stand");
-        let door = linedef_rows(&client, "MAP01", "working")
-            .await
-            .into_iter()
-            .find(|line| line["index"] == json!(2_i32))
-            .expect("linedef 2");
+        let door = linedef_row(&client, "MAP01", "working", 2_i32).await;
         assert_eq!(door["special"], 12_i32, "Door_Raise");
+        assert!(
+            flag_names_contain(&door, &["playeruse", "repeatspecial", "monsteractivate"]),
+            "row 1's USE|MONST|REP activation: {door}"
+        );
         assert_eq!(
             door["args"],
             json!([0_i32, 16_i32, 150_i32, 0_i32, 0_i32]),
@@ -309,17 +346,113 @@ mod tests {
         assert_eq!(back["untranslated"], json!([]), "and matched a row");
         let names = lump_names(&client, "MAP01", "merged").await;
         assert_eq!(names, DOOM_MEMBERS.to_vec(), "the block is binary Doom");
-        let home = linedef_rows(&client, "MAP01", "merged")
-            .await
-            .into_iter()
-            .find(|line| line["index"] == json!(2_i32))
-            .expect("linedef 2");
+        let home = linedef_row(&client, "MAP01", "merged", 2_i32).await;
         assert_eq!(home["special"], 1_i32, "special 1 again");
         assert_eq!(home["tag"], 0_i32, "with its tag restored in the tag field");
         assert_eq!(
             counts(&client, "MAP01", "merged").await,
             row_of(TWO_ROOM_COUNTS),
             "and the same elements throughout"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tagged_door_line_becomes_a_binary_hexen_generalized_action() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = loaded(&iwad(dir.path())).await;
+        call(
+            &client,
+            "edit_linedef",
+            json!({ "map": "MAP01", "index": 2_i32, "special": 26_i32, "tag": 3_i32 }),
+        )
+        .await;
+        let out = convert(&client, json!({ "map": "MAP01", "to": "hexen" })).await;
+        assert_eq!(out["from"], "doom", "a Doom family source");
+        assert_eq!(out["to"], "hexen", "written as binary Hexen");
+        assert_eq!(
+            out["namespace"],
+            Value::Null,
+            "a binary layout declares none"
+        );
+        assert_eq!(out["translated_specials"], 1_i32, "row 26 rode the table");
+        assert_eq!(
+            out["untranslated"],
+            json!([]),
+            "and every value fits a byte"
+        );
+        assert_eq!(
+            out["thing_flags_changed"], 2_i32,
+            "both things moved families"
+        );
+        assert_eq!(out["sector_types_changed"], 0_i32, "plain sectors stand");
+        let door = linedef_row(&client, "MAP01", "working", 2_i32).await;
+        assert_eq!(door["special"], 13_i32, "Door_LockedRaise");
+        assert_eq!(
+            door["args"],
+            json!([0_i32, 16_i32, 150_i32, 130_i32, 3_i32]),
+            "the row's template with the tag in its slot"
+        );
+        assert_eq!(door["tag"], 0_i32, "binary Hexen models no line tag");
+        assert!(
+            flag_names_contain(&door, &["playeruse", "repeatspecial"]),
+            "row 26's USE|REP activation: {door}"
+        );
+        let row = map_row(&client, "MAP01", "merged").await;
+        assert_eq!(row["format"], "hexen", "the block reads as binary Hexen");
+        let names = lump_names(&client, "MAP01", "working").await;
+        assert!(
+            names.contains(&"BEHAVIOR".to_owned()),
+            "the Hexen writer synthesized BEHAVIOR: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_action_too_wide_for_hexen_bytes_clears_but_survives_udmf() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let doomed = loaded(&iwad(dir.path())).await;
+        call(
+            &doomed,
+            "edit_linedef",
+            json!({ "map": "MAP01", "index": 2_i32, "special": 100_i32 }),
+        )
+        .await;
+        let out = convert(&doomed, json!({ "map": "MAP01", "to": "hexen" })).await;
+        assert_eq!(
+            out["translated_specials"], 0_i32,
+            "row 100's 273 is no byte"
+        );
+        assert_eq!(
+            out["untranslated"],
+            json!([{"linedef": 2_i32, "special": 100_i32}]),
+            "the line and its lost special are named"
+        );
+        assert!(
+            warns(&out, "no ZDoom translation"),
+            "the grouped warning follows: {out}"
+        );
+        let cleared = linedef_row(&doomed, "MAP01", "working", 2_i32).await;
+        assert_eq!(cleared["special"], 0_i32, "the line ends special 0");
+        let second = tempfile::tempdir().expect("a second scratch directory");
+        let zdoom = loaded(&iwad(second.path())).await;
+        call(
+            &zdoom,
+            "edit_linedef",
+            json!({ "map": "MAP01", "index": 2_i32, "special": 100_i32 }),
+        )
+        .await;
+        let there = convert(
+            &zdoom,
+            json!({ "map": "MAP01", "to": "udmf", "namespace": "zdoom" }),
+        )
+        .await;
+        assert_eq!(there["translated_specials"], 1_i32, "a UDMF target fits");
+        assert_eq!(there["untranslated"], json!([]), "and nothing is lost");
+        let kept = linedef_row(&zdoom, "MAP01", "working", 2_i32).await;
+        assert_eq!(kept["special"], 273_i32, "the action stands intact");
+        assert_eq!(
+            kept["args"],
+            json!([0_i32, 32_i32, 16_i32, 0_i32, 0_i32]),
+            "the row's template at tag 0"
         );
     }
 
@@ -357,6 +490,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_forward_dry_run_reports_the_numbers_and_changes_nothing() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = loaded(&iwad(dir.path())).await;
+        let wanted = json!({ "map": "MAP01", "to": "udmf", "namespace": "zdoom" });
+        let mut dry_request = wanted.clone();
+        dry_request["dry_run"] = json!(true);
+        let dry = convert(&client, dry_request).await;
+        assert_eq!(dry["dry_run"], true, "the call reports only");
+        assert_eq!(
+            dry["namespace"], "zdoom",
+            "and still resolves the namespace"
+        );
+        assert_eq!(
+            cross_family(&dry),
+            json!({
+                "translated_specials": 0_i32,
+                "untranslated": [],
+                "thing_flags_changed": 2_i32,
+                "sector_types_changed": 0_i32,
+            }),
+            "the forward stages ran on the copy"
+        );
+        assert!(warns(&dry, NODES_HINT), "the hint rides along: {dry}");
+        assert_eq!(
+            undo_labels(&client).await,
+            Vec::<String>::new(),
+            "a dry run adds no undo entry"
+        );
+        assert_eq!(working_maps(&client).await, 0, "nothing was copied in");
+        let row = map_row(&client, "MAP01", "merged").await;
+        assert_eq!(row["format"], "doom", "the map is still binary Doom");
+        let real = convert(&client, wanted).await;
+        assert_eq!(cross_family(&real), cross_family(&dry), "the same numbers");
+        assert_eq!(real["warnings"], dry["warnings"], "and the same notices");
+    }
+
+    #[tokio::test]
     async fn one_undo_takes_a_whole_conversion_step_back() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = loaded(&iwad(dir.path())).await;
@@ -382,6 +552,48 @@ mod tests {
         assert_eq!(
             row["format"], "doom",
             "the merged view shows the layer's map again"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_undo_takes_a_whole_forward_conversion_back() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = loaded(&iwad(dir.path())).await;
+        call(
+            &client,
+            "edit_linedef",
+            json!({ "map": "MAP01", "index": 2_i32, "special": 1_i32 }),
+        )
+        .await;
+        convert(
+            &client,
+            json!({ "map": "MAP01", "to": "udmf", "namespace": "zdoom" }),
+        )
+        .await;
+        assert_eq!(
+            undo_labels(&client).await,
+            vec!["edit 1 linedefs", "convert MAP01 to udmf"],
+            "one step for the copy, the translation and the rewrite"
+        );
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"][0], "convert MAP01 to udmf",
+            "the label comes back"
+        );
+        assert_eq!(undone["remaining_undo"], 1_i32, "the edit step stands");
+        assert_eq!(undone["dirty"], true, "the edited block is still working");
+        assert_eq!(working_maps(&client).await, 1, "and its block is copied in");
+        let row = map_row(&client, "MAP01", "merged").await;
+        assert_eq!(
+            row["format"], "doom",
+            "the source block came back under the translation"
+        );
+        let door = linedef_row(&client, "MAP01", "working", 2_i32).await;
+        assert_eq!(door["special"], 1_i32, "the pre-conversion edit survived");
+        assert!(
+            flag_names_contain(&door, &["twosided"])
+                && !flag_names_contain(&door, &["playeruse", "monsteractivate"]),
+            "the row's Hexen trigger bits went with the step: {door}"
         );
     }
 

@@ -91,7 +91,10 @@ the `Hexen` family):
   argument template is written into the line's `args` with the trigger
   `tag` in the row's `tag` slot (the tag field then empties), and the row's
   activation becomes the `Hexen` activation field plus the `repeatspecial`
-  and `monsteractivate` bits.
+  and `monsteractivate` bits. A row **without** a `tag` slot leaves the
+  trigger tag in the tag field, where a `UDMF` target carries it as the
+  line id; a binary `Hexen` target has no room for an id next to a special,
+  so there the tag drops with a warning naming the line.
 - A special with no row — and, for a binary `Hexen` target, any row whose
   action number, args or tag do not fit one byte — becomes `special` 0 and
   is listed in `untranslated` with a grouped warning. Its old tag rides on
@@ -104,8 +107,9 @@ the `Hexen` family):
 - Thing presence bits invert to their positive `Hexen` twins (all three
   class bits are set); the `tid`, `special` and `args` fields the `Doom`
   family never fills stay zero. Boom-style sector specials (bits 0-9)
-  move behind the `Hexen` generalized base; anything outside those bits
-  clears to 0 with a grouped warning.
+  move behind the `Hexen` generalized base, except the secret base type
+  `9`, which arrives as the `Hexen` secret bit; a value outside the
+  Boom-style range clears to 0 with a grouped warning.
 
 **`Hexen` family → `Doom` family** (to `doom`, or to a `UDMF` namespace of
 the `Doom` family):

@@ -160,9 +160,9 @@ pub struct DoorTextures {
 /// | [`Normal`] | `1` (`DR` door) | `12` `Door_Raise`, args `[0, 16, 150]` |
 /// | [`Fast`] | `117` (`DR` fast) | `12` `Door_Raise`, args `[0, 64, 150]` |
 /// | [`StayOpen`] | `31` (`D1`, stays open) | `11` `Door_Open`, args `[0, 16]` |
-/// | [`LockedRed`] | `28` (`DR` red key) | `13` `Door_LockedRaise`, args `[0, 16, 150, 130]` |
-/// | [`LockedBlue`] | `26` (`DR` blue key) | `13` `Door_LockedRaise`, args `[0, 16, 150, 131]` |
-/// | [`LockedYellow`] | `27` (`DR` yellow key) | `13` `Door_LockedRaise`, args `[0, 16, 150, 129]` |
+/// | [`LockedRed`] | `28` (`DR` red key) | `13` `Door_LockedRaise`, args `[0, 16, 150, 129]` |
+/// | [`LockedBlue`] | `26` (`DR` blue key) | `13` `Door_LockedRaise`, args `[0, 16, 150, 130]` |
+/// | [`LockedYellow`] | `27` (`DR` yellow key) | `13` `Door_LockedRaise`, args `[0, 16, 150, 131]` |
 /// | [`Remote`] | `0` | `0` |
 ///
 /// `Doom` setups carry `tag` in [`DoorLineSetup::tag`] (the door sector
@@ -230,9 +230,9 @@ const fn hexen_door(style: DoorStyle) -> DoorLineSetup {
             USE_REPEAT_MONSTER,
         ),
         DoorStyle::StayOpen => (11_i32, [0_i32, 16_i32, 0_i32, 0_i32, 0_i32], USE),
-        DoorStyle::LockedRed => (13_i32, [0_i32, 16_i32, 150_i32, 130_i32, 0_i32], USE_REPEAT),
-        DoorStyle::LockedBlue => (13_i32, [0_i32, 16_i32, 150_i32, 131_i32, 0_i32], USE_REPEAT),
-        DoorStyle::LockedYellow => (13_i32, [0_i32, 16_i32, 150_i32, 129_i32, 0_i32], USE_REPEAT),
+        DoorStyle::LockedRed => (13_i32, [0_i32, 16_i32, 150_i32, 129_i32, 0_i32], USE_REPEAT),
+        DoorStyle::LockedBlue => (13_i32, [0_i32, 16_i32, 150_i32, 130_i32, 0_i32], USE_REPEAT),
+        DoorStyle::LockedYellow => (13_i32, [0_i32, 16_i32, 150_i32, 131_i32, 0_i32], USE_REPEAT),
         DoorStyle::Remote => (0_i32, [0_i32; 5], 0_u32),
     };
     DoorLineSetup {
@@ -756,19 +756,19 @@ mod tests {
             (
                 DoorStyle::LockedRed,
                 13_i32,
-                [0_i32, 16_i32, 150_i32, 130_i32, 0_i32],
+                [0_i32, 16_i32, 150_i32, 129_i32, 0_i32],
                 0x600_u32,
             ),
             (
                 DoorStyle::LockedBlue,
                 13_i32,
-                [0_i32, 16_i32, 150_i32, 131_i32, 0_i32],
+                [0_i32, 16_i32, 150_i32, 130_i32, 0_i32],
                 0x600_u32,
             ),
             (
                 DoorStyle::LockedYellow,
                 13_i32,
-                [0_i32, 16_i32, 150_i32, 129_i32, 0_i32],
+                [0_i32, 16_i32, 150_i32, 131_i32, 0_i32],
                 0x600_u32,
             ),
             (DoorStyle::Remote, 0_i32, [0_i32; 5], 0_u32),

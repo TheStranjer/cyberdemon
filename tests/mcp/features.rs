@@ -524,6 +524,34 @@ mod tests {
         );
     }
 
+    /// Checks the `Hexen`-family `Door_LockedRaise` rows for key `key`.
+    fn expect_locked_lines(rows: &[Value], key: i32) {
+        assert_eq!(rows.len(), 2, "one use line per room");
+        for row in rows {
+            assert_eq!(row["special"], json!(13_i32), "Door_LockedRaise");
+            assert_eq!(
+                row["args"],
+                json!([0_i32, 16_i32, 150_i32, key, 0_i32]),
+                "the key class in args[3]"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hexen_locked_door_demands_its_coloured_key() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "add_door",
+            json!({"map": "MAP04", "between": [0_i32, 1_i32], "style": "locked_blue"}),
+        )
+        .await;
+        assert_eq!(result["style"], json!("locked_blue"), "echoed canonically");
+        let lines = reported_lines(&client, "MAP04", &result, "lines").await;
+        expect_locked_lines(&lines, 130_i32);
+    }
+
     #[tokio::test]
     async fn a_udmf_zdoom_stay_open_door_opens_once() {
         let dir = tempfile::tempdir().expect("temp dir");

@@ -28,8 +28,9 @@
 //! map structures: [`features::doors`] is the door action table and the
 //! doorway dressing behind the door tools, [`features::place`] the
 //! wall selection, width fit and depth raycast behind their placement,
-//! and [`features::switches`] the switch action table behind
-//! `add_switch`.
+//! [`features::switches`] the switch action table behind
+//! `add_switch`, and [`features::specials`] the secret bit and the light
+//! effect numbers behind `mark_secret` and `set_light_effect`.
 //! [`transform`] scales, rotates
 //! and translates a selection of vertices and things in integer math,
 //! the pure engine behind `transform_selection`. [`validate`] runs the

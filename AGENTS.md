@@ -227,7 +227,9 @@ src/
                   composes the `wad::map::features` door core and the
                   overlay engine into one `Session::edit_map` step
                   (void strip, recess paint, `apply_door`; the
-                  `add_switch`/`add_exit` tickets grow in place here);
+                  `add_switch`/`add_exit` tickets grow in place here, and
+                  the `mark_secret`/`set_light_effect` tools are the two
+                  special-bit steps over `features::specials`);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`, and its `optimize_wad`
@@ -305,7 +307,12 @@ src/
                   `convert_map_format`, `map/features.rs` +
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
                   action table, `apply_door`'s doorway dressing and `next_free_tag`),
-                  and `map/validate.rs` +
+                  `map/features/place.rs` the door placement geometry,
+                  `map/features/switches.rs` the switch action table and
+                  `map/features/specials.rs` the pure sector-special builders
+                  (`secret_edit`'s per-family secret bit and `light_special`'s
+                  per-family light effect, each keeping every bit outside its
+                  field), and `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
                   model and the `CHECKS` pipeline (`references`,

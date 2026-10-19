@@ -17,8 +17,14 @@
 //! every two-sided boundary of a sector with 52/124 (`Doom`) or
 //! `playercross` 243/244 (`Hexen`), the destination tag kept on the
 //! `W1` line, and the missing-`linedef`/missing-`sector`/bad-`kind`
-//! refusals; a fullbright `render_view` through the theme override
-//! shows the built door's `DOOR1` face from the room it opens.
+//! refusals. Then the two sector-special tools: `mark_secret` writing
+//! the vanilla `9`, the `Boom` bit 128 (with its warning over a vanilla
+//! type) or the `Hexen` bit 1024 and clearing each again, and
+//! `set_light_effect` landing every effect in its family's basic-type
+//! field with the bits above it intact, the optional light level riding
+//! along, and the bad-effect/bad-level/out-of-range-sector refusals. A
+//! fullbright `render_view` through the theme override shows the built
+//! door's `DOOR1` face from the room it opens.
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +99,15 @@ mod tests {
 
     /// The working sector row at `index` for `map`.
     async fn working_sector(client: &Client, map: &str, index: usize) -> Value {
+        working_sectors(client, map)
+            .await
+            .get(index)
+            .cloned()
+            .expect("the sector row exists")
+    }
+
+    /// The working sector rows for `map`, in order.
+    async fn working_sectors(client: &Client, map: &str) -> Vec<Value> {
         let report = call(
             client,
             "assemble_map",
@@ -102,9 +117,60 @@ mod tests {
         report["sectors"]
             .as_array()
             .expect("sectors is an array")
-            .get(index)
-            .cloned()
-            .expect("the sector row exists")
+            .clone()
+    }
+
+    /// Checks that both rooms of the two-room fixture carry `light` and
+    /// `special`: one call reaches every sector the list named.
+    fn expect_rooms(rooms: &[Value], light: i32, special: i32) {
+        assert_eq!(rooms.len(), 2_usize, "the fixture's two rooms");
+        for (index, row) in rooms.iter().enumerate() {
+            assert_eq!(
+                row["light"],
+                json!(light),
+                "sector {index} is lit at {light}"
+            );
+            assert_eq!(
+                row["special"],
+                json!(special),
+                "sector {index} carries special {special}"
+            );
+        }
+    }
+
+    /// Gives sector `index` of `map` the special `value`, so a special tool
+    /// has something to keep (or warn) about.
+    async fn set_special(client: &Client, map: &str, index: usize, value: i32) {
+        call(
+            client,
+            "edit_sector",
+            json!({"map": map, "index": index, "special": value}),
+        )
+        .await;
+    }
+
+    /// Requires `mark_secret` to reject `args` with `invalid_argument`
+    /// naming `needle`.
+    async fn refuse_secret(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "mark_secret", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+    }
+
+    /// Requires `set_light_effect` to reject `args` with `invalid_argument`
+    /// naming `needle`.
+    async fn refuse_light(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "set_light_effect", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
     }
 
     /// The working linedef rows at the indices of an `add_door` result's
@@ -1095,6 +1161,480 @@ mod tests {
             "no two-sided boundary",
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_secret_mark_follows_the_doom_flag_family() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let marked = call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        assert_eq!(marked["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(marked["secret"], json!(true), "marking is the default");
+        assert_eq!(marked["family"], json!("doom"), "the vanilla family secret");
+        assert_eq!(marked["sectors"], json!([0_i32]), "one row moved");
+        assert_eq!(
+            marked["warnings"],
+            json!([]),
+            "the vanilla type needs no note"
+        );
+        assert_eq!(
+            marked["nodes_invalidated"],
+            json!(false),
+            "a sector property is not geometry"
+        );
+        assert_eq!(marked["copied_to_working"], json!(true));
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(9_i32),
+            "the vanilla secret type"
+        );
+        let again = call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        assert_eq!(
+            again["sectors"],
+            json!([]),
+            "already secret: nothing changed"
+        );
+        let plain = call(
+            &client,
+            "mark_secret",
+            json!({"sectors": [0_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(plain["secret"], json!(false), "the clear is echoed");
+        assert_eq!(
+            plain["sectors"],
+            json!([0_i32]),
+            "and it moved the row back"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(0_i32),
+            "the vanilla 9 clears to plain"
+        );
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn a_boom_secret_mark_keeps_every_other_bit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        set_special(&client, "MAP01", 0_usize, 32_i32).await;
+        let boom = call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        assert_eq!(boom["sectors"], json!([0_i32]), "the Boom bit landed");
+        assert_eq!(
+            boom["warnings"],
+            json!([]),
+            "a generalized type is Boom's own"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(160_i32),
+            "32 | 128, the generalized field intact"
+        );
+        let unmarked = call(
+            &client,
+            "mark_secret",
+            json!({"sectors": [0_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(unmarked["sectors"], json!([0_i32]));
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(32_i32),
+            "exactly the flag came back off"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vanilla_secret_mark_carries_a_boom_warning() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        set_special(&client, "MAP01", 1_usize, 17_i32).await;
+        let warned = call(&client, "mark_secret", json!({"sectors": [1_i32]})).await;
+        assert_eq!(
+            warned["sectors"],
+            json!([1_i32]),
+            "the vanilla type took the bit too"
+        );
+        let notes = warned["warnings"].as_array().expect("warnings is an array");
+        assert_eq!(notes.len(), 1_usize, "one note: {notes:#?}");
+        let note = notes.first().and_then(Value::as_str).expect("a string");
+        assert!(
+            note.contains("vanilla Doom ignores Boom bits"),
+            "the note says what vanilla Doom does not read: {note}"
+        );
+        assert!(note.contains("sector 1"), "and names the sector: {note}");
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["special"],
+            json!(145_i32),
+            "17 | 128"
+        );
+        let back = call(
+            &client,
+            "mark_secret",
+            json!({"sectors": [1_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(
+            back["warnings"],
+            json!([]),
+            "clearing has nothing to warn about"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["special"],
+            json!(17_i32),
+            "the flicker is the plain number again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_mark_follows_the_hexen_flag_family() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        set_special(&client, "MAP04", 0_usize, 81_i32).await;
+        let marked = call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP04", "sectors": [0_i32, 1_i32]}),
+        )
+        .await;
+        assert_eq!(
+            marked["family"],
+            json!("hexen"),
+            "binary Hexen is its own family"
+        );
+        assert_eq!(marked["warnings"], json!([]), "the Hexen bit never warns");
+        assert_eq!(marked["sectors"], json!([0_i32, 1_i32]), "both rows moved");
+        let rooms = working_sectors(&client, "MAP04").await;
+        assert_eq!(
+            rooms.first().expect("sector 0")["special"],
+            json!(1_105_i32),
+            "81 | 1024 keeps the sector's own effect"
+        );
+        assert_eq!(
+            rooms.get(1).expect("sector 1")["special"],
+            json!(1_024_i32),
+            "a plain sector takes the bare bit"
+        );
+        let cleared = call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP04", "sectors": [0_i32, 1_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(cleared["sectors"], json!([0_i32, 1_i32]), "both cleared");
+        let back = working_sectors(&client, "MAP04").await;
+        assert_eq!(back.first().expect("sector 0")["special"], json!(81_i32));
+        assert_eq!(back.get(1).expect("sector 1")["special"], json!(0_i32));
+        let udmf = call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP03", "sectors": [1_i32]}),
+        )
+        .await;
+        assert_eq!(
+            udmf["family"],
+            json!("hexen"),
+            "a zdoom UDMF map is Hexen-family too"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP03", 1_usize).await["special"],
+            json!(1_024_i32),
+            "a plain sector of a zdoom map takes the bare bit, its tag untouched"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP03", 1_usize).await["tag"],
+            json!(1_i32),
+            "the tool writes the special column only"
+        );
+    }
+
+    /// One `set_light_effect` case: the map to edit, the family it reports,
+    /// the effect to send, the basic type that family stores and the whole
+    /// special the sector must end with.
+    struct EffectCase {
+        /// The map to edit.
+        map: &'static str,
+        /// The flag family the tool reports.
+        family: &'static str,
+        /// The effect name to send.
+        effect: &'static str,
+        /// The basic type this family stores for it.
+        basic: i32,
+        /// The whole special after the effect lands: every bit outside the
+        /// family's type field kept.
+        stored: i32,
+    }
+
+    /// Runs one [`EffectCase`] against sector 0 of its map, which starts at
+    /// `from`: a bit above each family's basic-type field plus a vanilla
+    /// type inside it, so a correct write shows on both sides of the edge.
+    async fn expect_effect(client: &Client, case: &EffectCase, from: i32) {
+        set_special(client, case.map, 0_usize, from).await;
+        let result = call(
+            client,
+            "set_light_effect",
+            json!({"map": case.map, "sectors": [0_i32], "effect": case.effect}),
+        )
+        .await;
+        let name = case.effect;
+        assert_eq!(result["effect"], json!(name), "{name} echoes canonically");
+        assert_eq!(
+            result["family"],
+            json!(case.family),
+            "{name} reads its family"
+        );
+        assert_eq!(
+            result["special"],
+            json!(case.basic),
+            "{name} is the family's type"
+        );
+        assert_eq!(result["light"], Value::Null, "{name} asked for no level");
+        assert_eq!(result["sectors"], json!([0_i32]), "{name} moved one row");
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(false),
+            "{name} is a property edit"
+        );
+        let row = working_sector(client, case.map, 0_usize).await;
+        assert_eq!(
+            row["special"],
+            json!(case.stored),
+            "{name} wrote only the type field of {from}"
+        );
+        assert_eq!(row["light"], json!(160_i32), "{name} left the level alone");
+    }
+
+    /// Runs every case of a family's table against its map's sector 0,
+    /// resetting that sector to `from` before each call.
+    async fn expect_effects(client: &Client, cases: &[EffectCase], from: i32) {
+        for case in cases {
+            expect_effect(client, case, from).await;
+        }
+    }
+
+    /// The `Doom` family's table: each effect's vanilla type under the
+    /// generalized bit (bit 12) the sector carried all along.
+    fn doom_cases() -> [EffectCase; 6] {
+        let rows = [
+            ("flicker", 17_i32, 4_113_i32),
+            ("strobe_fast", 2_i32, 4_098_i32),
+            ("strobe_slow", 3_i32, 4_099_i32),
+            ("glow", 8_i32, 4_104_i32),
+            ("random_off", 1_i32, 4_097_i32),
+            ("none", 0_i32, 4_096_i32),
+        ];
+        rows.map(|(effect, basic, stored)| EffectCase {
+            map: "MAP01",
+            family: "doom",
+            effect,
+            basic,
+            stored,
+        })
+    }
+
+    /// The `Hexen` family's table: the same effects `64` higher, under the
+    /// flag at 256 and the secret bit at 1024 the sector carried.
+    fn hexen_cases() -> [EffectCase; 6] {
+        let rows = [
+            ("flicker", 81_i32, 1_361_i32),
+            ("strobe_fast", 66_i32, 1_346_i32),
+            ("strobe_slow", 67_i32, 1_347_i32),
+            ("glow", 72_i32, 1_352_i32),
+            ("random_off", 65_i32, 1_345_i32),
+            ("none", 0_i32, 1_280_i32),
+        ];
+        rows.map(|(effect, basic, stored)| EffectCase {
+            map: "MAP04",
+            family: "hexen",
+            effect,
+            basic,
+            stored,
+        })
+    }
+
+    #[tokio::test]
+    async fn every_light_effect_lands_in_the_doom_type_field() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        expect_effects(&client, &doom_cases(), 4_105_i32).await;
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn every_light_effect_lands_in_the_hexen_type_field() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        expect_effects(&client, &hexen_cases(), 1_289_i32).await;
+    }
+
+    #[tokio::test]
+    async fn a_light_effect_keeps_a_hexen_sector_secret() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP04", "sectors": [0_i32]}),
+        )
+        .await;
+        call(
+            &client,
+            "set_light_effect",
+            json!({"map": "MAP04", "sectors": [0_i32], "effect": "flicker"}),
+        )
+        .await;
+        assert_eq!(
+            working_sector(&client, "MAP04", 0_usize).await["special"],
+            json!(1_105_i32),
+            "1024 | 81: the light repaint left the secret bit at 1024 alone"
+        );
+        let zdoom = call(
+            &client,
+            "set_light_effect",
+            json!({"map": "MAP03", "sectors": [1_i32], "effect": "strobe_slow", "light": 64_i32}),
+        )
+        .await;
+        assert_eq!(
+            zdoom["family"],
+            json!("hexen"),
+            "a zdoom UDMF map takes the Hexen numbers too"
+        );
+        assert_eq!(zdoom["special"], json!(67_i32), "3 plus 64");
+        assert_eq!(zdoom["sectors"], json!([1_i32]), "the row moved");
+        let room = working_sector(&client, "MAP03", 1_usize).await;
+        assert_eq!(room["special"], json!(67_i32), "the stored number");
+        assert_eq!(room["light"], json!(64_i32), "and the level rode along");
+    }
+
+    #[tokio::test]
+    async fn a_light_level_travels_with_the_effect() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [0_i32, 1_i32], "effect": "glow", "light": 96_i32}),
+        )
+        .await;
+        assert_eq!(result["light"], json!(96_i32), "the level the call applied");
+        assert_eq!(result["sectors"], json!([0_i32, 1_i32]), "both rooms");
+        let rooms = working_sectors(&client, "MAP01").await;
+        expect_rooms(&rooms, 96_i32, 8_i32);
+        let again = call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [0_i32, 1_i32], "effect": "glow", "light": 96_i32}),
+        )
+        .await;
+        assert_eq!(
+            again["sectors"],
+            json!([]),
+            "the same request changed nothing"
+        );
+        let level = call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [1_i32], "effect": "glow", "light": 128_i32}),
+        )
+        .await;
+        assert_eq!(
+            level["sectors"],
+            json!([1_i32]),
+            "a level alone counts as a change, the effect already standing"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["light"],
+            json!(128_i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_mark_and_a_light_effect_undo_as_one_step_each() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [1_i32], "effect": "flicker"}),
+        )
+        .await;
+        let undone = call(&client, "undo", json!({"steps": 2_usize})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["set light effect", "mark secret"]),
+            "each call is its own undo entry, rolled back newest first"
+        );
+        let merged = call(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "merged", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            merged["sectors"]
+                .as_array()
+                .expect("sectors is an array")
+                .iter()
+                .map(|row| row["special"].clone())
+                .collect::<Vec<Value>>(),
+            vec![json!(0_i32), json!(0_i32)],
+            "the layer was never written"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_two_special_tools_validate_their_arguments() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_secret(&client, json!({"sectors": []}), "sectors is empty").await;
+        refuse_secret(
+            &client,
+            json!({"sectors": [99_i32]}),
+            "sector 99 is out of range",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [], "effect": "glow"}),
+            "sectors is empty",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [0_i32], "effect": "pulsate"}),
+            "none, flicker, strobe_fast, strobe_slow, glow, random_off",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [0_i32], "effect": "glow", "light": 256_i32}),
+            "light 256 is out of range",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [0_i32], "effect": "glow", "light": -1_i32}),
+            "light -1 is out of range",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [42_i32], "effect": "glow"}),
+            "sector 42 is out of range",
+        )
+        .await;
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            code, "not_found",
+            "no refused special even copied the block into the working archive"
+        );
     }
 
     /// Fetch and decode a render report's PNG asset.

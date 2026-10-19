@@ -3,7 +3,10 @@
 Complete game structures built on a map you have already drawn.
 `add_door` cuts working doors; `add_switch` mounts the triggers that fire
 tagged sectors — including a `remote` door's; `add_exit` ends the level,
-from a switch or by walking over a line.
+from a switch or by walking over a line. `mark_secret` and
+`set_light_effect` are the two smallest: whole-sector edits of
+`Sector::special` (and of `Sector::light`), for rooms and lighting you
+have already drawn.
 
 A **feature is ordinary map elements plus the action that makes them do
 something**: `add_door` draws the doorway geometry (through the same
@@ -210,8 +213,103 @@ call add_exit {"kind": "walk_over", "sector": 1, "secret": true}
     "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
 ```
 
+## `mark_secret`
+
+`{map?, sectors: [index, ...], secret? = true}` → `{secret, family,
+sectors, warnings, map, nodes_invalidated, copied_to_working}`
+
+Marks whole sectors secret — or clears the flag — in one undoable step. It
+is a pure edit of `Sector::special` on sectors that already exist: no
+geometry, no textures, no tags, so `nodes_invalidated` is `false`.
+
+**Where**: `sectors` is the list of sector indices to change (duplicates
+collapse; an empty list is `invalid_argument`). An index the map does not
+hold is `invalid_argument` naming it, and then nothing at all is written.
+`secret` (default `true`) marks; `secret: false` clears. `map` defaults to
+the active map.
+
+**What the flag is** depends on the map's flag family:
+
+| Family | Mark | Clear |
+|--------|------|-------|
+| `Doom` (binary `Doom`, `UDMF` `doom`/`heretic`/`strife`) | special `0` → the vanilla secret type `9`; a `Boom` generalized special (`32` and up) gains bit `128`; any other vanilla type (`1..=31`) also gains bit `128` — and a warning | the vanilla `9` → `0`; anything from `32` up loses bit `128`, every other bit kept |
+| `Hexen` (binary `Hexen`, every other `UDMF` namespace) | bit `1024` set over the sector's own special | bit `1024` cleared, the special kept |
+
+Vanilla `Doom` compares the whole special instead of reading bits, so a
+`Boom` flag on a vanilla type is read as *neither* the old effect nor the
+secret: that call still succeeds but returns the warning *"vanilla Doom
+ignores Boom bits"* naming the sector. Give such a room its own sector
+with special `9` when the map has to hide it in every engine. The `Hexen`
+bit lives above the effect number, so it never needs a note.
+
+**The result** echoes `secret` and `family`, lists in `sectors` the
+indices whose special actually changed (an already-secret sector is
+honestly reported as an empty list) and in `warnings` the Boom notes. One
+`undo` rolls the whole call back — its history entry is labelled
+`mark secret`, or `clear secret` when clearing. Check the numbers with
+`assemble_map`, or ask `get_sector_specials` to decode a value (`flags`
+then names `"secret"`).
+
+```json
+call mark_secret {"sectors": [4, 5]}
+-> {"secret": true, "family": "doom", "sectors": [4, 5], "warnings": [],
+    "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
+```
+
+## `set_light_effect`
+
+`{map?, sectors: [index, ...], effect, light?}` → `{effect, special,
+family, light, sectors, map, nodes_invalidated, copied_to_working}`
+
+Installs a vanilla light effect on whole sectors in one undoable step: the
+same pure `Sector::special` edit as `mark_secret`, plus `Sector::light`
+when you ask for it. No geometry, no textures, no tags —
+`nodes_invalidated` is `false`.
+
+**The effect** — `effect` (case-insensitive) is one of six names; an
+unknown name is `invalid_argument` listing all six. Which number the
+family stores differs:
+
+| Effect | `Doom` family | `Hexen` family |
+|--------|---------------|----------------|
+| `none` | `0` | `0` |
+| `random_off` | `1` | `65` |
+| `strobe_fast` | `2` | `66` |
+| `strobe_slow` | `3` | `67` |
+| `glow` | `8` | `72` |
+| `flicker` | `17` | `81` |
+
+The `Hexen` numbers are `ZDoom`'s `Doom`-equivalents: the `Doom` type
+plus `64`. Only the family's basic-type field is rewritten — a
+`Doom`-family sector keeps every bit from `32` up (so a `Boom` generalized
+sector stays generalized, secret bit included) and a `Hexen`-family sector
+keeps every bit from `256` up (its damage flags and the secret bit at
+`1024` survive). Marking a sector secret and lighting it are therefore
+independent calls, in either order.
+
+**The level** — `light` (optional, `0..=255`) also sets each selected
+sector's `Sector::light`, the base the effect flashes around. Outside the
+range is `invalid_argument`; left out, the level stands. Nothing else on
+the sector moves: `UDMF` fields the model does not carry (a
+`lightsequence`, a `colormap`) are preserved untouched.
+
+**The result** echoes `effect`, `family` and the `special` this family
+stores, reports the `light` you applied (`null` when you passed none), and
+lists in `sectors` the indices whose special or light actually changed.
+One `undo` rolls the whole call back, under the history label
+`set light effect`. Read the rows back with `assemble_map`, or look at the
+lighting with `render_topdown` (`fill_sectors` greys each sector by half
+its light) and `render_view`.
+
+```json
+call set_light_effect {"sectors": [7], "effect": "flicker", "light": 176}
+-> {"effect": "flicker", "special": 17, "family": "doom", "light": 176,
+    "sectors": [7],
+    "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
+```
+
 ## Growth points
 
-- All three feature tools (`add_door`, `add_switch`, `add_exit`) are in
-  place. Lower-level control stays with the `edit_*` groups and
-  `run_batch`.
+- All five feature tools (`add_door`, `add_switch`, `add_exit`,
+  `mark_secret`, `set_light_effect`) are in place. Lower-level control
+  stays with the `edit_*` groups and `run_batch`.

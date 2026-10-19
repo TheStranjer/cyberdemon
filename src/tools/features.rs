@@ -1,5 +1,6 @@
-//! Map-feature tools: `add_door`, `add_switch` and `add_exit` (see the
-//! `features` router on [`crate::server::Cyberdemon`]).
+//! Map-feature tools: `add_door`, `add_switch`, `add_exit`, `mark_secret`
+//! and `set_light_effect` (see the `features` router on
+//! [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
 //! drawn map: the [`DoorSpec`] pipeline runs inside one
@@ -31,6 +32,15 @@
 //! rebuild; [`crate::wad::map::overlay`] does every drawing — the void
 //! strip that separates touching rooms and the door recess itself are one
 //! [`apply_overlay`] paint each, all of it inside a single undoable edit.
+//!
+//! The two sector-special tools stay on this side of the `features` group
+//! because they answer the same question the feature tables answer: what
+//! number makes a plain map element do something. Both are one
+//! [`crate::session::Session::edit_map`] step over [`Sector::special`]
+//! (plus [`Sector::light`] for `set_light_effect`) with no drawing at all:
+//! [`secret_edit`] is the per-family secret bit behind `mark_secret`,
+//! [`light_special`] the per-family basic type behind `set_light_effect`,
+//! and each refused index is named before anything is written.
 //!
 //! The opening rule: after the recess is drawn, every two-sided line
 //! facing the door sector is a room-facing door line (the vanilla
@@ -70,9 +80,10 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
-    DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, SwitchAction, VertexPair,
-    apply_door, door_rect, door_segment, door_specials, door_wall, longest_boundary,
-    nearest_boundary, next_free_tag, outward_depth, project_onto_line, switch_special, void_strip,
+    DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, LightEffect,
+    SecretEdit, SwitchAction, VertexPair, apply_door, door_rect, door_segment, door_specials,
+    door_wall, light_special, longest_boundary, nearest_boundary, next_free_tag, outward_depth,
+    project_onto_line, secret_edit, switch_special, void_strip,
 };
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
@@ -1462,6 +1473,343 @@ fn add_exit_run(session: &mut Session, args: &AddExitParams) -> Result<ExitRepor
     }
 }
 
+/// The lowest light level the vanilla range allows.
+const LIGHT_MIN: i32 = 0_i32;
+/// The highest light level the vanilla range allows (`u8::MAX`).
+const LIGHT_MAX: i32 = 255_i32;
+
+/// Arguments for [`Cyberdemon::mark_secret`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MarkSecretParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The sectors to change, as a non-empty list of indices (duplicates
+    /// collapse, the edit runs in ascending order).
+    sectors: Vec<usize>,
+    /// Whether the sectors are secret (default true); `false` clears the
+    /// flag instead of setting it.
+    #[serde(default = "default_secret")]
+    secret: bool,
+}
+
+/// Default [`MarkSecretParams::secret`]: marking, not clearing.
+const fn default_secret() -> bool {
+    true
+}
+
+/// Arguments for [`Cyberdemon::set_light_effect`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SetLightParams {
+    /// The map to edit; defaults like [`MarkSecretParams::map`].
+    #[serde(default)]
+    map: Option<String>,
+    /// The sectors to change, as a non-empty list of indices (duplicates
+    /// collapse, the edit runs in ascending order).
+    sectors: Vec<usize>,
+    /// The light effect: `none`, `flicker`, `strobe_fast`, `strobe_slow`,
+    /// `glow` or `random_off`.
+    effect: String,
+    /// The static light level to give the sectors, `0..=255` (optional:
+    /// without it only the effect changes).
+    #[serde(default)]
+    light: Option<i32>,
+}
+
+/// The sectors a special tool was asked to change: ascending, without
+/// duplicates and never empty.
+fn sector_selection(list: &[usize]) -> Result<Vec<usize>, CyberError> {
+    if list.is_empty() {
+        return Err(invalid(
+            "sectors is empty: pass at least one sector index (get_map_summary lists the \
+             map's sectors)",
+        ));
+    }
+    let mut indices = list.to_vec();
+    indices.sort_unstable();
+    indices.dedup();
+    Ok(indices)
+}
+
+/// Refuses a light level outside the vanilla `0..=255`, every format alike.
+fn check_light_level(level: i32) -> Result<(), CyberError> {
+    if (LIGHT_MIN..=LIGHT_MAX).contains(&level) {
+        return Ok(());
+    }
+    Err(invalid(&format!(
+        "light {level} is out of range: the light level holds {LIGHT_MIN}..={LIGHT_MAX}"
+    )))
+}
+
+/// The [`LightEffect`] `text` names (case-insensitive), or the refusal
+/// listing every valid name.
+fn effect_of(text: &str) -> Result<LightEffect, CyberError> {
+    let wanted = text.to_ascii_lowercase();
+    LightEffect::all()
+        .into_iter()
+        .find(|effect| effect.name() == wanted)
+        .ok_or_else(|| {
+            invalid(&format!(
+                "effect {text:?} is not a light effect: pass one of {}",
+                effect_names().join(", ")
+            ))
+        })
+}
+
+/// Every effect name, in [`LightEffect::all`] order.
+fn effect_names() -> Vec<&'static str> {
+    LightEffect::all().map(LightEffect::name).to_vec()
+}
+
+/// Everything [`mark_secrets`] needs once the wire parameters resolved.
+#[derive(Debug)]
+struct SecretSpec {
+    /// The sectors to change, ascending and deduplicated.
+    indices: Vec<usize>,
+    /// Whether they become secret or plain again.
+    secret: bool,
+}
+
+/// What one [`mark_secrets`] step wrote.
+#[derive(Debug)]
+struct SecretStep {
+    /// Indices of the sectors whose `special` the step changed.
+    changed: Vec<usize>,
+    /// The Boom-bit notes for sectors a vanilla engine cannot read.
+    warnings: Vec<String>,
+    /// The flag family whose bits were written.
+    family: &'static str,
+}
+
+/// Everything [`set_lights`] needs once the wire parameters resolved.
+#[derive(Debug)]
+struct LightSpec {
+    /// The sectors to change, ascending and deduplicated.
+    indices: Vec<usize>,
+    /// The effect to install.
+    effect: LightEffect,
+    /// The light level to give them, when one was asked for.
+    light: Option<i32>,
+}
+
+/// What one [`set_lights`] step wrote.
+#[derive(Debug)]
+struct LightStep {
+    /// Indices of the sectors whose special or light the step changed.
+    changed: Vec<usize>,
+    /// The effect the step installed.
+    effect: LightEffect,
+    /// The basic sector type the effect installs in this family.
+    special: i32,
+    /// The flag family that wrote it.
+    family: &'static str,
+}
+
+/// The `(special, light)` pair of sector `index`, or the `invalid_argument`
+/// naming the index past the map's sectors.
+fn sector_state(map: &Map, index: usize) -> Result<(i32, i32), CyberError> {
+    map.sectors
+        .get(index)
+        .map(|row| (row.special, row.light))
+        .ok_or_else(|| out_of_range("sector", index, map.sectors.len()))
+}
+
+/// The Boom-bit note for sector `index`, whose special now carries the
+/// secret flag on top of a vanilla `Doom` type: the effect and the secret
+/// survive only in ports that read bits, so a map that has to work in
+/// vanilla wants its own sector with the vanilla type instead.
+fn boom_note(index: usize, flagged: i32) -> String {
+    format!(
+        "sector {index} now carries special {flagged}: vanilla Doom ignores Boom bits, so \
+         that engine reads neither the old effect nor the secret (only a Boom-compatible \
+         or ZDoom port does); mark it with the vanilla type {DOOM_SECRET_SPECIAL} instead \
+         if it has to stay hidden from every engine"
+    )
+}
+
+/// Store `special` in sector `index`, reporting whether the row changed.
+fn write_special(map: &mut Map, index: usize, special: i32) -> bool {
+    let Some(row) = map.sectors.get_mut(index) else {
+        return false;
+    };
+    let changed = row.special != special;
+    row.special = special;
+    changed
+}
+
+/// Store the special `effect` and the level `light` in sector `index`,
+/// reporting whether the row changed.
+fn write_light(map: &mut Map, index: usize, effect: i32, light: i32) -> bool {
+    let Some(row) = map.sectors.get_mut(index) else {
+        return false;
+    };
+    let changed = row.special != effect || row.light != light;
+    row.special = effect;
+    row.light = light;
+    changed
+}
+
+/// The checked `(index, edit)` pair of one sector a [`mark_secrets`] call
+/// names.
+type SecretPlan = (usize, SecretEdit);
+
+/// The planned rows of a [`mark_secrets`] call: every selected sector's
+/// secret edit, all computed before any of them is written.
+fn planned_secrets(map: &Map, spec: &SecretSpec) -> Result<Vec<SecretPlan>, CyberError> {
+    let family = map.flag_family();
+    let mut plans = Vec::with_capacity(spec.indices.len());
+    for index in &spec.indices {
+        let (before, _) = sector_state(map, *index)?;
+        plans.push((*index, secret_edit(family, before, spec.secret)));
+    }
+    Ok(plans)
+}
+
+/// The checked `(index, special, light)` triple of every sector a
+/// [`set_lights`] call names, computed before any row is written.
+type LightPlan = (usize, i32, i32);
+
+/// The planned rows of a [`set_lights`] call, all computed up front.
+fn planned_lights(map: &Map, spec: &LightSpec) -> Result<Vec<LightPlan>, CyberError> {
+    let family = map.flag_family();
+    let mut plans = Vec::with_capacity(spec.indices.len());
+    for index in &spec.indices {
+        let (before, level) = sector_state(map, *index)?;
+        plans.push((
+            *index,
+            light_special(family, before, spec.effect),
+            spec.light.unwrap_or(level),
+        ));
+    }
+    Ok(plans)
+}
+
+/// Set or clear the family's secret flag on every selected sector, keeping
+/// every bit the flag does not own.
+fn mark_secrets(map: &mut Map, spec: &SecretSpec) -> Result<SecretStep, CyberError> {
+    let plans = planned_secrets(map, spec)?;
+    let mut step = SecretStep {
+        changed: Vec::new(),
+        warnings: Vec::new(),
+        family: map.flag_family().as_str(),
+    };
+    for (index, edit) in plans {
+        if edit.boom_warning {
+            step.warnings.push(boom_note(index, edit.special));
+        }
+        if write_special(map, index, edit.special) {
+            step.changed.push(index);
+        }
+    }
+    Ok(step)
+}
+
+/// Install the effect (and the asked-for light level) on every selected
+/// sector, keeping the bits above the family's basic-type field.
+fn set_lights(map: &mut Map, spec: &LightSpec) -> Result<LightStep, CyberError> {
+    let plans = planned_lights(map, spec)?;
+    let family = map.flag_family();
+    let mut step = LightStep {
+        changed: Vec::new(),
+        effect: spec.effect,
+        special: spec.effect.basic_special(family),
+        family: family.as_str(),
+    };
+    for (index, effect, light) in plans {
+        if write_light(map, index, effect, light) {
+            step.changed.push(index);
+        }
+    }
+    Ok(step)
+}
+
+/// Structured result of [`Cyberdemon::mark_secret`].
+#[derive(Serialize)]
+struct SecretToolReport {
+    /// Whether the sectors were marked (`true`) or cleared (`false`).
+    secret: bool,
+    /// The flag family whose secret bit was written: `doom` or `hexen`.
+    family: &'static str,
+    /// Indices of the sectors whose special actually changed, ascending.
+    sectors: Vec<usize>,
+    /// The Boom-bit notes, empty unless a vanilla type was flagged.
+    warnings: Vec<String>,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Structured result of [`Cyberdemon::set_light_effect`].
+#[derive(Serialize)]
+struct LightToolReport {
+    /// The canonical effect name the sectors now carry.
+    effect: &'static str,
+    /// The basic sector type the effect installs in this family.
+    special: i32,
+    /// The flag family that wrote it: `doom` or `hexen`.
+    family: &'static str,
+    /// The light level applied (`null` when the call asked for none).
+    light: Option<i32>,
+    /// Indices of the sectors whose special or light actually changed.
+    sectors: Vec<usize>,
+    /// The standard edit fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// `mark_secret`'s work: resolve the selection and run the whole flagging
+/// as one [`crate::session::Session::edit_map`] step.
+fn mark_secret_run(
+    session: &mut Session,
+    args: &MarkSecretParams,
+) -> Result<SecretToolReport, CyberError> {
+    let spec = SecretSpec {
+        indices: sector_selection(&args.sectors)?,
+        secret: args.secret,
+    };
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let label = if spec.secret {
+        "mark secret"
+    } else {
+        "clear secret"
+    };
+    let (step, report) = session.edit_map(name, label, |map| mark_secrets(map, &spec))?;
+    Ok(SecretToolReport {
+        secret: spec.secret,
+        family: step.family,
+        sectors: step.changed,
+        warnings: step.warnings,
+        edit: edit_result_fragment(&report),
+    })
+}
+
+/// `set_light_effect`'s work: resolve the effect and the level, then run
+/// the whole repaint as one [`crate::session::Session::edit_map`] step.
+fn set_light_run(
+    session: &mut Session,
+    args: &SetLightParams,
+) -> Result<LightToolReport, CyberError> {
+    let effect = effect_of(&args.effect)?;
+    args.light.map_or(Ok(()), check_light_level)?;
+    let spec = LightSpec {
+        indices: sector_selection(&args.sectors)?,
+        effect,
+        light: args.light,
+    };
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let label = "set light effect";
+    let (step, report) = session.edit_map(name, label, |map| set_lights(map, &spec))?;
+    Ok(LightToolReport {
+        effect: step.effect.name(),
+        special: step.special,
+        family: step.family,
+        light: spec.light,
+        sectors: step.changed,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// Hand an outcome to the client as the documented structured result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -1520,6 +1868,34 @@ impl Cyberdemon {
                 .with_session(|session| add_exit_run(session, &args)),
         )
     }
+
+    /// Marks whole sectors secret in one undoable edit.
+    #[tool(
+        description = "Marks whole sectors secret (or unmarks them) in a single undoable edit: a pure edit of Sector::special on sectors that already exist, so no geometry, no textures and no tags are touched and nodes_invalidated stays false. map defaults to the active map (set_active_map, else the merged view's only map). sectors is a non-empty list of sector indices (duplicates collapse); an empty list or an index the map does not hold is invalid_argument naming it, and the refusal changes nothing. secret (default true) marks; secret false clears. Which bit means secret depends on the map's flag family. Doom family (binary Doom, UDMF in the doom/heretic/strife namespace): a plain sector (special 0) becomes the vanilla secret type 9 and an unmark turns that 9 back to 0; a Boom generalized sector (32 and above) gains or loses the Boom secret bit 128 with every other bit kept; any other vanilla type (1..=31) also gets bit 128, and the result then carries the warning \"vanilla Doom ignores Boom bits\" because vanilla engines compare the whole special, losing the effect without gaining the secret - give those rooms their own sector with special 9 instead. Hexen family (binary Hexen, UDMF in any other namespace): bit 1024 is set or cleared on top of the sector's own special, so the effect survives, and nothing is warned about. Returns {secret, family (\"doom\"|\"hexen\"), sectors (the indices whose special actually changed, ascending), warnings, map, nodes_invalidated, copied_to_working}: an already-marked sector is honestly reported as unchanged. One undo entry rolls the call back, labelled \"mark secret\" (or \"clear secret\" when secret is false). Check it with assemble_map (the sector row's special) or get_sector_specials (its Boom decoding names the \"secret\" flag)."
+    )]
+    fn mark_secret(
+        &self,
+        Parameters(args): Parameters<MarkSecretParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| mark_secret_run(session, &args)),
+        )
+    }
+
+    /// Installs a vanilla light effect on whole sectors in one undoable edit.
+    #[tool(
+        description = "Installs a light effect on whole sectors in a single undoable edit: a pure edit of Sector::special, and of Sector::light when you give it, so no geometry, no textures and no tags are touched and nodes_invalidated stays false. map defaults to the active map (set_active_map, else the merged view's only map). sectors is a non-empty list of sector indices (duplicates collapse); an empty list or an index the map does not hold is invalid_argument naming it, and the refusal changes nothing. effect (case-insensitive) is one of none, flicker, strobe_fast, strobe_slow, glow or random_off; an unknown name is invalid_argument listing all six. The Doom family (binary Doom, UDMF in the doom/heretic/strife namespace) writes the vanilla types flicker 17, strobe_fast 2, strobe_slow 3, glow 8, random_off 1 and none 0 into the special's low five bits and keeps every bit from 32 up, so a Boom generalized sector keeps its generalized behaviour. The Hexen family (binary Hexen, UDMF in any other namespace) writes the ZDoom Doom-equivalents, the Doom number plus 64: flicker 81, strobe_fast 66, strobe_slow 67, glow 72, random_off 65 and none 0, into the low eight bits and keeps every bit from 256 up - its damage and trigger flags and the secret bit 1024 included. light (optional, 0..=255) also sets the sector's light level, the base the effect flashes around; outside that range is invalid_argument. Returns {effect, special (the basic type this family stores), family (\"doom\"|\"hexen\"), light (the level applied, null when you passed none), sectors (the indices that actually changed, ascending), map, nodes_invalidated, copied_to_working}. A sector already carrying exactly what you asked for is honestly reported as unchanged, and one undo entry (labelled \"set light effect\") rolls the whole call back. Check it with assemble_map and render_topdown (fill_sectors greys each sector by its light)."
+    )]
+    fn set_light_effect(
+        &self,
+        Parameters(args): Parameters<SetLightParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| set_light_run(session, &args)),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1528,16 +1904,19 @@ mod tests {
 
     use super::{
         AddDoorParams, AddExitParams, AddSwitchParams, Chosen, DoorSkins, DoorSpec, DoorStyle,
-        Dress, ExitKind, Groups, Placed, SwitchSpec, Target, action_name, action_names, action_of,
-        build_door, build_switch, build_walk_over_exit, centroid, choose_between, choose_linedef,
-        door_groups, door_record, dress_door, dress_switch, half_axis, isolate_chunk, kind_name,
-        kind_of, out_of_range, recess_depth, side_sector, strip_face_lost, strip_wall, style_name,
-        style_names, style_of, switch_cut, switch_role, switch_span, switch_tag, target_of,
-        track_role, walk_over_special,
+        Dress, ExitKind, Groups, LIGHT_MAX, LIGHT_MIN, LightSpec, MarkSecretParams, Placed,
+        SecretSpec, SetLightParams, SwitchSpec, Target, action_name, action_names, action_of,
+        build_door, build_switch, build_walk_over_exit, centroid, check_light_level,
+        choose_between, choose_linedef, door_groups, door_record, dress_door, dress_switch,
+        effect_names, effect_of, half_axis, isolate_chunk, kind_name, kind_of, mark_secrets,
+        out_of_range, recess_depth, sector_selection, set_lights, side_sector, strip_face_lost,
+        strip_wall, style_name, style_names, style_of, switch_cut, switch_role, switch_span,
+        switch_tag, target_of, track_role, walk_over_special,
     };
     use crate::error::CyberError;
     use crate::themes::Role;
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::features::LightEffect;
     use crate::wad::map::features::SwitchAction;
     use crate::wad::map::features::door_wall;
     use crate::wad::map::features::switch_special;
@@ -2579,5 +2958,373 @@ mod tests {
             "the hall-facing step line only, not room 1's own walls"
         );
         assert_eq!(map.linedefs.get(solid).expect("a wall").special, 0_i32);
+    }
+
+    /// A `mark_secret` request parsed from `json`.
+    fn secret_args(json: &str) -> MarkSecretParams {
+        from_str(json).expect("test secret requests parse")
+    }
+
+    /// A `set_light_effect` request parsed from `json`.
+    fn light_args(json: &str) -> SetLightParams {
+        from_str(json).expect("test light requests parse")
+    }
+
+    /// A secret spec over `indices`.
+    fn secret_spec(indices: &[usize], secret: bool) -> SecretSpec {
+        SecretSpec {
+            indices: indices.to_vec(),
+            secret,
+        }
+    }
+
+    /// A light spec over `indices` with an optional level.
+    fn light_spec(indices: &[usize], effect: LightEffect, light: Option<i32>) -> LightSpec {
+        LightSpec {
+            indices: indices.to_vec(),
+            effect,
+            light,
+        }
+    }
+
+    /// `two_rooms` with the given sector specials.
+    fn rooms_special(specials: [i32; 2]) -> Map {
+        let mut map = two_rooms();
+        for (row, special) in map.sectors.iter_mut().zip(specials) {
+            row.special = special;
+        }
+        map
+    }
+
+    /// The special of sector `index`.
+    fn special_of(map: &Map, index: usize) -> i32 {
+        map.sectors.get(index).expect("the sector exists").special
+    }
+
+    /// The light level of sector `index`.
+    fn light_of(map: &Map, index: usize) -> i32 {
+        map.sectors.get(index).expect("the sector exists").light
+    }
+
+    #[test]
+    fn the_two_special_tools_read_their_wire_shapes() {
+        let marked = secret_args(r#"{"sectors": [1, 0, 1]}"#);
+        assert!(marked.secret, "marking is the default");
+        assert_eq!(marked.map, None, "the map defaults like the other tools");
+        assert_eq!(marked.sectors, vec![1_usize, 0_usize, 1_usize], "as listed");
+        let cleared = secret_args(r#"{"sectors": [0], "secret": false, "map": "MAP01"}"#);
+        assert!(!cleared.secret, "the flag arrives");
+        assert_eq!(cleared.map.as_deref(), Some("MAP01"));
+        let lit = light_args(r#"{"sectors": [0], "effect": "flicker", "light": 200}"#);
+        assert_eq!(lit.effect, "flicker");
+        assert_eq!(lit.light, Some(200_i32), "the level arrives");
+        assert_eq!(
+            light_args(r#"{"sectors": [0], "effect": "glow"}"#).light,
+            None,
+            "and stands aside when unasked"
+        );
+        assert!(
+            from_str::<MarkSecretParams>(r#"{"secret": true}"#).is_err(),
+            "the sectors are required"
+        );
+        assert!(
+            from_str::<SetLightParams>(r#"{"sectors": [0]}"#).is_err(),
+            "the effect is required"
+        );
+    }
+
+    #[test]
+    fn a_selection_sorts_itself_and_refuses_to_be_empty() {
+        assert_eq!(
+            sector_selection(&[2_usize, 0_usize, 2_usize]).expect("a sorted copy"),
+            vec![0_usize, 2_usize],
+            "ascending and deduplicated"
+        );
+        let message = refuse(&sector_selection(&[]).unwrap_err());
+        assert!(message.contains("sectors is empty"), "{message}");
+    }
+
+    #[test]
+    fn light_effects_round_trip_and_refuse_unknown_names() {
+        for effect in LightEffect::all() {
+            assert_eq!(effect_of(effect.name()).expect("canonical"), effect);
+            assert_eq!(
+                effect_of(&effect.name().to_ascii_uppercase()).expect("case-insensitive"),
+                effect
+            );
+        }
+        let message = refuse(&effect_of("pulsate").unwrap_err());
+        assert!(
+            message.contains("none, flicker, strobe_fast, strobe_slow, glow, random_off"),
+            "the refusal lists every name: {message}"
+        );
+        assert_eq!(
+            effect_names().len(),
+            LightEffect::all().len(),
+            "one name each"
+        );
+    }
+
+    #[test]
+    fn a_light_level_stays_in_the_vanilla_range() {
+        assert!(
+            check_light_level(LIGHT_MIN).is_ok(),
+            "the floor of the range"
+        );
+        assert!(check_light_level(LIGHT_MAX).is_ok(), "and the top");
+        let low = refuse(&check_light_level(-1_i32).unwrap_err());
+        assert!(low.contains("light -1 is out of range"), "{low}");
+        let high = refuse(&check_light_level(256_i32).unwrap_err());
+        assert!(high.contains("light 256 is out of range"), "{high}");
+    }
+
+    #[test]
+    fn a_plain_doom_sector_takes_the_vanilla_secret_type() {
+        let mut map = rooms_special([0_i32, 1_i32]);
+        let step = mark_secrets(&mut map, &secret_spec(&[0_usize], true)).expect("sector 0");
+        assert_eq!(step.family, "doom", "the family echoes");
+        assert_eq!(step.changed, vec![0_usize], "one row moved");
+        assert!(step.warnings.is_empty(), "the vanilla type needs no note");
+        assert_eq!(special_of(&map, 0), 9_i32, "the vanilla secret");
+        assert_eq!(special_of(&map, 1), 1_i32, "the unlisted sector stands");
+        let again = mark_secrets(&mut map, &secret_spec(&[0_usize], true)).expect("marked twice");
+        assert!(
+            again.changed.is_empty(),
+            "the second call is honestly a no-op"
+        );
+        let cleared =
+            mark_secrets(&mut map, &secret_spec(&[0_usize], false)).expect("cleared again");
+        assert_eq!(cleared.changed, vec![0_usize]);
+        assert_eq!(
+            special_of(&map, 0),
+            0_i32,
+            "and the vanilla type clears back to plain"
+        );
+    }
+
+    #[test]
+    fn a_boom_doom_sector_gains_and_loses_only_bit_seven() {
+        let mut map = rooms_special([32_i32, 4_097_i32]);
+        let step =
+            mark_secrets(&mut map, &secret_spec(&[0_usize, 1_usize], true)).expect("both sectors");
+        assert_eq!(step.changed, vec![0_usize, 1_usize], "both moved");
+        assert!(
+            step.warnings.is_empty(),
+            "Boom bits are Boom's own business"
+        );
+        assert_eq!(special_of(&map, 0), 160_i32, "32 | 128");
+        assert_eq!(
+            special_of(&map, 1),
+            4_225_i32,
+            "4097 | 128 keeps the generalized field"
+        );
+        let cleared =
+            mark_secrets(&mut map, &secret_spec(&[0_usize, 1_usize], false)).expect("both cleared");
+        assert_eq!(cleared.changed, vec![0_usize, 1_usize]);
+        assert_eq!(special_of(&map, 0), 32_i32, "the flag came back off");
+        assert_eq!(
+            special_of(&map, 1),
+            4_097_i32,
+            "with every other bit where it was"
+        );
+    }
+
+    #[test]
+    fn a_vanilla_type_marked_secret_carries_a_boom_warning() {
+        let mut map = rooms_special([17_i32, 9_i32]);
+        let step =
+            mark_secrets(&mut map, &secret_spec(&[0_usize, 1_usize], true)).expect("both sectors");
+        assert_eq!(
+            step.changed,
+            vec![0_usize],
+            "the sector already secret by the vanilla type did not move"
+        );
+        assert_eq!(special_of(&map, 0), 145_i32, "17 | 128");
+        assert_eq!(special_of(&map, 1), 9_i32, "and 9 stays 9");
+        let note = step.warnings.first().expect("one warning");
+        assert!(note.contains("sector 0"), "{note}");
+        assert!(
+            note.contains("vanilla Doom ignores Boom bits"),
+            "the warning says what vanilla Doom does not read: {note}"
+        );
+        let back = mark_secrets(&mut map, &secret_spec(&[0_usize], false)).expect("cleared");
+        assert_eq!(
+            back.warnings.len(),
+            0_usize,
+            "clearing has nothing to warn about"
+        );
+        assert_eq!(
+            special_of(&map, 0),
+            17_i32,
+            "the flicker is the number again"
+        );
+    }
+
+    #[test]
+    fn a_hexen_map_flags_secret_over_its_own_effect() {
+        let mut map = rooms_special([81_i32, 1_i32]);
+        map.format = MapFormat::Hexen;
+        let step = mark_secrets(&mut map, &secret_spec(&[0_usize, 1_usize], true))
+            .expect("both sectors of a Hexen map");
+        assert_eq!(step.family, "hexen", "binary Hexen is its own family");
+        assert!(step.warnings.is_empty(), "the Hexen bit never needs a note");
+        assert_eq!(special_of(&map, 0), 1_105_i32, "81 | 1024 keeps the effect");
+        assert_eq!(special_of(&map, 1), 1_025_i32, "1 | 1024 too");
+        let cleared =
+            mark_secrets(&mut map, &secret_spec(&[1_usize], false)).expect("one sector back");
+        assert_eq!(cleared.changed, vec![1_usize]);
+        assert_eq!(special_of(&map, 1), 1_i32, "bit 10 came off alone");
+        assert_eq!(
+            special_of(&map, 0),
+            1_105_i32,
+            "the unlisted sector stands untouched"
+        );
+    }
+
+    #[test]
+    fn a_zdoom_udmf_map_shares_the_hexen_secret_bit() {
+        let mut map = rooms_special([0_i32, 1_i32]);
+        map.format = MapFormat::Udmf;
+        map.udmf_namespace = Some("zdoom".to_owned());
+        let step = mark_secrets(&mut map, &secret_spec(&[0_usize], true)).expect("sector 0");
+        assert_eq!(
+            step.family, "hexen",
+            "a zdoom namespace reads as Hexen family"
+        );
+        assert_eq!(special_of(&map, 0), 1_024_i32, "the bit binary Hexen uses");
+    }
+
+    #[test]
+    fn a_doom_namespace_udmf_map_keeps_the_boom_bit() {
+        let mut map = rooms_special([0_i32, 1_i32]);
+        map.format = MapFormat::Udmf;
+        map.udmf_namespace = Some("doom".to_owned());
+        let step =
+            mark_secrets(&mut map, &secret_spec(&[0_usize, 1_usize], true)).expect("both sectors");
+        assert_eq!(
+            step.family, "doom",
+            "the doom namespace is Doom family even in UDMF"
+        );
+        assert_eq!(
+            special_of(&map, 0),
+            9_i32,
+            "the plain sector took the vanilla type"
+        );
+        assert_eq!(special_of(&map, 1), 129_i32, "the basic 1 took bit 7");
+        assert_eq!(
+            step.warnings.len(),
+            1_usize,
+            "one note: {:?}",
+            step.warnings
+        );
+    }
+
+    #[test]
+    fn the_secret_step_names_the_sector_the_map_does_not_hold() {
+        let mut map = rooms_special([0_i32, 0_i32]);
+        let message =
+            refuse(&mark_secrets(&mut map, &secret_spec(&[1_usize, 99_usize], true)).unwrap_err());
+        assert!(message.contains("sector 99 is out of range"), "{message}");
+        assert_eq!(special_of(&map, 0), 0_i32, "a refusal wrote nothing");
+        assert_eq!(
+            special_of(&map, 1),
+            0_i32,
+            "not even the sectors it could have reached"
+        );
+    }
+
+    #[test]
+    fn a_doom_light_effect_writes_the_type_and_keeps_the_generalized_bits() {
+        let wanted = [
+            (LightEffect::Flicker, 17_i32),
+            (LightEffect::StrobeFast, 2_i32),
+            (LightEffect::StrobeSlow, 3_i32),
+            (LightEffect::Glow, 8_i32),
+            (LightEffect::RandomOff, 1_i32),
+            (LightEffect::None, 0_i32),
+        ];
+        for (effect, basic) in wanted {
+            let mut map = rooms_special([4_105_i32, 9_i32]);
+            let step = set_lights(&mut map, &light_spec(&[0_usize], effect, None))
+                .expect("sector 0 takes the effect");
+            assert_eq!(step.effect, effect, "{effect:?} echoes");
+            assert_eq!(step.family, "doom", "{effect:?} reads its family");
+            assert_eq!(step.special, basic, "{effect:?} is the vanilla type");
+            assert_eq!(step.changed, vec![0_usize], "{effect:?} moved one row");
+            assert_eq!(
+                special_of(&map, 0),
+                4_096_i32 | basic,
+                "{effect:?} landed below 32, the generalized bit above it survived"
+            );
+            assert_eq!(light_of(&map, 0), 176_i32, "an unasked level stands");
+            assert_eq!(special_of(&map, 1), 9_i32, "the unlisted sector stands");
+        }
+    }
+
+    #[test]
+    fn a_hexen_light_effect_is_the_doom_number_sixty_four_higher() {
+        let wanted = [
+            (LightEffect::Flicker, 81_i32),
+            (LightEffect::StrobeFast, 66_i32),
+            (LightEffect::StrobeSlow, 67_i32),
+            (LightEffect::Glow, 72_i32),
+            (LightEffect::RandomOff, 65_i32),
+            (LightEffect::None, 0_i32),
+        ];
+        for (effect, basic) in wanted {
+            let mut map = rooms_special([1_024_i32 | 256_i32, 0_i32]);
+            map.format = MapFormat::Hexen;
+            let step = set_lights(&mut map, &light_spec(&[0_usize], effect, Some(96_i32)))
+                .expect("sector 0 takes the effect");
+            assert_eq!(step.effect, effect, "{effect:?} echoes");
+            assert_eq!(step.special, basic, "{effect:?} is the Doom number plus 64");
+            assert_eq!(
+                special_of(&map, 0),
+                1_024_i32 | 256_i32 | basic,
+                "{effect:?} landed below 256, the secret bit and the flag above it survived"
+            );
+            assert_eq!(
+                light_of(&map, 0),
+                96_i32,
+                "and the asked-for level rode along"
+            );
+        }
+    }
+
+    #[test]
+    fn a_light_repaint_that_changes_nothing_reports_nothing() {
+        let mut map = rooms_special([17_i32, 17_i32]);
+        let first = set_lights(
+            &mut map,
+            &light_spec(&[0_usize, 1_usize], LightEffect::Flicker, None),
+        )
+        .expect("both already flicker");
+        assert!(first.changed.is_empty(), "the effect was already there");
+        assert_eq!(
+            set_lights(
+                &mut map,
+                &light_spec(&[0_usize], LightEffect::Flicker, Some(64_i32))
+            )
+            .expect("a level alone still counts")
+            .changed,
+            vec![0_usize],
+            "the light moved even though the special did not"
+        );
+        assert_eq!(light_of(&map, 0), 64_i32);
+        assert_eq!(light_of(&map, 1), 176_i32, "the unlisted level stands");
+    }
+
+    #[test]
+    fn the_light_step_names_the_sector_the_map_does_not_hold() {
+        let mut map = rooms_special([0_i32, 0_i32]);
+        let message = refuse(
+            &set_lights(
+                &mut map,
+                &light_spec(&[0_usize, 42_usize], LightEffect::Glow, None),
+            )
+            .unwrap_err(),
+        );
+        assert!(message.contains("sector 42 is out of range"), "{message}");
+        assert_eq!(special_of(&map, 0), 0_i32, "a refusal wrote nothing");
     }
 }

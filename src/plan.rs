@@ -9,6 +9,7 @@
 //! module touches archives, sessions or `MCP` types; it is data,
 //! measurement and validation only.
 
+pub mod connectors;
 pub mod model;
 pub mod walls;
 

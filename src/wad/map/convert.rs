@@ -870,6 +870,42 @@ mod tests {
         assert_eq!(cycle(&back), original, "modulo the empty node markers");
     }
 
+    /// The cross-family report keys of `out` as serialized: all four at
+    /// their `derive(Default)` zero, alongside the ever-present
+    /// `dropped_fields`, the shape a same-family step always publishes.
+    fn assert_cross_family_keys_are_zero(out: &Conversion) {
+        let value = serde_json::to_value(out).expect("a Conversion serializes");
+        assert_eq!(value["translated_specials"], 0_i32, "the table did not run");
+        assert_eq!(
+            value["untranslated"],
+            serde_json::json!([]),
+            "nothing failed to translate"
+        );
+        assert_eq!(value["thing_flags_changed"], 0_i32, "no thing flag moved");
+        assert_eq!(value["sector_types_changed"], 0_i32, "no sector type moved");
+        assert_eq!(
+            value["dropped_fields"],
+            serde_json::json!({
+                "things": 0_i32,
+                "linedefs": 0_i32,
+                "sidedefs": 0_i32,
+                "sectors": 0_i32,
+                "vertices": 0_i32,
+            }),
+            "the pre-existing key rides on the same object"
+        );
+    }
+
+    #[test]
+    fn a_same_family_conversion_publishes_the_cross_family_keys_as_zero() {
+        let mut as_udmf = two_room_map();
+        let out = convert_map(&mut as_udmf, &udmf("doom")).expect("the Doom family converts");
+        assert_cross_family_keys_are_zero(&out);
+        let mut back = cycle(&as_udmf);
+        let again = convert_map(&mut back, &binary("doom")).expect("and converts back");
+        assert_cross_family_keys_are_zero(&again);
+    }
+
     #[test]
     fn an_unnamed_udmf_target_takes_the_source_family_default_namespace() {
         let mut from_doom = two_room_map();

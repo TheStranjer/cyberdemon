@@ -1864,6 +1864,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn untranslated_serializes_under_its_plain_field_names() {
+        let lost = serde_json::to_value(Untranslated {
+            linedef: 3,
+            special: 999,
+        })
+        .expect("Untranslated serializes");
+        assert_eq!(
+            lost,
+            serde_json::json!({"linedef": 3_i32, "special": 999_i32}),
+            "plain field names, no serde renames"
+        );
+    }
+
+    #[test]
+    fn the_default_lines_report_is_all_zero_and_empty() {
+        let report = LinesReport::default();
+        assert_eq!(report.translated, 0, "a fresh report translated nothing");
+        assert!(report.untranslated.is_empty(), "and lost no lines");
+        assert!(report.warnings.is_empty(), "and warns about nothing");
+        assert_eq!(
+            serde_json::to_value(&report).expect("LinesReport serializes"),
+            serde_json::json!({"translated": 0_i32, "untranslated": [], "warnings": []}),
+            "the empty wire shape"
+        );
+    }
+
     /// One test linedef: `(special, tag, args, flags)`.
     type LineSpec = (i32, i32, [i32; MAX_ARGS], u32);
 

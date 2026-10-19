@@ -26,7 +26,9 @@
 //! together, the pure geometry behind `split_linedef`
 //! and `join_linedefs`. [`features`] holds the pure cores of assembled
 //! map structures: [`features::doors`] is the door action table and the
-//! doorway dressing behind the door tools. [`transform`] scales, rotates
+//! doorway dressing behind the door tools, and [`features::place`] the
+//! wall selection, width fit and depth raycast behind their placement.
+//! [`transform`] scales, rotates
 //! and translates a selection of vertices and things in integer math,
 //! the pure engine behind `transform_selection`. [`validate`] runs the
 //! pure map-health checks behind `validate_map`: reference integrity,

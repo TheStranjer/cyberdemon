@@ -16,7 +16,8 @@
 //! `edit_vertices`-group tests in `edit_vertices`, the
 //! graphics-group tests in `graphics`,
 //! the imports-group tests in `imports`, the
-//! inspect-group tests in `inspect`, the
+//! inspect-group tests in `inspect`, the features-group tests in
+//! `features`, the
 //! music-group tests in `music`, the
 //! nodes-group tests in `nodes`, the
 //! palette-group tests in `palette`, the
@@ -80,6 +81,9 @@ mod edit_things;
 #[cfg(test)]
 #[path = "mcp/edit_vertices.rs"]
 mod edit_vertices;
+#[cfg(test)]
+#[path = "mcp/features.rs"]
+mod features;
 #[cfg(test)]
 #[path = "mcp/fixtures.rs"]
 pub mod fixtures;

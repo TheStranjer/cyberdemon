@@ -219,6 +219,11 @@ src/
                   it turns the parameters into a `wad::map::convert::Target`
                   and runs the pure conversion as one `Session::convert_map`
                   step (`dry_run` converts a copy and only reports);
+                  `tools/features.rs` is the `features` group: `add_door`
+                  composes the `wad::map::features` door core and the
+                  overlay engine into one `Session::edit_map` step
+                  (void strip, recess paint, `apply_door`; the
+                  `add_switch`/`add_exit` tickets grow in place here);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`;

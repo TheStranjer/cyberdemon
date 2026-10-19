@@ -16,10 +16,10 @@
 //! background when the sky switch is off). Masked middle textures seen
 //! through two-sided lines are collected, fully keyed, mapped, placed,
 //! lit and stamped with the exact ray parameter, in [`Rendered::masked`]
-//! instead of drawn. Every painted pixel also records its perpendicular
-//! depth in map units in [`Rendered::depth`] (background and sky keep
-//! `i64::MAX`), the buffer the masked and sprite passes will depth-test
-//! against.
+//! and then painted by the render module's transparent pass far to near.
+//! Every painted pixel also records its perpendicular depth in map units
+//! in [`Rendered::depth`] (background and sky keep `i64::MAX`), the
+//! buffer that pass depth-tests against without ever writing it.
 //!
 //! All maths is integer. The camera's `cos`/`sin` are 16.16
 //! ([`crate::fixed::Angle`]), column directions are scaled by `2^32`, and
@@ -38,6 +38,7 @@ use crate::render::canvas::{Canvas, Rgba};
 use crate::render::light::{WallDir, colormap_index, shade};
 use crate::render::scene::Scene;
 use crate::render::settings::Lighting;
+use crate::render::sprites;
 use crate::wad::map::{Linedef, Map};
 
 /// Lowest accepted pitch, in degrees.
@@ -50,8 +51,10 @@ const TEXTURE_NONE: &str = "-";
 /// [`crate::render::scene::SKY_FLAT`] spells the same constant for scene
 /// builders.
 const SKY_CEILING: &str = "F_SKY1";
-/// One whole map unit or pixel in raw 16.16.
-const ONE_16: i128 = 0x1_0000;
+/// One whole map unit or pixel in raw 16.16. Also the divisor the
+/// transparent pass uses to floor its carried depths and texture rows
+/// out of raw positions.
+pub(crate) const ONE_16: i128 = 0x1_0000;
 /// Half of a raw 16.16 unit.
 const HALF_16: i128 = 0x8000;
 /// Column directions are scaled by `2^32` (`cos * focal2` in 16.16), so
@@ -135,9 +138,14 @@ pub struct MaskedMiddle {
 pub struct Rendered {
     /// The painted view (gamma is the caller's step).
     pub canvas: Canvas,
-    /// Masked middles collected behind two-sided lines, in
-    /// column-then-distance order.
+    /// Masked middles seen behind two-sided lines, sorted far to near
+    /// by the transparent pass that drew them (see
+    /// [`crate::render::sprites`]).
     pub masked: Vec<MaskedMiddle>,
+    /// Screen columns the transparent pass painted at least one masked
+    /// pixel in; a column carrying several masked items counts once.
+    /// Zero when the pass drew nothing.
+    pub masked_columns: usize,
     /// Per-pixel perpendicular depth in map units, row-major
     /// `width * height`, written for every wall and plane pixel;
     /// background and sky pixels keep `i64::MAX`. Internal to the
@@ -151,9 +159,10 @@ pub struct Rendered {
 /// The caller is expected to have checked that the camera lies inside a
 /// sector (`crate::render::camera_sector`); a camera in no sector simply
 /// gets no sector data to fill with and renders what the hits still
-/// cover. The result carries the [`MaskedMiddle`] list and the
-/// [`Rendered::depth`] buffer; this ticket draws no transparency, so the
-/// view only shows solid walls, textured planes and the textured sky.
+/// cover. After the column walk the collected [`MaskedMiddle`] list and
+/// the [`Rendered::depth`] buffer go through the render module's
+/// transparent pass, so the view shows masked middle textures painted
+/// far to near, depth-tested against a buffer the result still carries.
 #[must_use]
 #[inline]
 pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) -> Rendered {
@@ -175,9 +184,15 @@ pub fn render_view(scene: &Scene, camera: &ViewCamera, width: u32, height: u32) 
         };
         caster.draw_column(&mut walk);
     }
+    let masked_columns = sprites::draw_masked(
+        &sprites::Pass::new(scene, &caster.proj),
+        &mut sprites::Frame::new(&mut canvas, &depth),
+        &mut masked,
+    );
     Rendered {
         canvas,
         masked,
+        masked_columns,
         depth,
     }
 }
@@ -262,9 +277,12 @@ const fn quot(a: i128, b: i128) -> i128 {
     }
 }
 
-/// The projection constants of one camera and raster.
+/// The projection constants of one camera and raster. The transparent
+/// pass in the render module's `sprites` reads rows back through
+/// [`Self::height_at`], so the type and that one method are
+/// crate-visible; everything else stays the column caster's own.
 #[derive(Clone, Copy, Debug)]
-struct Projection {
+pub(crate) struct Projection {
     /// Raster width in pixels.
     width: i64,
     /// Raster height in pixels.
@@ -338,8 +356,9 @@ impl Projection {
     }
 
     /// The world height at screen `row` for ray parameter `t`, raw
-    /// 16.16: `z + (horizon - row) * 2t`.
-    fn height_at(&self, row: i64, t: Fraction) -> i128 {
+    /// 16.16: `z + (horizon - row) * 2t`. The transparent pass reads a
+    /// masked item's texture row through this.
+    pub(crate) fn height_at(&self, row: i64, t: Fraction) -> i128 {
         let dy = self
             .horizon
             .saturating_sub(i128::from(row).saturating_mul(ONE_16));
@@ -992,7 +1011,7 @@ impl<'scene> Caster<'scene> {
 
     /// Remembers the middle texture seen through this transparent
     /// crossing, mapped, placed, lit and stamped with the exact ray
-    /// parameter, for the masked pass that will draw it.
+    /// parameter, for the render module's transparent pass to draw.
     ///
     /// A crossing whose middle names a texture the scene lacks carries
     /// nothing drawable, so it collects nothing.
@@ -1276,14 +1295,16 @@ mod tests {
     use core::cmp::Ordering;
 
     use super::{
-        DIRECTION_SCALE, Edge, FacePlan, Fraction, MAX_PITCH, MIN_PITCH, ONE_16, Plane, Projection,
-        Slot, ViewCamera, check_pitch, flat_texel, focal_length, masked_tex_top, pierce,
-        plane_point, render_view, sky_column, tex_top, texture_key, texture_u16, wall_dir, wrap16,
+        DIRECTION_SCALE, Edge, FacePlan, Fraction, MAX_PITCH, MIN_PITCH, MaskedMiddle, ONE_16,
+        Plane, Projection, Slot, ViewCamera, check_pitch, flat_texel, focal_length, masked_tex_top,
+        pierce, plane_point, render_view, sky_column, tex_top, texture_key, texture_u16, wall_dir,
+        wrap16,
     };
     use crate::fixed::Angle;
     use crate::gfx::image::IndexedImage;
     use crate::gfx::palette::Palette;
-    use crate::render::{Lighting, RenderSettings, Scene, Switch, WallDir};
+    use crate::render::sprites::{Frame, Pass, draw_masked};
+    use crate::render::{Canvas, Lighting, RenderSettings, Scene, Switch, WallDir};
     use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
 
@@ -2265,5 +2286,220 @@ mod tests {
                 "`{middle}` on a two-sided line collects nothing"
             );
         }
+    }
+
+    /// A synthetic single-row masked middle at `column`/`row`, drawing
+    /// texture `texture`'s texel column `texcol`: hung from world height
+    /// 128 with no vertical shift, at depth 50 map units. Under a level
+    /// [`box_camera`] projection with `t = 1` that row reads texture row
+    /// `128 - (41 + 2 * (32 - row))`, so row 32 lands on texel row 87 of
+    /// a 128-tall image.
+    fn masked_at(column: u32, row: i64, texture: &str, texcol: u32) -> MaskedMiddle {
+        MaskedMiddle {
+            column,
+            line: 0,
+            side: 0,
+            top: row,
+            bottom: row,
+            depth16: raw(50),
+            texture: texture.to_owned(),
+            texcol,
+            tex_top16: raw(128),
+            y_off16: 0,
+            light: 255,
+            dir: WallDir::Other,
+            t: frac(1, 1),
+        }
+    }
+
+    /// A `width` by `height` indexed image of solid `index`, opaque
+    /// before texel column `clear_from` and transparent from it rightwards.
+    fn clear_columns(width: u32, height: u32, index: u8, clear_from: u32) -> IndexedImage {
+        let index_row = vec![index; usize::try_from(width).expect("test widths fit")];
+        let opaque_row: Vec<bool> = (0..width).map(|column| column < clear_from).collect();
+        let mut indices = Vec::new();
+        let mut opaque = Vec::new();
+        for _row in 0..height {
+            indices.extend_from_slice(&index_row);
+            opaque.extend_from_slice(&opaque_row);
+        }
+        IndexedImage::new(width, height, indices, opaque).expect("test images build")
+    }
+
+    /// The [`box_camera`] projection over a 32x64 raster, for the
+    /// transparent pass's row maths.
+    fn pass_projection() -> Projection {
+        Projection::new(&box_camera(), 32, 64)
+    }
+
+    #[test]
+    fn masked_items_paint_far_to_near_and_the_nearer_wins_a_shared_pixel() {
+        let mut scene = box_scene();
+        scene
+            .textures
+            .insert("FARBAR".to_owned(), solid(64, 128, 222));
+        scene
+            .textures
+            .insert("NEARBAR".to_owned(), solid(64, 128, 111));
+        let proj = pass_projection();
+        // The nearer item comes first in the list: only the far-to-near
+        // sort can leave it on top of the shared pixel.
+        let mut masked = vec![
+            masked_at(16, 32, "NEARBAR", 0),
+            masked_at(16, 32, "FARBAR", 0),
+        ];
+        masked[1].depth16 = raw(80);
+        let mut canvas = Canvas::new(32, 64, [9_u8, 9, 9, 255]);
+        let depth = vec![i64::MAX; 32_usize.saturating_mul(64)];
+        let painted = draw_masked(
+            &Pass::new(&scene, &proj),
+            &mut Frame::new(&mut canvas, &depth),
+            &mut masked,
+        );
+        assert_eq!(
+            masked.first().map(|entry| entry.depth16),
+            Some(raw(80)),
+            "the list comes back in the order it was drawn"
+        );
+        assert_eq!(
+            canvas.pixel(16, 32),
+            Some([111_u8, 144, 111, 255]),
+            "the nearer bar covers the farther one"
+        );
+        assert_eq!(painted, 1, "one column gained at least one pixel");
+    }
+
+    #[test]
+    fn masked_pixels_respect_the_depth_buffer_without_writing_it() {
+        let mut scene = box_scene();
+        scene
+            .textures
+            .insert("NEARBAR".to_owned(), solid(64, 128, 111));
+        let proj = pass_projection();
+        let near_slot = 32_usize.saturating_mul(32).saturating_add(16);
+        let front_slot = 30_usize.saturating_mul(32).saturating_add(16);
+        let mut canvas = Canvas::new(32, 64, [9_u8, 9, 9, 255]);
+        let mut depth = vec![60_i64; 32_usize.saturating_mul(64)];
+        depth[near_slot] = 40;
+        let mut behind = vec![masked_at(16, 32, "NEARBAR", 0)];
+        assert_eq!(
+            draw_masked(
+                &Pass::new(&scene, &proj),
+                &mut Frame::new(&mut canvas, &depth),
+                &mut behind,
+            ),
+            0,
+            "the recorded 40 is nearer than the item's 50"
+        );
+        assert_eq!(
+            canvas.pixel(16, 32),
+            Some([9_u8, 9, 9, 255]),
+            "behind an opaque wall pixel nothing paints"
+        );
+        let mut in_front = vec![masked_at(16, 30, "NEARBAR", 0)];
+        assert_eq!(
+            draw_masked(
+                &Pass::new(&scene, &proj),
+                &mut Frame::new(&mut canvas, &depth),
+                &mut in_front,
+            ),
+            1,
+            "the recorded 60 is farther than the item's 50"
+        );
+        assert_eq!(
+            canvas.pixel(16, 30),
+            Some([111_u8, 144, 111, 255]),
+            "in front of the wall the bar paints"
+        );
+        assert_eq!(depth[near_slot], 40, "the pass never writes the buffer");
+        assert_eq!(depth[front_slot], 60, "not the pixel it covered either");
+    }
+
+    #[test]
+    fn clear_texels_and_absent_keys_leave_the_pixels_behind_them() {
+        let mut scene = box_scene();
+        scene
+            .textures
+            .insert("HALFBAR".to_owned(), clear_columns(4, 128, 111, 2));
+        let proj = pass_projection();
+        let mut canvas = Canvas::new(32, 64, [9_u8, 9, 9, 255]);
+        let depth = vec![i64::MAX; 32_usize.saturating_mul(64)];
+        let mut masked = vec![
+            masked_at(8, 32, "HALFBAR", 0),
+            masked_at(16, 32, "HALFBAR", 2),
+            masked_at(24, 32, "GHOSTBAR", 0),
+        ];
+        let painted = draw_masked(
+            &Pass::new(&scene, &proj),
+            &mut Frame::new(&mut canvas, &depth),
+            &mut masked,
+        );
+        assert_eq!(painted, 1, "only the opaque texel's column counts");
+        assert_eq!(
+            canvas.pixel(8, 32),
+            Some([111_u8, 144, 111, 255]),
+            "texel column 0 is opaque and paints"
+        );
+        assert_eq!(
+            canvas.pixel(16, 32),
+            Some([9_u8, 9, 9, 255]),
+            "texel column 2 is a hole: what stands behind shows through"
+        );
+        assert_eq!(
+            canvas.pixel(24, 32),
+            Some([9_u8, 9, 9, 255]),
+            "a texture key the scene lacks draws nothing"
+        );
+    }
+
+    /// [`divider_map`] with a `64x4` `SHORTBAR` middle and an `F_SKY1`
+    /// on both sectors' ceilings: the window rows then stand on
+    /// infinitely deep sky (or the far wall), so only the texture's own
+    /// four rows can hide a texel, never the depth test or a wrap.
+    fn shortbar_scene() -> Scene {
+        let mut scene = box_scene();
+        scene.map = divider_map("SHORTBAR");
+        scene.sky = solid(256, 128, 200);
+        for entry in &mut scene.map.sectors {
+            entry.ceiling_flat = "F_SKY1".to_owned();
+        }
+        scene
+            .textures
+            .insert("SHORTBAR".to_owned(), solid(64, 4, 90));
+        scene
+    }
+
+    #[test]
+    fn masked_rows_outside_the_texture_height_keep_what_stands_behind() {
+        let scene = shortbar_scene();
+        let rendered = render_view(&scene, &divider_camera(), 33, 64);
+        // Centre column: the bar hangs from world height 136 at
+        // t = 64/11, so window rows 24..=35 read texture rows
+        // 1, 13, ..., 129 - only row 24 lands inside the four.
+        assert_eq!(
+            rendered.canvas.pixel(16, 24),
+            Some([90_u8, 165, 90, 255]),
+            "the one in-range row paints the bar"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 25),
+            Some([200_u8, 55, 200, 255]),
+            "row 25 reads texture row 13: a tiling pass would wrap to texel 1 and paint"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 30),
+            Some([77_u8, 178, 77, 255]),
+            "the far east wall mid-window is deep enough to paint over, and stays, at texture row 72"
+        );
+        assert_eq!(
+            rendered.canvas.pixel(16, 35),
+            Some([1_u8, 254, 1, 255]),
+            "the window's last row, texture row 129, keeps the floor"
+        );
+        assert!(
+            rendered.masked_columns >= 1,
+            "column 16 gained pixels and is counted: {}",
+            rendered.masked_columns
+        );
     }
 }

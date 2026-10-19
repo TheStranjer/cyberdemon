@@ -15,14 +15,16 @@
 //! [`view`] casts the columns of the 3D view: exact `i128` ray
 //! parameters, a sorted portal walk per column, textured walls,
 //! world-aligned textured planes and a sky texture, plus the per-pixel
-//! depth buffer the masked and sprite passes will need. Nothing here
-//! knows about MCP; the `render` tool
-//! group is the only caller that talks to clients.
+//! depth buffer, and [`sprites`] then paints the transparent pass over
+//! the masked middles the walk collected: sorted far to near and
+//! depth-tested against that buffer. Nothing here knows about MCP; the
+//! `render` tool group is the only caller that talks to clients.
 
 pub mod canvas;
 pub mod light;
 pub mod scene;
 pub mod settings;
+pub mod sprites;
 pub mod topdown;
 pub mod view;
 

@@ -1,0 +1,217 @@
+# Map feature tools
+
+Complete game structures built on a map you have already drawn.
+`add_door` cuts working doors; `add_switch` mounts the triggers that fire
+tagged sectors — including a `remote` door's; `add_exit` ends the level,
+from a switch or by walking over a line.
+
+A **feature is ordinary map elements plus the action that makes them do
+something**: `add_door` draws the doorway geometry (through the same
+overlay engine as `create_sector_from_loop`), installs the line special
+and tags, and dresses it with textures — all in one undoable step. Draw
+your rooms first (`reference/sectors.md`), then add the doors, their
+switches and the exit.
+
+## `add_door`
+
+`{map?, between: [sectorA, sectorB] | linedef: N, at?: {x, y}, width? =
+64, depth?, style? = "normal", texture?, track_texture?}` →
+`{door_sector, lines, jambs, style, tag, notes, map, nodes_invalidated,
+copied_to_working}`
+
+Cuts a working door into a wall: the doorway, the recess the door slides
+in, the use action and the dressing, as one `undo` step.
+
+**Where**: pass exactly one of
+
+- `between: [sectorA, sectorB]` — the two rooms the door joins. They
+  must share a two-sided boundary (both sector indices must exist, else
+  `invalid_argument`). The door cuts the shared line nearest `at`, or the
+  longest one when no `at` is given. Sector A lends the recess its floor
+  and ceiling heights.
+- `linedef: N` — the wall to cut. A two-sided line behaves like
+  `between` on its two sectors; a one-sided line opens a recess towards
+  the space its front faces.
+
+`at: {x, y}` optionally centres the cut there (a point off the wall is
+projected onto it); without it the cut sits at the wall's midpoint.
+`width` (default 64) is the opening; a door wider than its wall fails
+`invalid_argument` naming the wall's available length.
+
+**Touching rooms**: when the wall separates two sectors, `add_door` first
+carves a 16-unit **void strip** along their *whole* shared boundary (the
+`notes` say so) and spans the door recess across it, so each room gets a
+real wall face to the doorway and the door has somewhere to slide. The
+rooms stop touching — if that matters for a corridor, check the map
+afterwards with `render_topdown`.
+
+**One-sided walls**: `depth` defaults to an outward ray — the distance
+(≤ 256 units) to the first sector reachable behind the wall's front. An
+explicit positive `depth` overrides the ray, but the recess's far middle
+must land on (or inside) a sector. Both failures say *"no room behind
+this wall within 256 units; move the rooms closer or give a larger
+depth"* (`invalid_argument`). The recess opens into every sector it
+touches: through-room doors become passages.
+
+**Styles** — `style` (case-insensitive) picks the action installed on
+every room-facing line:
+
+| Style            | What it does                                            | `Doom` family | `Hexen` family                |
+|------------------|---------------------------------------------------------|---------------|-------------------------------|
+| `normal`         | Opens on use, waits, closes again                        | `DR` 1        | `Door_Raise` 12 speed 16, delay 150 |
+| `fast`           | The same, at double speed                                | `DR` 117      | `Door_Raise` 12 speed 64      |
+| `stay_open`      | Opens once on use and stays open (one-shot in `Doom`)    | `D1` 31       | `Door_Open` 11                |
+| `locked_red`     | `normal` with the red key card                           | `DR` 28       | `Door_LockedRaise` 13, red    |
+| `locked_blue`    | `normal` with the blue key card                          | `DR` 26       | `Door_LockedRaise` 13, blue   |
+| `locked_yellow`  | `normal` with the yellow key card                        | `DR` 27       | `Door_LockedRaise` 13, yellow |
+| `remote`         | No action on the door's lines — see below                | 0             | 0                             |
+
+Unknown style names fail `invalid_argument` listing all seven.
+
+A **`remote` door is inert until a switch is added**: the recess is built
+closed and its sector tagged with a fresh unused tag (the result's
+`tag`, `null` for every other style — plain `Doom`-family doors act on
+the sector behind their line and need no tag). Point an `add_switch` at
+it (pass this call's `door_sector` as the switch's `target_sector` and
+the tags match), or wire a walkover or an `ACS` script to that tag;
+until a trigger exists the door never moves.
+
+**Textures** default through the session's texture theme
+(`reference/themes.md`): the `door` role dresses the moving face (the
+upper of every room-facing side), `door_track` the jambs
+(`door_track_red`/`_blue`/`_yellow` for the locked styles), and
+`door_floor` the recess floor (room A's flat when the theme names none).
+`texture` and `track_texture` override, validated for the map's format.
+The jambs become one-sided, blocking, floor-pinned track walls; every
+room-facing line is reversed — its sides and its `v1`/`v2` swap together,
+so its front (the line's right, where `Doom` use actions fire and where
+the renderer draws) faces its own room — cleared of its blocking bit and
+top-pegged so the face rides the rising ceiling.
+
+**After the call**: the geometry changed, so `nodes_invalidated` is true
+— run `build_nodes` (or `build_all_nodes`) before playing the map in
+vanilla `Doom`. `lines` are the room-facing action lines, `jambs` the
+track walls, `door_sector` the recess; check the result with
+`assemble_map` and `render_topdown` (`reference/maps.md`,
+`reference/render.md`).
+
+```json
+call add_door {"between": [0, 1]}
+-> {"door_sector": 2, "lines": [4, 10], "jambs": [5, 7],
+    "style": "normal", "tag": null,
+    "notes": ["carved a 16-unit void strip along the shared boundary of
+              sectors 0 and 1: the door recess spans it"],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
+## `add_switch`
+
+`{map?, linedef: N, at?: {x, y}, width? = 32, action, target_sector?,
+repeatable? = false}` → `{linedef, split, action, special, tag, texture,
+map, nodes_invalidated, copied_to_working}`
+
+Mounts a usable switch panel on a wall: it isolates a `width`-wide chunk
+of `linedef` as its own linedef (splitting the wall if needed), paints
+the theme's switch texture on its front middle, and installs a
+use-activated special that acts on a tagged sector — all in one `undo`
+step. This is the trigger a `remote` `add_door` waits for.
+
+**The wall**: `linedef: N` is required and must exist (`invalid_argument`
+naming it otherwise). `at: {x, y}` optionally centres the panel there (a
+point off the wall is projected onto it); without it the panel sits at
+the wall's midpoint. `width` (default 32, positive) is the panel; a wall
+too short for it fails `invalid_argument` naming the available length.
+When the wall is longer than the panel it is split so the chunk becomes
+its own linedef — the result's `linedef` names that new line and `split`
+is `true`; when the line already is exactly that chunk nothing is cut
+(`split` false, `linedef` is the one you passed). The front side must
+wear the panel: a wall with no front sidedef fails `invalid_argument`
+(give it one with `add_sidedef`).
+
+**Actions** — `action` (case-insensitive) is required; an unknown name
+fails `invalid_argument` listing all five:
+
+| Action          | What it does                                             | Sector? | `Doom` family | `Hexen` family              |
+|-----------------|----------------------------------------------------------|---------|---------------|-----------------------------|
+| `open_door`     | Opens the tagged door, closing it after its wait          | yes     | `S1` 103 / `SR` 61 | `Door_Open` 11 (speed 16) |
+| `raise_floor`   | Raises the tagged floor to the highest neighbouring floor | yes     | `S1` 18 / `SR` 69  | `Floor_RaiseToNearest` 25 (speed 8) |
+| `lower_floor`   | Lowers the tagged floor to the lowest neighbouring floor  | yes     | `S1` 23 / `SR` 60  | `Floor_LowerToLowest` 21 (speed 8)  |
+| `exit`          | Ends the level (normal exit)                              | no      | `S1` 11            | `Portal` 243                |
+| `secret_exit`   | Ends the level (secret exit)                              | no      | `S1` 51            | `Portal` 244                |
+
+**Targets**: the three sector-moving actions (`open_door`, `raise_floor`,
+`lower_floor`) require `target_sector` — the index of the sector they act
+on (missing or out of range is `invalid_argument`). The line answers with
+that sector's existing tag; an **untagged** sector (`tag 0`) is stamped
+with a fresh unused tag and the result's `tag` reports it. So `add_door`'s
+`remote` door is wired by passing its reported `door_sector` here — the
+tags match. The two exit actions act on no sector: `target_sector` and
+`repeatable` are ignored for them (a level change fires once, and the
+`Doom` family ships no repeatable exit).
+
+**Repeatable**: `repeatable` (default false) picks the `SR` specials in
+the `Doom` family and adds `repeatspecial` activation in the `Hexen`
+family; the `Hexen` line's activation field is replaced with `playeruse`
+(a `Doom`-family line keeps its flags).
+
+**Textures**: the panel comes from the session's texture theme
+(`reference/themes.md`) — the `switch` role, or `exit_switch` for the two
+exit actions. It is written to the isolated line's front middle.
+
+**After the call**: `nodes_invalidated` is true only when the wall was
+split (that changed geometry — run `build_nodes` before playing in
+vanilla `Doom`); a line already the right size is a property edit that
+keeps the nodes. `special`/`tag`/`texture` echo what was installed.
+
+```json
+call add_switch {"linedef": 7, "action": "open_door", "target_sector": 2}
+-> {"linedef": 42, "split": true, "action": "open_door", "special": 103,
+    "tag": 2, "texture": "SW1COMP",
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
+## `add_exit`
+
+`{map?, kind, secret? = false, linedef?, sector?}` → `{kind, lines,
+special, secret, map, nodes_invalidated, copied_to_working}`
+
+Places the level end in one undoable edit, either as an exit switch on a
+wall or as lines the player crosses. `kind` (required, case-insensitive)
+picks the trigger; `secret` (default false) picks the map's secret exit.
+
+**`kind: "switch"`** is exactly `add_switch` with the `exit` (or
+`secret_exit`) action: `linedef` (required — missing or out of range is
+`invalid_argument` naming it) is the wall the panel mounts on, at the
+default 32-unit width, wearing the theme's `exit_switch` texture. The
+Doom family gets `S1` 11 (51); the Hexen family gets `Portal` 243 (244)
+with `playeruse` activation. `sector` is ignored.
+
+**`kind: "walk_over"`** dresses a whole sector: `sector` (required —
+missing or out of range is `invalid_argument` naming it) — **every
+two-sided linedef with the sector on either side** becomes a level-end
+line. A sector with no two-sided boundary is refused with a hint. The
+Doom family gets `W1` 52 (124); such a line's tag is the destination map
+number in vanilla, so each line's existing tag is **kept** untouched (0
+ends the game, or the secret level on 124 — set a real destination with
+`edit_linedef`). The Hexen family gets special 243 (244) with its
+activation field set to `playercross` — cross, not use; the lines' other
+flag bits, tags and args stay. `linedef` is ignored, and nothing is
+re-textured.
+
+The result reports `kind`, the installed `special`, the `secret` flag and
+`lines`: the one linedef for the switch kind (new when the wall was
+split), every dressed boundary for `walk_over`. Switch-kind edits set
+`nodes_invalidated` only when they split; walk-over edits are property
+changes and never do.
+
+```json
+call add_exit {"kind": "walk_over", "sector": 1, "secret": true}
+-> {"kind": "walk_over", "lines": [2], "special": 124, "secret": true,
+    "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
+```
+
+## Growth points
+
+- All three feature tools (`add_door`, `add_switch`, `add_exit`) are in
+  place. Lower-level control stays with the `edit_*` groups and
+  `run_batch`.

@@ -50,6 +50,7 @@ impl Cyberdemon {
         router.merge(Self::edit_sidedefs_router());
         router.merge(Self::edit_things_router());
         router.merge(Self::edit_vertices_router());
+        router.merge(Self::features_router());
         router.merge(Self::graphics_router());
         router.merge(Self::imports_router());
         router.merge(Self::inspect_router());

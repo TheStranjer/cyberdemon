@@ -223,6 +223,11 @@ src/
                   it turns the parameters into a `wad::map::convert::Target`
                   and runs the pure conversion as one `Session::convert_map`
                   step (`dry_run` converts a copy and only reports);
+                  `tools/features.rs` is the `features` group: `add_door`
+                  composes the `wad::map::features` door core and the
+                  overlay engine into one `Session::edit_map` step
+                  (void strip, recess paint, `apply_door`; the
+                  `add_switch`/`add_exit` tickets grow in place here);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`, and its `optimize_wad`
@@ -297,7 +302,10 @@ src/
                   shifts, and the removal-engine join),
                   `map/convert.rs` the pure within-flag-family format
                   conversion (`Target`, `convert_map`, `Conversion`) behind
-                  `convert_map_format`, and `map/validate.rs` +
+                  `convert_map_format`, `map/features.rs` +
+                  `map/features/doors.rs` the pure door core (the `DoorStyle`
+                  action table, `apply_door`'s doorway dressing and `next_free_tag`),
+                  and `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
                   model and the `CHECKS` pipeline (`references`,

@@ -24,10 +24,17 @@
 //! void-carving step behind `create_sector_from_loop` and `carve_void`.
 //! [`ops`] cuts one linedef at a point and welds two collinear ones
 //! together, the pure geometry behind `split_linedef`
-//! and `join_linedefs`. [`transform`] scales, rotates and translates a
-//! selection of vertices and things in integer math, the pure engine
-//! behind `transform_selection`. [`validate`] runs the pure map-health checks
-//! behind `validate_map`: reference integrity, line structure, thing
+//! and `join_linedefs`. [`features`] holds the pure cores of assembled
+//! map structures: [`features::doors`] is the door action table and the
+//! doorway dressing behind the door tools, [`features::place`] the
+//! wall selection, width fit and depth raycast behind their placement,
+//! and [`features::switches`] the switch action table behind
+//! `add_switch`.
+//! [`transform`] scales, rotates
+//! and translates a selection of vertices and things in integer math,
+//! the pure engine behind `transform_selection`. [`validate`] runs the
+//! pure map-health checks behind `validate_map`: reference integrity,
+//! line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
 //! rows.
 
@@ -36,6 +43,7 @@ pub mod build_blockmap;
 pub mod build_reject;
 pub mod convert;
 pub mod doom;
+pub mod features;
 pub mod flags;
 pub mod geometry;
 pub mod hexen;

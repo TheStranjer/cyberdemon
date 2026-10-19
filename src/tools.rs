@@ -22,6 +22,7 @@ pub(crate) mod edit_sectors;
 pub(crate) mod edit_sidedefs;
 pub(crate) mod edit_things;
 pub(crate) mod edit_vertices;
+pub(crate) mod features;
 pub mod graphics;
 pub(crate) mod imports;
 pub(crate) mod inspect;

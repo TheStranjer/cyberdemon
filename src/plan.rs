@@ -10,5 +10,6 @@
 //! measurement and validation only.
 
 pub mod model;
+pub mod walls;
 
 pub use model::*;

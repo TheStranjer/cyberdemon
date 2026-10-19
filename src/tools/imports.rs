@@ -31,8 +31,19 @@
 //! settles a tiling-friendly size, quantizes the picture opaquely, stores
 //! the patch, grows `PNAMES` and defines the `TEXTURE1`/`TEXTURE2` record
 //! through the [`crate::tools::textures`] internals, optionally pointing a
-//! theme wall role at the result.
+//! theme wall role at the result. [`Cyberdemon::create_flat_from_image`]
+//! is its floor/ceiling twin: [`create_flat`] fits the processed picture
+//! to the vanilla `64x64`, tiles and quantizes it opaquely, and places
+//! the raw flat in the working `flats` region with the stricter
+//! everywhere-used collision rule, optionally assigning a theme flat
+//! role. [`Cyberdemon::create_sprite_from_image`] is the sprite twin:
+//! [`create_sprite`] removes the border background, trims, scales to a
+//! sprite height, quantizes with alpha holes and places the named lump
+//! (or one per `frames` letter) in the working `sprites` region,
+//! carrying [`sprite`]' rotation warnings through.
 
+pub(in crate::tools) mod create_flat;
+pub(in crate::tools) mod create_sprite;
 pub(in crate::tools) mod image_pipeline;
 pub(in crate::tools) mod processed;
 mod sprite;
@@ -56,6 +67,12 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::fail;
+use crate::tools::imports::create_flat::{
+    CREATE_FLAT_TOOL_DESCRIPTION, CreateFlatParams, create_flat_run,
+};
+use crate::tools::imports::create_sprite::{
+    CREATE_SPRITE_TOOL_DESCRIPTION, CreateSpriteParams, create_sprite_run,
+};
 use crate::tools::imports::image_pipeline::{
     DEFAULT_PALETTE, ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched,
     build_patch, chosen_name, parse_import, put_lump,
@@ -529,7 +546,7 @@ fn fit_flat_shape(
 
 /// Source pixels with alpha below [`DEFAULT_ALPHA_THRESHOLD`]: flats store
 /// no transparency, so they are kept opaque and only counted.
-fn transparent_alpha_pixels(img: &RgbaImage) -> usize {
+pub(in crate::tools) fn transparent_alpha_pixels(img: &RgbaImage) -> usize {
     img.pixels
         .chunks_exact(BYTES_PER_PIXEL)
         .map(to_pixel)
@@ -752,6 +769,24 @@ impl Cyberdemon {
         Parameters(args): Parameters<CreateTextureParams>,
     ) -> Result<CallToolResult, ErrorData> {
         create_texture_run(self.state(), &args).await
+    }
+
+    /// Builds a working floor/ceiling flat from one picture in one step.
+    #[tool(description = CREATE_FLAT_TOOL_DESCRIPTION)]
+    async fn create_flat_from_image(
+        &self,
+        Parameters(args): Parameters<CreateFlatParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        create_flat_run(self.state(), &args).await
+    }
+
+    /// Builds working sprite lump(s) from one picture in one undoable step.
+    #[tool(description = CREATE_SPRITE_TOOL_DESCRIPTION)]
+    async fn create_sprite_from_image(
+        &self,
+        Parameters(args): Parameters<CreateSpriteParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        create_sprite_run(self.state(), &args).await
     }
 }
 

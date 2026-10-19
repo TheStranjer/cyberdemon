@@ -613,7 +613,7 @@ fn check_patch_clash(session: &Session, patch: LumpName, replace: bool) -> Resul
 
 /// What a layer reads as in a message: the base game archive or a
 /// resource, by its position in the stack.
-fn layer_label(session: &Session, index: usize) -> String {
+pub(in crate::tools) fn layer_label(session: &Session, index: usize) -> String {
     session.layers().get(index).map_or_else(
         || format!("layer {index}"),
         |layer| match layer.role {

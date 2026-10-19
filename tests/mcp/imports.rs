@@ -19,7 +19,16 @@
 //! `PNAMES`/patch/definition landing together, the layer-patch and
 //! texture-name collisions with and without `replace`, `assign_role`
 //! against the theme, and the single `undo`) close the picture-in side of
-//! the group.
+//! the group. The other two one-shots: `create_flat_from_image` (always
+//! `64x64`, the default `tileable` seam blend, `contain` padding, the
+//! layer-flat collision with the everywhere-used hint and its `replace`
+//! override, `assign_role` for flat roles with the wall-role refusal, and
+//! the single `undo`) and `create_sprite_from_image` (background removal
+//! and trim with the feet-on-origin default, `remove_background`/`trim`
+//! switches, the `height` fit and the too-tall note, `frames` writing one
+//! lump per letter in one undoable step, the mirror-pair naming, the
+//! rotation-coverage warnings, the all-background refusal hint, the
+//! duplicate and `replace` rule and the naming-conflict catalogue).
 
 #[cfg(test)]
 mod tests {
@@ -2297,5 +2306,765 @@ mod tests {
             rgba.chunks_exact(4).all(|pixel| pixel[3] == 255_u8),
             "the wall patch is fully opaque"
         );
+    }
+
+    /// One successful `create_flat_from_image` call of `file` with `extra`.
+    async fn create_flat(client: &Client, file: &Path, extra: Value) -> Value {
+        call(client, "create_flat_from_image", source_args(file, extra)).await
+    }
+
+    /// The `steps` of a report, as op names in order.
+    fn step_ops(report: &Value) -> Vec<&str> {
+        report["steps"]
+            .as_array()
+            .expect("a step list")
+            .iter()
+            .map(|step| step["op"].as_str().expect("a named step"))
+            .collect()
+    }
+
+    /// Whether a `warnings` entry is text mentioning every one of `parts`.
+    fn mentions(warning: &Value, parts: &[&str]) -> bool {
+        let text = warning.as_str().unwrap_or_default();
+        parts.iter().all(|part| text.contains(part))
+    }
+
+    /// One failing `create_flat_from_image` call of `file` with `extra`.
+    async fn create_flat_err(client: &Client, file: &Path, extra: Value) -> (String, String) {
+        call_err(client, "create_flat_from_image", source_args(file, extra)).await
+    }
+
+    /// The `RGBA` pixel at row-major `index` of a fetched picture.
+    fn rgba_pixel(rgba: &[u8], index: usize) -> [u8; 4] {
+        let start = index.checked_mul(4).expect("byte offset");
+        let byte = |shift: usize| {
+            *rgba
+                .get(start.checked_add(shift).expect("in range"))
+                .expect("pixel byte")
+        };
+        [byte(0), byte(1), byte(2), byte(3)]
+    }
+
+    /// The `RGB` triple at row-major `index` of a fetched picture.
+    fn rgb_at(rgba: &[u8], index: usize) -> [u8; 3] {
+        let pixel = rgba_pixel(rgba, index);
+        [pixel[0], pixel[1], pixel[2]]
+    }
+
+    /// The `create_flat_from_image` rule: any picture becomes a `64x64`
+    /// flat with the automatic `fit` (+ default `make_tileable`) steps, a
+    /// preview, a stored lump and one undoable edit.
+    #[tokio::test]
+    async fn create_flat_fits_any_picture_to_the_vanilla_square() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "PHOTO.png",
+            &flat_png(100_u32, 80_u32, |_| false),
+        );
+        let report = create_flat(&client, &file, json!({ "name": "myfloor" })).await;
+        assert_eq!(report["flat"], json!("MYFLOOR"), "the name uppercases");
+        assert_eq!(
+            step_ops(&report),
+            vec!["fit", "make_tileable"],
+            "the fit always runs and tiling is on by default"
+        );
+        assert_eq!(report["overrides_existing"], json!(false), "a free name");
+        assert!(report["preview"]["url"].is_string(), "a preview asset");
+        assert_eq!(
+            report["next_steps"][0],
+            json!("edit_sector floor_flat/ceiling_flat"),
+            "the documented way forward"
+        );
+        assert_eq!(report["warnings"], json!([]), "the picture is opaque");
+        assert!(
+            report["max_color_error"].as_u64().is_some(),
+            "the quantization is measured"
+        );
+        let flat = call(&client, "get_flat", json!({ "name": "MYFLOOR" })).await;
+        assert_eq!(flat["width"], json!(64_u64), "the vanilla square");
+        assert_eq!(flat["height"], json!(64_u64), "both ways");
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(
+            session["undo"],
+            json!(["create_flat MYFLOOR"]),
+            "one undoable step"
+        );
+    }
+
+    /// `tileable` (on by default) blends the edges; off keeps them.
+    #[tokio::test]
+    async fn the_tileable_switch_blends_the_flat_edges() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "RAMP.png",
+            &flat_png(100_u32, 80_u32, |_| false),
+        );
+        let tiled = create_flat(&client, &file, json!({ "name": "TILED" })).await;
+        let asdrawn = create_flat(
+            &client,
+            &file,
+            json!({ "name": "ASDRAWN", "tileable": false }),
+        )
+        .await;
+        assert_eq!(step_ops(&asdrawn), vec!["fit"], "no tiling step off");
+        assert_eq!(
+            step_ops(&tiled),
+            vec!["fit", "make_tileable"],
+            "on by default"
+        );
+        let blended = flat_rgba(&client, "TILED").await;
+        let kept = flat_rgba(&client, "ASDRAWN").await;
+        assert_eq!(blended.len(), kept.len(), "both are 64x64 RGBA");
+        assert_ne!(blended, kept, "the 16-pixel band changed the seams");
+    }
+
+    /// `contain` letterboxes the whole picture: the padding quantizes to
+    /// the palette colour nearest to black and counts as kept-opaque.
+    #[tokio::test]
+    async fn contain_fits_the_whole_picture_with_padding() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "WIDE.png", &flat_png(64_u32, 40_u32, |_| false));
+        let report = create_flat(
+            &client,
+            &file,
+            json!({ "name": "PADDED", "fit": "contain", "tileable": false, "dither": "none" }),
+        )
+        .await;
+        let warnings = report["warnings"].as_array().expect("a warning list");
+        assert_eq!(warnings.len(), 1_usize, "the padding warns");
+        assert!(
+            warnings[0]
+                .as_str()
+                .is_some_and(|text| text.contains("kept opaque") && text.contains("1536 pixels")),
+            "the warning counts the padding: {warnings:?}"
+        );
+        let rgba = flat_rgba(&client, "PADDED").await;
+        assert_eq!(
+            rgb_at(&rgba, 0_usize),
+            [85_u8, 170, 85],
+            "the padding took the palette colour nearest to black"
+        );
+        let row_12 = 12_usize.checked_mul(64).expect("row 12");
+        assert_eq!(
+            rgb_at(&rgba, row_12),
+            [0_u8, 255, 0],
+            "row 12 is source row 0"
+        );
+    }
+
+    /// A layer-held flat name refuses with the everywhere-used hint;
+    /// `replace` accepts the override; a working twin then needs
+    /// `replace` too.
+    #[tokio::test]
+    async fn create_flat_collisions_refuse_until_replace() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "CLASH.png",
+            &flat_png(32_u32, 32_u32, |_| false),
+        );
+        let (code, message) = call_err(
+            &client,
+            "create_flat_from_image",
+            source_args(&file, json!({ "name": "FLOOR1" })),
+        )
+        .await;
+        assert_eq!(code, "already_exists", "the IWAD flat stands");
+        assert!(
+            message.contains("this would override FLOOR1 everywhere it is used"),
+            "the hint names the consequence: {message}"
+        );
+        assert!(
+            message.contains("the IWAD"),
+            "and names the layer: {message}"
+        );
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(session["undo"], json!([]), "the refusal wrote nothing");
+        let replaced =
+            create_flat(&client, &file, json!({ "name": "FLOOR1", "replace": true })).await;
+        assert_eq!(
+            replaced["overrides_existing"],
+            json!(true),
+            "the override reports"
+        );
+        assert_eq!(
+            step_ops(&replaced),
+            vec!["fit", "make_tileable"],
+            "the normal chain"
+        );
+        let listed = call(&client, "list_flats", json!({ "pattern": "FLOOR1" })).await;
+        assert_eq!(
+            listed["flats"][0]["source"],
+            json!("working"),
+            "the working copy now serves"
+        );
+        let (twin_code, twin_message) = call_err(
+            &client,
+            "create_flat_from_image",
+            source_args(&file, json!({ "name": "FLOOR1" })),
+        )
+        .await;
+        assert_eq!(twin_code, "already_exists", "the working twin stands");
+        assert!(
+            twin_message.contains("working archive"),
+            "the message names the archive: {twin_message}"
+        );
+    }
+
+    /// `assign_role` points a theme flat role at the new flat and warns
+    /// that undo will not roll the override back.
+    #[tokio::test]
+    async fn create_flat_assign_role_points_the_theme_at_the_new_flat() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "ROLED.png",
+            &flat_png(64_u32, 64_u32, |_| false),
+        );
+        let report = create_flat(
+            &client,
+            &file,
+            json!({ "name": "ROLED", "assign_role": "floor" }),
+        )
+        .await;
+        assert_eq!(report["role"], json!("floor"), "the assigned role");
+        assert!(
+            report["warnings"]
+                .as_array()
+                .expect("warnings")
+                .iter()
+                .any(|warning| mentions(
+                    warning,
+                    &[
+                        "theme override floor -> ROLED",
+                        "undo does not roll it back"
+                    ]
+                )),
+            "the warning explains the theme state: {}",
+            report["warnings"]
+        );
+        let theme = call(&client, "get_texture_theme", json!({})).await;
+        assert_eq!(
+            theme["roles"]["floor"]["texture"],
+            json!("ROLED"),
+            "the role resolves"
+        );
+        assert_eq!(
+            theme["roles"]["floor"]["matched"],
+            json!("exact"),
+            "as an override"
+        );
+    }
+
+    /// One `create_flat_from_image` call asking for role `role`, refused.
+    async fn refuse_flat_role(client: &Client, file: &Path, role: &str) {
+        let (code, message) =
+            create_flat_err(client, file, json!({ "name": "NOPE", "assign_role": role })).await;
+        assert_eq!(code, "invalid_argument", "{role} refuses");
+        assert!(
+            message.contains("role"),
+            "the message explains {role}: {message}"
+        );
+    }
+
+    /// Both a wall role and an unknown one refuse.
+    async fn refuse_flat_roles(client: &Client, file: &Path) {
+        for role in ["wall", "roof"] {
+            refuse_flat_role(client, file, role).await;
+        }
+    }
+
+    /// A wall role (and an unknown one) refuse before anything is written.
+    #[tokio::test]
+    async fn create_flat_wall_roles_refuse_before_anything_is_written() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "WALLROLE.png",
+            &flat_png(64_u32, 64_u32, |_| false),
+        );
+        refuse_flat_roles(&client, &file).await;
+        let listed = call(&client, "list_flats", json!({ "pattern": "NOPE" })).await;
+        assert_eq!(listed["total"], json!(0_u64), "nothing was stored");
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(session["undo"], json!([]), "no edit landed");
+        let theme = call(&client, "get_texture_theme", json!({})).await;
+        assert_ne!(
+            theme["roles"]["floor"]["texture"],
+            json!("NOPE"),
+            "the theme is untouched"
+        );
+    }
+
+    /// One `undo` removes the created flat.
+    #[tokio::test]
+    async fn one_undo_rolls_back_the_created_flat() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "UNDONE.png",
+            &flat_png(100_u32, 80_u32, |_| false),
+        );
+        create_flat(&client, &file, json!({ "name": "UNDONE" })).await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["create_flat UNDONE"]),
+            "the single step rolls back"
+        );
+        let (code, _) = call_err(&client, "get_flat", json!({ "name": "UNDONE" })).await;
+        assert_eq!(code, "not_found", "the flat left with its edit");
+    }
+
+    /// Bad sources and parameters each report their code; nothing is
+    /// stored along the way.
+    #[tokio::test]
+    async fn bad_flat_creation_arguments_are_refused_without_edits() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let junk = write_file(dir.path(), "junk.txt", b"this is a text file, not an image");
+        let good = write_file(dir.path(), "GOOD.png", &flat_png(64_u32, 64_u32, |_| false));
+        let cases: [Refusal; 4] = [
+            (
+                "junk",
+                source_args(&junk, json!({ "name": "X" })),
+                "format_error",
+                "image",
+            ),
+            (
+                "long name",
+                source_args(&good, json!({ "name": "TOO LONG NAME" })),
+                "invalid_argument",
+                "name",
+            ),
+            (
+                "wall role",
+                source_args(&good, json!({ "name": "X", "assign_role": "door" })),
+                "invalid_argument",
+                "wall role",
+            ),
+            (
+                "missing",
+                json!({ "source": dir.path().join("absent.png").display().to_string(), "name": "X" }),
+                "not_found",
+                "absent.png",
+            ),
+        ];
+        refuse_all(&client, "create_flat_from_image", &cases).await;
+        let flats = call(&client, "list_flats", json!({})).await;
+        assert_eq!(flats["total"], json!(FIXTURE_FLATS), "nothing was stored");
+    }
+
+    /// The `40x60` figure PNG's pixel at `(x, y)`: red inside the `10x20`
+    /// block at `(10, 20)`, white outside it.
+    fn figure_pixel(x: u32, y: u32) -> [u8; 4] {
+        if (10_u32..20_u32).contains(&x) && (20_u32..40_u32).contains(&y) {
+            [255_u8, 0, 0, 255]
+        } else {
+            [255_u8, 255, 255, 255]
+        }
+    }
+
+    /// A `40x60` palette PNG: white all over, a solid red `10x20` block.
+    fn figure_png() -> Vec<u8> {
+        let pixels: Vec<u8> = (0_u32..60_u32)
+            .flat_map(|y| (0_u32..40_u32).map(move |x| figure_pixel(x, y)))
+            .flatten()
+            .collect();
+        let img = RgbaImage::new(40_u32, 60_u32, pixels).expect("40x60 is valid");
+        encode_png(&img, None).expect("test PNG encodes")
+    }
+
+    /// A `12x12` fully white PNG.
+    fn white_png() -> Vec<u8> {
+        let side = 12_usize;
+        let count = side
+            .checked_mul(side)
+            .expect("test pixels")
+            .checked_mul(4_usize)
+            .expect("test bytes");
+        let img = RgbaImage::new(12_u32, 12_u32, vec![255_u8; count]).expect("12x12 is valid");
+        encode_png(&img, None).expect("test PNG encodes")
+    }
+
+    /// One successful `create_sprite_from_image` call of `file`.
+    async fn create_sprite(client: &Client, file: &Path, extra: Value) -> Value {
+        call(client, "create_sprite_from_image", source_args(file, extra)).await
+    }
+
+    /// The pixel index just inside the figure block at row 20, column 12.
+    fn figure_index() -> usize {
+        usize::try_from(
+            20_u32
+                .checked_mul(40_u32)
+                .expect("row 20")
+                .checked_add(12_u32)
+                .expect("pixel 12"),
+        )
+        .expect("in range")
+    }
+
+    /// Every one of `names` answers `not_found` from `get_sprite`.
+    async fn sprites_are_gone(client: &Client, names: &[&str]) {
+        for name in names {
+            let (code, _) = call_err(client, "get_sprite", json!({ "name": name })).await;
+            assert_eq!(code, "not_found", "{name} left with the edit");
+        }
+    }
+
+    /// The default pipeline: background removal, trim, feet-on-origin
+    /// offsets, as one labelled edit with the definition hint.
+    #[tokio::test]
+    async fn create_sprite_removes_the_background_and_stands_on_its_feet() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let report = create_sprite(&client, &file, json!({ "sprite": "BOBA" })).await;
+        assert_eq!(
+            report["lumps"],
+            json!(["BOBAA0"]),
+            "the parts form names one lump"
+        );
+        assert_eq!(
+            (report["width"].as_u64(), report["height"].as_u64()),
+            (Some(10_u64), Some(20_u64)),
+            "trimmed to the figure"
+        );
+        assert_eq!(report["left_offset"], json!(5_i64), "half the final width");
+        assert_eq!(report["top_offset"], json!(20_i64), "feet on the origin");
+        assert_eq!(
+            step_ops(&report),
+            vec!["remove_background", "trim"],
+            "the automatic chain"
+        );
+        assert_eq!(report["notes"], json!([]), "nothing scaled");
+        assert_eq!(report["warnings"], json!([]), "a free sprite");
+        assert!(report["preview"]["url"].is_string(), "a preview asset");
+        assert_eq!(
+            report["next_steps"][0],
+            json!(
+                "a new thing type needs a definition: edit_decorate (ZDoom ports) or edit_dehacked to repoint an existing type's frames"
+            ),
+            "the definition hint"
+        );
+        let sprite = call(&client, "get_sprite", json!({ "name": "BOBAA0" })).await;
+        assert_eq!(sprite["width"], json!(10_u64), "the stored lump");
+        assert_eq!(sprite["top_offset"], json!(20_i64), "keeps the offsets");
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(
+            session["undo"],
+            json!(["create_sprite BOBAA0"]),
+            "one undoable step"
+        );
+    }
+
+    /// `remove_background: false` keeps the white canvas opaque;
+    /// `trim: false` keeps the cleared border as holes, so the area
+    /// outside the figure is transparent.
+    #[tokio::test]
+    async fn the_background_switches_keep_the_canvas_or_its_holes() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let kept = create_sprite(
+            &client,
+            &file,
+            json!({ "name": "BOBAA1", "remove_background": false }),
+        )
+        .await;
+        assert_eq!(
+            (kept["width"].as_u64(), kept["height"].as_u64()),
+            (Some(40_u64), Some(60_u64)),
+            "the white is content, so the trim keeps the full canvas"
+        );
+        assert_eq!(kept["top_offset"], json!(60_i64), "feet on the full height");
+        let kept_rgba = sprite_rgba(&client, "BOBAA1").await;
+        assert_eq!(
+            rgba_pixel(&kept_rgba, 0_usize)[3],
+            255_u8,
+            "the corner stays opaque"
+        );
+        let holed = create_sprite(&client, &file, json!({ "name": "BOBAA2", "trim": false })).await;
+        assert_eq!(
+            holed["transparent_pixels"],
+            json!(2200_u64),
+            "the white was dropped as holes"
+        );
+        let holed_rgba = sprite_rgba(&client, "BOBAA2").await;
+        assert_eq!(
+            rgba_pixel(&holed_rgba, 0_usize)[3],
+            0_u8,
+            "outside the figure is transparent"
+        );
+        assert_eq!(
+            rgba_pixel(&holed_rgba, figure_index())[3],
+            255_u8,
+            "the figure is opaque"
+        );
+    }
+
+    /// `height` scales the trimmed figure with the aspect kept, and the
+    /// offsets follow the final picture.
+    #[tokio::test]
+    async fn create_sprite_scales_to_the_requested_height() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let report = create_sprite(
+            &client,
+            &file,
+            json!({ "sprite": "BOBA", "rotation": 1_u64, "height": 40_u64 }),
+        )
+        .await;
+        assert_eq!(report["lumps"], json!(["BOBAA1"]), "the rotation carries");
+        assert_eq!(
+            (report["width"].as_u64(), report["height"].as_u64()),
+            (Some(20_u64), Some(40_u64)),
+            "10x20 scaled to 40 tall keeps 20 wide"
+        );
+        assert_eq!(report["left_offset"], json!(10_i64), "half the final width");
+        assert_eq!(report["top_offset"], json!(40_i64), "the final height");
+        assert_eq!(
+            step_ops(&report),
+            vec!["remove_background", "trim", "fit"],
+            "the fit follows the trim"
+        );
+        assert_eq!(report["notes"], json!([]), "an explicit height is quiet");
+    }
+
+    /// `frames` writes the same final image once per letter, in one edit
+    /// that one undo rolls back entirely.
+    #[tokio::test]
+    async fn create_sprite_frames_writes_one_lump_per_letter_at_once() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let report = create_sprite(
+            &client,
+            &file,
+            json!({ "sprite": "BOBA", "frames": ["A", "B"] }),
+        )
+        .await;
+        assert_eq!(
+            report["lumps"],
+            json!(["BOBAA0", "BOBAB0"]),
+            "both frames named"
+        );
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(
+            session["undo"],
+            json!(["create_sprite BOBAA0"]),
+            "the first lump labels the single step"
+        );
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["create_sprite BOBAA0"]),
+            "one undo rolls the pair back"
+        );
+        sprites_are_gone(&client, &["BOBAA0", "BOBAB0"]).await;
+    }
+
+    /// The parts form with `mirror_rotation` names the pair lump.
+    #[tokio::test]
+    async fn create_sprite_names_the_mirror_pair() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let report = create_sprite(
+            &client,
+            &file,
+            json!({ "sprite": "BOBA", "frame": "B", "rotation": 2_u64, "mirror_rotation": 7_u64 }),
+        )
+        .await;
+        assert_eq!(
+            report["lumps"],
+            json!(["BOBAB2B7"]),
+            "the assembled pair name"
+        );
+        let sprite = call(&client, "get_sprite", json!({ "name": "BOBAB2B7" })).await;
+        assert_eq!(sprite["width"], json!(10_u64), "the lump serves");
+    }
+
+    /// Rotations another lump already serves are warnings, not refusals.
+    #[tokio::test]
+    async fn create_sprite_warns_about_rotations_the_session_already_serves() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let report = create_sprite(
+            &client,
+            &file,
+            json!({ "sprite": "TROO", "rotation": 2_u64 }),
+        )
+        .await;
+        assert_eq!(report["lumps"], json!(["TROOA2"]), "the import lands");
+        let warnings = report["warnings"].as_array().expect("a warning list");
+        assert!(
+            warnings.iter().any(|warning| mentions(
+                warning,
+                &["frame A rotation 2 is also served by TROOA2A8"]
+            )),
+            "the pair's coverage warns: {warnings:?}"
+        );
+    }
+
+    /// A picture that is all background refuses with the documented hint.
+    #[tokio::test]
+    async fn a_picture_that_is_all_background_refuses_with_the_hint() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "WHITE.png", &white_png());
+        let (code, message) = call_err(
+            &client,
+            "create_sprite_from_image",
+            source_args(&file, json!({ "sprite": "BOBA" })),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "nothing is left to store");
+        assert!(
+            message.contains("the whole image was removed as background"),
+            "the message names the cause: {message}"
+        );
+        assert!(
+            message.contains("lower background_tolerance")
+                && message.contains("set remove_background false"),
+            "both ways out are named: {message}"
+        );
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(session["undo"], json!([]), "nothing was written");
+    }
+
+    /// A taller-than-`256` picture without `height` is scaled to `128`
+    /// tall and says so in the notes.
+    #[tokio::test]
+    async fn a_tall_picture_is_scaled_with_the_documented_note() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "TALL.png",
+            &flat_png(60_u32, 300_u32, |_| false),
+        );
+        let report = create_sprite(
+            &client,
+            &file,
+            json!({ "name": "BOBAA3", "remove_background": false, "trim": false }),
+        )
+        .await;
+        assert_eq!(
+            (report["width"].as_u64(), report["height"].as_u64()),
+            (Some(26_u64), Some(128_u64)),
+            "60x300 to 128 tall keeps the aspect"
+        );
+        assert_eq!(
+            report["notes"],
+            json!(["scaled to 128 px tall; pass height to choose"]),
+            "the documented note"
+        );
+        assert_eq!(step_ops(&report), vec!["fit"], "the automatic fit");
+    }
+
+    /// A working twin refuses until `replace`, which overwrites in place;
+    /// the refusal adds no undo step.
+    #[tokio::test]
+    async fn create_sprite_duplicates_need_replace() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        create_sprite(&client, &file, json!({ "sprite": "BOBA" })).await;
+        let (code, message) = call_err(
+            &client,
+            "create_sprite_from_image",
+            source_args(&file, json!({ "sprite": "BOBA" })),
+        )
+        .await;
+        assert_eq!(code, "already_exists", "the working twin stands");
+        assert!(
+            message.contains("replace=true"),
+            "the message names the way out: {message}"
+        );
+        let replaced =
+            create_sprite(&client, &file, json!({ "sprite": "BOBA", "replace": true })).await;
+        assert_eq!(replaced["lumps"], json!(["BOBAA0"]), "the overwrite lands");
+        let session = call(&client, "get_session_info", json!({})).await;
+        let undo = session["undo"].as_array().expect("the undo stack");
+        assert_eq!(undo.len(), 2_usize, "the refusal added no step: {undo:?}");
+        assert_eq!(
+            undo[0],
+            json!("create_sprite BOBAA0"),
+            "both steps are the create"
+        );
+    }
+
+    /// Naming conflicts, a bad height and a bad colour each report
+    /// `invalid_argument`; nothing is stored along the way.
+    #[tokio::test]
+    async fn bad_sprite_creation_arguments_are_refused_without_edits() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FIGURE.png", &figure_png());
+        let cases: [Refusal; 7] = [
+            (
+                "both forms",
+                source_args(&file, json!({ "name": "TROOA1", "sprite": "TROO" })),
+                "invalid_argument",
+                "not both",
+            ),
+            (
+                "frame and frames",
+                source_args(
+                    &file,
+                    json!({ "sprite": "TROO", "frame": "A", "frames": ["B"] }),
+                ),
+                "invalid_argument",
+                "frame and frames",
+            ),
+            (
+                "name and frames",
+                source_args(&file, json!({ "name": "TROOA1", "frames": ["B"] })),
+                "invalid_argument",
+                "invalid together with name",
+            ),
+            (
+                "no selector",
+                source_args(&file, Value::Null),
+                "invalid_argument",
+                "needs a sprite",
+            ),
+            (
+                "empty frames",
+                source_args(&file, json!({ "sprite": "TROO", "frames": [] })),
+                "invalid_argument",
+                "frames is empty",
+            ),
+            (
+                "height",
+                source_args(&file, json!({ "sprite": "BOBA", "height": 0_u64 })),
+                "invalid_argument",
+                "1..=512",
+            ),
+            (
+                "background colour",
+                source_args(
+                    &file,
+                    json!({ "sprite": "BOBA", "background_color": "green" }),
+                ),
+                "invalid_argument",
+                "background_color",
+            ),
+        ];
+        refuse_all(&client, "create_sprite_from_image", &cases).await;
+        let session = call(&client, "get_session_info", json!({})).await;
+        assert_eq!(session["undo"], json!([]), "nothing was stored");
     }
 }

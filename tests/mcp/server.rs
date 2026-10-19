@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 114] = [
+    const EXPECTED_TOOLS: [&str; 116] = [
         "add_linedef",
         "add_lump",
         "add_patch",
@@ -99,8 +99,10 @@ mod tests {
         "carve_void",
         "convert_map_format",
         "copy_map",
+        "create_flat_from_image",
         "create_map",
         "create_sector_from_loop",
+        "create_sprite_from_image",
         "create_texture_from_image",
         "decode_patch",
         "delete_geometry",

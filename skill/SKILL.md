@@ -171,6 +171,8 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `import_image_as_raw`    | `reference/imports.md`  |
 | `process_image`          | `reference/imports.md`  |
 | `create_texture_from_image` | `reference/imports.md` |
+| `create_flat_from_image` | `reference/imports.md`  |
+| `create_sprite_from_image` | `reference/imports.md` |
 | `add_patch`              | `reference/patches.md`  |
 | `replace_patch`          | `reference/patches.md`  |
 | `remove_patch`           | `reference/patches.md`  |

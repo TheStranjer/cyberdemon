@@ -88,11 +88,11 @@ pub(super) const ALIASED_SPRITE_TOOL_DESCRIPTION: &str = "Alias of import_image_
 /// The validated naming of one sprite import: the lump name to store under
 /// and the frames and rotations its image serves.
 #[derive(Debug)]
-struct Naming {
+pub(super) struct Naming {
     /// The whole sprite lump name (`TROOA2A8`).
-    name: LumpName,
+    pub(super) name: LumpName,
     /// The grammar that name answers with.
-    parsed: SpriteName,
+    pub(super) parsed: SpriteName,
 }
 
 /// One other sprite-region lump's coverage of the rotation space.
@@ -180,7 +180,7 @@ fn parse_naming(args: &ImportSpriteParams) -> Result<Naming, CyberError> {
 ///
 /// [`LumpName::parse`]' [`CyberError::InvalidArgument`] for text that is no
 /// lump name, and [`grammar_error`] for a name outside the sprite grammar.
-fn whole_name(text: &str) -> Result<Naming, CyberError> {
+pub(super) fn whole_name(text: &str) -> Result<Naming, CyberError> {
     let name = LumpName::parse(text)?;
     let parsed = parse_sprite_name(&name.to_string()).ok_or_else(|| grammar_error(text))?;
     Ok(Naming { name, parsed })
@@ -194,7 +194,7 @@ fn whole_name(text: &str) -> Result<Naming, CyberError> {
 ///
 /// [`parse_prefix`], [`parse_frame`], [`parse_rotation`] and
 /// [`parse_mirror`]' [`CyberError::InvalidArgument`] errors.
-fn part_name(
+pub(super) fn part_name(
     sprite: &str,
     frame: Option<&str>,
     rotation: Option<u8>,
@@ -226,7 +226,7 @@ fn grammar_error(text: &str) -> CyberError {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected text.
-fn parse_prefix(text: &str) -> Result<String, CyberError> {
+pub(super) fn parse_prefix(text: &str) -> Result<String, CyberError> {
     let upper = text.to_ascii_uppercase();
     let well_formed = upper.len() == SPRITE_LEN
         && upper
@@ -247,7 +247,7 @@ fn parse_prefix(text: &str) -> Result<String, CyberError> {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for any other text.
-fn parse_frame(text: Option<&str>) -> Result<char, CyberError> {
+pub(super) fn parse_frame(text: Option<&str>) -> Result<char, CyberError> {
     let Some(raw) = text else {
         return Ok(DEFAULT_FRAME);
     };
@@ -275,7 +275,7 @@ const fn is_frame_letter(letter: char) -> bool {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected number.
-fn parse_rotation(value: Option<u8>) -> Result<u8, CyberError> {
+pub(super) fn parse_rotation(value: Option<u8>) -> Result<u8, CyberError> {
     match value {
         None => Ok(ALL_ANGLES),
         Some(rotation) if rotation <= MAX_ROTATION => Ok(rotation),
@@ -293,7 +293,7 @@ fn parse_rotation(value: Option<u8>) -> Result<u8, CyberError> {
 ///
 /// [`CyberError::InvalidArgument`] for a number outside `1..=8`, for one
 /// equal to `rotation` and for any mirror on the all-angles rotation.
-fn parse_mirror(value: Option<u8>, rotation: u8) -> Result<Option<u8>, CyberError> {
+pub(super) fn parse_mirror(value: Option<u8>, rotation: u8) -> Result<Option<u8>, CyberError> {
     let Some(mirror) = value else {
         return Ok(None);
     };
@@ -458,7 +458,7 @@ fn mixing_warning(
 /// # Errors
 ///
 /// [`covering_lumps`]' errors for the merged scope.
-fn warnings_for(session: &Session, naming: &Naming) -> Result<Vec<String>, CyberError> {
+pub(super) fn warnings_for(session: &Session, naming: &Naming) -> Result<Vec<String>, CyberError> {
     let others = covering_lumps(&naming.parsed, naming.name, session)?;
     Ok(coverage_warnings(&naming.parsed, &others))
 }

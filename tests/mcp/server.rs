@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 129] = [
+    const EXPECTED_TOOLS: [&str; 130] = [
         "add_door",
         "add_exit",
         "add_lift",
@@ -126,6 +126,7 @@ mod tests {
         "edit_thing",
         "edit_zscript",
         "extract_lump",
+        "find_elements",
         "get_asset_server_info",
         "get_asset_url",
         "get_blockmap",

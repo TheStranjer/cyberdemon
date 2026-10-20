@@ -277,6 +277,14 @@ src/
                   path, pages the pure `wad::map::describe` rows beside
                   its always-whole map summary, and publishes the same
                   overview, unhighlighted, by default;
+                  `tools/query.rs` is the thin `find_elements` group: it
+                  flattens the `Query` fields beside `map`/`offset`/
+                  `limit` (check the limit first), reads the map and the
+                  session's definitions under the same one-lock path the
+                  playability tools use, runs the pure
+                  `wad::map::query::run_query`, and pages its hits into
+                  `{kind, count, indices, rows, next_offset}` with one
+                  compact summary row per kind;
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,
@@ -439,6 +447,14 @@ src/
                   blocker reasons read off a finished walk, and
                   `playability/stuck.rs` the body-square tests for the
                   things that cannot stand.
+                  `map/query.rs` is the pure filter engine behind
+                  `find_elements`: a `Query` (element kind, ANDed field
+                  `Filter`s over stored and derived values, an optional
+                  `Within` bbox/sector bound) runs as one
+                  `run_query(map, ctx, query)` over the model, the
+                  `QueryContext` carrying the flag family and the game
+                  definitions the derived fields read, and answering the
+                  ascending matching indices.
                   `map/flags.rs` names the two families' flag bits and
                   carries the `Skill` whose bit a thing's presence is
                   tested against.

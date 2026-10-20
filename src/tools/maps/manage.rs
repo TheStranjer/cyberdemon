@@ -24,12 +24,8 @@ use crate::wad::classify::{Analysis, MapBlock, MapFormat, analyze};
 use crate::wad::map::{Map, write_map};
 use crate::wad::name::{LumpName, NAME_LEN};
 
-use super::parse_scope;
+use super::{parse_format, parse_scope, resolve_namespace};
 
-/// The `UDMF` namespace `create_map` declares when the caller gives none.
-const DEFAULT_NAMESPACE: &str = "zdoom";
-/// Longest accepted `UDMF` namespace name, in characters.
-const MAX_NAMESPACE_LEN: usize = 32;
 /// The prefix of a map's `GL` node marker lump.
 const GL_PREFIX: &[u8] = b"GL_";
 /// Longest map name whose `GL_<name>` marker still fits a directory name.
@@ -99,60 +95,6 @@ fn name_warning(name: LumpName) -> Vec<String> {
         "{name} is neither ExMy nor MAPxx: engines only load ExMy/MAPxx unless MAPINFO defines \
          it, so add a MAPINFO/UMAPINFO entry or rename the map"
     )]
-}
-
-/// The `format` parameter: `doom` (absent means this), `hexen` or `udmf`,
-/// case-insensitively.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] listing the accepted names.
-fn parse_format(text: Option<&str>) -> Result<MapFormat, CyberError> {
-    match text.map(str::to_ascii_lowercase).as_deref() {
-        None | Some("doom") => Ok(MapFormat::Doom),
-        Some("hexen") => Ok(MapFormat::Hexen),
-        Some("udmf") => Ok(MapFormat::Udmf),
-        Some(other) => Err(CyberError::InvalidArgument(format!(
-            "unknown map format {other:?}: use \"doom\", \"hexen\" or \"udmf\""
-        ))),
-    }
-}
-
-/// Whether `text` is an acceptable `UDMF` namespace: 1 to
-/// [`MAX_NAMESPACE_LEN`] `ASCII` letters, digits or underscores.
-fn namespace_valid(text: &str) -> bool {
-    !text.is_empty()
-        && text.len() <= MAX_NAMESPACE_LEN
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
-
-/// The namespace the new `UDMF` map declares: the lowercased parameter,
-/// `zdoom` when absent, and `None` for the binary formats.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] when a namespace is given for a binary
-/// format or holds characters a namespace name excludes.
-fn resolve_namespace(text: Option<&str>, format: MapFormat) -> Result<Option<String>, CyberError> {
-    match (text, format) {
-        (None, MapFormat::Udmf) => Ok(Some(DEFAULT_NAMESPACE.to_owned())),
-        (None, MapFormat::Doom | MapFormat::Hexen) => Ok(None),
-        (Some(raw), MapFormat::Doom | MapFormat::Hexen) => Err(CyberError::InvalidArgument(
-            format!("namespace {raw:?} only applies to UDMF maps: drop it for the binary format"),
-        )),
-        (Some(raw), MapFormat::Udmf) => {
-            let lowered = raw.to_ascii_lowercase();
-            if namespace_valid(&lowered) {
-                return Ok(Some(lowered));
-            }
-            Err(CyberError::InvalidArgument(format!(
-                "namespace {raw:?} is not a UDMF namespace name: use 1 to {MAX_NAMESPACE_LEN} \
-                 ASCII letters, digits or underscores, or omit it for \"{DEFAULT_NAMESPACE}\""
-            )))
-        }
-    }
 }
 
 /// The validated arguments of one [`super::Cyberdemon::create_map`] call.
@@ -306,11 +248,14 @@ fn copied_block(dir: &Directory, block: &MapBlock, to: LumpName) -> Vec<Lump> {
 /// Appends `lumps` as the working archive's new block for `name`, first
 /// discarding the old block of that name when `replace` allows it.
 ///
+/// `build_map_from_plan` writes its compiled block through the same door
+/// (see the `write_block` wrapper one level up).
+///
 /// # Errors
 ///
 /// [`CyberError::AlreadyExists`] when the working archive holds a block
 /// named `name` and `replace` is `false`.
-fn append_block(
+pub(super) fn append_block(
     wad: &mut Wad,
     name: LumpName,
     replace: bool,
@@ -584,13 +529,13 @@ mod tests {
 
     use super::{
         CopyPlan, CreatePlan, GlPlan, copied_block, copy_run, create_run, doomed_positions,
-        empty_block, gl_marker, gl_plan, is_loadable_name, name_warning, parse_format, plan_copy,
-        plan_create, remove_run, rename_gl, rename_run, resolve_namespace,
+        empty_block, gl_marker, gl_plan, is_loadable_name, name_warning, plan_copy, plan_create,
+        remove_run, rename_gl, rename_run,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::tools::maps::common::directory;
-    use crate::tools::maps::{CopyMapParams, CreateMapParams};
+    use crate::tools::maps::{CopyMapParams, CreateMapParams, parse_format, resolve_namespace};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::{MapFormat, analyze};
     use crate::wad::name::LumpName;

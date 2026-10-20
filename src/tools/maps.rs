@@ -30,7 +30,7 @@ use crate::session::{Scope, Session, Source};
 use crate::state::AppState;
 use crate::tools::maps::common::Directory;
 use crate::tools::{fail, ok};
-use crate::wad::archive::Lump;
+use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpKind, MapBlock, MapFormat};
 use crate::wad::map::read_map;
 use crate::wad::map::stats::{MapSummary, summarize};
@@ -171,6 +171,89 @@ struct RenameMapParams {
 struct RemoveMapParams {
     /// The working archive's map block to remove, GL node run included.
     pub(crate) name: String,
+}
+
+/// The `UDMF` namespace `create_map` declares when the caller gives none.
+const DEFAULT_NAMESPACE: &str = "zdoom";
+/// Longest accepted `UDMF` namespace name, in characters.
+const MAX_NAMESPACE_LEN: usize = 32;
+
+/// The `format` parameter: `doom` (absent means this), `hexen` or
+/// `udmf`, case-insensitively. Shared by `create_map` and
+/// `build_map_from_plan`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] listing the accepted names.
+pub(crate) fn parse_format(text: Option<&str>) -> Result<MapFormat, CyberError> {
+    text.map_or(Ok(MapFormat::Doom), |raw| {
+        MapFormat::parse(raw).ok_or_else(|| {
+            CyberError::InvalidArgument(format!(
+                "unknown map format {raw:?}: use \"doom\", \"hexen\" or \"udmf\""
+            ))
+        })
+    })
+}
+
+/// Whether `text` is an acceptable `UDMF` namespace: 1 to
+/// [`MAX_NAMESPACE_LEN`] `ASCII` letters, digits or underscores.
+fn namespace_valid(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= MAX_NAMESPACE_LEN
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// The namespace the new `UDMF` map declares: the lowercased parameter,
+/// `zdoom` when absent, and `None` for the binary formats. Shared by
+/// `create_map` and `build_map_from_plan` (which only consults it for
+/// `UDMF` and ignores a namespace beside a binary layout).
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when a namespace is given for a binary
+/// format or holds characters a namespace name excludes.
+pub(crate) fn resolve_namespace(
+    text: Option<&str>,
+    format: MapFormat,
+) -> Result<Option<String>, CyberError> {
+    match (text, format) {
+        (None, MapFormat::Udmf) => Ok(Some(DEFAULT_NAMESPACE.to_owned())),
+        (None, MapFormat::Doom | MapFormat::Hexen) => Ok(None),
+        (Some(raw), MapFormat::Doom | MapFormat::Hexen) => Err(CyberError::InvalidArgument(
+            format!("namespace {raw:?} only applies to UDMF maps: drop it for the binary format"),
+        )),
+        (Some(raw), MapFormat::Udmf) => {
+            let lowered = raw.to_ascii_lowercase();
+            if namespace_valid(&lowered) {
+                return Ok(Some(lowered));
+            }
+            Err(CyberError::InvalidArgument(format!(
+                "namespace {raw:?} is not a UDMF namespace name: use 1 to {MAX_NAMESPACE_LEN} \
+                 ASCII letters, digits or underscores, or omit it for \"{DEFAULT_NAMESPACE}\""
+            )))
+        }
+    }
+}
+
+/// Appends the freshly `write_map`-encoded `lumps` as the working
+/// archive's new block for `name`, first discarding the old block of
+/// that name when `replace` allows it: `build_map_from_plan`'s write
+/// path, sharing `create_map`'s append rules (see
+/// [`manage::append_block`]).
+///
+/// # Errors
+///
+/// [`CyberError::AlreadyExists`] when the working archive holds a block
+/// named `name` and `replace` is `false`.
+pub(crate) fn write_block(
+    wad: &mut Wad,
+    name: LumpName,
+    replace: bool,
+    lumps: Vec<Lump>,
+) -> Result<(), CyberError> {
+    manage::append_block(wad, name, replace, lumps)
 }
 
 /// The accepted `scope` text, the merged view being the default.

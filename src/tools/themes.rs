@@ -122,17 +122,19 @@ struct ThemeView {
     roles: BTreeMap<Role, Resolved>,
 }
 
-/// Resolve every role for the session's current theme.
+/// Resolve every role for the session's current theme, with an optional
+/// one-call theme-name override (`None` follows the session's choice).
 ///
 /// # Errors
 ///
 /// [`inventory`]'s errors and [`table::theme_names`]' /
 /// [`table::theme_table`]' [`CyberError::Internal`] for broken embedded
 /// tables.
-fn theme_view(session: &Session) -> Result<ThemeView, CyberError> {
+fn theme_view(session: &Session, theme_override: Option<&str>) -> Result<ThemeView, CyberError> {
     let game = session.game();
     let available_themes = table::theme_names(game)?;
-    let selected = table::theme_table(game, session.texture_theme().name.as_deref())?;
+    let wanted = theme_override.or_else(|| session.texture_theme().name.as_deref());
+    let selected = table::theme_table(game, wanted)?;
     let stock = inventory(session)?;
     let overrides = &session.texture_theme().overrides;
     let mut roles = BTreeMap::new();
@@ -165,11 +167,51 @@ fn theme_view(session: &Session) -> Result<ThemeView, CyberError> {
 /// use.
 #[inline]
 pub fn theme_texture(session: &Session, role: Role) -> Result<String, CyberError> {
-    let view = theme_view(session)?;
+    let view = theme_view(session, None)?;
     Ok(view
         .roles
         .get(&role)
         .map_or_else(|| "-".to_owned(), |hit| hit.name.clone()))
+}
+
+/// The textures standing for `wanted` roles, resolved in one pass against
+/// the session's theme or a one-call `theme_override`.
+///
+/// This is what a tool that needs the whole picture for a single build
+/// (`build_map_from_plan` and its [`crate::plan::TextureRoles`] adapter)
+/// asks instead of one [`theme_texture`] call per role: the candidate
+/// table is resolved once, and a named `theme_override` dresses only
+/// this call — the session's theme state never changes. The session's
+/// per-role overrides keep winning over the override theme, exactly as
+/// they do for [`theme_texture`]. A role the theme cannot answer maps to
+/// `"-"`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when `theme_override` names a theme the
+/// session's game does not offer (listing the ones it does), plus
+/// `theme_view`'s errors.
+#[inline]
+pub fn theme_roles(
+    session: &Session,
+    theme_override: Option<&str>,
+    wanted: &[Role],
+) -> Result<BTreeMap<Role, String>, CyberError> {
+    if let Some(text) = theme_override {
+        check_theme_name(session.game(), text)?;
+    }
+    let view = theme_view(session, theme_override)?;
+    Ok(wanted
+        .iter()
+        .map(|role| {
+            (
+                *role,
+                view.roles
+                    .get(role)
+                    .map_or_else(|| "-".to_owned(), |hit| hit.name.clone()),
+            )
+        })
+        .collect())
 }
 
 /// One `get_texture_theme` role row.
@@ -275,7 +317,7 @@ fn set_run(session: &mut Session, args: &SetThemeParams) -> Result<ThemeReport, 
             }
         }
     }
-    Ok(reported_view(&theme_view(session)?))
+    Ok(reported_view(&theme_view(session, None)?))
 }
 
 /// Refuse a theme the session's game does not offer.
@@ -588,7 +630,7 @@ impl Cyberdemon {
     fn get_texture_theme(&self) -> Result<CallToolResult, ErrorData> {
         reported(
             self.state()
-                .with_session(|session| Ok(reported_view(&theme_view(session)?))),
+                .with_session(|session| Ok(reported_view(&theme_view(session, None)?))),
         )
     }
 
@@ -640,9 +682,11 @@ mod tests {
 
     use super::{
         AlignTexturesParams, AutoTextureParams, SetThemeParams, is_door_action, mode_label,
-        parse_mode, push_tx_name,
+        parse_mode, push_tx_name, theme_roles,
     };
+    use crate::session::Session;
     use crate::themes::auto::AutoMode;
+    use crate::themes::{Role, table};
     use crate::wad::map::FlagFamily;
 
     /// The plain `Doom` door specials for the action checks.
@@ -714,5 +758,50 @@ mod tests {
         let theme: SetThemeParams =
             from_str(r#"{"overrides": {"wall": "WALL1", "step": "-"}}"#).expect("set args");
         assert_eq!(theme.overrides.expect("map").len(), 2, "two overrides");
+    }
+
+    #[test]
+    fn theme_roles_answers_one_row_per_wanted_role() {
+        let session = Session::default();
+        let wanted = [Role::Wall, Role::Floor];
+        let resolved = theme_roles(&session, None, &wanted).expect("an empty session answers");
+        assert_eq!(resolved.len(), 2, "one row per role");
+        assert_eq!(
+            resolved.get(&Role::Wall).expect("wall"),
+            "-",
+            "an empty merged view resolves to the no-texture name"
+        );
+        assert_eq!(
+            resolved.get(&Role::Floor).expect("floor"),
+            "F_SKY1",
+            "F_SKY1 is always in the flats inventory, so it is the only existing flat"
+        );
+        let none_wanted = theme_roles(&session, None, &[]).expect("nothing asked");
+        assert!(none_wanted.is_empty(), "nothing answered");
+    }
+
+    #[test]
+    fn a_theme_override_dresses_one_call_without_touching_the_session() {
+        let session = Session::default();
+        let game_themes = table::theme_names(session.game()).expect("the table reads");
+        let other = game_themes
+            .iter()
+            .find(|name| name.as_str() != "tech")
+            .expect("the doom table offers more than one theme");
+        let wanted = [Role::Floor];
+        let dressed = theme_roles(&session, Some(&other.to_ascii_uppercase()), &wanted)
+            .expect("overrides are case-insensitive");
+        assert_eq!(dressed.len(), 1, "the named theme resolves");
+        assert_eq!(
+            session.texture_theme().name,
+            None,
+            "the session never adopted the override theme"
+        );
+        let broken =
+            theme_roles(&session, Some("nope"), &wanted).expect_err("an unknown theme is refused");
+        assert_eq!(broken.code(), "invalid_argument", "unknown theme code");
+        for name in &game_themes {
+            assert!(broken.to_string().contains(name), "lists {name}");
+        }
     }
 }

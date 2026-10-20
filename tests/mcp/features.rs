@@ -7,7 +7,12 @@
 //! one-step undo, and every listed refusal: an over-wide door naming the
 //! available length, a one-sided wall with nothing behind it, the depth
 //! probe, the both/neither wall parameter, bad style names and
-//! out-of-range sector/linedef indices. Plus `add_switch`: a panel split
+//! out-of-range sector/linedef indices. `add_window` raises a blocking
+//! glass strip between two rooms: its floor and ceiling sit on the
+//! sill/lintel trims, every room-facing line is two-sided *and* blocking
+//! with the sill below and the wall above, and a too-small opening or the
+//! both/neither wall parameter refuses with the whole edit uncommitted.
+//! Plus `add_switch`: a panel split
 //! out of a plain wall wearing `SW1STRTN` and answering with the
 //! target's tag, the fresh tag minted onto an untagged sector, the
 //! whole-wall exit switch needing no split (`SW1EXIT`), the `Hexen`
@@ -17,8 +22,35 @@
 //! every two-sided boundary of a sector with 52/124 (`Doom`) or
 //! `playercross` 243/244 (`Hexen`), the destination tag kept on the
 //! `W1` line, and the missing-`linedef`/missing-`sector`/bad-`kind`
-//! refusals; a fullbright `render_view` through the theme override
-//! shows the built door's `DOOR1` face from the room it opens.
+//! refusals. Then the two sector-special tools: `mark_secret` writing
+//! the vanilla `9`, the `Boom` bit 128 (with its warning over a vanilla
+//! type) or the `Hexen` bit 1024 and clearing each again, and
+//! `set_light_effect` landing every effect in its family's basic-type
+//! field with the bits above it intact, the optional light level riding
+//! along, and the bad-effect/bad-level/out-of-range-sector refusals. A
+//! fullbright `render_view` through the theme override shows the built
+//! door's `DOOR1` face from the room it opens. And `add_stairs`: four
+//! evenly rising step sectors climbing from the hall floor to a raised
+//! room at 64 (`validate_map` stays clean, one `undo` rolls the whole
+//! staircase back, risers in the theme's `step` texture), and the
+//! headroom, `step_depth`, `step_height`, endpoint and width refusals.
+//! Then `add_lift`: the fixture's 32-unit step as a platform (fresh tag
+//! on the sector, the step line dressed `SR` 62 / `S1` 21 / `WR` 88 /
+//! `W1` 10 with its front facing the lower hall and the theme's
+//! `lift_side` below the ledge, the short-drop note present), a 96-unit
+//! ledge with no note, a platform drawn across the step through the
+//! overlay engine, binary `Hexen` `Plat_DownWaitUpStayLip` 206 with the
+//! tag in `args[0]` and the `playeruse`/`playercross` field, the
+//! both/neither platform-selector refusal, and the one-step undo. Then
+//! `add_teleporter`: the drawn pad and destination squares (a fresh tag
+//! on the destination sector, the type-14 destination thing standing at
+//! the destination point, the theme's `teleport_floor` on the pad's
+//! floor, every two-sided pad border dressed `WR` 97 with its front
+//! facing out of the pad), the `two_way` return leg with its own tag,
+//! pad-sector stamp and backwards-facing second thing, binary `Hexen`
+//! `Teleport` 70 with the TID on the thing and in `args[0]` of
+//! `playercross`-plus-`repeatspecial` lines, and the missing-point,
+//! non-positive-`pad_size` and void-point refusals.
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +125,15 @@ mod tests {
 
     /// The working sector row at `index` for `map`.
     async fn working_sector(client: &Client, map: &str, index: usize) -> Value {
+        working_sectors(client, map)
+            .await
+            .get(index)
+            .cloned()
+            .expect("the sector row exists")
+    }
+
+    /// The working sector rows for `map`, in order.
+    async fn working_sectors(client: &Client, map: &str) -> Vec<Value> {
         let report = call(
             client,
             "assemble_map",
@@ -102,9 +143,60 @@ mod tests {
         report["sectors"]
             .as_array()
             .expect("sectors is an array")
-            .get(index)
-            .cloned()
-            .expect("the sector row exists")
+            .clone()
+    }
+
+    /// Checks that both rooms of the two-room fixture carry `light` and
+    /// `special`: one call reaches every sector the list named.
+    fn expect_rooms(rooms: &[Value], light: i32, special: i32) {
+        assert_eq!(rooms.len(), 2_usize, "the fixture's two rooms");
+        for (index, row) in rooms.iter().enumerate() {
+            assert_eq!(
+                row["light"],
+                json!(light),
+                "sector {index} is lit at {light}"
+            );
+            assert_eq!(
+                row["special"],
+                json!(special),
+                "sector {index} carries special {special}"
+            );
+        }
+    }
+
+    /// Gives sector `index` of `map` the special `value`, so a special tool
+    /// has something to keep (or warn) about.
+    async fn set_special(client: &Client, map: &str, index: usize, value: i32) {
+        call(
+            client,
+            "edit_sector",
+            json!({"map": map, "index": index, "special": value}),
+        )
+        .await;
+    }
+
+    /// Requires `mark_secret` to reject `args` with `invalid_argument`
+    /// naming `needle`.
+    async fn refuse_secret(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "mark_secret", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+    }
+
+    /// Requires `set_light_effect` to reject `args` with `invalid_argument`
+    /// naming `needle`.
+    async fn refuse_light(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "set_light_effect", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
     }
 
     /// The working linedef rows at the indices of an `add_door` result's
@@ -160,6 +252,48 @@ mod tests {
             message.contains(needle),
             "the refusal for {note} must mention {needle:?}: {message}"
         );
+    }
+
+    /// Requires `add_window` to reject `args` with `invalid_argument`
+    /// naming `needle`.
+    async fn refuse_window(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "add_window", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+    }
+
+    /// Checks one `add_window` result's view-line row: two-sided and
+    /// blocking, the sill `lower` and the wall `upper` on its room side,
+    /// and the strip side left open; returns the room's sector.
+    fn window_view_room(row: &Value) -> Value {
+        assert_ne!(row["back"], Value::Null, "the view line is two-sided");
+        let names = flag_names(row);
+        assert!(
+            names.contains(&"twosided"),
+            "the glass sees both ways: {names:?}"
+        );
+        assert!(
+            names.contains(&"blocking"),
+            "blocking is set so nobody walks through: {names:?}"
+        );
+        let (strip, room) = if row["front"]["sector"] == json!(2_i32) {
+            (&row["front"], &row["back"])
+        } else {
+            (&row["back"], &row["front"])
+        };
+        assert_eq!(room["lower"], json!("STEP1"), "the sill under the glass");
+        assert_eq!(room["upper"], json!("WALL1"), "the wall over it");
+        assert_eq!(
+            strip["upper"],
+            json!("-"),
+            "from inside the strip the line is open"
+        );
+        assert_eq!(strip["lower"], json!("-"), "above and below");
+        room["sector"].clone()
     }
 
     /// Requires `add_switch` to reject `args` with `invalid_argument`
@@ -598,6 +732,120 @@ mod tests {
                 .len(),
             2_usize,
             "the layer was never written"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_between_touching_rooms_raises_a_blocking_view() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let theme = call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"window_sill": "STEP1", "wall": "WALL1"}}),
+        )
+        .await;
+        assert_eq!(
+            theme["roles"]["window_sill"]["texture"],
+            json!("STEP1"),
+            "the sill override stands for the role"
+        );
+        let result = call(&client, "add_window", json!({"between": [0_i32, 1_i32]})).await;
+        assert_eq!(result["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(result["window_sector"], json!(2_i32), "a third sector");
+        assert_eq!(result["width"], json!(64_i32), "the default width");
+        assert_eq!(result["sill"], json!(32_i32), "the default sill");
+        assert_eq!(result["lintel"], json!(24_i32), "the default lintel");
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(true),
+            "the strip is new geometry"
+        );
+        assert_eq!(result["copied_to_working"], json!(true));
+        assert!(
+            note_mentions(&result, "void strip"),
+            "the strip carve is noted: {}",
+            result["notes"]
+        );
+        let window = working_sector(&client, "MAP01", 2_usize).await;
+        assert_eq!(window["floor_height"], json!(64_i32), "max(0, 32) + 32");
+        assert_eq!(
+            window["ceiling_height"],
+            json!(104_i32),
+            "min(128, 128) - 24"
+        );
+        assert_eq!(window["special"], json!(0_i32), "inert");
+        assert_eq!(window["tag"], json!(0_i32), "untagged");
+        let lines = reported_lines(&client, "MAP01", &result, "lines").await;
+        assert_eq!(lines.len(), 2, "one view line per room");
+        let rooms: Vec<Value> = lines.iter().map(window_view_room).collect();
+        assert!(
+            rooms.contains(&json!(0_i32)) && rooms.contains(&json!(1_i32)),
+            "both rooms see the glass: {rooms:?}"
+        );
+        validate_clean(&client, "MAP01").await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["add window"]),
+            "the whole window rolls back together"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_with_too_small_an_opening_refuses() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_window(
+            &client,
+            json!({"between": [0_i32, 1_i32], "sill": 90_i32, "lintel": 24_i32}),
+            "at least 16",
+        )
+        .await;
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            code, "not_found",
+            "the refused window did not even copy the block into the working archive"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_window_wall_parameter_needs_exactly_one_form() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_window(&client, json!({}), "exactly one").await;
+        refuse_window(
+            &client,
+            json!({"between": [0_i32, 1_i32], "linedef": 2_i32}),
+            "exactly one",
+        )
+        .await;
+        refuse_window(
+            &client,
+            json!({"between": [0_i32, 99_i32]}),
+            "sector 99 is out of range",
+        )
+        .await;
+        refuse_window(
+            &client,
+            json!({"linedef": 999_i32}),
+            "linedef 999 is out of range",
+        )
+        .await;
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            code, "not_found",
+            "no refused window even copied the block into the working archive"
         );
     }
 
@@ -1097,6 +1345,480 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn a_secret_mark_follows_the_doom_flag_family() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let marked = call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        assert_eq!(marked["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(marked["secret"], json!(true), "marking is the default");
+        assert_eq!(marked["family"], json!("doom"), "the vanilla family secret");
+        assert_eq!(marked["sectors"], json!([0_i32]), "one row moved");
+        assert_eq!(
+            marked["warnings"],
+            json!([]),
+            "the vanilla type needs no note"
+        );
+        assert_eq!(
+            marked["nodes_invalidated"],
+            json!(false),
+            "a sector property is not geometry"
+        );
+        assert_eq!(marked["copied_to_working"], json!(true));
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(9_i32),
+            "the vanilla secret type"
+        );
+        let again = call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        assert_eq!(
+            again["sectors"],
+            json!([]),
+            "already secret: nothing changed"
+        );
+        let plain = call(
+            &client,
+            "mark_secret",
+            json!({"sectors": [0_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(plain["secret"], json!(false), "the clear is echoed");
+        assert_eq!(
+            plain["sectors"],
+            json!([0_i32]),
+            "and it moved the row back"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(0_i32),
+            "the vanilla 9 clears to plain"
+        );
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn a_boom_secret_mark_keeps_every_other_bit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        set_special(&client, "MAP01", 0_usize, 32_i32).await;
+        let boom = call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        assert_eq!(boom["sectors"], json!([0_i32]), "the Boom bit landed");
+        assert_eq!(
+            boom["warnings"],
+            json!([]),
+            "a generalized type is Boom's own"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(160_i32),
+            "32 | 128, the generalized field intact"
+        );
+        let unmarked = call(
+            &client,
+            "mark_secret",
+            json!({"sectors": [0_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(unmarked["sectors"], json!([0_i32]));
+        assert_eq!(
+            working_sector(&client, "MAP01", 0_usize).await["special"],
+            json!(32_i32),
+            "exactly the flag came back off"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vanilla_secret_mark_carries_a_boom_warning() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        set_special(&client, "MAP01", 1_usize, 17_i32).await;
+        let warned = call(&client, "mark_secret", json!({"sectors": [1_i32]})).await;
+        assert_eq!(
+            warned["sectors"],
+            json!([1_i32]),
+            "the vanilla type took the bit too"
+        );
+        let notes = warned["warnings"].as_array().expect("warnings is an array");
+        assert_eq!(notes.len(), 1_usize, "one note: {notes:#?}");
+        let note = notes.first().and_then(Value::as_str).expect("a string");
+        assert!(
+            note.contains("vanilla Doom ignores Boom bits"),
+            "the note says what vanilla Doom does not read: {note}"
+        );
+        assert!(note.contains("sector 1"), "and names the sector: {note}");
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["special"],
+            json!(145_i32),
+            "17 | 128"
+        );
+        let back = call(
+            &client,
+            "mark_secret",
+            json!({"sectors": [1_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(
+            back["warnings"],
+            json!([]),
+            "clearing has nothing to warn about"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["special"],
+            json!(17_i32),
+            "the flicker is the plain number again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_mark_follows_the_hexen_flag_family() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        set_special(&client, "MAP04", 0_usize, 81_i32).await;
+        let marked = call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP04", "sectors": [0_i32, 1_i32]}),
+        )
+        .await;
+        assert_eq!(
+            marked["family"],
+            json!("hexen"),
+            "binary Hexen is its own family"
+        );
+        assert_eq!(marked["warnings"], json!([]), "the Hexen bit never warns");
+        assert_eq!(marked["sectors"], json!([0_i32, 1_i32]), "both rows moved");
+        let rooms = working_sectors(&client, "MAP04").await;
+        assert_eq!(
+            rooms.first().expect("sector 0")["special"],
+            json!(1_105_i32),
+            "81 | 1024 keeps the sector's own effect"
+        );
+        assert_eq!(
+            rooms.get(1).expect("sector 1")["special"],
+            json!(1_024_i32),
+            "a plain sector takes the bare bit"
+        );
+        let cleared = call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP04", "sectors": [0_i32, 1_i32], "secret": false}),
+        )
+        .await;
+        assert_eq!(cleared["sectors"], json!([0_i32, 1_i32]), "both cleared");
+        let back = working_sectors(&client, "MAP04").await;
+        assert_eq!(back.first().expect("sector 0")["special"], json!(81_i32));
+        assert_eq!(back.get(1).expect("sector 1")["special"], json!(0_i32));
+        let udmf = call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP03", "sectors": [1_i32]}),
+        )
+        .await;
+        assert_eq!(
+            udmf["family"],
+            json!("hexen"),
+            "a zdoom UDMF map is Hexen-family too"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP03", 1_usize).await["special"],
+            json!(1_024_i32),
+            "a plain sector of a zdoom map takes the bare bit, its tag untouched"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP03", 1_usize).await["tag"],
+            json!(1_i32),
+            "the tool writes the special column only"
+        );
+    }
+
+    /// One `set_light_effect` case: the map to edit, the family it reports,
+    /// the effect to send, the basic type that family stores and the whole
+    /// special the sector must end with.
+    struct EffectCase {
+        /// The map to edit.
+        map: &'static str,
+        /// The flag family the tool reports.
+        family: &'static str,
+        /// The effect name to send.
+        effect: &'static str,
+        /// The basic type this family stores for it.
+        basic: i32,
+        /// The whole special after the effect lands: every bit outside the
+        /// family's type field kept.
+        stored: i32,
+    }
+
+    /// Runs one [`EffectCase`] against sector 0 of its map, which starts at
+    /// `from`: a bit above each family's basic-type field plus a vanilla
+    /// type inside it, so a correct write shows on both sides of the edge.
+    async fn expect_effect(client: &Client, case: &EffectCase, from: i32) {
+        set_special(client, case.map, 0_usize, from).await;
+        let result = call(
+            client,
+            "set_light_effect",
+            json!({"map": case.map, "sectors": [0_i32], "effect": case.effect}),
+        )
+        .await;
+        let name = case.effect;
+        assert_eq!(result["effect"], json!(name), "{name} echoes canonically");
+        assert_eq!(
+            result["family"],
+            json!(case.family),
+            "{name} reads its family"
+        );
+        assert_eq!(
+            result["special"],
+            json!(case.basic),
+            "{name} is the family's type"
+        );
+        assert_eq!(result["light"], Value::Null, "{name} asked for no level");
+        assert_eq!(result["sectors"], json!([0_i32]), "{name} moved one row");
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(false),
+            "{name} is a property edit"
+        );
+        let row = working_sector(client, case.map, 0_usize).await;
+        assert_eq!(
+            row["special"],
+            json!(case.stored),
+            "{name} wrote only the type field of {from}"
+        );
+        assert_eq!(row["light"], json!(160_i32), "{name} left the level alone");
+    }
+
+    /// Runs every case of a family's table against its map's sector 0,
+    /// resetting that sector to `from` before each call.
+    async fn expect_effects(client: &Client, cases: &[EffectCase], from: i32) {
+        for case in cases {
+            expect_effect(client, case, from).await;
+        }
+    }
+
+    /// The `Doom` family's table: each effect's vanilla type under the
+    /// generalized bit (bit 12) the sector carried all along.
+    fn doom_cases() -> [EffectCase; 6] {
+        let rows = [
+            ("flicker", 17_i32, 4_113_i32),
+            ("strobe_fast", 2_i32, 4_098_i32),
+            ("strobe_slow", 3_i32, 4_099_i32),
+            ("glow", 8_i32, 4_104_i32),
+            ("random_off", 1_i32, 4_097_i32),
+            ("none", 0_i32, 4_096_i32),
+        ];
+        rows.map(|(effect, basic, stored)| EffectCase {
+            map: "MAP01",
+            family: "doom",
+            effect,
+            basic,
+            stored,
+        })
+    }
+
+    /// The `Hexen` family's table: the same effects `64` higher, under the
+    /// flag at 256 and the secret bit at 1024 the sector carried.
+    fn hexen_cases() -> [EffectCase; 6] {
+        let rows = [
+            ("flicker", 81_i32, 1_361_i32),
+            ("strobe_fast", 66_i32, 1_346_i32),
+            ("strobe_slow", 67_i32, 1_347_i32),
+            ("glow", 72_i32, 1_352_i32),
+            ("random_off", 65_i32, 1_345_i32),
+            ("none", 0_i32, 1_280_i32),
+        ];
+        rows.map(|(effect, basic, stored)| EffectCase {
+            map: "MAP04",
+            family: "hexen",
+            effect,
+            basic,
+            stored,
+        })
+    }
+
+    #[tokio::test]
+    async fn every_light_effect_lands_in_the_doom_type_field() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        expect_effects(&client, &doom_cases(), 4_105_i32).await;
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn every_light_effect_lands_in_the_hexen_type_field() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        expect_effects(&client, &hexen_cases(), 1_289_i32).await;
+    }
+
+    #[tokio::test]
+    async fn a_light_effect_keeps_a_hexen_sector_secret() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        call(
+            &client,
+            "mark_secret",
+            json!({"map": "MAP04", "sectors": [0_i32]}),
+        )
+        .await;
+        call(
+            &client,
+            "set_light_effect",
+            json!({"map": "MAP04", "sectors": [0_i32], "effect": "flicker"}),
+        )
+        .await;
+        assert_eq!(
+            working_sector(&client, "MAP04", 0_usize).await["special"],
+            json!(1_105_i32),
+            "1024 | 81: the light repaint left the secret bit at 1024 alone"
+        );
+        let zdoom = call(
+            &client,
+            "set_light_effect",
+            json!({"map": "MAP03", "sectors": [1_i32], "effect": "strobe_slow", "light": 64_i32}),
+        )
+        .await;
+        assert_eq!(
+            zdoom["family"],
+            json!("hexen"),
+            "a zdoom UDMF map takes the Hexen numbers too"
+        );
+        assert_eq!(zdoom["special"], json!(67_i32), "3 plus 64");
+        assert_eq!(zdoom["sectors"], json!([1_i32]), "the row moved");
+        let room = working_sector(&client, "MAP03", 1_usize).await;
+        assert_eq!(room["special"], json!(67_i32), "the stored number");
+        assert_eq!(room["light"], json!(64_i32), "and the level rode along");
+    }
+
+    #[tokio::test]
+    async fn a_light_level_travels_with_the_effect() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [0_i32, 1_i32], "effect": "glow", "light": 96_i32}),
+        )
+        .await;
+        assert_eq!(result["light"], json!(96_i32), "the level the call applied");
+        assert_eq!(result["sectors"], json!([0_i32, 1_i32]), "both rooms");
+        let rooms = working_sectors(&client, "MAP01").await;
+        expect_rooms(&rooms, 96_i32, 8_i32);
+        let again = call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [0_i32, 1_i32], "effect": "glow", "light": 96_i32}),
+        )
+        .await;
+        assert_eq!(
+            again["sectors"],
+            json!([]),
+            "the same request changed nothing"
+        );
+        let level = call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [1_i32], "effect": "glow", "light": 128_i32}),
+        )
+        .await;
+        assert_eq!(
+            level["sectors"],
+            json!([1_i32]),
+            "a level alone counts as a change, the effect already standing"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["light"],
+            json!(128_i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_mark_and_a_light_effect_undo_as_one_step_each() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(&client, "mark_secret", json!({"sectors": [0_i32]})).await;
+        call(
+            &client,
+            "set_light_effect",
+            json!({"sectors": [1_i32], "effect": "flicker"}),
+        )
+        .await;
+        let undone = call(&client, "undo", json!({"steps": 2_usize})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["set light effect", "mark secret"]),
+            "each call is its own undo entry, rolled back newest first"
+        );
+        let merged = call(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "merged", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            merged["sectors"]
+                .as_array()
+                .expect("sectors is an array")
+                .iter()
+                .map(|row| row["special"].clone())
+                .collect::<Vec<Value>>(),
+            vec![json!(0_i32), json!(0_i32)],
+            "the layer was never written"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_two_special_tools_validate_their_arguments() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_secret(&client, json!({"sectors": []}), "sectors is empty").await;
+        refuse_secret(
+            &client,
+            json!({"sectors": [99_i32]}),
+            "sector 99 is out of range",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [], "effect": "glow"}),
+            "sectors is empty",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [0_i32], "effect": "pulsate"}),
+            "none, flicker, strobe_fast, strobe_slow, glow, random_off",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [0_i32], "effect": "glow", "light": 256_i32}),
+            "light 256 is out of range",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [0_i32], "effect": "glow", "light": -1_i32}),
+            "light -1 is out of range",
+        )
+        .await;
+        refuse_light(
+            &client,
+            json!({"sectors": [42_i32], "effect": "glow"}),
+            "sector 42 is out of range",
+        )
+        .await;
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            code, "not_found",
+            "no refused special even copied the block into the working archive"
+        );
+    }
+
     /// Fetch and decode a render report's PNG asset.
     async fn rendered_image(report: &Value) -> RgbaImage {
         let url = report["asset"]["url"].as_str().expect("an asset url");
@@ -1145,5 +1867,1001 @@ mod tests {
             "the closed door's DOOR1 face (the fixture patch's index 170, one fake-contrast \
              step darker) shows from room 0 across the doorway"
         );
+    }
+
+    /// Requires `add_stairs` to reject `args` with `invalid_argument`
+    /// naming `needle`, and the working archive to hold nothing.
+    async fn refuse_stairs(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "add_stairs", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+        let (missing, _) = call_err(
+            client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            missing, "not_found",
+            "the refused staircase did not even copy the block into the working archive"
+        );
+    }
+
+    /// Raises the fixture's rooms so a 64-unit climb has headroom:
+    /// both ceilings to 160 and room 1's floor to 64.
+    async fn raise_the_fixture(client: &Client) {
+        call(
+            client,
+            "edit_sector",
+            json!({"index": 0_i32, "ceiling_height": 160_i32}),
+        )
+        .await;
+        call(
+            client,
+            "edit_sector",
+            json!({"index": 1_i32, "floor_height": 64_i32, "ceiling_height": 160_i32}),
+        )
+        .await;
+    }
+
+    /// Checks the four created step rows (sectors 2 to 5): their even
+    /// floors, the probed 160 ceiling, and that each stays inert.
+    fn expect_step_sectors(rows: &[Value]) {
+        let wanted = [
+            (2_usize, 16_i32),
+            (3_usize, 32_i32),
+            (4_usize, 48_i32),
+            (5_usize, 64_i32),
+        ];
+        for (index, floor) in wanted {
+            let step = rows.get(index).expect("the step sector row exists");
+            assert_eq!(step["floor_height"], json!(floor), "step sector {index}");
+            assert_eq!(step["ceiling_height"], json!(160_i32), "the probed ceiling");
+            assert_eq!(step["special"], json!(0_i32), "inert");
+            assert_eq!(step["tag"], json!(0_i32), "untagged");
+        }
+    }
+
+    /// Checks the four riser lines across the staircase (at `x` 64, 160,
+    /// 256 and 352): each two-sided, and its `lower` wears the theme's
+    /// `STEP1` on at least one face.
+    fn expect_stairs_risers(rows: &[Value]) {
+        let risers = [64_i64, 160_i64, 256_i64, 352_i64]
+            .into_iter()
+            .map(|x| {
+                (
+                    x,
+                    find_riser(rows, x).expect("a two-sided riser line at that x"),
+                )
+            })
+            .collect::<Vec<(i64, &Value)>>();
+        assert_eq!(risers.len(), 4_usize, "four risers across the path");
+        for (x, riser) in risers {
+            assert!(
+                riser["front"]["lower"] == json!("STEP1")
+                    || riser["back"]["lower"] == json!("STEP1"),
+                "the riser at x {x} wears the theme's step: {riser}"
+            );
+        }
+    }
+
+    /// The two-sided row in `rows` running north-south across the
+    /// staircase at `x`, from `y 96` to `y 160`: one step's riser.
+    fn find_riser(rows: &[Value], x: i64) -> Option<&Value> {
+        let vertical = |first: &Value, second: &Value| {
+            first["x"] == json!(x)
+                && second["x"] == json!(x)
+                && ((first["y"] == json!(96_i64) && second["y"] == json!(160_i64))
+                    || (first["y"] == json!(160_i64) && second["y"] == json!(96_i64)))
+        };
+        let wanted = |row: &Value| -> bool {
+            !row["back"].is_null()
+                && (vertical(&row["v1"], &row["v2"]) || vertical(&row["v2"], &row["v1"]))
+        };
+        rows.iter().find(|row| wanted(row))
+    }
+
+    #[tokio::test]
+    async fn stairs_climb_from_the_hall_to_a_raised_room() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        raise_the_fixture(&client).await;
+        let result = call(
+            &client,
+            "add_stairs",
+            json!({"from": {"x": 64_i64, "y": 128_i64}, "to": {"x": 448_i64, "y": 128_i64}}),
+        )
+        .await;
+        assert_eq!(result["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(result["floor_from"], json!(0_i32), "the hall's floor");
+        assert_eq!(result["floor_to"], json!(64_i32), "the raised room's floor");
+        assert_eq!(result["step_height"], json!(16_i32), "the default climb");
+        assert_eq!(result["width"], json!(64_i32), "the default width");
+        assert_eq!(result["count"], json!(4_i32), "four 16-unit steps");
+        assert_eq!(
+            result["steps"],
+            json!([
+                {"sector": 2_i32, "floor_height": 16_i32, "ceiling_height": 160_i32},
+                {"sector": 3_i32, "floor_height": 32_i32, "ceiling_height": 160_i32},
+                {"sector": 4_i32, "floor_height": 48_i32, "ceiling_height": 160_i32},
+                {"sector": 5_i32, "floor_height": 64_i32, "ceiling_height": 160_i32},
+            ]),
+            "the created sectors and their floors, in path order"
+        );
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(true),
+            "the staircase is new geometry"
+        );
+        assert_eq!(
+            result["copied_to_working"],
+            json!(false),
+            "the sector edits above had already copied the block in"
+        );
+        let sectors = working_sectors(&client, "MAP01").await;
+        expect_step_sectors(&sectors);
+        expect_stairs_risers(&working_linedefs(&client, "MAP01").await);
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn a_staircase_undoes_as_one_step() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(
+            &client,
+            "add_stairs",
+            json!({"from": {"x": 64_i64, "y": 128_i64}, "to": {"x": 448_i64, "y": 128_i64}}),
+        )
+        .await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["add stairs"]),
+            "the whole staircase rolls back together"
+        );
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(code, "not_found", "and the copy went with it");
+    }
+
+    #[tokio::test]
+    async fn stairs_refuse_a_step_without_headroom() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_stairs(
+            &client,
+            json!({
+                "from": {"x": 64_i64, "y": 128_i64},
+                "to": {"x": 448_i64, "y": 128_i64},
+                "floor_to": 64_i32,
+            }),
+            "not enough headroom",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stairs_step_depth_must_match_the_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_stairs(
+            &client,
+            json!({
+                "from": {"x": 64_i64, "y": 128_i64},
+                "to": {"x": 448_i64, "y": 128_i64},
+                "step_depth": 24_i32,
+            }),
+            "wants a path 48 map units",
+        )
+        .await;
+        refuse_stairs(
+            &client,
+            json!({
+                "from": {"x": 64_i64, "y": 128_i64},
+                "to": {"x": 448_i64, "y": 128_i64},
+                "step_depth": 0_i32,
+            }),
+            "step_depth must be a positive",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stairs_step_height_stays_between_one_and_twenty_four() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_stairs(
+            &client,
+            json!({
+                "from": {"x": 64_i64, "y": 128_i64},
+                "to": {"x": 448_i64, "y": 128_i64},
+                "step_height": 25_i32,
+            }),
+            "is out of range",
+        )
+        .await;
+        refuse_stairs(
+            &client,
+            json!({
+                "from": {"x": 64_i64, "y": 128_i64},
+                "to": {"x": 448_i64, "y": 128_i64},
+                "step_height": 0_i32,
+            }),
+            "step_height 0 is out of range",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stairs_endpoints_and_width_are_checked() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_stairs(
+            &client,
+            json!({"from": {"x": 5000_i64, "y": 5000_i64}, "to": {"x": 448_i64, "y": 128_i64}}),
+            "from point 5000, 5000 lies in no sector",
+        )
+        .await;
+        refuse_stairs(
+            &client,
+            json!({
+                "from": {"x": 64_i64, "y": 128_i64},
+                "to": {"x": 448_i64, "y": 128_i64},
+                "width": 0_i32,
+            }),
+            "width must be a positive",
+        )
+        .await;
+        refuse_stairs(
+            &client,
+            json!({"from": {"x": 64_i64, "y": 128_i64}, "to": {"x": 64_i64, "y": 128_i64}}),
+            "zero-length",
+        )
+        .await;
+    }
+
+    /// Requires `add_lift` to reject `args` with `invalid_argument`
+    /// naming `needle`, and the working archive to hold nothing.
+    async fn refuse_lift(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "add_lift", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+        let (missing, _) = call_err(
+            client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            missing, "not_found",
+            "the refused lift did not even copy the block into the working archive"
+        );
+    }
+
+    /// The fixture's step straddled by a new platform's outline: its
+    /// centre (272, 128) sits on the raised room.
+    fn platform_points() -> Value {
+        json!([
+            {"x": 224_i64, "y": 64_i64},
+            {"x": 320_i64, "y": 64_i64},
+            {"x": 320_i64, "y": 192_i64},
+            {"x": 224_i64, "y": 192_i64},
+        ])
+    }
+
+    /// Checks one Doom-family activation line of a lift: special
+    /// `special`, answering with `tag`, front at the lower hall and
+    /// wearing `WALL1`'s side band below the platform.
+    fn expect_lift_line(row: &Value, special: i32, tag: i32) {
+        assert_eq!(row["special"], json!(special), "the lift action");
+        assert_eq!(
+            row["tag"],
+            json!(tag),
+            "the line answers with the platform tag"
+        );
+        assert_eq!(
+            row["front"]["sector"],
+            json!(0_i32),
+            "the front faces the lower hall"
+        );
+        assert_eq!(
+            row["back"]["sector"],
+            json!(1_i32),
+            "and the platform behind"
+        );
+        assert_eq!(
+            row["front"]["lower"],
+            json!("WALL1"),
+            "the lift's side below the ledge"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lift_on_the_step_tags_the_platform_and_notes_the_short_drop() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let theme = call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"lift_side": "WALL1", "lift_floor": "FLAT10"}}),
+        )
+        .await;
+        assert_eq!(
+            theme["roles"]["lift_side"]["texture"],
+            json!("WALL1"),
+            "the side override stands for the role"
+        );
+        let result = call(&client, "add_lift", json!({"sector": 1_i32})).await;
+        assert_eq!(result["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(
+            result["platform_sector"],
+            json!(1_i32),
+            "the raised room rides"
+        );
+        assert_eq!(result["style"], json!("use_wall"), "the default style");
+        assert_eq!(
+            result["repeatable"],
+            json!(true),
+            "a lift repeats by default"
+        );
+        assert_eq!(result["tag"], json!(2_i32), "a fresh tag above room 1's 1");
+        assert_eq!(
+            result["floor_height"],
+            json!(32_i32),
+            "the platform's high floor"
+        );
+        assert_eq!(result["low_floor"], json!(0_i32), "the hall below");
+        assert_eq!(result["drop"], json!(32_i32), "the 32-unit step");
+        assert!(
+            note_mentions(&result, "a lift is not needed; stairs or a step will do"),
+            "the small drop is noted, not refused: {}",
+            result["notes"]
+        );
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(false),
+            "a standing edge and its tags are a property edit"
+        );
+        assert_eq!(result["copied_to_working"], json!(true));
+        let lines = reported_lines(&client, "MAP01", &result, "lines").await;
+        assert_eq!(lines.len(), 1_usize, "the step line only");
+        expect_lift_line(lines.first().expect("the activation line"), 62_i32, 2_i32);
+        let platform = working_sector(&client, "MAP01", 1_usize).await;
+        assert_eq!(platform["tag"], json!(2_i32), "the sector carries the tag");
+        assert_eq!(
+            platform["floor_flat"],
+            json!("FLAT10"),
+            "the theme's lift floor"
+        );
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn lift_styles_and_repeats_follow_the_doom_table() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"lift_side": "WALL1"}}),
+        )
+        .await;
+        let once = call(
+            &client,
+            "add_lift",
+            json!({"sector": 1_i32, "style": "USE_WALL", "repeatable": false}),
+        )
+        .await;
+        assert_eq!(once["style"], json!("use_wall"), "echoed canonically");
+        let lines = reported_lines(&client, "MAP01", &once, "lines").await;
+        expect_lift_line(lines.first().expect("the activation line"), 21_i32, 2_i32);
+        let crossed = call(
+            &client,
+            "add_lift",
+            json!({"sector": 1_i32, "style": "walk_trigger"}),
+        )
+        .await;
+        assert_eq!(crossed["tag"], json!(3_i32), "the next fresh tag");
+        let crossed_lines = reported_lines(&client, "MAP01", &crossed, "lines").await;
+        expect_lift_line(
+            crossed_lines.first().expect("the activation line"),
+            88_i32,
+            3_i32,
+        );
+        assert_eq!(
+            working_sector(&client, "MAP01", 1_usize).await["tag"],
+            json!(3_i32),
+            "the sector is re-stamped to match the lines"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tall_ledge_lifts_without_the_short_drop_note() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"lift_side": "WALL1"}}),
+        )
+        .await;
+        call(
+            &client,
+            "edit_sector",
+            json!({"index": 1_i32, "floor_height": 96_i32}),
+        )
+        .await;
+        let result = call(&client, "add_lift", json!({"sector": 1_i32})).await;
+        assert_eq!(result["floor_height"], json!(96_i32), "the raised ledge");
+        assert_eq!(
+            result["low_floor"],
+            json!(0_i32),
+            "the hall's floor by default"
+        );
+        assert_eq!(result["drop"], json!(96_i32), "a real ride");
+        assert!(
+            result["notes"]
+                .as_array()
+                .expect("notes is an array")
+                .is_empty(),
+            "no note for a 96-unit drop: {}",
+            result["notes"]
+        );
+        let lines = reported_lines(&client, "MAP01", &result, "lines").await;
+        expect_lift_line(lines.first().expect("the activation line"), 62_i32, 2_i32);
+        validate_clean(&client, "MAP01").await;
+    }
+
+    /// Checks every drawn-platform activation row: two-sided between the
+    /// lower hall (sector 0) and the new platform (sector 2), carrying
+    /// special `special` with the shared tag, its front at the hall and
+    /// wearing `WALL1` as the lift's side band.
+    fn expect_hall_lines(rows: &[Value], special: i32, tag: &Value) {
+        for row in rows {
+            assert_eq!(
+                row["front"]["sector"],
+                json!(0_i32),
+                "facing the lower hall: {row}"
+            );
+            assert_eq!(
+                row["back"]["sector"],
+                json!(2_i32),
+                "the platform behind: {row}"
+            );
+            assert_eq!(row["special"], json!(special), "the lift action: {row}");
+            assert_eq!(row["tag"], *tag, "the shared tag: {row}");
+            assert_eq!(
+                row["front"]["lower"],
+                json!("WALL1"),
+                "the lift's side: {row}"
+            );
+        }
+    }
+
+    /// Checks one `Hexen`-family lift line: special 206
+    /// `Plat_DownWaitUpStayLip` with the platform tag in `args[0]`, no
+    /// line tag, the front facing the lower hall, and every name of
+    /// `wanted` among its flag names.
+    fn expect_hexen_plat_line(row: &Value, tag: i32, wanted: &[&str]) {
+        assert_eq!(row["special"], json!(206_i32), "Plat_DownWaitUpStayLip");
+        assert_eq!(
+            row["args"],
+            json!([tag, 32_i32, 105_i32, 0_i32, 0_i32]),
+            "tag, speed, wait"
+        );
+        assert_eq!(row["tag"], json!(0_i32), "a Hexen line carries no tag");
+        assert_eq!(
+            row["front"]["sector"],
+            json!(0_i32),
+            "the front faces the lower hall"
+        );
+        let names = flag_names(row);
+        for name in wanted {
+            assert!(names.contains(name), "{name} activates it: {names:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_drawn_platform_lifts_from_where_the_player_stands() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"lift_side": "WALL1"}}),
+        )
+        .await;
+        let result = call(
+            &client,
+            "add_lift",
+            json!({"platform": {"points": platform_points()}}),
+        )
+        .await;
+        assert_eq!(result["platform_sector"], json!(2_i32), "the drawn sector");
+        assert_eq!(
+            result["floor_height"],
+            json!(32_i32),
+            "the raised room's height at the centre"
+        );
+        assert_eq!(result["low_floor"], json!(0_i32), "the hall below");
+        assert!(
+            note_mentions(&result, "a lift is not needed"),
+            "a 32-unit ride: {}",
+            result["notes"]
+        );
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(true),
+            "the platform is new geometry"
+        );
+        let lines = reported_lines(&client, "MAP01", &result, "lines").await;
+        assert!(!lines.is_empty(), "the hall-facing edges activate");
+        expect_hall_lines(&lines, 62_i32, &result["tag"]);
+        let platform = working_sector(&client, "MAP01", 2_usize).await;
+        assert_eq!(
+            platform["tag"], result["tag"],
+            "the sector answers with the fresh tag"
+        );
+        assert_eq!(
+            platform["floor_flat"],
+            json!("FLAT10"),
+            "the theme's lift floor"
+        );
+        assert_eq!(
+            platform["floor_height"],
+            json!(32_i32),
+            "the copied high floor"
+        );
+        assert_eq!(platform["ceiling_height"], json!(128_i32), "and ceiling");
+        validate_clean(&client, "MAP01").await;
+    }
+
+    #[tokio::test]
+    async fn a_hexen_map_gets_the_scripted_plat() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        let result = call(
+            &client,
+            "add_lift",
+            json!({"map": "MAP04", "sector": 1_i32}),
+        )
+        .await;
+        assert_eq!(result["tag"], json!(2_i32), "a fresh tag above room 1's 1");
+        let lines = reported_lines(&client, "MAP04", &result, "lines").await;
+        assert_eq!(lines.len(), 1_usize, "the step line only");
+        expect_hexen_plat_line(
+            lines.first().expect("the step line"),
+            2_i32,
+            &["twosided", "playeruse", "repeatspecial"],
+        );
+        let crossed = call(
+            &client,
+            "add_lift",
+            json!({"map": "MAP04", "sector": 1_i32, "style": "walk_trigger", "repeatable": false}),
+        )
+        .await;
+        assert_eq!(crossed["tag"], json!(3_i32), "the next minted tag");
+        let crossed_lines = reported_lines(&client, "MAP04", &crossed, "lines").await;
+        let crossed_line = crossed_lines.first().expect("the step line");
+        expect_hexen_plat_line(crossed_line, 3_i32, &["twosided", "playercross"]);
+        let crossed_names = flag_names(crossed_line);
+        assert!(
+            !crossed_names.contains(&"playeruse"),
+            "the field replaced outright: {crossed_names:?}"
+        );
+        assert!(
+            !crossed_names.contains(&"repeatspecial"),
+            "a one-shot clears the repeat bit: {crossed_names:?}"
+        );
+        assert_eq!(
+            working_sector(&client, "MAP04", 1_usize).await["tag"],
+            json!(3_i32),
+            "the sector and the args agree"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_platform_parameter_needs_exactly_one_form() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_lift(&client, json!({}), "exactly one").await;
+        refuse_lift(
+            &client,
+            json!({"platform": {"points": platform_points()}, "sector": 1_i32}),
+            "exactly one",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn lift_requests_name_their_fix() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_lift(
+            &client,
+            json!({"sector": 99_i32}),
+            "sector 99 is out of range",
+        )
+        .await;
+        refuse_lift(
+            &client,
+            json!({"sector": 0_i32}),
+            "not above its lift floor",
+        )
+        .await;
+        refuse_lift(
+            &client,
+            json!({"sector": 1_i32, "style": "slide"}),
+            "use_wall, walk_trigger",
+        )
+        .await;
+        refuse_lift(
+            &client,
+            json!({"platform": {"points": [{"x": 0_i64, "y": 0_i64}, {"x": 64_i64, "y": 0_i64}]}}),
+            "at least three corners",
+        )
+        .await;
+        refuse_lift(
+            &client,
+            json!({"platform": {"points": [
+                {"x": 5000_i64, "y": 5000_i64},
+                {"x": 5064_i64, "y": 5000_i64},
+                {"x": 5064_i64, "y": 5064_i64},
+                {"x": 5000_i64, "y": 5064_i64},
+            ]}}),
+            "centre 5032, 5032 lies in no sector",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_lift_undoes_as_one_step() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        call(&client, "add_lift", json!({"sector": 1_i32})).await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["add use_wall lift"]),
+            "the whole lift rolls back together"
+        );
+        let (code, _) = call_err(
+            &client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(code, "not_found", "and the copy went with it");
+    }
+
+    /// Requires `add_teleporter` to reject `args` with `invalid_argument`
+    /// naming `needle`, and the working archive to hold nothing.
+    async fn refuse_teleporter(client: &Client, args: Value, needle: &str) {
+        let note = args.to_string();
+        let (code, message) = call_err(client, "add_teleporter", args).await;
+        assert_eq!(code, "invalid_argument", "refusal code for {note}");
+        assert!(
+            message.contains(needle),
+            "the refusal for {note} must mention {needle:?}: {message}"
+        );
+        let (missing, _) = call_err(
+            client,
+            "assemble_map",
+            json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        assert_eq!(
+            missing, "not_found",
+            "the refused teleporter did not even copy the block into the working archive"
+        );
+    }
+
+    /// The pad-and-destination points the teleporter tests use: the pad
+    /// stands in the hall, the destination in the raised room.
+    fn teleporter_points() -> Value {
+        json!({
+            "pad": {"x": 64_i64, "y": 64_i64},
+            "destination": {"x": 384_i64, "y": 64_i64},
+        })
+    }
+
+    /// The working thing rows at the indices of a result's `things` list.
+    async fn reported_things(client: &Client, map: &str, result: &Value) -> Vec<Value> {
+        let indices = index_list(result, "things");
+        let report = call(
+            client,
+            "assemble_map",
+            json!({"map": map, "scope": "working", "include": ["things"]}),
+        )
+        .await;
+        let all = report["things"]
+            .as_array()
+            .expect("things is an array")
+            .clone();
+        let rows = indices
+            .iter()
+            .filter_map(|index| all.get(*index).cloned())
+            .collect::<Vec<Value>>();
+        assert_eq!(rows.len(), indices.len(), "every thing index exists");
+        rows
+    }
+
+    /// Checks one teleport-destination thing row: type 14 standing at
+    /// `at`, with the arrival facing and thing TID of `facing`.
+    fn expect_teleport_thing(row: &Value, at: (i64, i64), facing: (i32, i32)) {
+        assert_eq!(row["type"], json!(14_i32), "a teleport destination");
+        assert_eq!(row["x"], json!(at.0), "the thing's x");
+        assert_eq!(row["y"], json!(at.1), "the thing's y");
+        assert_eq!(row["angle"], json!(facing.0), "the arriving facing");
+        assert_eq!(row["tid"], json!(facing.1), "the thing's tid");
+    }
+
+    /// Checks the four `Doom`-family teleport borders of one square:
+    /// special 97 answering with `tag`, their front at the surrounding
+    /// room `outer` and the square `square` sector behind.
+    fn expect_doom_teleport_lines(rows: &[Value], square: usize, outer: usize, tag: i32) {
+        assert_eq!(rows.len(), 4_usize, "a border line on every side");
+        for row in rows {
+            assert_eq!(row["special"], json!(97_i32), "the WR teleport");
+            assert_eq!(row["tag"], json!(tag), "answering with the destination tag");
+            assert_eq!(
+                row["front"]["sector"],
+                json!(outer),
+                "the front faces out of the square into its room"
+            );
+            assert_eq!(
+                row["back"]["sector"],
+                json!(square),
+                "and the square lies behind, so walking in crosses it front-first"
+            );
+        }
+    }
+
+    /// Checks the four `Hexen`-family teleport borders of one square:
+    /// every side dressed with `tid` in its `args[0]`.
+    fn expect_hexen_teleport_lines(rows: &[Value], tid: i32) {
+        assert_eq!(rows.len(), 4_usize, "a border line on every side");
+        for row in rows {
+            expect_teleport_hexen_line(row, tid);
+        }
+    }
+
+    /// Checks one `Hexen`-family teleport border: special 70 Teleport
+    /// with `tid` in `args[0]`, no line tag, the whole trigger field
+    /// replaced by `playercross` plus `repeatspecial`.
+    fn expect_teleport_hexen_line(row: &Value, tid: i32) {
+        assert_eq!(row["special"], json!(70_i32), "Teleport");
+        assert_eq!(
+            row["args"],
+            json!([tid, 0_i32, 0_i32, 0_i32, 0_i32]),
+            "the destination TID in args[0]"
+        );
+        assert_eq!(row["tag"], json!(0_i32), "a Hexen line carries no tag");
+        let names = flag_names(row);
+        assert!(
+            names.contains(&"playercross"),
+            "the field reads as a cross: {names:?}"
+        );
+        assert!(
+            names.contains(&"repeatspecial"),
+            "a pad keeps working: {names:?}"
+        );
+        assert!(
+            !names.contains(&"playeruse"),
+            "crossed, not used: {names:?}"
+        );
+        assert!(names.contains(&"twosided"), "the border stands: {names:?}");
+    }
+
+    /// Checks the echoed fields of a one-way `add_teleporter` result on
+    /// the features fixture: both squares drawn, the fresh tag, the
+    /// null return leg and the invalidated nodes.
+    fn expect_one_way_report(result: &Value) {
+        assert_eq!(result["map"], json!("MAP01"), "the only map is default");
+        assert_eq!(result["pad_sector"], json!(2_i32), "the drawn pad");
+        assert_eq!(
+            result["destination_sector"],
+            json!(3_i32),
+            "the drawn destination"
+        );
+        assert_eq!(result["tag"], json!(2_i32), "a fresh tag above room 1's 1");
+        assert_eq!(result["return_tag"], Value::Null, "one-way has no return");
+        assert_eq!(result["pad_size"], json!(64_i32), "the default side");
+        assert_eq!(result["two_way"], json!(false), "echoed back");
+        assert_eq!(
+            result["nodes_invalidated"],
+            json!(true),
+            "both squares are new geometry"
+        );
+        assert_eq!(result["copied_to_working"], json!(true));
+        assert_eq!(
+            result["destination_lines"]
+                .as_array()
+                .expect("a list")
+                .len(),
+            0_usize,
+            "one-way dresses no destination borders"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_doom_teleporter_tags_the_destination_and_dresses_the_pad_outwards() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let theme = call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"teleport_floor": "FLAT10"}}),
+        )
+        .await;
+        assert_eq!(
+            theme["roles"]["teleport_floor"]["texture"],
+            json!("FLAT10"),
+            "the pad floor override stands for the role"
+        );
+        let mut args = teleporter_points();
+        args["destination"]["angle"] = json!(90_i32);
+        let result = call(&client, "add_teleporter", args).await;
+        expect_one_way_report(&result);
+        let pad = working_sector(&client, "MAP01", 2_usize).await;
+        assert_eq!(
+            pad["floor_flat"],
+            json!("FLAT10"),
+            "the theme's teleport floor"
+        );
+        assert_eq!(pad["floor_height"], json!(0_i32), "the hall's floor");
+        assert_eq!(
+            pad["tag"],
+            json!(0_i32),
+            "the outward leg tags the destination, not the pad"
+        );
+        let destination = working_sector(&client, "MAP01", 3_usize).await;
+        assert_eq!(
+            destination["tag"],
+            json!(2_i32),
+            "the vanilla search finds the thing through this tag"
+        );
+        assert_eq!(destination["floor_height"], json!(32_i32), "room 1's floor");
+        let lines = reported_lines(&client, "MAP01", &result, "pad_lines").await;
+        expect_doom_teleport_lines(&lines, 2_usize, 0_usize, 2_i32);
+        let things = reported_things(&client, "MAP01", &result).await;
+        expect_teleport_thing(
+            things.first().expect("the destination thing"),
+            (384_i64, 64_i64),
+            (90_i32, 0_i32),
+        );
+        validate_clean(&client, "MAP01").await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["add teleporter"]),
+            "the whole teleporter rolls back together"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_two_way_teleporter_tags_the_pad_for_the_way_back() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut args = teleporter_points();
+        args["destination"]["angle"] = json!(90_i32);
+        args["two_way"] = json!(true);
+        let result = call(&client, "add_teleporter", args).await;
+        assert_eq!(result["two_way"], json!(true), "echoed back");
+        assert_eq!(result["tag"], json!(2_i32), "the outward leg's tag");
+        assert_eq!(
+            result["return_tag"],
+            json!(3_i32),
+            "the return leg's own fresh tag"
+        );
+        let pad = working_sector(&client, "MAP01", 2_usize).await;
+        assert_eq!(
+            pad["tag"],
+            json!(3_i32),
+            "the pad sector answers with the return tag"
+        );
+        let lines = reported_lines(&client, "MAP01", &result, "pad_lines").await;
+        expect_doom_teleport_lines(&lines, 2_usize, 0_usize, 2_i32);
+        let back = reported_lines(&client, "MAP01", &result, "destination_lines").await;
+        expect_doom_teleport_lines(&back, 3_usize, 1_usize, 3_i32);
+        let things = reported_things(&client, "MAP01", &result).await;
+        assert_eq!(things.len(), 2_usize, "one destination thing per leg");
+        expect_teleport_thing(
+            things.first().expect("the destination thing"),
+            (384_i64, 64_i64),
+            (90_i32, 0_i32),
+        );
+        expect_teleport_thing(
+            things.get(1).expect("the return thing"),
+            (64_i64, 64_i64),
+            (270_i32, 0_i32),
+        );
+        validate_clean(&client, "MAP01").await;
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["add two-way teleporter"]),
+            "both legs roll back as one step"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hexen_teleporter_threads_the_tid_through_crossing_lines() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = formats_loaded(dir.path()).await;
+        let mut args = teleporter_points();
+        args["map"] = json!("MAP04");
+        args["destination"]["angle"] = json!(45_i32);
+        args["two_way"] = json!(true);
+        let result = call(&client, "add_teleporter", args).await;
+        assert_eq!(result["tag"], json!(2_i32), "the outward TID");
+        assert_eq!(result["return_tag"], json!(3_i32), "the return TID");
+        assert_eq!(result["pad_sector"], json!(2_i32));
+        assert_eq!(result["destination_sector"], json!(3_i32));
+        let lines = reported_lines(&client, "MAP04", &result, "pad_lines").await;
+        expect_hexen_teleport_lines(&lines, 2_i32);
+        let back = reported_lines(&client, "MAP04", &result, "destination_lines").await;
+        expect_hexen_teleport_lines(&back, 3_i32);
+        let things = reported_things(&client, "MAP04", &result).await;
+        expect_teleport_thing(
+            things.first().expect("the destination thing"),
+            (384_i64, 64_i64),
+            (45_i32, 2_i32),
+        );
+        expect_teleport_thing(
+            things.get(1).expect("the return thing"),
+            (64_i64, 64_i64),
+            (225_i32, 3_i32),
+        );
+    }
+
+    #[tokio::test]
+    async fn teleporter_arguments_are_validated() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        refuse_teleporter(&client, json!({}), "pad is required").await;
+        refuse_teleporter(
+            &client,
+            json!({"pad": {"x": 64_i64, "y": 64_i64}}),
+            "destination is required",
+        )
+        .await;
+        refuse_teleporter(
+            &client,
+            json!({"destination": {"x": 384_i64, "y": 64_i64}}),
+            "pad is required",
+        )
+        .await;
+        refuse_teleporter(
+            &client,
+            json!({"pad": {"x": 64_i64, "y": 64_i64}, "destination": {"x": 384_i64, "y": 64_i64}, "pad_size": 0_i32}),
+            "positive",
+        )
+        .await;
+        refuse_teleporter(
+            &client,
+            json!({"pad": {"x": -64_i64, "y": -64_i64}, "destination": {"x": 384_i64, "y": 64_i64}}),
+            "the pad point -64, -64 lies in no sector",
+        )
+        .await;
+        refuse_teleporter(
+            &client,
+            json!({"pad": {"x": 64_i64, "y": 64_i64}, "destination": {"x": 5000_i64, "y": 5000_i64}}),
+            "the destination point 5000, 5000 lies in no sector",
+        )
+        .await;
     }
 }

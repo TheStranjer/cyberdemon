@@ -80,17 +80,21 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 119] = [
+    const EXPECTED_TOOLS: [&str; 125] = [
         "add_door",
         "add_exit",
+        "add_lift",
         "add_linedef",
         "add_lump",
         "add_patch",
         "add_sector",
         "add_sidedef",
+        "add_stairs",
         "add_switch",
+        "add_teleporter",
         "add_thing",
         "add_vertex",
+        "add_window",
         "align_textures",
         "assemble_map",
         "auto_texture",
@@ -159,6 +163,7 @@ mod tests {
         "list_pnames",
         "list_sprites",
         "list_textures",
+        "mark_secret",
         "merge_wad",
         "move_vertex",
         "new_wad",
@@ -191,6 +196,7 @@ mod tests {
         "search_lumps",
         "set_active_map",
         "set_asset_capacity",
+        "set_light_effect",
         "set_palette",
         "set_render_options",
         "set_render_resolution",
@@ -510,6 +516,27 @@ mod tests {
             ],
         );
         assert_nothing_required(&reorder);
+    }
+
+    #[tokio::test]
+    async fn the_two_sector_special_tools_require_their_selection() {
+        let client = connect().await;
+        let tools = client.list_all_tools().await.expect("list tools");
+        let secret = schema_of(tool_named(&tools, "mark_secret"));
+        assert_flattens(&secret, &["map", "sectors", "secret"]);
+        assert_required(&secret, "sectors");
+        let light = schema_of(tool_named(&tools, "set_light_effect"));
+        assert_flattens(&light, &["map", "sectors", "effect", "light"]);
+        assert_required(&light, "sectors");
+        assert_required(&light, "effect");
+        let warning = tool_named(&tools, "mark_secret")
+            .description
+            .as_deref()
+            .expect("a description");
+        assert!(
+            warning.contains("vanilla Doom ignores Boom bits"),
+            "the description carries the exact Boom warning: {warning}"
+        );
     }
 
     #[tokio::test]

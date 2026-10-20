@@ -23,7 +23,8 @@
 //! palette-group tests in `palette`, the
 //! patches-group tests in `patches`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
-//! the textures-group tests in `textures`, the themes-group tests in
+//! the plan-group tests in `plan`, the textures-group tests in
+//! `textures`, the themes-group tests in
 //! `themes`, the validate-group tests in `validate`, and the
 //! documentation-layout
 //! checks in `docs`; every helper is exercised by a test in `server`, and
@@ -118,6 +119,9 @@ mod palette;
 #[cfg(test)]
 #[path = "mcp/patches.rs"]
 mod patches;
+#[cfg(test)]
+#[path = "mcp/plan.rs"]
+mod plan;
 #[cfg(test)]
 #[path = "mcp/render.rs"]
 mod render;

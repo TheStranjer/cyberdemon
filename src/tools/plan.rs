@@ -1,0 +1,1060 @@
+//! Plan tools: `build_map_from_plan` (see the `plan` router on
+//! [`crate::server::Cyberdemon`]).
+//!
+//! One declarative call: rooms with footprints and sector properties,
+//! connections joining them, a wall thickness and a theme. The wire
+//! shape and its mapping onto [`crate::plan::model`] live in
+//! [`params`]; the pure [`crate::plan::compile`] engine grows the thick
+//! walls, places every connector band, emits the fresh [`Map`] and
+//! dresses it in the [`ThemeRoles`] this module resolves for the call.
+//! The [`crate::plan::things`] engine then stands the requested things
+//! in: names resolve against the session's game definitions (the same
+//! overlay the validate tools read), pinned points travel with the
+//! rooms through [`crate::plan::units`], room fills land row-major on
+//! the clearance grid, and every built map keeps a player 1 start.
+//! The compiled block is written into the working archive as exactly
+//! one [`Session::edit`] step through
+//! [`crate::tools::maps::write_block`], and the map becomes the
+//! session's active map. The `finalize` parameter grows that one step:
+//! before the write it runs the [`crate::tools::nodes`] whole-set build
+//! (`SEGS`/`SSECTORS`/`NODES` plus `REJECT` and `BLOCKMAP` on a binary
+//! map, the extended `ZNODES` lump on a `UDMF` one) on the compiled
+//! model, and it reports an errors-only pass of
+//! [`crate::wad::map::validate`] over the finished map — validation
+//! findings never roll the build back. Door sector specials still
+//! wait for the follow-up behaviour ticket. Before the compiler, the pure
+//! [`crate::plan::units`] transform carries the
+//! drawn plan into map units: the `units` scale/origin/mirror and the
+//! `grid` snap, so a sketch measured in pixels lands grid-aligned at
+//! map size.
+//!
+//! Compiler refusals already name the offending id;
+//! [`with_plan_path`] prefixes them with the plan path (`rooms[0]`,
+//! `connections[1]`) so the caller can point at the wire element that
+//! broke.
+
+mod params;
+
+use alloc::collections::BTreeMap;
+
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CallToolResult;
+use rmcp::{ErrorData, tool, tool_router};
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::defs::{Definitions, session_definitions};
+use crate::error::CyberError;
+use crate::plan::CompiledPlan;
+use crate::plan::compile;
+use crate::plan::model::ConnectionKind;
+use crate::plan::textures::{TextureRole, TextureRoles};
+use crate::plan::things::{
+    PLAYER_ONE_START, PlacementContext, PlannedThing, place, presence_flags, resolve_thing_kind,
+};
+use crate::plan::transform_plan;
+use crate::server::Cyberdemon;
+use crate::session::Session;
+use crate::themes::Role;
+use crate::tools::defs::collect;
+use crate::tools::maps::{parse_format, resolve_namespace, write_block};
+use crate::tools::nodes::{AllPlan, apply_all};
+use crate::tools::plan::params::{BuildPlanParams, ConnectionParam, KindSource, ThingRequest};
+use crate::tools::themes::theme_roles;
+use crate::tools::validate::{Counts, resource_index, session_tables};
+use crate::tools::{fail, ok};
+use crate::wad::classify::MapFormat;
+use crate::wad::game::Game;
+use crate::wad::map::FlagFamily;
+use crate::wad::map::Map;
+use crate::wad::map::validate::{Issue, Outcome as ValidateOutcome, Severity, run as run_checks};
+use crate::wad::map::write_map;
+use crate::wad::name::LumpName;
+
+/// The texture name meaning "nothing here" in a resolved theme.
+const NO_TEXTURE: &str = "-";
+/// Error rows the finalized result lists at most; the counts stay exact.
+const VALIDATION_ERROR_CAP: usize = 20_usize;
+/// The steps every result hands the caller.
+const NEXT_STEPS: [&str; 2] = [
+    "render_topdown to compare with the sketch",
+    "render_view from the player start",
+];
+/// Every plan dressing role and the session theme role answering it.
+const THEME_ROLES: [(TextureRole, Role); 8] = [
+    (TextureRole::Floor, Role::Floor),
+    (TextureRole::Ceiling, Role::Ceiling),
+    (TextureRole::Wall, Role::Wall),
+    (TextureRole::Door, Role::Door),
+    (TextureRole::DoorFloor, Role::DoorFloor),
+    (TextureRole::DoorTrack, Role::DoorTrack),
+    (TextureRole::WindowSill, Role::WindowSill),
+    (TextureRole::Step, Role::Step),
+];
+
+/// The resolved [`TextureRole`] names one [`crate::plan::compile`] call
+/// dresses with: a role the theme answered `"-"` holds no name, so the
+/// compiler leaves its faces undressed instead of inventing one.
+struct PlanTheme {
+    /// The (role, name) pairs the theme answered, in [`THEME_ROLES`]
+    /// order.
+    names: Vec<(TextureRole, String)>,
+}
+
+impl TextureRoles for PlanTheme {
+    fn texture(&self, role: TextureRole) -> Option<&str> {
+        self.names
+            .iter()
+            .find_map(|pair| (pair.0 == role).then_some(pair.1.as_str()))
+    }
+}
+
+/// The compiler's theme for this call and the notes for the roles that
+/// answered `"-"`.
+///
+/// # Errors
+///
+/// [`theme_roles`]' refusals for an unknown `theme` override.
+fn plan_theme(
+    session: &Session,
+    theme: Option<&str>,
+) -> Result<(PlanTheme, Vec<String>), CyberError> {
+    let wanted: Vec<Role> = THEME_ROLES.iter().map(|&(_, role)| role).collect();
+    let resolved = theme_roles(session, theme, &wanted)?;
+    let mut names = Vec::new();
+    let mut notes = Vec::new();
+    for (plan_role, role) in THEME_ROLES {
+        match resolved.get(&role).map(String::as_str) {
+            Some(name) if name != NO_TEXTURE => names.push((plan_role, name.to_owned())),
+            _ => notes.push(format!(
+                "the theme answers \"-\" for role {}: those faces stay undressed",
+                role.as_str()
+            )),
+        }
+    }
+    Ok((PlanTheme { names }, notes))
+}
+
+/// The wire string naming `kind`'s class, as the result reports it.
+const fn kind_name(kind: ConnectionKind) -> &'static str {
+    match kind {
+        ConnectionKind::Opening => "opening",
+        ConnectionKind::Door { .. } => "door",
+        ConnectionKind::Window { .. } => "window",
+        ConnectionKind::Stairs { .. } => "stairs",
+    }
+}
+
+/// The first `'…'`-quoted name of `message`, if it carries one.
+fn quoted_first(message: &str) -> Option<&str> {
+    message.split('\'').nth(1).filter(|name| !name.is_empty())
+}
+
+/// The label the compiler gives an unnamed connection: `from->to`.
+fn connection_label(connection: &ConnectionParam) -> String {
+    connection
+        .id
+        .clone()
+        .unwrap_or_else(|| format!("{}->{}", connection.from, connection.to))
+}
+
+/// The plan path naming the offender of a compiler message: the first
+/// quoted room id wins, then the first quoted connection label.
+fn plan_path(args: &BuildPlanParams, message: &str) -> Option<String> {
+    let name = quoted_first(message)?;
+    if let Some(index) = args.rooms.iter().position(|room| room.id == name) {
+        return Some(format!("rooms[{index}]"));
+    }
+    args.connections
+        .iter()
+        .position(|connection| connection_label(connection) == name)
+        .map(|index| format!("connections[{index}]"))
+}
+
+/// The compiler error with its plan path prefixed, keeping the code;
+/// messages that name no known id and errors that are neither an
+/// argument nor a limit refusal pass through unchanged.
+fn with_plan_path(error: CyberError, args: &BuildPlanParams) -> CyberError {
+    let message = error.to_string();
+    let Some(path) = plan_path(args, &message) else {
+        return error;
+    };
+    let prefixed = format!("{path}: {message}");
+    match error {
+        CyberError::InvalidArgument(_) => CyberError::InvalidArgument(prefixed),
+        CyberError::LimitExceeded(_) => CyberError::LimitExceeded(prefixed),
+        other @ (CyberError::NotFound(_)
+        | CyberError::AlreadyExists(_)
+        | CyberError::Conflict(_)
+        | CyberError::Format(_)
+        | CyberError::Io(_)
+        | CyberError::Fetch(_)
+        | CyberError::Unsupported(_)
+        | CyberError::Internal(_)) => other,
+    }
+}
+
+/// The vertex bounds of the compiled map as one result object.
+fn bounds_of(map: &Map) -> Option<PlanBounds> {
+    map.bounds()
+        .map(|(x1, y1, x2, y2)| PlanBounds { x1, y1, x2, y2 })
+}
+
+/// The definitions game a plan run reads: the session's detected game,
+/// with an unidentified session standing for DOOM II (as the validate
+/// and defs tools do).
+fn plan_game(found: Game) -> Game {
+    if found == Game::Unknown {
+        return Game::Doom2;
+    }
+    found
+}
+
+/// The thing definitions `build_map_from_plan` resolves names against:
+/// the detected game's tables overlaid with the merged view's
+/// `DEHACKED`, `DECORATE`, `ZScript` and `MAPINFO` customs.
+///
+/// # Errors
+///
+/// [`collect::custom_sources`]' read errors and [`session_definitions`]'
+/// refusal for malformed embedded definition data.
+fn plan_definitions(session: &Session) -> Result<Definitions, CyberError> {
+    let (sources, _notes) = collect::custom_sources(session)?;
+    session_definitions(plan_game(session.game()), &sources)
+}
+
+/// The doomednum of a request row: its explicit `type`, the type its
+/// `name` resolves to (refused as `invalid_argument` prefixed with the
+/// wire path), or the player 1 start.
+fn resolved_kind(request: &ThingRequest, definitions: &Definitions) -> Result<u32, CyberError> {
+    match request.kind.clone() {
+        KindSource::Type(kind) => Ok(kind),
+        KindSource::PlayerOne => Ok(PLAYER_ONE_START),
+        KindSource::Name(name) => resolve_thing_kind(definitions, &name)
+            .map_err(|problem| CyberError::InvalidArgument(format!("{}: {problem}", request.path))),
+    }
+}
+
+/// Every request row with its doomednum and presence flags resolved
+/// against `definitions` and the compiled map's flag `family`.
+fn resolve_specs(
+    requests: &[ThingRequest],
+    family: FlagFamily,
+    definitions: &Definitions,
+) -> Result<Vec<PlannedThing>, CyberError> {
+    requests
+        .iter()
+        .map(|request| {
+            Ok(PlannedThing {
+                kind: resolved_kind(request, definitions)?,
+                spot: request.spot.clone(),
+                count: request.count,
+                angle: request.angle,
+                flags: presence_flags(family, request.skills.as_deref(), request.multiplayer_only),
+                path: request.path.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Refuse a plan whose resolved rows hold no player 1 start; the check
+/// runs after name resolution, so a `type: 1` or a `name` answering to
+/// type `1` satisfies it.
+fn ensure_player_start(specs: &[PlannedThing]) -> Result<(), CyberError> {
+    if specs.iter().any(|spec| spec.kind == PLAYER_ONE_START) {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(
+        "a map needs a player 1 start; pass player_start or a thing of type 1".to_owned(),
+    ))
+}
+
+/// Stand every planned thing in the compiled map: validate and resolve
+/// the wire rows, refuse a plan without a player start, run the pure
+/// [`place`] engine and extend the map's things and the plan's
+/// warnings. The number of thing rows placed (the player start
+/// included).
+///
+/// # Errors
+///
+/// [`params`]' shape refusals, [`plan_definitions`]' read errors, the
+/// resolution refusals naming `things[i]` or `player_start`,
+/// [`ensure_player_start`]' refusal and [`place`]'s placement refusals.
+fn place_planned(
+    session: &Session,
+    args: &BuildPlanParams,
+    compiled: &mut CompiledPlan,
+) -> Result<usize, CyberError> {
+    let requests = args.to_things()?;
+    let definitions = plan_definitions(session)?;
+    let family = compiled.map.flag_family();
+    let specs = resolve_specs(&requests, family, &definitions)?;
+    ensure_player_start(&specs)?;
+    let context = PlacementContext {
+        map: &compiled.map,
+        room_sectors: &compiled.room_sectors,
+        definitions: &definitions,
+        units: args.to_units(),
+        grid: args.grid,
+    };
+    let placement = place(&context, &specs)?;
+    compiled.warnings.extend(placement.warnings);
+    let placed = placement.things.len();
+    compiled.map.things.extend(placement.things);
+    Ok(placed)
+}
+
+/// The finalized node build: the format's whole-set default plan
+/// ([`AllPlan::for_model`] — `classic` plus a `zero` `REJECT` and a
+/// fresh `BLOCKMAP` for a binary map, the compressed extended `ZNODES`
+/// lump for a `UDMF` one) applied in place to the compiled model before
+/// `write_map` turns the grown block into lumps, so the node run joins
+/// the one `Session::edit` the write already is. The build summary as
+/// `NodesBuildBody`-shaped `JSON`.
+///
+/// # Errors
+///
+/// [`apply_all`]'s refusals (a tree the builder cannot cut, limits the
+/// record layouts refuse) and the summary's serialization.
+fn finalize_nodes(compiled: &mut CompiledPlan) -> Result<Value, CyberError> {
+    let plan = AllPlan::for_model(&compiled.map);
+    let built = apply_all(&mut compiled.map, &plan)?;
+    built.into_nodes_json()
+}
+
+/// The finalized validation's result frame: the `Severity::Error` rows
+/// of `outcome` capped at [`VALIDATION_ERROR_CAP`], with the
+/// per-severity counts over every issue the checks found.
+fn validation_view(outcome: &ValidateOutcome) -> Value {
+    let counts = Counts::of(&outcome.issues);
+    let errors: Vec<&Issue> = outcome
+        .issues
+        .iter()
+        .filter(|issue| issue.severity == Severity::Error)
+        .take(VALIDATION_ERROR_CAP)
+        .collect();
+    serde_json::json!({"errors": errors, "counts": counts})
+}
+
+/// The finalized validation: every `validate_map` check over the
+/// finished model, with the session's definition tables and the merged
+/// view's resource index exactly as [`crate::tools::validate`] reads
+/// them, reported through [`validation_view`]. Findings never fail the
+/// call: the map was built to plan, and the caller fixes error rows
+/// with the element tools.
+///
+/// # Errors
+///
+/// [`session_tables`]' and [`resource_index`]' read errors.
+fn finalize_validation(session: &Session, map: &Map) -> Result<Value, CyberError> {
+    let tables = session_tables(session)?;
+    let resources = resource_index(session)?;
+    let outcome = run_checks(map, &tables.context(&resources), None);
+    Ok(validation_view(&outcome))
+}
+
+/// The bounding box of the compiled map's vertices.
+#[derive(Debug, PartialEq, Serialize)]
+struct PlanBounds {
+    /// Smallest vertex `X`.
+    x1: i32,
+    /// Smallest vertex `Y`.
+    y1: i32,
+    /// Largest vertex `X`.
+    x2: i32,
+    /// Largest vertex `Y`.
+    y2: i32,
+}
+
+/// One placed connection as the result reports it.
+#[derive(Serialize)]
+struct ConnectionReport {
+    /// The connection's id, or its `from->to` label when unnamed.
+    id: String,
+    /// The kind class: `opening`, `door`, `window` or `stairs`.
+    kind: &'static str,
+    /// The sectors this connector owns (one band, or one per stair
+    /// step), in plan order.
+    sectors: Vec<usize>,
+}
+
+/// Structured result of [`Cyberdemon::build_map_from_plan`].
+#[derive(Serialize)]
+struct PlanReport {
+    /// The map block that was written.
+    map: LumpName,
+    /// The layout its block uses.
+    format: MapFormat,
+    /// Room id to the sector indices that room owns; a room fully
+    /// painted over by a later one holds no entry.
+    rooms: BTreeMap<String, Vec<usize>>,
+    /// One row per connection, in plan order.
+    connections: Vec<ConnectionReport>,
+    /// The thing rows standing in the written map, player start
+    /// included.
+    things_placed: usize,
+    /// The vertex bounding box; `null` for a map without vertices.
+    bounds: Option<PlanBounds>,
+    /// The compiler's advisories (unreachable and painted-over rooms,
+    /// too-tall floor gaps) plus the notes for theme roles that answered
+    /// `"-"`.
+    warnings: Vec<String>,
+    /// The finalized node build's summary (`NodesBuildBody`-shaped:
+    /// `variant`, `segs`, `subsectors`, `nodes` and the layout's extra
+    /// counts); `null` when `finalize` was not asked for.
+    nodes: Option<Value>,
+    /// The finalized errors-only validation pass
+    /// (`{"errors": [...], "counts": {...}}`); `null` when `finalize`
+    /// was not asked for. Error rows never rolled the build back.
+    validation: Option<Value>,
+    /// What to look at next.
+    next_steps: [&'static str; 2],
+}
+
+/// The result frame for a compiled plan, before the archive write: the
+/// live counts plus whatever the `finalize` step produced (`nodes` and
+/// `validation` are `None` without it).
+fn reporting(
+    compiled: &CompiledPlan,
+    things_placed: usize,
+    nodes: Option<Value>,
+    validation: Option<Value>,
+) -> PlanReport {
+    PlanReport {
+        map: compiled.map.name,
+        format: compiled.map.format,
+        rooms: compiled.room_sectors.clone(),
+        connections: compiled
+            .connector_sectors
+            .iter()
+            .map(|info| ConnectionReport {
+                id: info.id.clone(),
+                kind: kind_name(info.kind),
+                sectors: info.sectors.clone(),
+            })
+            .collect(),
+        things_placed,
+        bounds: bounds_of(&compiled.map),
+        warnings: compiled.warnings.clone(),
+        nodes,
+        validation,
+        next_steps: NEXT_STEPS,
+    }
+}
+
+/// `build_map_from_plan`'s work: resolve the parameters, carry the
+/// drawn plan into map units, compile the plan, stand the things in,
+/// finalize when asked, and write the block as one [`Session::edit`]
+/// step, making the map the session's active one.
+fn build_run(session: &mut Session, args: &BuildPlanParams) -> Result<PlanReport, CyberError> {
+    let name = LumpName::parse(args.map.as_str())?;
+    let format = parse_format(args.format.as_deref())?;
+    let namespace = if format == MapFormat::Udmf {
+        resolve_namespace(args.namespace.as_deref(), format)?
+    } else {
+        None
+    };
+    let drawn = args.to_model()?;
+    let units = args.to_units();
+    units.check()?;
+    let plan = transform_plan(&drawn, &units, args.grid)?;
+    let (theme, notes) = plan_theme(session, args.theme.as_deref())?;
+    let mut compiled =
+        compile(&plan, name, format, &theme).map_err(|error| with_plan_path(error, args))?;
+    compiled.map.udmf_namespace = namespace;
+    compiled.warnings.extend(notes);
+    let things_placed = place_planned(session, args, &mut compiled)?;
+    let (node_summary, validation) = if args.finalize {
+        let built = finalize_nodes(&mut compiled)?;
+        let checked = finalize_validation(session, &compiled.map)?;
+        (Some(built), Some(checked))
+    } else {
+        (None, None)
+    };
+    let report = reporting(&compiled, things_placed, node_summary, validation);
+    let lumps = write_map(&compiled.map)?;
+    let label = format!("build_map_from_plan {name}");
+    let replace = args.replace;
+    session.edit(&label, move |wad| write_block(wad, name, replace, lumps))?;
+    session.set_active_map(Some(name));
+    Ok(report)
+}
+
+/// Hand an outcome to the client as the documented structured result.
+fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
+where
+    T: Serialize,
+{
+    match outcome {
+        Ok(value) => ok(&value),
+        Err(error) => fail(&error),
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
+)]
+#[tool_router(router = plan_router, vis = "pub(crate)")]
+impl Cyberdemon {
+    /// Builds a whole map block from a declarative rooms-and-connections plan in one undoable edit.
+    #[tool(
+        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between, things standing in the result - and writes the compiled block into the working archive as one undoable edit. Every built map needs a player start: pass player_start or a thing of type 1; door sector specials come from a later update. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later update wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). things: rows each give exactly one of type (a doomednum) and name (resolved against the session's definitions: a case-insensitive exact name, else a unique case-insensitive substring; no match or an ambiguous one is invalid_argument naming things[i], ambiguities listing the candidate names), and exactly one of an x/y plan point (transformed and snapped with the rooms) and a room id to fill. A room fill is deterministic: row-major from the sector bounding box's minimum corner raised by the thing's clearance (its definition's radius, else 16, plus 8 map units), one grid point per twice the clearance, every point kept at least that clearance inside the sector; up to count (default 1) copies land and a room that holds fewer warns \"room 'x' fits only N of M things\". angle (default 0) must be 0..=359; skills (some of easy/medium/hard) and multiplayer_only (notsingle in the Doom family, coop+dm in the Hexen one) set the presence flag bits, defaulting to present everywhere. player_start: {x, y, angle} or {room, angle} (the room form lands on the sector bounding box's centre) adds a type 1 thing; without it or a resolved thing of type 1 the call fails invalid_argument asking for a player start. theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. finalize: true (default false) builds the node run into the block before the write - the whole build_all_nodes set on the compiled model inside this same undoable edit: the classic SEGS/SSECTORS/NODES run plus a zero REJECT and a fresh BLOCKMAP for a binary map, the compressed extended ZNODES lump (that one lump only) for a UDMF one - and validates the finished map. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], things_placed, bounds {x1, y1, x2, y2}, warnings, nodes, validation, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, things_placed counts the written thing rows (player start included), and with finalize nodes carries the build summary {variant (classic|extended), segs, subsectors, nodes, warnings, the layout's extra counts} while validation carries an errors-only pass {errors: [at most 20 issue rows as validate_map reports them], counts: {error, warning, info} over every issue found}. Validation errors never roll the build back: the map was built to plan; fix the rows with the element tools. Without finalize, nodes and validation are null and the block ships without node data. Run undo to take the whole block back - node run included. Look at the result with render_topdown and render_view from the player start, and check it with validate_map."
+    )]
+    fn build_map_from_plan(
+        &self,
+        Parameters(args): Parameters<BuildPlanParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| build_run(session, &args)),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::from_str;
+
+    use super::{
+        BuildPlanParams, CompiledPlan, ConnectionKind, PlanTheme, THEME_ROLES, TextureRole,
+        VALIDATION_ERROR_CAP, bounds_of, connection_label, ensure_player_start, finalize_nodes,
+        kind_name, plan_game, plan_path, quoted_first, reporting, resolve_specs, validation_view,
+        with_plan_path,
+    };
+    use crate::defs::definitions_for;
+    use crate::error::CyberError;
+    use crate::plan::compile;
+    use crate::plan::textures::TextureRoles as _;
+    use crate::plan::things::{PlannedThing, Skill, ThingSpot};
+    use crate::tools::plan::params::{KindSource, ThingRequest};
+    use crate::wad::classify::MapFormat;
+    use crate::wad::game::Game;
+    use crate::wad::map::FlagFamily;
+    use crate::wad::map::Map;
+    use crate::wad::map::validate::{Issue, Outcome as ValidateOutcome, Severity};
+    use crate::wad::name::LumpName;
+
+    /// A request parsed from `json`.
+    fn args(json: &str) -> BuildPlanParams {
+        from_str(json).expect("test requests parse")
+    }
+
+    /// A two-room, one-door request with the ids the path tests need.
+    fn plan_args() -> BuildPlanParams {
+        args(
+            r#"{"map": "MAP05",
+                "rooms": [
+                    {"id": "a", "rect": {"x": 0, "y": 0, "w": 128, "h": 128}},
+                    {"id": "b", "rect": {"x": 128, "y": 0, "w": 128, "h": 128}}
+                ],
+                "connections": [
+                    {"from": "a", "to": "b", "kind": "opening"},
+                    {"id": "d1", "from": "a", "to": "b", "kind": "door"}
+                ]}"#,
+        )
+    }
+
+    #[test]
+    fn connector_kinds_carry_their_wire_names() {
+        use crate::plan::model::DoorStyle;
+        assert_eq!(kind_name(ConnectionKind::Opening), "opening");
+        assert_eq!(
+            kind_name(ConnectionKind::Door {
+                style: DoorStyle::Remote
+            }),
+            "door",
+            "the style does not change the class name"
+        );
+        assert_eq!(
+            kind_name(ConnectionKind::Window {
+                sill: 32_i32,
+                lintel: 24_i32
+            }),
+            "window"
+        );
+        assert_eq!(
+            kind_name(ConnectionKind::Stairs {
+                step_height: 16_i32,
+                step_depth: 24_i32
+            }),
+            "stairs"
+        );
+    }
+
+    #[test]
+    fn every_dressing_role_maps_to_a_theme_role() {
+        let mapped: Vec<TextureRole> = THEME_ROLES.iter().map(|&(role, _)| role).collect();
+        for role in [
+            TextureRole::Floor,
+            TextureRole::Ceiling,
+            TextureRole::Wall,
+            TextureRole::Door,
+            TextureRole::DoorFloor,
+            TextureRole::DoorTrack,
+            TextureRole::WindowSill,
+            TextureRole::Step,
+        ] {
+            assert_eq!(
+                mapped.iter().filter(|slot| **slot == role).count(),
+                1,
+                "{role:?} appears exactly once"
+            );
+        }
+        assert_eq!(mapped.len(), 8, "eight plan roles, eight answers");
+    }
+
+    #[test]
+    fn a_theme_that_answers_dash_leaves_the_role_undressed() {
+        let theme = PlanTheme {
+            names: vec![(TextureRole::Wall, "WALL1".to_owned())],
+        };
+        assert_eq!(theme.texture(TextureRole::Wall), Some("WALL1"));
+        assert_eq!(
+            theme.texture(TextureRole::Step),
+            None,
+            "absent means undressed"
+        );
+        let empty = PlanTheme { names: Vec::new() };
+        assert_eq!(empty.texture(TextureRole::Floor), None);
+    }
+
+    #[test]
+    fn quoted_first_reads_the_first_name_of_a_message() {
+        assert_eq!(quoted_first("room 'a' has no edge"), Some("a"));
+        assert_eq!(
+            quoted_first("connection 'd1' cannot be placed: rooms a and b"),
+            Some("d1")
+        );
+        assert_eq!(quoted_first("no names here"), None, "unquoted passes");
+        assert_eq!(quoted_first("empty '' name"), None, "empty is not a name");
+    }
+
+    #[test]
+    fn plan_paths_resolve_rooms_first_then_connection_labels() {
+        let plan = plan_args();
+        assert_eq!(
+            plan_path(&plan, "room 'b' has a 0x0 rectangle").as_deref(),
+            Some("rooms[1]")
+        );
+        assert_eq!(
+            plan_path(&plan, "connection 'a->b' is too wide").as_deref(),
+            Some("connections[0]"),
+            "the derived label names the unnamed connection"
+        );
+        assert_eq!(
+            plan_path(&plan, "connection 'd1' rooms do not touch").as_deref(),
+            Some("connections[1]")
+        );
+        assert_eq!(
+            plan_path(&plan, "room 'ghost' is not in the plan"),
+            None,
+            "an unknown name finds no path"
+        );
+    }
+
+    #[test]
+    fn connection_labels_prefer_the_id_over_from_arrow_to() {
+        let plan = plan_args();
+        let unnamed = plan.connections.first().expect("the opening");
+        assert_eq!(connection_label(unnamed), "a->b");
+        let named = plan.connections.get(1).expect("the door");
+        assert_eq!(connection_label(named), "d1");
+    }
+
+    #[test]
+    fn with_plan_path_prefixes_refusals_and_keeps_the_rest() {
+        let plan = plan_args();
+        let invalid = with_plan_path(
+            CyberError::InvalidArgument("room 'a' has a 0x64 rectangle".to_owned()),
+            &plan,
+        );
+        assert_eq!(invalid.code(), "invalid_argument", "the code stands");
+        assert_eq!(
+            invalid.to_string(),
+            "rooms[0]: room 'a' has a 0x64 rectangle",
+            "the path leads"
+        );
+        let limit = with_plan_path(
+            CyberError::LimitExceeded("connection 'd1' needs 9999 steps".to_owned()),
+            &plan,
+        );
+        assert_eq!(limit.code(), "limit_exceeded", "limits keep their code");
+        assert!(limit.to_string().starts_with("connections[1]: "), "{limit}");
+        let unhandled = CyberError::Internal("room 'a' broke the server".to_owned());
+        assert!(
+            matches!(with_plan_path(unhandled, &plan), CyberError::Internal(text) if text == "room 'a' broke the server"),
+            "internal errors pass through"
+        );
+        let nameless = with_plan_path(
+            CyberError::InvalidArgument("plan has no rooms; add at least one room".to_owned()),
+            &plan,
+        );
+        assert_eq!(
+            nameless.to_string(),
+            "plan has no rooms; add at least one room",
+            "no quoted id, no prefix"
+        );
+    }
+
+    #[test]
+    fn bounds_fold_the_vertex_box_into_the_result_object() {
+        assert_eq!(
+            bounds_of(&Map::default()),
+            None,
+            "an empty map has no bounds"
+        );
+        let mut map = Map::new_empty(
+            LumpName::parse("MAP01").expect("a valid name"),
+            MapFormat::Doom,
+        );
+        map.vertices.push(crate::wad::map::Vertex {
+            x: -64_i32,
+            y: 8_i32,
+            ..Default::default()
+        });
+        let bounds = bounds_of(&map).expect("one vertex bounds itself");
+        assert_eq!(
+            serde_json::to_value(&bounds).expect("it serializes"),
+            serde_json::json!({"x1": -64_i64, "y1": 8_i64, "x2": -64_i64, "y2": 8_i64}),
+            "the documented field names"
+        );
+    }
+
+    /// A minimal compile for the integration-free smoke: one room,
+    /// no connections, roles answering nothing.
+    #[test]
+    fn a_single_room_plan_compiles_through_the_same_parts() {
+        let plan = args(
+            r#"{"map": "MAP05",
+                "rooms": [{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}],
+                "connections": []}"#,
+        );
+        let model = plan.to_model().expect("the wire maps onto the model");
+        let theme = PlanTheme { names: Vec::new() };
+        let name = LumpName::parse("MAP05").expect("a valid name");
+        let compiled = compile(&model, name, MapFormat::Doom, &theme).expect("one room compiles");
+        assert_eq!(compiled.map.sectors.len(), 1, "just the room");
+        assert_eq!(compiled.room_sectors.get("a"), Some(&vec![0_usize]));
+        assert_eq!(
+            compiled.map.bounds().expect("vertices"),
+            (0_i32, 0_i32, 64_i32, 64_i32)
+        );
+    }
+
+    /// A request row with the shape tests' defaults.
+    fn request(kind: KindSource, path: &str) -> ThingRequest {
+        ThingRequest {
+            kind,
+            spot: ThingSpot::Point((8_i64, 8_i64)),
+            count: 1_u32,
+            angle: 0_i32,
+            skills: None,
+            multiplayer_only: false,
+            path: path.to_owned(),
+        }
+    }
+
+    #[test]
+    fn resolve_specs_reads_names_keeps_numbers_and_folds_flags() {
+        let definitions = definitions_for(Game::Doom).expect("the embedded tables parse");
+        let numbered = request(KindSource::Type(2035_u32), "things[0]");
+        let named = ThingRequest {
+            kind: KindSource::Name("imp".to_owned()),
+            spot: ThingSpot::Room { id: "a".to_owned() },
+            skills: Some(vec![Skill::Easy]),
+            path: "things[1]".to_owned(),
+            ..numbered
+        };
+        let start = request(KindSource::PlayerOne, "player_start");
+        let specs = resolve_specs(&[numbered, named, start], FlagFamily::Doom, &definitions)
+            .expect("the rows resolve");
+        assert_eq!(
+            specs.iter().map(|spec| spec.kind).collect::<Vec<u32>>(),
+            vec![2035_u32, 3001_u32, 1_u32],
+            "type passes, name resolves, player_start means type 1"
+        );
+        assert_eq!(
+            specs.iter().map(|spec| spec.flags).collect::<Vec<u32>>(),
+            vec![7_u32, 1_u32, 7_u32],
+            "defaults are all-skill presence; easy-only stays easy-only"
+        );
+        assert_eq!(specs.first().expect("three rows").path, "things[0]");
+    }
+
+    #[test]
+    fn an_unresolvable_name_is_refused_with_the_row_path() {
+        let definitions = definitions_for(Game::Doom).expect("the embedded tables parse");
+        let bad = request(KindSource::Name("platypus".to_owned()), "things[2]");
+        let error =
+            resolve_specs(&[bad], FlagFamily::Doom, &definitions).expect_err("no such thing");
+        assert_eq!(error.code(), "invalid_argument");
+        let message = error.to_string();
+        assert!(message.contains("things[2]"), "the path leads: {message}");
+        assert!(message.contains("no thing named 'platypus'"), "{message}");
+    }
+
+    #[test]
+    fn ensure_player_start_reads_resolved_kinds_not_wire_names() {
+        let monster = PlannedThing {
+            kind: 3001_u32,
+            spot: ThingSpot::Point((8_i64, 8_i64)),
+            count: 1_u32,
+            angle: 0_i32,
+            flags: 7_u32,
+            path: "things[0]".to_owned(),
+        };
+        let error = ensure_player_start(core::slice::from_ref(&monster)).expect_err("no type 1");
+        assert_eq!(error.code(), "invalid_argument");
+        assert_eq!(
+            error.to_string(),
+            "a map needs a player 1 start; pass player_start or a thing of type 1"
+        );
+        let start = PlannedThing {
+            kind: 1_u32,
+            ..monster.clone()
+        };
+        ensure_player_start(&[monster, start]).expect("the resolved type 1 satisfies the check");
+    }
+
+    #[test]
+    fn an_unidentified_session_stands_for_doom_ii() {
+        assert_eq!(plan_game(Game::Unknown), Game::Doom2, "the fallback");
+        assert_eq!(plan_game(Game::Doom), Game::Doom, "a detected game stands");
+        assert_eq!(plan_game(Game::Hexen), Game::Hexen);
+    }
+
+    #[test]
+    fn the_report_counts_placed_things_under_its_documented_field() {
+        let plan = args(
+            r#"{"map": "MAP05",
+                "rooms": [{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}],
+                "connections": []}"#,
+        );
+        let model = plan.to_model().expect("the wire maps onto the model");
+        let theme = PlanTheme { names: Vec::new() };
+        let compiled = compile(
+            &model,
+            LumpName::parse("MAP05").expect("a valid name"),
+            MapFormat::Doom,
+            &theme,
+        )
+        .expect("one room compiles");
+        let value =
+            serde_json::to_value(reporting(&compiled, 5_usize, None, None)).expect("it serializes");
+        assert_eq!(
+            value["things_placed"],
+            serde_json::json!(5_u64),
+            "the live field"
+        );
+        assert_eq!(
+            value["nodes"],
+            serde_json::Value::Null,
+            "null without finalize"
+        );
+        assert_eq!(
+            value["validation"],
+            serde_json::Value::Null,
+            "null without finalize"
+        );
+    }
+
+    #[test]
+    fn finalize_fills_the_nodes_and_validation_result_fields() {
+        let plan = args(
+            r#"{"map": "MAP05",
+                "rooms": [{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}],
+                "connections": [],
+                "finalize": true}"#,
+        );
+        assert!(plan.finalize, "the wire flag arrives");
+        let model = plan.to_model().expect("the wire maps onto the model");
+        let theme = PlanTheme { names: Vec::new() };
+        let compiled = compile(
+            &model,
+            LumpName::parse("MAP05").expect("a valid name"),
+            MapFormat::Doom,
+            &theme,
+        )
+        .expect("one room compiles");
+        let value = serde_json::to_value(reporting(
+            &compiled,
+            1_usize,
+            Some(serde_json::json!({"variant": "classic", "segs": 4_u64})),
+            Some(serde_json::json!({"errors": [], "counts": {"error": 0_u64}})),
+        ))
+        .expect("it serializes");
+        assert_eq!(value["nodes"]["variant"], serde_json::json!("classic"));
+        assert_eq!(value["nodes"]["segs"], serde_json::json!(4_u64));
+        assert_eq!(value["validation"]["errors"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn finalize_defaults_to_off_on_the_wire() {
+        let plan = args(
+            r#"{"map": "MAP05",
+                "rooms": [{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}],
+                "connections": []}"#,
+        );
+        assert!(!plan.finalize, "absent means no node build");
+    }
+
+    /// The one-room compiled plan both finalize tests grow a tree from.
+    fn compiled_room(format: MapFormat) -> CompiledPlan {
+        let plan = args(
+            r#"{"map": "MAP05",
+                "rooms": [{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}],
+                "connections": []}"#,
+        );
+        let model = plan.to_model().expect("the wire maps onto the model");
+        let theme = PlanTheme { names: Vec::new() };
+        compile(
+            &model,
+            LumpName::parse("MAP05").expect("a valid name"),
+            format,
+            &theme,
+        )
+        .expect("one room compiles")
+    }
+
+    #[test]
+    fn finalize_nodes_installs_the_whole_binary_run_in_place() {
+        let mut compiled = compiled_room(MapFormat::Doom);
+        let before = compiled.map.vertices.len();
+        let summary = finalize_nodes(&mut compiled).expect("a square builds a tree");
+        assert_eq!(
+            summary["variant"],
+            serde_json::json!("classic"),
+            "the binary default layout"
+        );
+        assert!(
+            summary["segs"].as_u64().expect("a count") > 0,
+            "segs written"
+        );
+        assert!(
+            summary["subsectors"].as_u64().expect("a count") > 0,
+            "subsectors written"
+        );
+        assert!(
+            compiled.map.vertices.len() >= before,
+            "the classic run only ever adds split vertices"
+        );
+        for wanted in [
+            b"SEGS".as_slice(),
+            b"SSECTORS",
+            b"NODES",
+            b"REJECT",
+            b"BLOCKMAP",
+        ] {
+            assert!(
+                compiled
+                    .map
+                    .other
+                    .iter()
+                    .any(|lump| lump.name.as_bytes() == wanted),
+                "the binary finalize installs {wanted:?}: {:?}",
+                compiled
+                    .map
+                    .other
+                    .iter()
+                    .map(|lump| lump.name.to_string())
+                    .collect::<Vec<String>>()
+            );
+        }
+    }
+
+    #[test]
+    fn finalize_nodes_gives_a_udmf_model_the_znodes_lump_only() {
+        let mut compiled = compiled_room(MapFormat::Udmf);
+        let summary = finalize_nodes(&mut compiled).expect("a square builds a tree");
+        assert_eq!(
+            summary["variant"],
+            serde_json::json!("extended"),
+            "the UDMF default layout"
+        );
+        assert_eq!(
+            summary["format"],
+            serde_json::json!("ZNOD"),
+            "compressed by default"
+        );
+        assert!(
+            compiled
+                .map
+                .other
+                .iter()
+                .any(|lump| lump.name.as_bytes() == b"ZNODES"),
+            "the extended lump lands in ZNODES"
+        );
+        for absent in [b"REJECT".as_slice(), b"BLOCKMAP", b"SEGS", b"SSECTORS"] {
+            assert!(
+                !compiled
+                    .map
+                    .other
+                    .iter()
+                    .any(|lump| lump.name.as_bytes() == absent),
+                "{absent:?} stays out of a UDMF block"
+            );
+        }
+    }
+
+    /// An [`Issue`] row of `severity` carrying a numbered message.
+    fn issue(severity: Severity, number: usize) -> Issue {
+        Issue {
+            severity,
+            code: "synthetic",
+            message: format!("synthetic issue {number}"),
+            vertices: Vec::new(),
+            linedefs: Vec::new(),
+            sidedefs: Vec::new(),
+            sectors: Vec::new(),
+            things: Vec::new(),
+            x: None,
+            y: None,
+        }
+    }
+
+    #[test]
+    fn validation_view_caps_the_error_rows_and_keeps_counts_exact() {
+        let mut issues: Vec<Issue> = (0..VALIDATION_ERROR_CAP + 7_usize)
+            .map(|number| issue(Severity::Error, number))
+            .collect();
+        issues.push(issue(Severity::Warning, 0_usize));
+        issues.push(issue(Severity::Info, 0_usize));
+        issues.push(issue(Severity::Warning, 1_usize));
+        let outcome = ValidateOutcome {
+            checks_run: Vec::new(),
+            issues,
+        };
+        let value = validation_view(&outcome);
+        let errors = value["errors"].as_array().expect("an error list");
+        assert_eq!(
+            errors.len(),
+            VALIDATION_ERROR_CAP,
+            "the rows are capped at the documented 20"
+        );
+        assert_eq!(
+            value["counts"]["error"],
+            serde_json::json!(27_u64),
+            "the count keeps the whole truth"
+        );
+        assert_eq!(value["counts"]["warning"], serde_json::json!(2_u64));
+        assert_eq!(value["counts"]["info"], serde_json::json!(1_u64));
+        assert_eq!(
+            errors.first().expect("a row")["code"],
+            serde_json::json!("synthetic"),
+            "rows keep the validate_map issue shape"
+        );
+    }
+
+    #[test]
+    fn validation_view_of_a_clean_map_holds_no_rows() {
+        let outcome = ValidateOutcome {
+            checks_run: Vec::new(),
+            issues: vec![issue(Severity::Info, 0_usize)],
+        };
+        let value = validation_view(&outcome);
+        assert_eq!(value["errors"], serde_json::json!([]), "only the info row");
+        assert_eq!(value["counts"]["error"], serde_json::json!(0_u64));
+        assert_eq!(value["counts"]["info"], serde_json::json!(1_u64));
+    }
+}

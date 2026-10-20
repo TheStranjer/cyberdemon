@@ -133,6 +133,29 @@ pub enum MapFormat {
     Udmf,
 }
 
+impl MapFormat {
+    /// The wire name of this format, as the map tools spell it.
+    #[must_use]
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Doom => "doom",
+            Self::Hexen => "hexen",
+            Self::Udmf => "udmf",
+        }
+    }
+
+    /// Parses a format from its wire name, case-insensitively; `None` for
+    /// anything else.
+    #[must_use]
+    #[inline]
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::Doom, Self::Hexen, Self::Udmf]
+            .into_iter()
+            .find(|format| format.as_str().eq_ignore_ascii_case(text))
+    }
+}
+
 /// The type hint [`analyze`] proposes for one lump.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1719,5 +1742,24 @@ mod tests {
         assert!(empty_maps.is_empty(), "type anchor for MapBlock");
         let first_info: Option<&LumpInfo> = analysis.lumps.first();
         assert!(first_info.is_none(), "type anchor for LumpInfo");
+    }
+
+    #[test]
+    fn map_formats_parse_from_their_wire_names() {
+        for (format, text) in [
+            (MapFormat::Doom, "doom"),
+            (MapFormat::Hexen, "hexen"),
+            (MapFormat::Udmf, "udmf"),
+        ] {
+            assert_eq!(format.as_str(), text, "wire name");
+            assert_eq!(MapFormat::parse(text), Some(format), "lowercase");
+            assert_eq!(
+                MapFormat::parse(&text.to_ascii_uppercase()),
+                Some(format),
+                "case-insensitive"
+            );
+        }
+        assert_eq!(MapFormat::parse("zdoom"), None, "not a format name");
+        assert_eq!(MapFormat::parse(""), None, "empty is not a format");
     }
 }

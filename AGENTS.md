@@ -254,7 +254,25 @@ src/
                   issues outside them;
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
-                  `theme_texture(session, role)` every role-asking tool uses.
+                  `theme_texture(session, role)` every role-asking tool uses,
+                  and `theme_roles(session, override, roles)` which
+                  `build_map_from_plan` uses to resolve a whole dressing set
+                  against an optional one-call theme override;
+                  `tools/plan.rs` is the `plan` group: `build_map_from_plan`
+                  maps its wire `rooms`/`connections` onto `crate::plan::model`
+                  (`tools/plan/params.rs`, which also shape-validates the
+                  `things`/`player_start` rows), carries the coordinates through
+                  `crate::plan::units` (`units`/`grid` parameters), resolves
+                  the eight `TextureRole` dressing slots through the theme, runs `crate::plan::compile`,
+                  stands the things in with `crate::plan::things` (name
+                  resolution over the session definitions, room grids,
+                  presence flags; a type 1 row is mandatory) and
+                  `wad::map::write_map`, and appends the block as one
+                  `Session::edit` via `maps::write_block` (the `finalize`
+                  parameter runs the `nodes` tools' whole-set build on the
+                  model inside that step and fills the `nodes` summary and
+                  the errors-only `validation` result fields; the door
+                  specials come from the follow-up ticket);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

@@ -30,7 +30,10 @@
 //! `UDMF` block gets `ZNODES` alone unless a reject mode is asked for) —
 //! as a single [`Session::edit`], sharing the `apply_build_nodes`,
 //! [`apply_build_reject`] and [`apply_build_blockmap`] steps with the
-//! three single-lump builders.
+//! three single-lump builders. The [`apply_all`] step and the
+//! [`AllPlan::for_model`] default of that combined build are also what
+//! [`Cyberdemon::build_map_from_plan`]'s `finalize` parameter runs on
+//! its compiled model.
 
 use alloc::collections::BTreeMap;
 
@@ -1075,7 +1078,7 @@ enum Variant {
 
 /// The node part of one builder plan: the layout to write and the
 /// builder's two knobs.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NodeBuildPlan {
     /// The node layout to write.
     variant: Variant,
@@ -1595,9 +1598,11 @@ fn nodes_build_run(
 }
 
 /// Everything one [`Cyberdemon::build_all_nodes`] call writes: the node
-/// plan plus which of the two generated side lumps join the tree.
-#[derive(Clone, Copy, Debug)]
-struct AllPlan {
+/// plan plus which of the two generated side lumps join the tree. Also
+/// what [`Cyberdemon::build_map_from_plan`]'s `finalize` step runs:
+/// [`AllPlan::for_model`] holds the format's defaults there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tools) struct AllPlan {
     /// The tree build: layout, cost and compression.
     nodes: NodeBuildPlan,
     /// The reject matrix to write, when the map gets one.
@@ -1606,14 +1611,53 @@ struct AllPlan {
     blockmap: bool,
 }
 
+impl AllPlan {
+    /// The whole-set defaults for `model`'s format: `classic` for a
+    /// binary map and `extended` for a `UDMF` one, the `zero` reject and
+    /// a fresh `BLOCKMAP` for binary maps only (`ZDoom` builds both
+    /// itself for `UDMF`), `compress` on and [`DEFAULT_SPLIT_COST`].
+    /// `build_map_from_plan`'s `finalize` builds exactly this;
+    /// [`plan_all`] starts here and lets the wire parameters override
+    /// the knobs.
+    pub(in crate::tools) fn for_model(model: &Map) -> Self {
+        let udmf = model.format == MapFormat::Udmf;
+        Self {
+            nodes: NodeBuildPlan {
+                variant: if udmf {
+                    Variant::Extended
+                } else {
+                    Variant::Classic
+                },
+                split_cost: DEFAULT_SPLIT_COST,
+                compress: true,
+            },
+            reject: (!udmf).then_some(RejectMode::Zero),
+            blockmap: !udmf,
+        }
+    }
+}
+
 /// What one [`Cyberdemon::build_all_nodes`] edit wrote.
-struct AllBuilt {
+pub(in crate::tools) struct AllBuilt {
     /// The node run, in the layout the plan chose.
     nodes: NodesBuilt,
     /// The reject matrix body, when the plan wrote one.
     reject: Option<RejectBuildBody>,
     /// The blockmap body, when the plan wrote one.
     blockmap: Option<BlockmapBuildBody>,
+}
+
+impl AllBuilt {
+    /// The node build's counts as the `NodesBuildBody`-shaped `JSON`
+    /// `build_map_from_plan`'s `finalize` hands back; the reject and
+    /// blockmap bodies go unused, their lumps are in the map either way.
+    pub(in crate::tools) fn into_nodes_json(self) -> Result<Value, CyberError> {
+        serde_json::to_value(self.nodes.into_body()).map_err(|error| {
+            CyberError::Internal(format!(
+                "the node build summary does not serialize: {error}"
+            ))
+        })
+    }
 }
 
 /// Resolve one `build_all_nodes` call's arguments against the map's
@@ -1626,33 +1670,27 @@ struct AllBuilt {
 ///
 /// [`Variant::parse`]'s and [`RejectMode::parse`]'s refusals.
 fn plan_all(model: &Map, args: &BuildAllNodesParams) -> Result<AllPlan, CyberError> {
-    let udmf = model.format == MapFormat::Udmf;
-    let variant = if udmf && args.variant.is_none() {
-        Variant::Extended
-    } else {
-        Variant::parse(args.variant.as_deref())?
-    };
-    let reject = args
-        .reject_mode
-        .as_deref()
-        .map(RejectMode::parse)
-        .transpose()?
-        .or_else(|| (!udmf).then_some(RejectMode::Zero));
-    Ok(AllPlan {
-        nodes: NodeBuildPlan {
-            variant,
-            split_cost: DEFAULT_SPLIT_COST,
-            compress: args.compress.unwrap_or(true),
-        },
-        reject,
-        blockmap: !udmf,
-    })
+    let mut plan = AllPlan::for_model(model);
+    if let Some(text) = args.variant.as_deref() {
+        plan.nodes.variant = Variant::parse(Some(text))?;
+    }
+    if let Some(text) = args.reject_mode.as_deref() {
+        plan.reject = Some(RejectMode::parse(text)?);
+    }
+    plan.nodes.compress = args.compress.unwrap_or(true);
+    Ok(plan)
 }
 
 /// The combined edit closure of [`Cyberdemon::build_all_nodes`]: the
 /// planned tree, then the reject and the blockmap, all on the one model
-/// so one refusal rolls everything back.
-fn apply_all(map: &mut Map, plan: &AllPlan) -> Result<AllBuilt, CyberError> {
+/// so one refusal rolls everything back. `build_map_from_plan`'s
+/// `finalize` runs the same step on its compiled model.
+///
+/// # Errors
+///
+/// [`apply_build_nodes`], [`apply_build_reject`] and
+/// [`apply_build_blockmap`]' refusals.
+pub(in crate::tools) fn apply_all(map: &mut Map, plan: &AllPlan) -> Result<AllBuilt, CyberError> {
     let nodes = apply_build_nodes(map, plan.nodes)?;
     let reject = plan
         .reject
@@ -1870,12 +1908,13 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        BuildAllNodesParams, BuildBlockmapParams, BuildNodesParams, BuildRejectParams,
+        AllPlan, BuildAllNodesParams, BuildBlockmapParams, BuildNodesParams, BuildRejectParams,
         DEFAULT_SPLIT_COST, Detail, GL_NODES_RECORD, GL_SEGS_RECORD, GlInfo, Implemented, NodeData,
-        RejectMode, Request, Variant, all_nodes_run, blockmap_build_run, blockmap_summary,
-        empty_blockmap_report, find_lump, gl_info, gl_lump_names, install_lump, json_bytes,
-        lump_magic, nodes_asset_body, nodes_build_run, nodes_outcome, nodes_run, parse_detail,
-        parse_mode, parse_scope, plan_all, read_node_data, reject_build_run, whole_records,
+        RejectMode, Request, Variant, all_nodes_run, apply_all, blockmap_build_run,
+        blockmap_summary, empty_blockmap_report, find_lump, gl_info, gl_lump_names, install_lump,
+        json_bytes, lump_magic, nodes_asset_body, nodes_build_run, nodes_outcome, nodes_run,
+        parse_detail, parse_mode, parse_scope, plan_all, read_node_data, reject_build_run,
+        whole_records,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
@@ -3293,6 +3332,78 @@ mod tests {
         let bad_mode =
             plan_all(&binary, &all_params(None, None, Some("opaque"))).expect_err("not a mode");
         assert_eq!(bad_mode.code(), "invalid_argument", "bad mode code");
+    }
+
+    #[test]
+    fn the_finalize_plan_is_plan_all_without_any_parameter() {
+        let binary_model = Map::default();
+        let udmf_model = Map {
+            format: MapFormat::Udmf,
+            ..Map::default()
+        };
+        for model in [binary_model, udmf_model] {
+            assert_eq!(
+                AllPlan::for_model(&model),
+                plan_all(&model, &all_params(None, None, None)).expect("no parameters"),
+                "the whole-set defaults are the parameterless plan_all for {model:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_finalize_defaults_follow_the_map_format() {
+        let binary = AllPlan::for_model(&Map::default());
+        assert_eq!(
+            binary.nodes.variant,
+            Variant::Classic,
+            "binary maps take the vanilla run"
+        );
+        assert_eq!(
+            binary.nodes.split_cost, DEFAULT_SPLIT_COST,
+            "the builder default cost"
+        );
+        assert!(binary.nodes.compress, "compressed wherever it applies");
+        assert_eq!(binary.reject, Some(RejectMode::Zero), "and a zero reject");
+        assert!(binary.blockmap, "and a fresh blockmap");
+        let leaves = AllPlan::for_model(&Map {
+            format: MapFormat::Udmf,
+            ..Map::default()
+        });
+        assert_eq!(
+            leaves.nodes.variant,
+            Variant::Extended,
+            "UDMF takes the extended lump"
+        );
+        assert_eq!(leaves.reject, None, "ZDoom builds the reject itself");
+        assert!(!leaves.blockmap, "and the blockmap");
+    }
+
+    #[test]
+    fn apply_all_reports_the_node_body_as_plan_finalize_json() {
+        let mut map = l_room_model();
+        let plan = AllPlan::for_model(&map);
+        let built = apply_all(&mut map, &plan).expect("the L room fully builds");
+        let body = built.into_nodes_json().expect("the summary serializes");
+        assert_eq!(body["variant"], json!("classic"), "the binary default");
+        assert_eq!(body["segs"], json!(7_u64), "the L room's seg count");
+        assert_eq!(body["subsectors"], json!(2_u64), "one cut, two leaves");
+        assert_eq!(body["nodes"], json!(1_u64), "one interior node");
+        assert!(
+            body.get("reject").is_none() && body.get("blockmap").is_none(),
+            "the plan result carries the nodes body only"
+        );
+        for wanted in [
+            b"SEGS".as_slice(),
+            b"SSECTORS",
+            b"NODES",
+            b"REJECT",
+            b"BLOCKMAP",
+        ] {
+            assert!(
+                map.other.iter().any(|lump| lump.name.as_bytes() == wanted),
+                "apply_all installed {wanted:?} into the model",
+            );
+        }
     }
 
     #[test]

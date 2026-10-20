@@ -35,6 +35,7 @@ pub mod palette;
 pub(crate) mod patches;
 pub(crate) mod plan;
 pub(crate) mod playability;
+pub(crate) mod query;
 pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;

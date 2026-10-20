@@ -175,6 +175,20 @@ const NAME_STEP_UP: &str = "step_up";
 /// The `via` name a lower neighbour answers with.
 const NAME_STEP_DOWN: &str = "step_down";
 
+/// Every role name a sector can wear, as [`SectorFacts::roles`] spells
+/// them. The query engine validates `roles has` names against this list.
+pub const ROLE_NAMES: [&str; 9] = [
+    NAME_DOOR,
+    NAME_LIFT,
+    NAME_TELEPORT_DESTINATION,
+    NAME_SECRET,
+    NAME_DAMAGING,
+    NAME_LIGHT_EFFECT,
+    NAME_EXIT_ROOM,
+    NAME_STAIR_STEP,
+    NAME_SKY,
+];
+
 /// One world-space map point, coordinates widened to `i64`.
 type Point = (i64, i64);
 

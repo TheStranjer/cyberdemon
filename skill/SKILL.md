@@ -167,6 +167,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `validate_map`           | `reference/validate.md` |
 | `check_playability`      | `reference/playability.md` |
 | `describe_map`           | `reference/playability.md` |
+| `find_elements`          | `reference/query.md`    |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |
@@ -249,6 +250,10 @@ severity-ranked issues you fix with the editing tools before saving
 player would and answers `ok` plus reasons: unreachable sectors each named
 with the rule that blocks them and the tool that fixes it, stuck and
 unreachable things, locks without their keys (`reference/playability.md`).
+When a request is about a *set* ("every dark room", "all STARTAN walls"),
+`find_elements` answers it as a query — kind, filters, optional bound — and
+returns the matching indices instead of making you scan whole maps
+(`reference/query.md`).
 `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`

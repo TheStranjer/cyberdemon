@@ -54,7 +54,13 @@
 //! rows. [`playability`] answers the player's question instead: it walks the
 //! sector graph from the player start, opens the doors, lifts and teleporters
 //! the walk can reach and the keys it finds, and reports what a player can
-//! and cannot get to. [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
+//! and cannot get to. [`query`] is the pure filter engine behind
+//! `find_elements`: it turns a [`query::Query`] (an element kind, combined
+//! [`query::Filter`]s and an optional [`query::Within`] bound) over a
+//! decoded map into the ascending indices of the matching elements, reading
+//! the derived fields through [`geometry`] and [`describe`] and the flag and
+//! definition names through the [`query::QueryContext`] the caller passes.
+//! [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
 //! translation table (rows, flags and lookups) and the cross-family thing,
 //! sector and linedef stages [`convert`] runs.
 
@@ -74,6 +80,7 @@ pub mod ops;
 pub mod overlay;
 pub mod placement;
 pub mod playability;
+pub mod query;
 pub mod reject;
 pub mod remove;
 pub mod stats;

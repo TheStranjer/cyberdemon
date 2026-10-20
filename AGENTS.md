@@ -234,6 +234,10 @@ src/
                   `add_lift` runs the `features::lift` core (an existing
                   or overlay-drawn platform, its lower-facing edges
                   turned front-down and tagged) as one step;
+                  `add_teleporter` runs the `features::teleport` core (the
+                  pad and destination squares, the type-14 destination
+                  things and their outward-facing border actions, one-way
+                  or `two_way`) as one step;
                   the `add_switch`/`add_exit` tickets grow in place here, and
                   the `mark_secret`/`set_light_effect` tools are the two
                   special-bit steps over `features::specials`);
@@ -326,6 +330,11 @@ src/
                   `build_lift`'s lower-facing edge selection,
                   front-down orientation and platform tagging, with an
                   optional `apply_overlay` platform draw),
+                  `map/features/teleport.rs` the pure teleporter core
+                  (`teleport_specials`' per-family pad-border action and
+                  `build_teleporter`'s pad and destination squares, the
+                  type-14 destination things it places and their
+                  outward-facing borders, with the `two_way` return leg),
                   `map/features/switches.rs` the switch action table and
                   `map/features/specials.rs` the pure sector-special builders
                   (`secret_edit`'s per-family secret bit and `light_special`'s

@@ -28,6 +28,12 @@
 //! map structures: [`features::doors`] is the door action table and the
 //! doorway dressing behind the door tools, [`features::place`] the
 //! wall selection, width fit and depth raycast behind their placement,
+//! [`features::window`] the sill/lintel heights and the blocking view
+//! lines behind `add_window`, [`features::stairs`] the even step division
+//! and bottom-up paints behind `add_stairs`, [`features::lift`] the
+//! lower-facing edge selection and down-wait-up action behind `add_lift`,
+//! [`features::teleport`] the pad and destination squares, destination
+//! things and border actions behind `add_teleporter`,
 //! [`features::switches`] the switch action table behind
 //! `add_switch`, and [`features::specials`] the secret bit and the light
 //! effect numbers behind `mark_secret` and `set_light_effect`.

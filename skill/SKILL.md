@@ -155,6 +155,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `add_teleporter`         | `reference/features.md` |
 | `add_switch`             | `reference/features.md` |
 | `add_exit`               | `reference/features.md` |
+| `place_things`           | `reference/features.md` |
 | `mark_secret`            | `reference/features.md` |
 | `set_light_effect`       | `reference/features.md` |
 | `build_map_from_plan`    | `reference/plan.md`     |

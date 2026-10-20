@@ -244,7 +244,13 @@ src/
                   dressing; `build_walk_over_exit`'s sector-boundary level
                   ends), and
                   the `mark_secret`/`set_light_effect` tools are the two
-                  special-bit steps over `features::specials`);
+                  special-bit steps over `features::specials`, and the
+                  `place_things` tool runs the pure `wad::map::placement`
+                  engine (name-resolved type, sector/bbox/circle areas,
+                  proportional or per-sector counts, centred clearance
+                  grids spread centre-outward, snapped facings with an
+                  optional seeded xorshift32) as one step, sharing that
+                  engine with the plan builder's room fills);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`, and its `optimize_wad`
@@ -350,6 +356,13 @@ src/
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and
                   shifts, and the removal-engine join),
+                  `map/placement.rs` the pure thing-placement core: the
+                  clearance primitives (`fits`, `keeps_distance`,
+                  `boundary_clear`, `axis_points`, `thing_clearance`) the
+                  plan builder's room fills share with the `distribute`
+                  grid engine (centred clearance grids spread by distance
+                  from the area centre), the `split_proportional` area
+                  split and the seeded/face modes behind `place_things`,
                   `map/convert.rs` the pure within- and cross-flag-family
                   format conversion (`Target`, `convert_map`, `Conversion`)
                   behind `convert_map_format`, `map/features.rs` +

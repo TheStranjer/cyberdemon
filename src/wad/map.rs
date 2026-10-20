@@ -25,8 +25,10 @@
 //! void-carving step behind `create_sector_from_loop` and `carve_void`.
 //! [`ops`] cuts one linedef at a point and welds two collinear ones
 //! together, the pure geometry behind `split_linedef`
-//! and `join_linedefs`. [`features`] holds the pure cores of assembled
-//! map structures: [`features::doors`] is the door action table and the
+//! and `join_linedefs`. [`placement`] is the pure thing-placement core:
+//! the clearance primitives the plan builder's room fills share with the
+//! [`distribute`](placement::distribute) engine behind `place_things`.
+//! [`features`] holds the pure cores of assembled map structures: [`features::doors`] is the door action table and the
 //! doorway dressing behind the door tools, [`features::place`] the
 //! wall selection, width fit and depth raycast behind their placement,
 //! [`features::window`] the sill/lintel heights and the blocking view
@@ -64,6 +66,7 @@ pub mod model;
 pub mod nodes;
 pub mod ops;
 pub mod overlay;
+pub mod placement;
 pub mod playability;
 pub mod reject;
 pub mod remove;

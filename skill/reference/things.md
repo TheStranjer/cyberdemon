@@ -3,7 +3,10 @@
 Creating, changing and removing the things of a map: `add_thing`,
 `edit_thing` and `remove_thing`. A thing is one spawned object — a player
 start, monster, item, decoration, teleport destination or script trigger —
-placed at a point with a facing angle.
+placed at a point with a facing angle. To spread many copies across
+sectors, a box or a circle with clearance and computed positions, use
+`place_things` (`reference/features.md`); these three tools move exactly
+one thing at coordinates you name.
 
 ## Things and their numbers
 

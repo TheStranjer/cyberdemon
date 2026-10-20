@@ -54,6 +54,10 @@ defaults of good play — break them on purpose, not by accident.
 
 - Every thing needs its own radius clear of walls, plus slack; a monster
   spawned inside geometry stays inside geometry.
+- How many monsters or items a room should hold is your call; the
+  `place_things` tool only places the number you ask for, so decide the
+  count and the area, then check the spread with `check_playability` and
+  `render_topdown`.
 - Every monster needs a path to the player, or it never fires. Check
   connectivity after walling anything in.
 - Every map needs a player 1 start (thing type 1) and an exit the player can

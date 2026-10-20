@@ -12,12 +12,14 @@
 //! transform (and snap grid) the rooms did. Room placement fills a
 //! sector deterministically: row-major on a grid spaced by twice the
 //! thing's clearance, starting at the sector bounding box's minimum
-//! corner raised by the clearance, keeping every point at least
-//! `radius + 8` map units inside the sector ([`fits`]).
-//! [`presence_flags`] folds the `skills` and `multiplayer_only`
-//! parameters into the `Thing` flag bits of the map's flag family,
-//! reading the tables in [`crate::wad::map::flags`]. Nothing here
-//! touches archives, sessions or `MCP` types.
+//! corner raised by the clearance, keeping every point at least that
+//! clearance inside the sector through the shared
+//! [`crate::wad::map::placement`] primitives ([`fits`] and friends) that
+//! the `place_things` tool distributes with too. [`presence_flags`]
+//! folds the `skills` and `multiplayer_only` parameters into the `Thing`
+//! flag bits of the map's flag family, reading the tables in
+//! [`crate::wad::map::flags`]. Nothing here touches archives, sessions
+//! or `MCP` types.
 
 use alloc::collections::BTreeMap;
 
@@ -29,22 +31,12 @@ use crate::plan::units::Units;
 /// own [`Skill`], re-exported where the plan writers read it.
 pub use crate::wad::map::flags::Skill;
 use crate::wad::map::flags::{FlagFamily, FlagKind, names as flag_names};
-use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
+use crate::wad::map::geometry::sector_bbox;
+use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points, fits, mid};
 use crate::wad::map::{Map, Thing};
 
 /// The thing type of the player 1 start.
 pub const PLAYER_ONE_START: u32 = 1_u32;
-/// The blocking radius assumed for a type the definitions do not list.
-const DEFAULT_RADIUS: i64 = 16_i64;
-/// Extra clearance every placed thing keeps from the sector boundary,
-/// on top of its blocking radius, map units.
-const CLEARANCE: i64 = 8_i64;
-/// The largest number of grid points one room axis contributes, so a
-/// huge bounding box cannot spin the fill forever.
-const MAX_AXIS_POINTS: usize = 4_096_usize;
-
-/// One `i128`-wide map point, for the exact distance tests.
-type End = (i128, i128);
 
 /// Where one planned thing goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,16 +184,6 @@ pub fn presence_flags(family: FlagFamily, skills: Option<&[Skill]>, multiplayer_
     bits
 }
 
-/// Whether a thing with this `clearance` may stand at `at` in `sector`:
-/// the sector contains the point and every boundary line of the sector
-/// keeps at least `clearance` map units of distance from it.
-#[must_use]
-#[inline]
-pub fn fits(map: &Map, sector: usize, at: Pt, clearance: i64) -> bool {
-    let (x, y) = at;
-    point_in_sector(map, x, y) == Some(sector) && boundary_clear(map, sector, at, clearance)
-}
-
 /// Turn resolved rows into [`Thing`] records for `context`'s compiled
 /// map.
 ///
@@ -296,11 +278,6 @@ fn room_centre(
     ))
 }
 
-/// The whole midpoint of an axis, `i64`-safe for any `i32` pair.
-const fn mid(low: i64, high: i64) -> i64 {
-    low.saturating_add(high).saturating_div(2_i64)
-}
-
 /// Fill one room row-major, append what fits and note what did not.
 fn place_room_fill(
     context: &PlacementContext<'_>,
@@ -328,12 +305,9 @@ fn place_room_fill(
 
 /// The wall clearance of thing type `kind`: its definition's blocking
 /// radius (or [`DEFAULT_RADIUS`] when the definitions do not list the
-/// type) plus [`CLEARANCE`] map units.
+/// type) plus the shared clearance margin.
 fn thing_clearance(definitions: &Definitions, kind: u32) -> i64 {
-    let radius = definitions
-        .thing(kind)
-        .map_or(DEFAULT_RADIUS, |row| i64::from(row.radius));
-    radius.saturating_add(CLEARANCE)
+    placement::thing_clearance(definitions, kind, DEFAULT_RADIUS)
 }
 
 /// The first `wanted` grid points that [`fits`]: row-major (the `x`
@@ -360,79 +334,6 @@ fn room_slots(map: &Map, sector: usize, clearance: i64, wanted: usize) -> Vec<Pt
         .filter(|at| fits(map, sector, *at, clearance))
         .take(wanted)
         .collect()
-}
-
-/// The grid values from `start` to `last` inclusive, `step` apart,
-/// capped at [`MAX_AXIS_POINTS`] per axis.
-fn axis_points(start: i64, last: i64, step: i64) -> Vec<i64> {
-    let mut points = Vec::new();
-    let mut value = start;
-    while value <= last && points.len() < MAX_AXIS_POINTS {
-        points.push(value);
-        value = value.saturating_add(step);
-    }
-    points
-}
-
-/// Whether every boundary line of `sector` keeps at least `clearance`
-/// map units from `at`; lines with unresolvable endpoints never bound
-/// anything and stay clear.
-fn boundary_clear(map: &Map, sector: usize, at: Pt, clearance: i64) -> bool {
-    sector_boundary(map, sector)
-        .iter()
-        .all(|&(index, _)| segment_clear(map, index, at, clearance))
-}
-
-/// Whether the line `linedef` keeps at least `clearance` from `at`.
-fn segment_clear(map: &Map, linedef: usize, at: Pt, clearance: i64) -> bool {
-    let Some((from, to)) = segment_endpoints(map, linedef) else {
-        return true;
-    };
-    let (x, y) = at;
-    keeps_distance(
-        from,
-        to,
-        (i128::from(x), i128::from(y)),
-        i128::from(clearance),
-    )
-}
-
-/// Both endpoints of `linedef` widened to `i128`, when they resolve.
-fn segment_endpoints(map: &Map, linedef: usize) -> Option<(End, End)> {
-    let line = map.linedefs.get(linedef)?;
-    let first = map.vertices.get(line.v1)?;
-    let second = map.vertices.get(line.v2)?;
-    Some((
-        (i128::from(first.x), i128::from(first.y)),
-        (i128::from(second.x), i128::from(second.y)),
-    ))
-}
-
-/// Whether `point` keeps at least `min` distance from the segment
-/// `from`-`to`, exact in `i128`: squared distances are compared as
-/// integers, the perpendicular case as `cross^2 >= min^2 * len^2`.
-const fn keeps_distance(from: End, to: End, point: End, min: i128) -> bool {
-    let (ax, ay) = from;
-    let (bx, by) = to;
-    let (px, py) = point;
-    let dx = bx.saturating_sub(ax);
-    let dy = by.saturating_sub(ay);
-    let wx = px.saturating_sub(ax);
-    let wy = py.saturating_sub(ay);
-    let len2 = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
-    let near2 = wx.saturating_mul(wx).saturating_add(wy.saturating_mul(wy));
-    let need = min.saturating_mul(min);
-    let dot = wx.saturating_mul(dx).saturating_add(wy.saturating_mul(dy));
-    if len2 == 0_i128 || dot <= 0_i128 {
-        return near2 >= need;
-    }
-    if dot >= len2 {
-        let ex = px.saturating_sub(bx);
-        let ey = py.saturating_sub(by);
-        return ex.saturating_mul(ex).saturating_add(ey.saturating_mul(ey)) >= need;
-    }
-    let cross = dx.saturating_mul(wy).saturating_sub(dy.saturating_mul(wx));
-    cross.saturating_mul(cross) >= need.saturating_mul(len2)
 }
 
 /// The [`Thing`] record for one copy of `spec` standing at map `point`.
@@ -474,9 +375,8 @@ mod tests {
     use alloc::collections::BTreeMap;
 
     use super::{
-        CLEARANCE, PLAYER_ONE_START, PlacementContext, PlannedThing, Skill, ThingSpot, axis_points,
-        candidate_names, fits, keeps_distance, mid, place, presence_flags, resolve_thing_kind,
-        room_slots, substring_matches, thing_clearance,
+        PLAYER_ONE_START, PlacementContext, PlannedThing, Skill, ThingSpot, candidate_names, place,
+        presence_flags, resolve_thing_kind, room_slots, substring_matches, thing_clearance,
     };
     use crate::defs::table::ThingDef;
     use crate::defs::{Definitions, definitions_for};
@@ -486,7 +386,7 @@ mod tests {
     use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Thing, Vertex};
     use crate::wad::name::LumpName;
 
-    /// A parsed test map name.
+    /// A valid parsed name for test data.
     fn map_name(text: &str) -> LumpName {
         LumpName::parse(text).expect("test names are valid")
     }
@@ -712,62 +612,6 @@ mod tests {
     }
 
     #[test]
-    fn fits_requires_the_sector_and_the_clearance_from_every_wall() {
-        let map = square_rooms(&[(0_i32, 100_i32), (400_i32, 500_i32)]);
-        assert!(fits(&map, 0, (50_i64, 50_i64), CLEARANCE));
-        assert!(
-            fits(&map, 0, (20_i64, 50_i64), 20_i64),
-            "exactly the clearance fits"
-        );
-        assert!(
-            !fits(&map, 0, (19_i64, 50_i64), 20_i64),
-            "one short does not"
-        );
-        assert!(
-            !fits(&map, 0, (50_i64, 450_i64), CLEARANCE),
-            "a point in the other room's sector is not this one's"
-        );
-        assert!(
-            !fits(&map, 0, (5000_i64, 5000_i64), CLEARANCE),
-            "a point in no sector at all"
-        );
-    }
-
-    #[test]
-    fn the_distance_test_measures_perpendicular_and_endpoint_cases() {
-        assert!(keeps_distance(
-            (0_i128, 0_i128),
-            (100_i128, 0_i128),
-            (50_i128, 28_i128),
-            28_i128
-        ));
-        assert!(!keeps_distance(
-            (0_i128, 0_i128),
-            (100_i128, 0_i128),
-            (50_i128, 27_i128),
-            28_i128
-        ));
-        assert!(
-            !keeps_distance(
-                (0_i128, 0_i128),
-                (100_i128, 0_i128),
-                (-20_i128, 20_i128),
-                29_i128
-            ),
-            "beyond the endpoint the distance is to the corner: sqrt(800) < 29"
-        );
-        assert!(
-            keeps_distance(
-                (0_i128, 0_i128),
-                (100_i128, 0_i128),
-                (-20_i128, 20_i128),
-                28_i128
-            ),
-            "and sqrt(800) >= 28"
-        );
-    }
-
-    #[test]
     fn the_room_grid_runs_row_major_from_the_raised_minimum_corner() {
         let map = square_rooms(&[(0_i32, 100_i32)]);
         assert_eq!(
@@ -792,30 +636,16 @@ mod tests {
     }
 
     #[test]
-    fn axis_points_includes_the_far_bound_and_is_capped() {
-        assert_eq!(
-            axis_points(20_i64, 100_i64, 40_i64),
-            vec![20_i64, 60_i64, 100_i64]
-        );
-        assert_eq!(axis_points(50_i64, 40_i64, 40_i64), Vec::<i64>::new());
-        assert_eq!(
-            axis_points(0_i64, i64::MAX, 1_i64).len(),
-            4_096_usize,
-            "a huge axis stops at the cap"
-        );
-    }
-
-    #[test]
-    fn clearance_uses_the_defined_radius_or_the_default() {
+    fn clearance_uses_the_defined_radius_or_the_plan_default() {
         let definitions = doom_definitions();
         assert_eq!(
             thing_clearance(&definitions, 3001_u32),
-            20_i64.checked_add(CLEARANCE).expect("imp radius"),
-            "the Imp's 20-unit radius"
+            28_i64,
+            "the Imp's 20-unit radius plus the 8-unit margin"
         );
         assert_eq!(
             thing_clearance(&definitions, 999_999_u32),
-            16_i64.checked_add(CLEARANCE).expect("default radius"),
+            24_i64,
             "an unlisted type gets 16"
         );
     }
@@ -943,7 +773,6 @@ mod tests {
             path: "player_start".to_owned(),
         };
         let placement = place(&context, core::slice::from_ref(&start)).expect("the centre lands");
-        assert_eq!(mid(0_i64, 100_i64), 50_i64);
         let row = placement.things.first().expect("one start");
         assert_eq!(
             (row.x, row.y, row.kind, row.angle),

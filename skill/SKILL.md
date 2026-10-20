@@ -164,6 +164,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `delete_geometry`        | `reference/geometry.md` |
 | `transform_selection`    | `reference/geometry.md` |
 | `validate_map`           | `reference/validate.md` |
+| `check_playability`      | `reference/playability.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |
@@ -237,12 +238,15 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 for a fresh one → edit the working archive → `build_all_nodes` after the
 geometry edits (one undoable step rebuilding the BSP tree, the `REJECT`
 matrix and the `BLOCKMAP` so vanilla `Doom` can play the map;
-`reference/nodes.md`) → `validate_map` → `save_wad`.
+`reference/nodes.md`) → `validate_map` → `check_playability` → `save_wad`.
 `validate_map` reads a map's health — dangling references, broken lines,
 missing starts, specials outside the tables, unclosed or crossing
 geometry, textures and flats the session does not define — as
 severity-ranked issues you fix with the editing tools before saving
-(`reference/validate.md`).
+(`reference/validate.md`). `check_playability` then walks the map as a
+player would and answers `ok` plus reasons: unreachable sectors each named
+with the rule that blocks them and the tool that fixes it, stuck and
+unreachable things, locks without their keys (`reference/playability.md`).
 `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`

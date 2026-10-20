@@ -256,6 +256,15 @@ src/
                   the session's definitions under one lock and runs the
                   pure `wad::map::validate` checks, paging and counting the
                   issues outside them;
+                  `tools/playability.rs` is the thin `check_playability`
+                  group: it parses `skill`, reads the map and the session's
+                  definitions under one lock, runs the pure
+                  `wad::map::playability` walk with its `blockers` and
+                  `stuck_things` readings, folds the reason-keyed hints
+                  and the plain summary, and sends `render: true` over the
+                  `tools/render.rs` overview machinery
+                  (`playability_overview`, the shared `render_topdown`
+                  internals with the report's problems highlighted);
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,
@@ -395,11 +404,15 @@ src/
                   teleport/exit/lock/key tables read into a map's feature
                   inventory, `playability/graph.rs` the sector movement
                   graph and the player-shaped step/gap/width passability
-                  tests, and `playability/reach.rs` the fixpoint that
+                  tests, `playability/reach.rs` the fixpoint that
                   walks the sectors, collects the keys it reaches and
                   opens the features both allow, answering with
                   `Playability` (reachable sectors, exits, keys, locks,
-                  unopened doors, narrow lines, warnings).
+                  unopened doors, narrow lines, warnings),
+                  `playability/explain.rs` the per-unreachable-sector
+                  blocker reasons read off a finished walk, and
+                  `playability/stuck.rs` the body-square tests for the
+                  things that cannot stand.
                   `map/flags.rs` names the two families' flag bits and
                   carries the `Skill` whose bit a thing's presence is
                   tested against.

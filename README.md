@@ -27,7 +27,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
 > (`render_topdown`, `render_minimap`, `render_view`, `set_render_resolution`,
 > `set_render_options`, `get_render_settings`), a `textures` group (`list_textures`,
-> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `themes` group
+> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `playability` group (`check_playability`: a player's-eye sector walk reporting reachability, per-blocker reasons and fix hints, stuck and unreachable things), a `themes` group
 > (`get_texture_theme`, `set_texture_theme`, `auto_texture`, `align_textures`) and a `palette` group (`get_palette`, `set_palette`),
 > and defines the structured JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started
@@ -50,7 +50,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
 > detection and patch-reference renumbering, and a `UDMF` `TEXTMAP`
 > tokenizer, parser and writer over documents of blocks and key/value
-> pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers, serializers and pure builders, and pure integer map geometry), and a session
+> pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers, serializers and pure builders, pure integer map geometry, and a pure sector-graph playability analysis (reachability fixpoint, blocker explanations and stuck-thing body tests) behind `check_playability`), and a session
 > model (`src/session*`: an IWAD plus resource layers under one editable
 > working archive, a merged view with vanilla last-archive-wins override
 > rules, a labelled undo/redo history with dirty-state tracking, and the copy-on-write `edit_map` step every map edit wraps) and a definitions registry (`src/defs*`: TSV game tables embedded in the binary,

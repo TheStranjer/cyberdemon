@@ -8,6 +8,11 @@
 //! names back into a bitset, refusing unknown ones with an
 //! [`CyberError::InvalidArgument`] that lists the valid names.
 //!
+//! The difficulty skills a map can be read or written for live here too as
+//! [`Skill`]: both thing tables name `easy`, `medium` and `hard` with the
+//! same bits, so the skill whose presence bit a caller asks for is a
+//! flag-family idea and one type serves the writers and the readers.
+//!
 //! The `Hexen` linedef table carries the trigger activation as a 3-bit
 //! field (`flags & 0x1C00`, the value shifted to bit 10):
 //! the six activation names hold the *field value* `0..=5` in their table
@@ -61,6 +66,58 @@ impl FlagFamily {
             Self::Doom => "doom",
             Self::Hexen => "hexen",
         }
+    }
+}
+
+/// A difficulty skill a map is played, planned or read at.
+///
+/// Every [`Thing`](crate::wad::map::Thing) that spawns carries one bit per
+/// skill; which of the three a caller asks about decides what the map holds
+/// at that difficulty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Skill {
+    /// The easy skill bit.
+    Easy,
+    /// The medium skill bit.
+    Medium,
+    /// The hard skill bit.
+    Hard,
+}
+
+impl Skill {
+    /// Every skill, in flag-table order.
+    pub const ALL: [Self; 3] = [Self::Easy, Self::Medium, Self::Hard];
+
+    /// The name of this skill's bit in both families' thing flag tables.
+    #[must_use]
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Medium => "medium",
+            Self::Hard => "hard",
+        }
+    }
+
+    /// The skill the wire name `text` spells, case-insensitively.
+    #[must_use]
+    #[inline]
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|skill| skill.as_str().eq_ignore_ascii_case(text))
+    }
+
+    /// The bit this skill holds in `family`'s thing flag table, `0` when
+    /// that table carries no such name.
+    #[must_use]
+    #[inline]
+    pub fn bit(self, family: FlagFamily) -> u32 {
+        names(FlagKind::Thing, family)
+            .iter()
+            .find(|entry| entry.0 == self.as_str())
+            .map_or(0_u32, |entry| entry.1)
     }
 }
 
@@ -267,7 +324,7 @@ fn unknown(wanted: &str, kind: FlagKind, family: FlagFamily) -> CyberError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVATION_MASK, FlagFamily, FlagKind, MONSTER_ACTIVATE, from_names, names, to_names,
+        ACTIVATION_MASK, FlagFamily, FlagKind, MONSTER_ACTIVATE, Skill, from_names, names, to_names,
     };
     use crate::error::CyberError;
 
@@ -475,6 +532,21 @@ mod tests {
             error_for("nope", FlagKind::Thing, FlagFamily::Hexen).contains("'nope'"),
             "the bad name is quoted"
         );
+    }
+
+    #[test]
+    fn each_skill_names_its_bit_in_both_thing_tables() {
+        for (skill, bit) in [
+            (Skill::Easy, 1_u32),
+            (Skill::Medium, 2_u32),
+            (Skill::Hard, 4_u32),
+        ] {
+            assert_eq!(skill.bit(FlagFamily::Doom), bit, "the Doom table");
+            assert_eq!(skill.bit(FlagFamily::Hexen), bit, "and the Hexen one");
+            assert_eq!(Skill::parse(skill.as_str()), Some(skill), "and its name");
+        }
+        assert_eq!(Skill::ALL.len(), 3, "all three, in table order");
+        assert_eq!(Skill::parse("nightmare"), None, "and no fourth skill");
     }
 
     #[test]

@@ -1,5 +1,6 @@
-//! Pure per-sector descriptions over a decoded [`Map`]: the geometry,
-//! identity and role half of the future `describe_map` core.
+//! Pure per-sector descriptions and the map-wide overview over a decoded
+//! [`Map`]: the geometry, identity and role half of the future
+//! `describe_map` core.
 //!
 //! [`Describe::sector`] turns one sector into a [`SectorFacts`] row: what
 //! it measures (an integer shoelace [`SectorFacts::area`] over its
@@ -35,6 +36,17 @@
 //! a blocking line; and otherwise `opening`, `step_up` or `step_down` by
 //! the neighbour's floor over the sector's own.
 //!
+//! The map-wide [`Describe::summary`] folds the same per-map reads into a
+//! [`MapOverview`]: the stored format and vertex bounds, element counts,
+//! the player starts, the [`Skill::Medium`] walk's exit, key and lock rows
+//! reused as-is, the teleport actions with their (possibly unresolved)
+//! destinations, the sectors wearing the `secret` role, the monsters and
+//! items tallied by definition name, the ten busiest wall textures and
+//! flats, the five largest sectors and a `playable` `{ok, summary}` read
+//! computed the way `check_playability` computes its own — the sentence
+//! builders are duplicated here because this layer may not import the
+//! tool layer.
+//!
 //! Like [`geometry`], this is a function of the map model and the passed
 //! [`Definitions`] alone: no sessions, no `MCP`, no editing. References
 //! that do not resolve simply do not take part in the answer, so a
@@ -55,10 +67,13 @@ use super::flags::{ACTIVATION_MASK, FlagFamily, Skill};
 use super::geometry::{point_in_sector, sector_bbox, sector_boundary};
 use super::model::{Linedef, Map};
 use super::playability::{
-    FeatureTargets, MAX_STEP_UP, Playability, analyze_playability, feature_targets,
+    ExitInfo, FeatureTargets, KeyInfo, LockInfo, MAX_STEP_UP, Playability, Stuck, StuckReason,
+    Teleporter, analyze_playability, feature_targets, start_thing, stuck_things,
 };
-use crate::defs::Definitions;
+use super::stats::ElementCounts;
 use crate::defs::boom::{SectorFamily, SectorFlag, decode_sector_special};
+use crate::defs::{Definitions, ThingDef};
+use crate::wad::classify::MapFormat;
 
 /// The ceiling flat that means open sky, the name the renderer switches on.
 const SKY_FLAT: &str = "F_SKY1";
@@ -104,6 +119,32 @@ const HEXEN_LIGHT_SPECIALS: [i32; 7] = [65_i32, 66_i32, 67_i32, 72_i32, 76_i32, 
 const DOOM_WALK_EXITS: [i32; 4] = [52_i32, 124_i32, 197_i32, 198_i32];
 /// The decoder's damage text for sectors that hurt nobody.
 const NO_DAMAGE: &str = "none";
+
+/// The rows `MapOverview::top_wall_textures` and `MapOverview::top_flats`
+/// answer with.
+const TOP_ROWS: usize = 10_usize;
+/// The rows `MapOverview::largest_sectors` answers with.
+const LARGEST_ROWS: usize = 5_usize;
+/// The thing types that stand a player in the map.
+const PLAYER_START_KINDS: [i32; 4] = [1_i32, 2_i32, 3_i32, 4_i32];
+/// The definition category a monster stands under.
+const MONSTER_CATEGORY: &str = "Monsters";
+/// The definition categories an item counts under.
+const ITEM_CATEGORIES: [&str; 5] = [
+    "Weapons",
+    "Ammunition",
+    "Powerups",
+    "Keys",
+    "Health And Armour",
+];
+/// The overview's note when no player start resolves to a sector.
+const NO_START_SENTENCE: &str = "No player 1 start: nothing can be reached.";
+/// The overview's note when a non-secret exit stands on a reached side.
+const EXIT_REACHABLE_SENTENCE: &str = "Exit reachable.";
+/// The overview's note when the map carries no exit line at all.
+const NO_EXIT_SENTENCE: &str = "The map has no exit.";
+/// The overview's note when every exit line stayed out of the walk.
+const EXIT_UNREACHABLE_SENTENCE: &str = "No exit is reachable.";
 
 /// The role and `via` name a door sector answers with.
 const NAME_DOOR: &str = "door";
@@ -225,12 +266,91 @@ pub struct SectorFacts {
     pub neighbours: Vec<Neighbour>,
 }
 
-/// The per-map read behind [`SectorFacts`] rows.
+/// One player-start thing: where a type 1 to 4 stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct PlayerStart {
+    /// The index into [`Map::things`].
+    pub thing: usize,
+    /// The stored thing type: 1, 2, 3 or 4.
+    pub kind: i32,
+}
+
+/// Whether a player can start and finish the map, in the
+/// `check_playability` tool's own words.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PlayableSummary {
+    /// Whether a player start stands in a sector, a non-secret exit is
+    /// reachable from a side the walk reached, and the start thing itself
+    /// is not among the stuck things.
+    pub ok: bool,
+    /// The exit note (or the no-start note) and the reachable-sector
+    /// count, one pair of plain sentences.
+    pub summary: String,
+}
+
+/// The map-wide overview: the pagination-independent picture an agent
+/// orients on before reading any single row.
+///
+/// [`Describe::summary`] folds it from the reads one [`Describe`] already
+/// holds plus one stuck-test pass: nothing here paginates, sorts a whole
+/// element block out, or reports a sector's own facts — the per-sector
+/// [`SectorFacts`] rows answer those.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MapOverview {
+    /// The layout the map block is stored in, as kept.
+    pub format: MapFormat,
+    /// The vertex box `[min_x, min_y, max_x, max_y]`, `None` when the map
+    /// holds no vertices.
+    pub bounds: Option<[i32; 4]>,
+    /// How many rows each of the five element blocks holds.
+    pub counts: ElementCounts,
+    /// The player-start things, in thing order.
+    pub player_starts: Vec<PlayerStart>,
+    /// The level exits as the [`Skill::Medium`] walk saw them, in linedef
+    /// order.
+    pub exits: Vec<ExitInfo>,
+    /// The keys that spawn at the skill, in thing order.
+    pub keys: Vec<KeyInfo>,
+    /// The locked lines, in linedef order; each row says whether the walk
+    /// opened its door.
+    pub locked_doors: Vec<LockInfo>,
+    /// The teleport actions, in linedef order, each landing on a sector
+    /// or on nothing (`destination` `None`) when its tag or `TID` answers
+    /// no destination thing.
+    pub teleporters: Vec<Teleporter>,
+    /// The sectors wearing the `secret` role, ascending.
+    pub secret_sectors: Vec<usize>,
+    /// The things whose definitions stand under a Monsters category,
+    /// counted by display name; unknown and absent definitions count
+    /// under neither tally.
+    pub monsters: BTreeMap<String, u32>,
+    /// The things whose definitions stand under a Weapons, Ammunition,
+    /// Powerups, Keys or Health And Armour category, counted by display
+    /// name.
+    pub items: BTreeMap<String, u32>,
+    /// The ten busiest texture names worn by the map's sidedefs (upper,
+    /// middle and lower faces, `"-"` never counted): count descending,
+    /// ties by name ascending.
+    pub top_wall_textures: Vec<(String, u32)>,
+    /// The ten busiest flat names worn by the map's sectors (floors and
+    /// ceilings, `"-"` never counted), read the same way.
+    pub top_flats: Vec<(String, u32)>,
+    /// The indices of the five largest sectors by [`SectorFacts::area`],
+    /// descending, ties by index.
+    pub largest_sectors: Vec<usize>,
+    /// Whether a player can start and finish the map, and the sentences
+    /// that say so.
+    pub playable: PlayableSummary,
+}
+
+/// The per-map read behind [`SectorFacts`] rows and the [`MapOverview`].
 ///
 /// Roles and neighbours ask what the map's door, lift, teleport and
 /// level-end actions work on, so [`Describe::new`] folds the flag family,
 /// [`feature_targets`] and [`analyze_playability`] once and every
 /// [`Describe::sector`] call answers from them; nothing is walked again.
+/// [`Describe::summary`] folds the same reads, plus one stuck-test pass,
+/// into the map-wide [`MapOverview`].
 pub struct Describe<'map> {
     /// The map being described.
     map: &'map Map,
@@ -437,6 +557,68 @@ impl<'map> Describe<'map> {
         );
         found.into_iter().collect()
     }
+
+    /// The sectors wearing the `secret` role, ascending: the per-sector
+    /// role read, asked straight of every stored special rather than
+    /// re-testing the family's bits here.
+    fn secret_sectors(&self) -> Vec<usize> {
+        self.map
+            .sectors
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                special_roles(row.special, self.family)
+                    .contains(&NAME_SECRET)
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    /// The [`LARGEST_ROWS`] biggest sectors by the facts' own shoelace
+    /// area, descending, ties by index.
+    fn largest_sectors(&self) -> Vec<usize> {
+        let mut sized: Vec<(usize, u64)> = (0..self.map.sectors.len())
+            .map(|index| (index, shoelace_area(&boundary_edges(self.map, index))))
+            .collect();
+        sized.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        sized
+            .into_iter()
+            .take(LARGEST_ROWS)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// The map-wide [`MapOverview`]: this read's folded format, counts,
+    /// walk rows and feature targets, the secret and largest-sector
+    /// readings, the thing and texture tallies and the playable answer,
+    /// which adds one [`Skill::Medium`] stuck test over the map.
+    #[must_use]
+    #[inline]
+    pub fn summary(&self) -> MapOverview {
+        let stuck = stuck_things(self.map, self.defs, Skill::Medium);
+        let start = start_thing(self.map, self.family, Skill::Medium);
+        let exit_open = exit_reachable(&self.play);
+        MapOverview {
+            format: self.map.format,
+            bounds: self.map.bounds().map(<[i32; 4]>::from),
+            counts: element_counts(self.map),
+            player_starts: player_starts(self.map),
+            exits: self.play.exits.clone(),
+            keys: self.play.keys.clone(),
+            locked_doors: self.play.locks.clone(),
+            teleporters: self.targets.teleporters.clone(),
+            secret_sectors: self.secret_sectors(),
+            monsters: category_counts(self.map, self.defs, &[MONSTER_CATEGORY]),
+            items: category_counts(self.map, self.defs, &ITEM_CATEGORIES),
+            top_wall_textures: top_rows(wall_tally(self.map)),
+            top_flats: top_rows(flat_tally(self.map)),
+            largest_sectors: self.largest_sectors(),
+            playable: PlayableSummary {
+                ok: self.play.start_sector.is_some() && exit_open && !start_stuck(start, &stuck),
+                summary: overview_summary(&self.play, self.map.sectors.len(), exit_open),
+            },
+        }
+    }
 }
 
 /// Describe sector `sector` of `map`, naming its sector special and its
@@ -450,6 +632,126 @@ impl<'map> Describe<'map> {
 #[inline]
 pub fn sector_facts(map: &Map, defs: &Definitions, sector: usize) -> Option<SectorFacts> {
     Describe::new(map, defs).sector(sector)
+}
+
+/// How many rows each of `map`'s five element blocks holds.
+fn element_counts(map: &Map) -> ElementCounts {
+    ElementCounts {
+        things: map.things.len(),
+        vertices: map.vertices.len(),
+        linedefs: map.linedefs.len(),
+        sidedefs: map.sidedefs.len(),
+        sectors: map.sectors.len(),
+    }
+}
+
+/// The things typed [`PLAYER_START_KINDS`], in thing order.
+fn player_starts(map: &Map) -> Vec<PlayerStart> {
+    map.things
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            PLAYER_START_KINDS
+                .contains(&row.kind)
+                .then_some(PlayerStart {
+                    thing: index,
+                    kind: row.kind,
+                })
+        })
+        .collect()
+}
+
+/// The definition row of thing type `kind`, `None` for a negative type or
+/// one the game does not define.
+fn thing_def(defs: &Definitions, kind: i32) -> Option<&ThingDef> {
+    u32::try_from(kind)
+        .ok()
+        .and_then(|number| defs.thing(number))
+}
+
+/// The things whose definitions stand under one of `categories` (a
+/// category reads as a match when it starts with it), counted by display
+/// name; unknown and absent definitions count under neither tally.
+fn category_counts(map: &Map, defs: &Definitions, categories: &[&str]) -> BTreeMap<String, u32> {
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for row in &map.things {
+        let Some(def) = thing_def(defs, row.kind) else {
+            continue;
+        };
+        if categories.iter().any(|name| def.category.starts_with(name)) {
+            bump(&mut counts, &def.name);
+        }
+    }
+    counts
+}
+
+/// Every texture name `map`'s sidedefs wear: each side's upper, middle
+/// and lower face counts whatever the side opens into; `"-"` never does.
+fn wall_tally(map: &Map) -> BTreeMap<String, u32> {
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for row in &map.sidedefs {
+        for texture in [row.upper.as_str(), row.middle.as_str(), row.lower.as_str()] {
+            bump_named(&mut counts, texture);
+        }
+    }
+    counts
+}
+
+/// Every flat name `map`'s sectors wear: floor and ceiling alike, `"-"`
+/// never counted.
+fn flat_tally(map: &Map) -> BTreeMap<String, u32> {
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for row in &map.sectors {
+        for flat in [row.floor_flat.as_str(), row.ceiling_flat.as_str()] {
+            bump_named(&mut counts, flat);
+        }
+    }
+    counts
+}
+
+/// The [`TOP_ROWS`] busiest names of `counts`: count descending, ties by
+/// name ascending; fewer rows when the map wears fewer names.
+fn top_rows(counts: BTreeMap<String, u32>) -> Vec<(String, u32)> {
+    let mut rows: Vec<(String, u32)> = counts.into_iter().collect();
+    rows.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    rows.truncate(TOP_ROWS);
+    rows
+}
+
+/// Whether the folded walk can work some non-secret exit from a side it
+/// reached: the `check_playability` tool's rule, read here because this
+/// layer may not import the tool layer.
+fn exit_reachable(play: &Playability) -> bool {
+    play.exits.iter().any(|exit| !exit.secret && exit.reachable)
+}
+
+/// Whether the player start thing is one of the stuck rows (its own row,
+/// or an overlap row naming it as the other body).
+fn start_stuck(start: Option<usize>, stuck: &[Stuck]) -> bool {
+    let Some(index) = start else {
+        return false;
+    };
+    stuck.iter().any(|row| {
+        row.thing == index
+            || matches!(row.reason, StuckReason::Overlaps { other } if other == index)
+    })
+}
+
+/// The overview's pair of plain sentences: the exit note (or the no-start
+/// note) and the reachable-sector count, worded as `check_playability`
+/// words its own summary.
+fn overview_summary(play: &Playability, sectors: usize, reached_exit: bool) -> String {
+    let lead = if play.start_sector.is_none() {
+        NO_START_SENTENCE
+    } else if reached_exit {
+        EXIT_REACHABLE_SENTENCE
+    } else if play.exits.is_empty() {
+        NO_EXIT_SENTENCE
+    } else {
+        EXIT_UNREACHABLE_SENTENCE
+    };
+    let reached = play.reachable.len();
+    format!("{lead} {reached} of {sectors} sectors reachable.")
 }
 
 /// `sector`'s boundary as directed world-space edges: front sides walk
@@ -751,9 +1053,7 @@ fn count_side(counts: &mut BTreeMap<String, u32>, map: &Map, side: usize, sector
         return;
     }
     for texture in [row.upper.as_str(), row.lower.as_str(), row.middle.as_str()] {
-        if texture != NO_TEXTURE {
-            bump(counts, texture);
-        }
+        bump_named(counts, texture);
     }
 }
 
@@ -761,10 +1061,7 @@ fn count_side(counts: &mut BTreeMap<String, u32>, map: &Map, side: usize, sector
 /// [`Definitions::thing`] knows, `Unknown <kind>` for anything else
 /// (including a negative type number).
 fn thing_name(defs: &Definitions, kind: i32) -> String {
-    u32::try_from(kind)
-        .ok()
-        .and_then(|number| defs.thing(number))
-        .map_or_else(|| format!("Unknown {kind}"), |row| row.name.clone())
+    thing_def(defs, kind).map_or_else(|| format!("Unknown {kind}"), |row| row.name.clone())
 }
 
 /// Every thing that stands in `sector` - skill-independent, whatever its
@@ -798,6 +1095,14 @@ fn bump(counts: &mut BTreeMap<String, u32>, name: &str) {
     *slot = slot.saturating_add(1);
 }
 
+/// Record the texture or flat name `name` once more in `counts`; the
+/// model's `"-"` (and nothing else) never counts.
+fn bump_named(counts: &mut BTreeMap<String, u32>, name: &str) {
+    if name != NO_TEXTURE {
+        bump(counts, name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -806,7 +1111,8 @@ mod tests {
     use serde_json::{json, to_value};
 
     use super::{
-        BLOCKING, Describe, Neighbour, SectorFacts, SpecialInfo, ThingCount, sector_facts,
+        BLOCKING, Describe, Neighbour, PlayerStart, SectorFacts, SpecialInfo, ThingCount,
+        sector_facts,
     };
     use crate::defs::{Definitions, definitions_for};
     use crate::plan::FeatureDress;
@@ -822,6 +1128,7 @@ mod tests {
     use crate::wad::map::common::fixtures::{name, room, side, solid_line, spawn, vertex};
     use crate::wad::map::features::LiftStyle;
     use crate::wad::map::geometry::point_in_sector;
+    use crate::wad::map::playability::{KeyColor, KeyInfo};
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing};
 
     /// The shared `twosided` bit.
@@ -1979,5 +2286,328 @@ mod tests {
                 "the wrapper and the shared read agree on sector {index}"
             );
         }
+    }
+
+    /// The four-room plan the overview tests build: `a | b | c` down the
+    /// `x` axis, a blue-locked door between `a` and `b`, openings from
+    /// `b` to `c` and from `c` to the secret room `s`, and a walk-over
+    /// exit on `c`'s boundaries.
+    fn keyed_exit_plan() -> Plan {
+        let mut hidden = plan_room("s", (768, 256), cell(0_i32));
+        hidden.secret = true;
+        plan_of(
+            vec![
+                plan_room("a", (0, 256), cell(0_i32)),
+                plan_room("b", (256, 256), cell(0_i32)),
+                plan_room("c", (512, 256), cell(0_i32)),
+                hidden,
+            ],
+            vec![
+                plan_link(
+                    "d1",
+                    ("a", "b"),
+                    ConnectionKind::Door {
+                        style: DoorStyle::Locked(PlanKeyColor::Blue),
+                    },
+                    64,
+                ),
+                plan_link("c1", ("b", "c"), ConnectionKind::Opening, 64),
+                plan_link("s1", ("c", "s"), ConnectionKind::Opening, 64),
+            ],
+            vec![PlanFeature::Exit {
+                room: "c".to_owned(),
+                style: ExitStyle::WalkOver,
+                secret: false,
+                wall: None,
+            }],
+            16_i64,
+        )
+    }
+
+    /// The room sectors of a [`keyed_exit_plan`] build, in plan order.
+    fn plan_rooms(map: &Map) -> [usize; 4] {
+        [
+            room_sector(map, 0),
+            room_sector(map, 1),
+            room_sector(map, 2),
+            room_sector(map, 3),
+        ]
+    }
+
+    #[test]
+    fn the_two_room_hall_overviews_counts_sizes_tallies_and_the_missing_exit() {
+        let map = hall(&[cell(0_i32), cell(0_i32)]);
+        let overview = Describe::new(&map, &doom2_defs()).summary();
+        assert_eq!(overview.format, MapFormat::Doom, "the stored format");
+        assert_eq!(
+            overview.bounds,
+            Some([0_i32, 0_i32, 512_i32, 256_i32]),
+            "the vertex box"
+        );
+        assert_eq!(overview.counts.vertices, 6, "two rows of columns");
+        assert_eq!(overview.counts.linedefs, 7, "one divider and six walls");
+        assert_eq!(
+            overview.counts.sidedefs, 8,
+            "two on the divider, one per wall"
+        );
+        assert_eq!(overview.counts.sectors, 2, "the two rooms");
+        assert_eq!(overview.counts.things, 1, "just the start");
+        assert_eq!(
+            overview.player_starts,
+            vec![PlayerStart { thing: 0, kind: 1 }],
+            "the type-1 row, in thing order"
+        );
+        assert!(overview.exits.is_empty(), "the hall ends nowhere");
+        assert!(overview.keys.is_empty(), "and keeps no keys");
+        assert!(overview.locked_doors.is_empty(), "and no locks");
+        assert!(overview.teleporters.is_empty(), "and no pads");
+        assert!(overview.secret_sectors.is_empty(), "and hides nothing");
+        assert!(overview.monsters.is_empty(), "only the player stands here");
+        assert!(overview.items.is_empty(), "and the start is no item");
+        assert_eq!(
+            overview.top_wall_textures,
+            vec![("WALL1".to_owned(), 6_u32)],
+            "six WALL1 faces and nothing else"
+        );
+        assert_eq!(
+            overview.top_flats,
+            vec![("FLOOR1".to_owned(), 4_u32)],
+            "two floors and two ceilings"
+        );
+        assert_eq!(
+            overview.largest_sectors,
+            vec![0_usize, 1],
+            "equal rooms tie and fall back to index order"
+        );
+        assert!(!overview.playable.ok, "nothing ends the level");
+        assert_eq!(
+            overview.playable.summary, "The map has no exit. 2 of 2 sectors reachable.",
+            "the tool's own wording, both sentences"
+        );
+    }
+
+    #[test]
+    fn the_hall_overview_serialises_to_the_tickets_shape() {
+        let map = hall(&[cell(0_i32), cell(0_i32)]);
+        let value = to_value(Describe::new(&map, &doom2_defs()).summary())
+            .expect("the overview serialises");
+        assert_eq!(
+            value,
+            json!({
+                "format": "doom",
+                "bounds": [0_i64, 0_i64, 512_i64, 256_i64],
+                "counts": {
+                    "vertices": 6_u64,
+                    "linedefs": 7_u64,
+                    "sidedefs": 8_u64,
+                    "sectors": 2_u64,
+                    "things": 1_u64,
+                },
+                "player_starts": [{ "thing": 0_u64, "kind": 1_i64 }],
+                "exits": [],
+                "keys": [],
+                "locked_doors": [],
+                "teleporters": [],
+                "secret_sectors": [],
+                "monsters": {},
+                "items": {},
+                "top_wall_textures": [["WALL1", 6_u64]],
+                "top_flats": [["FLOOR1", 4_u64]],
+                "largest_sectors": [0_u64, 1_u64],
+                "playable": {
+                    "ok": false,
+                    "summary": "The map has no exit. 2 of 2 sectors reachable.",
+                },
+            }),
+            "every field the ticket named, in its names"
+        );
+    }
+
+    /// The [`keyed_exit_plan`] built with a player 1 start, a blue keycard
+    /// and a small crew (two monsters, three items) standing in the start
+    /// room `a`.
+    fn crewed_plan() -> (Map, Vec<FeatureRow>) {
+        let (mut map, rows) = built(&keyed_exit_plan(), MapFormat::Doom);
+        stand(&mut map, spawn(1, 128, 128, 0));
+        stand(&mut map, spawn(5, 64, 192, 0));
+        stand(&mut map, spawn(3001, 192, 64, 0));
+        stand(&mut map, spawn(3004, 64, 64, 0));
+        stand(&mut map, spawn(2001, 192, 192, 0));
+        stand(&mut map, spawn(8, 160, 128, 0));
+        stand(&mut map, spawn(2011, 224, 128, 0));
+        (map, rows)
+    }
+
+    #[test]
+    fn the_keyed_exit_plan_overviews_its_walk_and_playable_rows() {
+        let (map, _) = crewed_plan();
+        let overview = Describe::new(&map, &doom2_defs()).summary();
+        assert!(
+            overview.playable.ok,
+            "the card in hand walks the whole map: {:?}",
+            overview.playable
+        );
+        assert_eq!(
+            overview.playable.summary, "Exit reachable. 7 of 7 sectors reachable.",
+            "start room, band, hall, exit room, secret and both opening strips stand on the path"
+        );
+        assert!(
+            overview
+                .exits
+                .iter()
+                .any(|exit| !exit.secret && exit.reachable),
+            "the walk-over exit is worked from a reached side: {:?}",
+            overview.exits
+        );
+        assert_eq!(
+            overview.keys,
+            vec![KeyInfo {
+                thing: 1,
+                color: KeyColor::Blue,
+                sector: Some(plan_rooms(&map)[0]),
+                reachable: true,
+            }],
+            "the card waits in the start room"
+        );
+        assert!(
+            !overview.locked_doors.is_empty()
+                && overview
+                    .locked_doors
+                    .iter()
+                    .all(|lock| lock.color == KeyColor::Blue && lock.opened),
+            "every door lock rose for the card: {:?}",
+            overview.locked_doors
+        );
+        assert!(
+            overview.teleporters.is_empty(),
+            "the plan teleports nowhere"
+        );
+    }
+
+    #[test]
+    fn the_keyed_exit_plan_overviews_its_crew_and_sizes() {
+        let (map, rows) = crewed_plan();
+        let overview = Describe::new(&map, &doom2_defs()).summary();
+        let secret = *row(&rows, "secret")
+            .sectors
+            .first()
+            .expect("the secret room");
+        assert_eq!(
+            overview.secret_sectors,
+            vec![secret],
+            "and the secret room alone"
+        );
+        assert_eq!(
+            to_value(&overview.monsters).expect("monsters serialise"),
+            json!({ "Former Human": 1_u64, "Imp": 1_u64 }),
+            "counted by definition name"
+        );
+        assert_eq!(
+            to_value(&overview.items).expect("items serialise"),
+            json!({
+                "Backpack": 1_u64,
+                "Blue Keycard": 1_u64,
+                "Shotgun": 1_u64,
+                "Stimpack": 1_u64,
+            }),
+            "weapons, ammunition, the key and health alike"
+        );
+        let band = *row(&rows, "door").sectors.first().expect("the band");
+        let rooms = plan_rooms(&map);
+        // Sector areas: the outer rooms `a`/`s` (63488 square units)
+        // outrank the inner `b`/`c` (61440); the door band and both
+        // opening strips tie at 1024, so the lowest index wins the
+        // fifth row.
+        assert_eq!(
+            overview.largest_sectors,
+            vec![rooms[0], rooms[3], rooms[1], rooms[2], band],
+            "biggest first, ties by index, the band claiming the fifth row"
+        );
+        assert_eq!(
+            overview.counts.sectors, 7,
+            "four rooms, the band, two strips"
+        );
+        assert!(overview.bounds.is_some(), "and the built map bounds itself");
+        assert!(
+            !overview.top_wall_textures.is_empty() && !overview.top_flats.is_empty(),
+            "the dressed walls and flats tally: {:?} {:?}",
+            overview.top_wall_textures,
+            overview.top_flats
+        );
+    }
+
+    #[test]
+    fn the_plan_without_its_key_stays_locked_and_lists_the_locks_anyway() {
+        let (mut map, rows) = built(&keyed_exit_plan(), MapFormat::Doom);
+        stand(&mut map, spawn(1, 128, 128, 0));
+        stand(&mut map, spawn(5, 640, 64, 0));
+        let overview = Describe::new(&map, &doom2_defs()).summary();
+        assert!(
+            !overview.locked_doors.is_empty()
+                && overview.locked_doors.iter().all(|lock| !lock.opened),
+            "the key in the far room opens none of them: {:?}",
+            overview.locked_doors
+        );
+        assert_eq!(
+            overview.keys.first().map(|key| key.reachable),
+            Some(false),
+            "and that card stands behind the door"
+        );
+        assert!(
+            overview.exits.iter().any(|exit| !exit.reachable),
+            "the exit lines are there and out of reach: {:?}",
+            overview.exits
+        );
+        assert!(
+            !overview.playable.ok,
+            "a shut door is no way to the exit: {:?}",
+            overview.playable
+        );
+        assert!(
+            overview
+                .playable
+                .summary
+                .starts_with("No exit is reachable. "),
+            "the tool's own note: {}",
+            overview.playable.summary
+        );
+        let secret = *row(&rows, "secret")
+            .sectors
+            .first()
+            .expect("the secret room");
+        assert_eq!(
+            overview.secret_sectors,
+            vec![secret],
+            "locked out or not, the secret reads the same"
+        );
+    }
+
+    #[test]
+    fn the_empty_map_overviews_with_zeroes_and_the_no_start_note() {
+        let map = Map::default();
+        let overview = Describe::new(&map, &doom_defs()).summary();
+        assert_eq!(overview.bounds, None, "no vertices, no box");
+        assert_eq!(overview.counts.vertices, 0, "and no elements at all");
+        assert_eq!(overview.counts.things, 0, "not even a start");
+        assert!(overview.player_starts.is_empty(), "nobody spawns");
+        assert!(overview.exits.is_empty(), "nothing ends");
+        assert!(overview.teleporters.is_empty(), "nothing lands");
+        assert!(overview.secret_sectors.is_empty(), "nothing hides");
+        assert!(
+            overview.monsters.is_empty() && overview.items.is_empty(),
+            "nobody and nothing to tally"
+        );
+        assert!(
+            overview.top_wall_textures.is_empty(),
+            "no sidedefs, no textures"
+        );
+        assert!(overview.top_flats.is_empty(), "no sectors, no flats");
+        assert!(overview.largest_sectors.is_empty(), "no sectors to rank");
+        assert!(!overview.playable.ok, "nobody can start, let alone finish");
+        assert_eq!(
+            overview.playable.summary,
+            "No player 1 start: nothing can be reached. 0 of 0 sectors reachable.",
+            "the no-start note and the zero count"
+        );
     }
 }

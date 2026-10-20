@@ -14,8 +14,10 @@
 //! one. It runs *before* [`compile`](fn@crate::plan::compile): it is the
 //! stage that turns a drawing into map-sized geometry, so walls,
 //! connectors and emission all see final coordinates. [`Units::point`]
-//! exposes the same transform for a single point. The transformed fields
-//! are the room shapes, each [`Connection::at`] placement and each
+//! exposes the same transform for a single point; [`Units::to_map`] and
+//! [`Units::to_image`] are its unsnapped leg and its exact inverse, the
+//! pair a reference image is placed and sampled with. The transformed
+//! fields are the room shapes, each [`Connection::at`] placement and each
 //! [`Feature::Teleporter`]'s `pad` and `destination` squares.
 //!
 //! Sizes are **not** transformed. [`Plan::wall_thickness`],
@@ -127,6 +129,49 @@ impl Units {
             self.origin_x.checked_add(scaled)?
         };
         snap(placed, grid)
+    }
+
+    /// One drawing pixel in map units with no snapping: [`point`](Self::point)
+    /// at grid `1`. This is the image-pixel to map-unit direction a
+    /// reference picture travels; the inverse is [`to_image`](Self::to_image).
+    ///
+    /// A sketch pixel `(px, py)` lands at `x = origin_x + px * num / den`
+    /// and `y = origin_y - py * num / den` when [`flip_y`](Self::flip_y)
+    /// mirrors the drawing vertically, `y = origin_y + py * num / den`
+    /// without the mirror (both [`mul_div_round`]-rounded).
+    #[must_use]
+    #[inline]
+    pub fn to_map(self, x: i64, y: i64) -> Option<Pt> {
+        self.point(1_i64, x, y)
+    }
+
+    /// One map point back in the drawing's pixel space: the inverse of
+    /// [`to_map`](Self::to_map), so `px = (x - origin_x) * den / num` and
+    /// `py = (origin_y - y) * den / num` when [`flip_y`](Self::flip_y)
+    /// mirrors, `py = (y - origin_y) * den / num` without the mirror.
+    /// Divisions round through [`mul_div_round`]; `None` when a value
+    /// leaves the supported range or the scale is degenerate (zero
+    /// [`scale_num`](Self::scale_num) or [`scale_den`](Self::scale_den),
+    /// which [`check`](Self::check) refuses).
+    #[must_use]
+    #[inline]
+    pub fn to_image(self, x: i64, y: i64) -> Option<Pt> {
+        let px = self.unaxis(x, self.origin_x, false)?;
+        let py = self.unaxis(y, self.origin_y, true)?;
+        Some((px, py))
+    }
+
+    /// The inverse of one [`axis`](Self::axis) leg: the distance from the
+    /// origin, measured downward on a mirrored vertical axis, divided by
+    /// the scale.
+    #[inline]
+    fn unaxis(self, placed: i64, origin: i64, vertical: bool) -> Option<i64> {
+        let offset = if vertical && self.flip_y {
+            origin.checked_sub(placed)?
+        } else {
+            placed.checked_sub(origin)?
+        };
+        mul_div_round(offset, self.scale_den, self.scale_num)
     }
 
     /// [`Units::point`] as a `Result`, reporting a failure at the plan
@@ -551,6 +596,52 @@ mod tests {
     fn assert_plan_refused(plan: &Plan, units: &Units, grid: i64, needle: &str) {
         let refused = transform_plan(plan, units, grid).expect_err("the coordinate must fail");
         assert_argument(&refused, needle);
+    }
+
+    #[test]
+    fn to_map_and_to_image_invert_each_other() {
+        let units = Units {
+            scale_num: 4_i64,
+            origin_x: 10_i64,
+            origin_y: -20_i64,
+            flip_y: true,
+            ..Units::default()
+        };
+        for (px, py) in [(0_i64, 0_i64), (12_i64, 30_i64), (-8_i64, 7_i64)] {
+            let (x, y) = units
+                .to_map(px, py)
+                .expect("small scaled coordinates stay in range");
+            assert_eq!(
+                units.to_image(x, y),
+                Some((px, py)),
+                "an exact pixel round-trips at scale 4 with the mirror"
+            );
+        }
+        assert_eq!(
+            units.to_map(0_i64, 4_i64),
+            Some((10_i64, -36_i64)),
+            "the unsnapped direction matches point(1, x, y)"
+        );
+        assert_eq!(
+            units.to_image(12_i64, -20_i64),
+            Some((1_i64, 0_i64)),
+            "a map point between pixels rounds to the nearest, halves away from zero"
+        );
+        let shrink = Units {
+            scale_num: 1_i64,
+            scale_den: 8_i64,
+            ..Units::default()
+        };
+        assert_eq!(
+            shrink.to_image(7_i64, -7_i64),
+            Some((56_i64, -56_i64)),
+            "a fractional scale divides out by eight"
+        );
+        assert_eq!(
+            Units::default().to_map(3_i64, -3_i64),
+            Some((3_i64, -3_i64)),
+            "the identity carries pixels through"
+        );
     }
 
     #[test]

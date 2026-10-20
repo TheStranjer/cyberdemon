@@ -16,7 +16,12 @@
 //! map and the session's thing definitions under the session lock, then
 //! paints, gamma-corrects and publishes the `PNG` outside it, returning
 //! the fitted `transform` so a client can convert pixels back to map
-//! coordinates.
+//! coordinates. On the top-down projection it also paints verification
+//! overlays: a fetched reference picture placed through
+//! [`crate::plan::Units`] under the map ([`load_underlay`] runs before
+//! any session lock), a coordinate grid, element-index labels and free
+//! [`crate::render::draw_text`] annotations on top, all drawn in the
+//! [`crate::render::font`] bitmap type.
 //!
 //! [`Cyberdemon::render_minimap`] draws a compact automap-style square:
 //! it reuses the line classification, colours and [`crate::render::Canvas`]
@@ -45,16 +50,20 @@ use crate::assets::server::AssetRef;
 use crate::defs::{Definitions, ThingDef, session_definitions};
 use crate::error::CyberError;
 use crate::fixed::{Angle, FRACBITS, mul_div_round, rotate_point};
-use crate::gfx::codec::encode_png;
+use crate::gfx::codec::{decode_image, encode_png};
+use crate::gfx::image::RgbaImage;
+use crate::gfx::ops::parse_hex_color;
 use crate::gfx::palette::Palette;
 use crate::gfx::patch::Patch;
 use crate::gfx::sprite_rotation::rotation_for;
+use crate::plan::Units;
+use crate::render::canvas::intersect_x;
 use crate::render::sprites::SpriteItem;
 use crate::render::view::ONE_16;
 use crate::render::{
-    AutomapColors, Canvas, Edge, PlayerMark, Pt, RenderSettings, Rgba, Stroke, Switch,
+    AutomapColors, Canvas, Edge, PlayerMark, Pt, RenderSettings, Rgba, Stroke, Switch, TextStyle,
     TopdownStyle, ViewCamera, ViewFrame, Window, automap_color, build_scene, camera_sector,
-    check_pitch, default_eye_z, gamma_table, paint_automap_lines, paint_player_arrow,
+    check_pitch, default_eye_z, draw_text, gamma_table, paint_automap_lines, paint_player_arrow,
     paint_thing_dots, render_frame, scale_down, side_sector, thing_visual,
 };
 use crate::server::Cyberdemon;
@@ -65,6 +74,7 @@ use crate::tools::graphics::resolve::load_sprite_cached;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::tools::palette::load_palette;
+use crate::tools::plan::params::UnitsParam;
 use crate::tools::{fail, ok};
 use crate::wad::LumpName;
 use crate::wad::map::geometry;
@@ -275,6 +285,78 @@ struct RenderTopdownParams {
     /// Element indices to draw as highlights.
     #[serde(default)]
     highlight: Option<HighlightParams>,
+    /// Reference image drawn under the map (top-down projection only).
+    #[serde(default)]
+    underlay: Option<UnderlayParams>,
+    /// Grid spacing in map units, `8..=1024`, drawn under the map lines
+    /// (top-down projection only).
+    #[serde(default)]
+    grid: Option<i64>,
+    /// Which element indices to draw as text over the map (top-down
+    /// projection only).
+    #[serde(default)]
+    labels: Option<LabelsParams>,
+    /// Free text at map coordinates drawn over the map (top-down
+    /// projection only). At most [`MAX_ANNOTATIONS`] rows of at most
+    /// [`MAX_ANNOTATION_CHARS`] characters each.
+    #[serde(default)]
+    annotations: Option<Vec<AnnotationParams>>,
+    /// Magnification of every label and annotation glyph, `1..=4`
+    /// (default `2` when the output width is at least 1024 pixels, else `1`).
+    #[serde(default)]
+    label_scale: Option<u32>,
+}
+
+/// Arguments for `render_topdown`' `underlay` parameter: the reference
+/// picture to draw under the map.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UnderlayParams {
+    /// File to draw: absolute path, `file://` URI, `http(s)://` `URL` or
+    /// this server's asset `URL`.
+    source: String,
+    /// How image pixels map to map units — exactly the object
+    /// `build_map_from_plan` takes as `units` (no `grid`: the underlay
+    /// never snaps). Default identity: `scale_num: 1`, `scale_den: 1`,
+    /// origins `0`, `flip_y: false`.
+    #[serde(default)]
+    units: Option<UnitsParam>,
+    /// Blend strength in percent, `0..=100` (default `50`); each texel's
+    /// own alpha is scaled by this.
+    #[serde(default)]
+    opacity: Option<u8>,
+}
+
+/// Arguments for `render_topdown`' `labels` parameter: which element
+/// indices to draw.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct LabelsParams {
+    /// Draw each sector's index inside it.
+    #[serde(default)]
+    sectors: Option<bool>,
+    /// Draw each linedef's index at its midpoint.
+    #[serde(default)]
+    linedefs: Option<bool>,
+    /// Draw each thing's index beside its marker.
+    #[serde(default)]
+    things: Option<bool>,
+    /// Draw each vertex's index beside its mark.
+    #[serde(default)]
+    vertices: Option<bool>,
+}
+
+/// Arguments for one `render_topdown`' `annotations` row.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AnnotationParams {
+    /// World `x` of the text anchor.
+    x: i64,
+    /// World `y` of the text anchor.
+    y: i64,
+    /// The text; upper-cased, characters outside the font draw as `?`,
+    /// at most [`MAX_ANNOTATION_CHARS`] characters.
+    text: String,
+    /// Text colour as `"#RRGGBB"` (default `"#FFFFFF"`).
+    #[serde(default)]
+    color: Option<String>,
 }
 
 /// Arguments for `render_topdown`'s `bounds` parameter: the world
@@ -307,6 +389,63 @@ struct HighlightParams {
     #[serde(default)]
     vertices: Option<Vec<usize>>,
 }
+
+/// The decoded [`UnderlayParams`]: the picture, its map placement and the
+/// blend strength it draws at.
+#[derive(Debug)]
+struct Underlay {
+    /// The decoded reference picture.
+    image: RgbaImage,
+    /// Image-pixel to map-unit transform, unsnapped
+    /// ([`grid`](Units::grid) `1`).
+    units: Units,
+    /// Blend strength in percent, `0..=100`.
+    opacity: u8,
+    /// The underlay's map-space rectangle: the four image corners
+    /// through [`Units::to_map`].
+    rect: Rect,
+}
+
+/// Which element indices [`render_topdown`](Cyberdemon::render_topdown)
+/// draws as text.
+#[derive(Clone, Copy, Debug, Default)]
+struct Labels {
+    /// Sector indices.
+    sectors: Switch,
+    /// Linedef indices.
+    linedefs: Switch,
+    /// Thing indices.
+    things: Switch,
+    /// Vertex indices.
+    vertices: Switch,
+}
+
+impl Labels {
+    /// Whether any label pass has to run.
+    const fn any(self) -> bool {
+        self.sectors.is_on()
+            || self.linedefs.is_on()
+            || self.things.is_on()
+            || self.vertices.is_on()
+    }
+}
+
+/// One resolved `annotations` row.
+#[derive(Debug)]
+struct Annotation {
+    /// World `x` of the text anchor.
+    x: i64,
+    /// World `y` of the text anchor.
+    y: i64,
+    /// The upper-cased text.
+    text: String,
+    /// The text colour.
+    colour: Rgba,
+}
+
+/// A world rectangle as `(min_x, min_y, max_x, max_y)`; [`union_rect`]
+/// folds these.
+type Rect = (i64, i64, i64, i64);
 
 /// The world rectangle a render frames; validation guarantees strictly
 /// positive spans.
@@ -358,6 +497,16 @@ struct Request {
     fill_sectors: Switch,
     /// Highlighted elements.
     highlight: Highlights,
+    /// The reference picture drawn under the map, when given.
+    underlay: Option<Underlay>,
+    /// Grid spacing in map units, when given.
+    grid: Option<i64>,
+    /// Which element indices draw their numbers.
+    labels: Labels,
+    /// Free texts standing at map coordinates.
+    annotations: Vec<Annotation>,
+    /// Magnification of every label and annotation glyph.
+    label_scale: u32,
 }
 
 /// The axis range a fitted view must place inside the canvas margins.
@@ -406,6 +555,17 @@ impl View {
         self.point(
             x.saturating_sub(y),
             half(x.saturating_add(y)).saturating_sub(z),
+        )
+    }
+
+    /// The world point whose pixel lands at canvas `(col, row)`:
+    /// [`point`](Self::point)'s mapping inverted in integer arithmetic,
+    /// floor-rounded. `self.num` is at least `1` for every fitted view,
+    /// so the division always has a non-zero denominator.
+    fn unproject(self, col: i64, row: i64) -> (i64, i64) {
+        (
+            scale_down(col.saturating_sub(self.offset_x), self.den, self.num),
+            scale_down(self.offset_y.saturating_sub(row), self.den, self.num),
         )
     }
 
@@ -531,14 +691,19 @@ fn parse_projection(text: Option<&str>) -> Result<Projection, CyberError> {
     )))
 }
 
-/// The rectangle to frame: the validated `requested` bounds, else the
-/// map's vertex bounds padded by [`BOUNDS_PAD`].
+/// The rectangle to frame: the validated `requested` bounds; else the
+/// union of the map's vertex bounds and the `underlay`'s map-space
+/// rectangle, padded by [`BOUNDS_PAD`].
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for an inverted or flat rectangle, and
-/// for an empty map without explicit bounds.
-fn resolve_bounds(requested: Option<&BoundsParams>, map: &Map) -> Result<Bounds, CyberError> {
+/// for an empty map without an underlay or explicit bounds.
+fn resolve_bounds(
+    requested: Option<&BoundsParams>,
+    map: &Map,
+    underlay: Option<Rect>,
+) -> Result<Bounds, CyberError> {
     if let Some(boxed) = requested {
         let bounds = Bounds {
             min_x: boxed.min_x,
@@ -555,18 +720,244 @@ fn resolve_bounds(requested: Option<&BoundsParams>, map: &Map) -> Result<Bounds,
         }
         return Ok(bounds);
     }
-    let (min_x, min_y, max_x, max_y) = map.bounds().ok_or_else(|| {
-        CyberError::InvalidArgument(format!(
-            "{} has no vertices to frame: pass bounds {{min_x, min_y, max_x, max_y}} to render \
-             it",
-            map.name
-        ))
-    })?;
+    let world = map
+        .bounds()
+        .map(|(x0, y0, x1, y1)| (i64::from(x0), i64::from(y0), i64::from(x1), i64::from(y1)));
+    let frame = match (world, underlay) {
+        (None, None) => {
+            return Err(CyberError::InvalidArgument(format!(
+                "{} has no vertices to frame: pass bounds {{min_x, min_y, max_x, max_y}} or an \
+                 underlay to render it",
+                map.name
+            )));
+        }
+        (Some(rect), None) | (None, Some(rect)) => rect,
+        (Some(one), Some(other)) => union_rect(one, other),
+    };
+    let (min_x, min_y, max_x, max_y) = frame;
     Ok(Bounds {
-        min_x: i64::from(min_x).saturating_sub(BOUNDS_PAD),
-        min_y: i64::from(min_y).saturating_sub(BOUNDS_PAD),
-        max_x: i64::from(max_x).saturating_add(BOUNDS_PAD),
-        max_y: i64::from(max_y).saturating_add(BOUNDS_PAD),
+        min_x: min_x.saturating_sub(BOUNDS_PAD),
+        min_y: min_y.saturating_sub(BOUNDS_PAD),
+        max_x: max_x.saturating_add(BOUNDS_PAD),
+        max_y: max_y.saturating_add(BOUNDS_PAD),
+    })
+}
+
+/// The enclosing rectangle of two rects; an empty one (`min > max`)
+/// contributes nothing.
+fn union_rect(one: Rect, other: Rect) -> Rect {
+    if other.0 > other.2 || other.1 > other.3 {
+        return one;
+    }
+    if one.0 > one.2 || one.1 > one.3 {
+        return other;
+    }
+    (
+        one.0.min(other.0),
+        one.1.min(other.1),
+        one.2.max(other.2),
+        one.3.max(other.3),
+    )
+}
+
+/// Refuses the overlay parameters (`underlay`, `grid`, `labels`,
+/// `annotations`, `label_scale`) for a projection that cannot draw them.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the overlays' home projection.
+fn check_overlays(args: &RenderTopdownParams, projection: Projection) -> Result<(), CyberError> {
+    if projection == Projection::Topdown {
+        return Ok(());
+    }
+    let bare = args.underlay.is_none()
+        && args.grid.is_none()
+        && args.labels.is_none()
+        && args.annotations.as_ref().is_none_or(Vec::is_empty)
+        && args.label_scale.is_none();
+    if bare {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(
+        "overlays need the topdown projection: underlay, grid, labels, annotations and \
+         label_scale only draw on the flat overview; drop projection \"isometric\" or the \
+         overlay parameters"
+            .to_owned(),
+    ))
+}
+
+/// The validated `grid` spacing in map units, `8..=1024`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a spacing outside the range.
+fn resolve_grid(requested: Option<i64>) -> Result<Option<i64>, CyberError> {
+    let Some(spacing) = requested else {
+        return Ok(None);
+    };
+    if (MIN_GRID..=MAX_GRID).contains(&spacing) {
+        return Ok(Some(spacing));
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "render_topdown grid spacing must be within {MIN_GRID}..={MAX_GRID} map units, got \
+         {spacing}: pass a coarser or finer grid, or drop the parameter"
+    )))
+}
+
+/// The label switches, absent fields off.
+fn resolve_labels(requested: Option<&LabelsParams>) -> Labels {
+    let absent = LabelsParams::default();
+    let wanted = requested.unwrap_or(&absent);
+    Labels {
+        sectors: Switch::from(wanted.sectors.unwrap_or(false)),
+        linedefs: Switch::from(wanted.linedefs.unwrap_or(false)),
+        things: Switch::from(wanted.things.unwrap_or(false)),
+        vertices: Switch::from(wanted.vertices.unwrap_or(false)),
+    }
+}
+
+/// The validated `label_scale`: `1..=4`, defaulting to [`WIDE_LABEL_SCALE`]
+/// once the output is at least [`WIDE_LABEL_THRESHOLD`] pixels wide.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a scale outside the range.
+fn resolve_label_scale(requested: Option<u32>, width: u32) -> Result<u32, CyberError> {
+    let fallback = if width >= WIDE_LABEL_THRESHOLD {
+        WIDE_LABEL_SCALE
+    } else {
+        DEFAULT_LABEL_SCALE
+    };
+    let scale = requested.unwrap_or(fallback);
+    if (MIN_LABEL_SCALE..=MAX_LABEL_SCALE).contains(&scale) {
+        return Ok(scale);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "render_topdown label_scale must be within {MIN_LABEL_SCALE}..={MAX_LABEL_SCALE}, got \
+         {scale}: drop it for the size-appropriate default"
+    )))
+}
+
+/// The validated `annotations` rows, upper-cased and coloured.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for more than [`MAX_ANNOTATIONS`] rows,
+/// a row longer than [`MAX_ANNOTATION_CHARS`] characters, or a colour
+/// [`parse_hex_color`] refuses.
+fn resolve_annotations(
+    requested: Option<&[AnnotationParams]>,
+) -> Result<Vec<Annotation>, CyberError> {
+    let Some(rows) = requested else {
+        return Ok(Vec::new());
+    };
+    if rows.len() > MAX_ANNOTATIONS {
+        return Err(CyberError::InvalidArgument(format!(
+            "render_topdown takes at most {MAX_ANNOTATIONS} annotations, got {}: keep the notes \
+             that matter",
+            rows.len()
+        )));
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| row_note(index, row))
+        .collect()
+}
+
+/// One annotation `row` under its list `index`.
+fn row_note(index: usize, row: &AnnotationParams) -> Result<Annotation, CyberError> {
+    if row.text.chars().count() > MAX_ANNOTATION_CHARS {
+        return Err(CyberError::InvalidArgument(format!(
+            "annotation {index} is longer than {MAX_ANNOTATION_CHARS} characters: shorten {:?}",
+            row.text
+        )));
+    }
+    let colour = match row.color.as_deref() {
+        Some(text) => parse_hex_color(text)?,
+        None => ANNOTATION_COLOUR,
+    };
+    Ok(Annotation {
+        x: row.x,
+        y: row.y,
+        text: row.text.to_ascii_uppercase(),
+        colour,
+    })
+}
+
+/// The validated `opacity` percent, `0..=100`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a percent above `100`.
+fn resolve_opacity(requested: Option<u8>) -> Result<u8, CyberError> {
+    let opacity = requested.unwrap_or(DEFAULT_OPACITY);
+    if opacity <= MAX_OPACITY {
+        return Ok(opacity);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "underlay opacity must be within 0..={MAX_OPACITY} percent, got {opacity}"
+    )))
+}
+
+/// The wire `units` object as an unsnapped [`Units`]: the render's grid is
+/// always `1`, snapping belongs to plan building, not to picture sampling.
+fn to_overlay_units(requested: Option<UnitsParam>) -> Units {
+    let wire = requested.unwrap_or_default();
+    Units {
+        scale_num: wire.scale_num,
+        scale_den: wire.scale_den,
+        origin_x: wire.origin_x,
+        origin_y: wire.origin_y,
+        grid: 1_i64,
+        flip_y: wire.flip_y,
+    }
+}
+
+/// The enclosing map-space rectangle of an `image` under `units`: its four
+/// corners through [`Units::to_map`].
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when a corner leaves the supported
+/// range under the transform.
+fn underlay_rect(units: &Units, image: &RgbaImage) -> Result<Rect, CyberError> {
+    let wide = i64::from(image.width);
+    let high = i64::from(image.height);
+    let corners = [(0_i64, 0_i64), (wide, 0_i64), (wide, high), (0_i64, high)];
+    let mut rect = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    for (px, py) in corners {
+        let (x, y) = units.to_map(px, py).ok_or_else(|| {
+            CyberError::InvalidArgument(format!(
+                "underlay corner ({px}, {py}) leaves the map range under this scale and origin: \
+                 reduce scale_num or move the origin"
+            ))
+        })?;
+        rect = union_rect(rect, (x, y, x, y));
+    }
+    Ok(rect)
+}
+
+/// Fetch and decode `render_topdown`' underlay before any session lock:
+/// [`AppState::fetch_source`], [`decode_image`], the wire units checked
+/// and the map-space rectangle measured.
+///
+/// # Errors
+///
+/// [`AppState::fetch_source`]' errors for the `source`,
+/// [`decode_image`]'s [`CyberError::Format`] for bytes that are no
+/// readable picture, and the [`Units::check`], [`underlay_rect`] and
+/// [`resolve_opacity`] refusals for a bad transform or blend.
+async fn load_underlay(state: &AppState, args: &UnderlayParams) -> Result<Underlay, CyberError> {
+    let fetched = state.fetch_source(&args.source).await?;
+    let image = decode_image(&fetched.bytes)?;
+    let units = to_overlay_units(args.units);
+    units.check()?;
+    let rect = underlay_rect(&units, &image)?;
+    Ok(Underlay {
+        image,
+        units,
+        opacity: resolve_opacity(args.opacity)?,
+        rect,
     })
 }
 
@@ -626,19 +1017,23 @@ fn checked_indices(
 
 /// The call's resolved arguments: projection, resolution and style through
 /// the render settings' own validators, bounds and highlights against the
-/// map.
+/// map, and the overlay parameters checked and normalised.
 ///
 /// # Errors
 ///
 /// [`parse_projection`], [`RenderSettings::set_resolution`],
 /// [`RenderSettings::set_topdown_style`], [`resolve_bounds`] and
-/// [`resolve_highlight`]'s errors.
+/// [`resolve_highlight`]'s errors, plus the [`check_overlays`],
+/// [`resolve_grid`], [`resolve_label_scale`] and [`resolve_annotations`]
+/// refusals.
 fn resolve_request(
     settings: &RenderSettings,
     args: &RenderTopdownParams,
     map: &Map,
+    underlay: Option<Underlay>,
 ) -> Result<Request, CyberError> {
     let projection = parse_projection(args.projection.as_deref())?;
+    check_overlays(args, projection)?;
     let mut probe = settings.clone();
     probe.set_resolution(
         args.width.unwrap_or(settings.width),
@@ -656,12 +1051,17 @@ fn resolve_request(
         width: probe.width,
         height: probe.height,
         style,
-        bounds: resolve_bounds(args.bounds.as_ref(), map)?,
+        bounds: resolve_bounds(args.bounds.as_ref(), map, underlay.as_ref().map(|u| u.rect))?,
         background: background_pixel(&settings.background),
         show_things: args.show_things.map_or(settings.show_things, Switch::from),
         show_vertices: args.show_vertices.unwrap_or(false).into(),
         fill_sectors: args.fill_sectors.unwrap_or(false).into(),
         highlight: resolve_highlight(args.highlight.as_ref(), map)?,
+        underlay,
+        grid: resolve_grid(args.grid)?,
+        labels: resolve_labels(args.labels.as_ref()),
+        annotations: resolve_annotations(args.annotations.as_deref())?,
+        label_scale: resolve_label_scale(args.label_scale, probe.width)?,
     })
 }
 
@@ -725,6 +1125,8 @@ struct Scene<'render> {
     view: View,
     /// The pixels so far.
     canvas: Canvas,
+    /// What the render skipped or adjusted, for the result's `notes`.
+    notes: Vec<String>,
 }
 
 impl Scene<'_> {
@@ -801,8 +1203,16 @@ impl Scene<'_> {
     }
 }
 
-/// Paints the whole top-down view: fills, lines, vertices, things.
+/// Paints the whole top-down view in order: background (already the
+/// canvas ground), underlay, grid, sector fills, lines, vertices, things
+/// with their highlights, then the labels and annotations on top.
 fn draw_topdown(scene: &mut Scene<'_>, request: &Request) {
+    if let Some(underlay) = request.underlay.as_ref() {
+        paint_underlay(scene, underlay);
+    }
+    if let Some(spacing) = request.grid {
+        paint_grid(scene, spacing);
+    }
     if request.fill_sectors.is_on() {
         paint_sector_fills(scene, request);
     }
@@ -813,6 +1223,134 @@ fn draw_topdown(scene: &mut Scene<'_>, request: &Request) {
     if request.show_things.is_on() {
         paint_thing_marks(scene, request);
     }
+    if request.labels.any() {
+        paint_labels(scene, request);
+    }
+    paint_annotations(scene, request);
+}
+
+/// Draws the `underlay`: every output pixel is inverted through the
+/// fitted [`View`] to a world point, mapped back into image pixels by
+/// [`Units::to_image`] and nearest-neighbour sampled; the texel blends
+/// over the background at `opacity` percent of its own alpha. Pixels
+/// outside the image keep what was painted there.
+fn paint_underlay(scene: &mut Scene<'_>, underlay: &Underlay) {
+    let percent = i64::from(underlay.opacity.min(MAX_OPACITY));
+    for row in 0..i64::from(scene.canvas.height()) {
+        for col in 0..i64::from(scene.canvas.width()) {
+            paint_underlay_pixel(scene, underlay, percent, (col, row));
+        }
+    }
+}
+
+/// One [`paint_underlay`] output pixel, dropping everything the mapping
+/// or the image cannot answer for.
+fn paint_underlay_pixel(scene: &mut Scene<'_>, underlay: &Underlay, percent: i64, at: Pt) {
+    let (x, y) = scene.view.unproject(at.0, at.1);
+    let Some(texel) = underlay.units.to_image(x, y).and_then(|(px, py)| {
+        underlay
+            .image
+            .get(u32::try_from(px).ok()?, u32::try_from(py).ok()?)
+    }) else {
+        return;
+    };
+    let [red, green, blue, alpha] = texel;
+    let mixed = scale_alpha(alpha, percent);
+    if mixed == 0_u8 {
+        return;
+    }
+    scene.canvas.blend(at.0, at.1, [red, green, blue, mixed]);
+}
+
+/// `alpha` scaled to `percent` percent, rounded; `percent` is `0..=100`.
+fn scale_alpha(alpha: u8, percent: i64) -> u8 {
+    let lifted = i64::from(alpha)
+        .saturating_mul(percent)
+        .saturating_add(50_i64)
+        .checked_div(100_i64)
+        .unwrap_or(0_i64);
+    u8::try_from(lifted).unwrap_or(0_u8)
+}
+
+/// Draws the map-unit grid: a line at every multiple of `spacing` across
+/// the visible world, every [`GRID_MAJOR_EVERY`]th one in the major
+/// colour. A spacing that measures under [`MIN_GRID_PIXELS`] pixels on
+/// screen is skipped with a [`Scene::notes`] line instead of mud.
+fn paint_grid(scene: &mut Scene<'_>, spacing: i64) {
+    let pixels = scene.view.scale(spacing);
+    if pixels < MIN_GRID_PIXELS {
+        scene.notes.push(format!(
+            "grid skipped: {spacing} map units measure {pixels} pixels at this zoom; use a \
+             coarser spacing or a larger output"
+        ));
+        return;
+    }
+    let (left, top, right, bottom) = grid_frame(scene);
+    for k in left.div_euclid(spacing)..=right.div_euclid(spacing) {
+        let line = GridLine {
+            at: k.saturating_mul(spacing),
+            vertical: true,
+            low: bottom,
+            high: top,
+        };
+        paint_grid_line(scene, &line, k);
+    }
+    for k in bottom.div_euclid(spacing)..=top.div_euclid(spacing) {
+        let line = GridLine {
+            at: k.saturating_mul(spacing),
+            vertical: false,
+            low: left,
+            high: right,
+        };
+        paint_grid_line(scene, &line, k);
+    }
+}
+
+/// The world rectangle the whole canvas covers, as `(left, top, right,
+/// bottom)`: the fitted view read at the canvas corners.
+fn grid_frame(scene: &Scene<'_>) -> (i64, i64, i64, i64) {
+    let (left, top) = scene.view.unproject(0, 0);
+    let (right, bottom) = scene.view.unproject(
+        i64::from(scene.canvas.width().saturating_sub(1)),
+        i64::from(scene.canvas.height().saturating_sub(1)),
+    );
+    (left, top, right, bottom)
+}
+
+/// One grid line's placement: the world coordinate it runs along, the
+/// span it covers on the other axis, and which axis is which.
+struct GridLine {
+    /// The fixed coordinate: `k * spacing` map units.
+    at: i64,
+    /// Whether [`at`](Self::at) measures along `x` (a vertical line) or
+    /// along `y`.
+    vertical: bool,
+    /// The span's lower world coordinate on the other axis.
+    low: i64,
+    /// The span's higher world coordinate on the other axis.
+    high: i64,
+}
+
+/// Draws one grid line, in the [`GRID_MAJOR`] colour when its multiple
+/// index `k` is a full [`GRID_MAJOR_EVERY`]th step, [`GRID_MINOR`] else.
+fn paint_grid_line(scene: &mut Scene<'_>, line: &GridLine, k: i64) {
+    let colour = if k.rem_euclid(GRID_MAJOR_EVERY) == 0_i64 {
+        GRID_MAJOR
+    } else {
+        GRID_MINOR
+    };
+    let (from, to) = if line.vertical {
+        (
+            scene.view.point(line.at, line.low),
+            scene.view.point(line.at, line.high),
+        )
+    } else {
+        (
+            scene.view.point(line.low, line.at),
+            scene.view.point(line.high, line.at),
+        )
+    };
+    scene.canvas.line(from, to, colour);
 }
 
 /// Paints the whole isometric wireframe: height-aware lines and thing
@@ -921,6 +1459,149 @@ fn paint_one_thing(scene: &mut Scene<'_>, mark: &Thing, index: usize, request: &
     scene.canvas.line(center, tip, rgba);
 }
 
+/// Draws every requested element's number, centred on its anchor, after
+/// the map itself so the text always reads on top.
+fn paint_labels(scene: &mut Scene<'_>, request: &Request) {
+    if request.labels.linedefs.is_on() {
+        paint_linedef_labels(scene, request);
+    }
+    if request.labels.sectors.is_on() {
+        paint_sector_labels(scene, request);
+    }
+    if request.labels.vertices.is_on() {
+        paint_vertex_labels(scene, request);
+    }
+    if request.labels.things.is_on() {
+        paint_thing_labels(scene, request);
+    }
+}
+
+/// Draws one centred overlay number in the label colour.
+fn label_number(scene: &mut Scene<'_>, at: Pt, index: usize, request: &Request) {
+    let style = TextStyle {
+        colour: LABEL_COLOUR,
+        outline: OUTLINE_COLOUR,
+        scale: request.label_scale,
+    };
+    draw_text(&mut scene.canvas, at, &index.to_string(), style);
+}
+
+/// Draws every linedef's index at its midpoint; a dangling vertex skips.
+fn paint_linedef_labels(scene: &mut Scene<'_>, request: &Request) {
+    let map = scene.map;
+    for (index, line) in map.linedefs.iter().enumerate() {
+        if let Some((from, to)) = scene.line_pixels(line) {
+            label_number(
+                scene,
+                (midpoint(from.0, to.0), midpoint(from.1, to.1)),
+                index,
+                request,
+            );
+        }
+    }
+}
+
+/// Draws every sector's index at a point guaranteed inside it.
+fn paint_sector_labels(scene: &mut Scene<'_>, request: &Request) {
+    for sector in 0..scene.map.sectors.len() {
+        let edges = scene.sector_edges(sector);
+        if let Some(at) = sector_label_point(&edges) {
+            label_number(scene, at, sector, request);
+        }
+    }
+}
+
+/// Draws every vertex's index beside its mark.
+fn paint_vertex_labels(scene: &mut Scene<'_>, request: &Request) {
+    let map = scene.map;
+    for (index, mark) in map.vertices.iter().enumerate() {
+        let center = scene.view.point(i64::from(mark.x), i64::from(mark.y));
+        label_number(
+            scene,
+            offset_pt(center, VERTEX_LABEL_OFFSET),
+            index,
+            request,
+        );
+    }
+}
+
+/// Draws every thing's index beside its marker, a scaled radius away.
+fn paint_thing_labels(scene: &mut Scene<'_>, request: &Request) {
+    let map = scene.map;
+    for (index, mark) in map.things.iter().enumerate() {
+        let center = scene.view.point(i64::from(mark.x), i64::from(mark.y));
+        let (_, radius) = thing_visual(scene.defs, mark.kind);
+        let away = scene
+            .view
+            .scale(i64::from(radius))
+            .max(MIN_THING_RADIUS)
+            .saturating_add(VERTEX_HALF);
+        label_number(scene, offset_pt(center, away), index, request);
+    }
+}
+
+/// A point guaranteed inside the sector polygon drawn as pixel `edges`:
+/// the middle row of the bounding box is scanned with the even-odd rule,
+/// the longest inside interval wins and its midpoint is the anchor; a
+/// polygon the row misses entirely falls back to its first vertex. An
+/// empty edge list has no anchor.
+fn sector_label_point(edges: &[Edge]) -> Option<Pt> {
+    let (min_y, max_y) = edge_rows(edges)?;
+    let row = midpoint(min_y, max_y);
+    let mut crossings: Vec<i64> = edges
+        .iter()
+        .filter(|edge| (edge.0.1 > row) != (edge.1.1 > row))
+        .map(|edge| intersect_x(edge.0, edge.1, row))
+        .collect();
+    crossings.sort_unstable();
+    longest_interval(&crossings)
+        .map(|(lo, hi)| (midpoint(lo, hi), row))
+        .or_else(|| edges.first().map(|edge| edge.0))
+}
+
+/// The `(lowest, highest)` endpoint rows over `edges`, `None` when empty.
+fn edge_rows(edges: &[Edge]) -> Option<(i64, i64)> {
+    let rows = edges.iter().flat_map(|edge| [edge.0.1, edge.1.1]);
+    let min = rows.clone().min()?;
+    Some((min, rows.max()?))
+}
+
+/// The widest `(lo, hi)` interval between consecutive pairs of the sorted
+/// `crossings`, `None` when fewer than two of them exist.
+fn longest_interval(crossings: &[i64]) -> Option<(i64, i64)> {
+    let mut best: Option<(i64, i64)> = None;
+    for pair in crossings.chunks_exact(2) {
+        let Ok(&[lo, hi]) = <&[i64; 2]>::try_from(pair) else {
+            continue;
+        };
+        if wider_than((lo, hi), best) {
+            best = Some((lo, hi));
+        }
+    }
+    best
+}
+
+/// Whether the interval `one` is wider than `best` (or `best` is unset).
+const fn wider_than(one: (i64, i64), best: Option<(i64, i64)>) -> bool {
+    match best {
+        None => true,
+        Some((b_lo, b_hi)) => one.1.saturating_sub(one.0) > b_hi.saturating_sub(b_lo),
+    }
+}
+
+/// Draws every annotation's text centred on its world position.
+fn paint_annotations(scene: &mut Scene<'_>, request: &Request) {
+    for note in &request.annotations {
+        let at = scene.view.point(note.x, note.y);
+        let style = TextStyle {
+            colour: note.colour,
+            outline: OUTLINE_COLOUR,
+            scale: request.label_scale,
+        };
+        draw_text(&mut scene.canvas, at, &note.text, style);
+    }
+}
+
 /// Draws the isometric wireframe of every linedef.
 fn paint_iso_lines(scene: &mut Scene<'_>, request: &Request) {
     let map = scene.map;
@@ -1003,9 +1684,19 @@ fn paint_one_iso_thing(scene: &mut Scene<'_>, mark: &Thing, index: usize, reques
     scene.canvas.fill_circle(center, ISO_THING_RADIUS, rgba);
 }
 
-/// `render_topdown`' picture: the painted canvas and the `transform` to
-/// report (the isometric projection returns `None`).
-fn paint_map(map: &Map, defs: &Definitions, request: &Request) -> (Canvas, Option<View>) {
+/// The finished pixels of one `render_topdown`: the canvas, the `transform`
+/// to report (the isometric projection returns `None`) and the notes.
+struct Painted {
+    /// The pixels.
+    canvas: Canvas,
+    /// The fitted top-down mapping, `None` for isometric.
+    view: Option<View>,
+    /// What the render skipped or adjusted, for the result's `notes`.
+    notes: Vec<String>,
+}
+
+/// Paints a whole `render_topdown` picture in the documented order.
+fn paint_map(map: &Map, defs: &Definitions, request: &Request) -> Painted {
     let (plane, reported) = match request.projection {
         Projection::Topdown => (bounds_plane(&request.bounds), true),
         Projection::Isometric => (iso_plane(&request.bounds, height_span(map)), false),
@@ -1016,12 +1707,18 @@ fn paint_map(map: &Map, defs: &Definitions, request: &Request) -> (Canvas, Optio
         defs,
         view,
         canvas: Canvas::new(request.width, request.height, request.background),
+        notes: Vec::new(),
     };
     match request.projection {
         Projection::Topdown => draw_topdown(&mut scene, request),
         Projection::Isometric => draw_isometric(&mut scene, request),
     }
-    (scene.canvas, reported.then_some(view))
+    let Scene { canvas, notes, .. } = scene;
+    Painted {
+        canvas,
+        view: reported.then_some(view),
+        notes,
+    }
 }
 
 /// The session half of one `render_topdown` call: the map, its thing
@@ -1037,7 +1734,8 @@ struct Prepared {
 }
 
 /// [`Cyberdemon::render_topdown`]'s result: the fitted `transform` (null
-/// for the isometric wireframe) and the published `PNG` asset.
+/// for the isometric wireframe), the underlay as placed (null without
+/// one), the notes and the published `PNG` asset.
 #[derive(Serialize)]
 struct TopdownReport {
     /// The rendered map's name.
@@ -1050,8 +1748,53 @@ struct TopdownReport {
     height: u32,
     /// The top-down pixel-to-world mapping, `null` for isometric.
     transform: Option<TransformReport>,
+    /// The underlay picture and where it stands, `null` without one.
+    underlay: Option<UnderlayReport>,
+    /// What the render skipped or adjusted, one line each.
+    notes: Vec<String>,
     /// The published overview.
     asset: AssetRef,
+}
+
+/// The `underlay` object of a [`TopdownReport`].
+#[derive(Serialize)]
+struct UnderlayReport {
+    /// The decoded picture's width in image pixels.
+    width: u32,
+    /// The decoded picture's height in image pixels.
+    height: u32,
+    /// The map-space rectangle the picture covers.
+    map_bounds: BoundsReport,
+}
+
+/// A `(min_x, min_y, max_x, max_y)` world rectangle.
+#[derive(Serialize)]
+struct BoundsReport {
+    /// World `x` of the west edge.
+    min_x: i64,
+    /// World `y` of the south edge.
+    min_y: i64,
+    /// World `x` of the east edge.
+    max_x: i64,
+    /// World `y` of the north edge.
+    max_y: i64,
+}
+
+impl UnderlayReport {
+    /// The report line for the placed `underlay`.
+    const fn of(underlay: &Underlay) -> Self {
+        let (min_x, min_y, max_x, max_y) = underlay.rect;
+        Self {
+            width: underlay.image.width,
+            height: underlay.image.height,
+            map_bounds: BoundsReport {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            },
+        }
+    }
 }
 
 /// The `transform` object: `px = offset_x + x * scale_num / scale_den`,
@@ -1088,21 +1831,30 @@ fn load_scene(state: &AppState, requested: Option<&str>) -> Result<Prepared, Cyb
     })
 }
 
-/// `render_topdown`' work: resolve, paint, gamma, encode, publish.
+/// `render_topdown`' work: check the overlays, fetch and decode the
+/// underlay before any lock, then resolve, paint, gamma, encode, publish.
 ///
 /// # Errors
 ///
-/// [`load_scene`] and [`resolve_request`]'s errors,
-/// [`encode_png`]' and [`AppState::publish`]' failures.
-fn topdown_report(
+/// [`load_scene`] and [`resolve_request`]'s errors, [`load_underlay`]'s
+/// fetch, decode and transform refusals, [`encode_png`]' and
+/// [`AppState::publish`]' failures.
+async fn topdown_report(
     state: &AppState,
     args: &RenderTopdownParams,
 ) -> Result<TopdownReport, CyberError> {
+    check_overlays(args, parse_projection(args.projection.as_deref())?)?;
+    let underlay = match args.underlay.as_ref() {
+        Some(wanted) => Some(load_underlay(state, wanted).await?),
+        None => None,
+    };
     let prepared = load_scene(state, args.map.as_deref())?;
-    let request = resolve_request(&prepared.settings, args, &prepared.map)?;
-    let (mut canvas, view) = paint_map(&prepared.map, &prepared.defs, &request);
-    canvas.apply_gamma(&gamma_table(prepared.settings.gamma));
-    let png = encode_png(&canvas.to_rgba_image(), None)?;
+    let request = resolve_request(&prepared.settings, args, &prepared.map, underlay)?;
+    let mut painted = paint_map(&prepared.map, &prepared.defs, &request);
+    painted
+        .canvas
+        .apply_gamma(&gamma_table(prepared.settings.gamma));
+    let png = encode_png(&painted.canvas.to_rgba_image(), None)?;
     let asset = state.publish(
         &format!("{}{OVERVIEW_SUFFIX}", prepared.map.name),
         PNG_MIME,
@@ -1113,7 +1865,9 @@ fn topdown_report(
         projection: request.projection.as_str(),
         width: request.width,
         height: request.height,
-        transform: view.map(View::report),
+        transform: painted.view.map(View::report),
+        underlay: request.underlay.as_ref().map(UnderlayReport::of),
+        notes: painted.notes,
         asset,
     })
 }
@@ -1880,6 +2634,45 @@ const MARK_WHITE: Rgba = [255, 255, 255, 255];
 /// The `3x3` vertex marks.
 const VERTEX_MARK: Rgba = [255, 208, 0, 255];
 
+/// Smallest `grid` spacing, in map units.
+const MIN_GRID: i64 = 8;
+/// Largest `grid` spacing, in map units.
+const MAX_GRID: i64 = 1_024;
+/// A `grid` spacing measuring under this many pixels on screen is skipped.
+const MIN_GRID_PIXELS: i64 = 4;
+/// Every `GRID_MAJOR_EVERY`th grid line draws in the major colour.
+const GRID_MAJOR_EVERY: i64 = 8;
+/// The grid's minor lines.
+const GRID_MINOR: Rgba = [42, 42, 42, 255];
+/// The grid's every-[`GRID_MAJOR_EVERY`]th lines.
+const GRID_MAJOR: Rgba = [60, 60, 60, 255];
+/// The element-index label text.
+const LABEL_COLOUR: Rgba = [255, 255, 128, 255];
+/// The outline under every overlay glyph.
+const OUTLINE_COLOUR: Rgba = [0, 0, 0, 255];
+/// The `annotations` default colour.
+const ANNOTATION_COLOUR: Rgba = [255, 255, 255, 255];
+/// The `underlay.opacity` default, percent.
+const DEFAULT_OPACITY: u8 = 50;
+/// The largest `underlay.opacity`, percent.
+const MAX_OPACITY: u8 = 100;
+/// The most `annotations` rows one call may carry.
+const MAX_ANNOTATIONS: usize = 64;
+/// The most characters one `annotations` row may carry.
+const MAX_ANNOTATION_CHARS: usize = 32;
+/// The smallest `label_scale`.
+const MIN_LABEL_SCALE: u32 = 1;
+/// The largest `label_scale`.
+const MAX_LABEL_SCALE: u32 = 4;
+/// The `label_scale` default on a narrow output.
+const DEFAULT_LABEL_SCALE: u32 = 1;
+/// The `label_scale` default once the output is wide.
+const WIDE_LABEL_SCALE: u32 = 2;
+/// The output width at or above which labels default to [`WIDE_LABEL_SCALE`].
+const WIDE_LABEL_THRESHOLD: u32 = 1_024;
+/// How far a vertex label stands off its mark, in pixels.
+const VERTEX_LABEL_OFFSET: i64 = 4;
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -1930,13 +2723,13 @@ impl Cyberdemon {
 
     /// Renders a map overview as a `PNG` asset.
     #[tool(
-        description = "Renders a map overview and publishes it as a PNG asset; returns {map, projection, width, height, transform, asset}. projection \"topdown\" (default) draws the flat north-up line map; projection \"isometric\" draws a 2:1 wireframe (screen = (x - y, (x + y) / 2 - z), floor edges per side, ceiling and verticals on one-sided lines, no hidden-line removal) and reports transform null. width/height default to the render settings. bounds {min_x, min_y, max_x, max_y} frames a world rectangle (default: the map bounds padded by 32 units; an empty map without bounds fails invalid_argument, as do min >= max). style \"editor\" colours one-sided #C0C0C0, two-sided #707070, special-bearing #6A8CFF; style \"automap\" draws the in-game map: one-sided (and secret) #FC0000, floor-height change #BC7848, ceiling-height change #FCFC00, flat two-sided #808080, dontdraw lines skipped. fill_sectors first fills each sector with a grey of half its light. show_vertices adds a 3x3 #FFD000 mark per vertex; show_things (default from the settings) marks each thing with a circle of its definition radius (unknown types: 16) in its category colour and a facing tick. highlight {linedefs, sectors, things, vertices} draws those elements as highlights (red 3px lines, a red sector tint, white thing outlines); an index past the end of its table fails not_found. For topdown, transform carries {scale_num, scale_den, offset_x, offset_y} with px = offset_x + x*scale_num/scale_den and py = offset_y - y*scale_num/scale_den (both floor-rounded): convert a pixel back with x = (px - offset_x)*scale_den/scale_num and y = (offset_y - py)*scale_den/scale_num. The gamma render setting is applied to the output."
+        description = "Renders a map overview and publishes it as a PNG asset; returns {map, projection, width, height, transform, underlay, notes, asset}. projection \"topdown\" (default) draws the flat north-up line map; projection \"isometric\" draws a 2:1 wireframe (screen = (x - y, (x + y) / 2 - z), floor edges per side, ceiling and verticals on one-sided lines, no hidden-line removal) and reports transform null. width/height default to the render settings. bounds {min_x, min_y, max_x, max_y} frames a world rectangle (default: the map bounds unioned with the underlay's map rectangle, padded by 32 units; an empty map without bounds and without an underlay fails invalid_argument, as do min >= max). style \"editor\" colours one-sided #C0C0C0, two-sided #707070, special-bearing #6A8CFF; style \"automap\" draws the in-game map: one-sided (and secret) #FC0000, floor-height change #BC7848, ceiling-height change #FCFC00, flat two-sided #808080, dontdraw lines skipped. fill_sectors first fills each sector with a grey of half its light. show_vertices adds a 3x3 #FFD000 mark per vertex; show_things (default from the settings) marks each thing with a circle of its definition radius (unknown types: 16) in its category colour and a facing tick. highlight {linedefs, sectors, things, vertices} draws those elements as highlights (red 3px lines, a red sector tint, white thing outlines); an index past the end of its table fails not_found. For topdown, transform carries {scale_num, scale_den, offset_x, offset_y} with px = offset_x + x*scale_num/scale_den and py = offset_y - y*scale_num/scale_den (both floor-rounded): convert a pixel back with x = (px - offset_x)*scale_den/scale_num and y = (offset_y - py)*scale_den/scale_num. Overlays are topdown-only: underlay {source, units, opacity} draws a reference picture (PNG/JPEG/GIF/BMP by path, file:// or http(s):// URL, or an asset URL) under the map; units {scale_num, scale_den, origin_x, origin_y, flip_y} means exactly what build_map_from_plan's units means, so image pixel (px, py) sits at x = origin_x + px*scale_num/scale_den and y = origin_y - py*scale_num/scale_den (plus when flip_y is false) and the sketch lines up with the map built from it; opacity (default 50, 0..=100 percent) blends the picture over the background scaled by each texel's alpha. grid (8..=1024 map units) draws a coordinate grid under the map, minor lines #2A2A2A and every 8th #3C3C3C; a spacing under 4 pixels on screen is skipped and reported in notes. labels {sectors, linedefs, things, vertices} draws element indices in #FFFF80 with a black outline: sectors at a point guaranteed inside them, linedefs at their midpoint, things and vertices beside their marks. annotations [{x, y, text, color}] draws free text (uppercased, characters outside the 5x7 font as ?, at most 64 rows of 32 characters, default colour #FFFFFF) centred on world coordinates. label_scale (1..=4) magnifies all overlay text (default 2 when the output is at least 1024 pixels wide, else 1). Any overlay parameter with projection \"isometric\" fails invalid_argument; an underlay source that is no readable picture fails format_error. Results report underlay {width, height, map_bounds} (null without one) and notes []. The gamma render setting is applied to the output."
     )]
-    fn render_topdown(
+    async fn render_topdown(
         &self,
         Parameters(args): Parameters<RenderTopdownParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match topdown_report(self.state(), &args) {
+        match topdown_report(self.state(), &args).await {
             Ok(report) => ok(&report),
             Err(error) => fail(&error),
         }
@@ -2104,17 +2897,26 @@ mod tests {
     }
 
     use super::{
-        BoundsParams, HighlightParams, Highlights, MINIMAP_FIT_PAD, Plane, PointParams, Projection,
-        RenderMinimapParams, RenderTopdownParams, Request, Scene, background_pixel, bounds_plane,
-        editor_line_color, fit, height_span, iso_plane, light_grey, paint_map, paint_minimap,
-        parse_projection, resolve_bounds, resolve_centre, resolve_highlight, resolve_minimap,
-        resolve_radius, resolve_request, resolve_size,
+        Annotation, AnnotationParams, Bounds, BoundsParams, Edge, GRID_MAJOR, GRID_MINOR, GridLine,
+        HighlightParams, Highlights, LABEL_COLOUR, Labels, LabelsParams, MINIMAP_FIT_PAD, Plane,
+        PointParams, Projection, RenderMinimapParams, RenderTopdownParams, Request, Scene,
+        Underlay, View, background_pixel, bounds_plane, check_overlays, editor_line_color, fit,
+        grid_frame, height_span, iso_plane, light_grey, paint_grid_line, paint_map, paint_minimap,
+        parse_projection, resolve_annotations, resolve_bounds, resolve_centre, resolve_grid,
+        resolve_highlight, resolve_label_scale, resolve_labels, resolve_minimap, resolve_opacity,
+        resolve_radius, resolve_request, resolve_size, scale_alpha, sector_label_point,
+        to_overlay_units, underlay_rect,
     };
     use crate::defs::definitions_for;
+    use crate::gfx::image::RgbaImage;
     use crate::gfx::palette::Palette;
+    use crate::plan::Units;
+    use crate::render::canvas::intersect_x;
     use crate::render::{
-        AutomapColors, Canvas, PlayerMark, Rgba, Switch, category_color, scale_down, thing_visual,
+        AutomapColors, Canvas, PlayerMark, Pt, Rgba, Switch, category_color, scale_down,
+        thing_visual,
     };
+    use crate::tools::plan::params::UnitsParam;
     use crate::wad::game::Game;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
     use crate::wad::{LumpName, MapFormat};
@@ -2221,13 +3023,14 @@ mod tests {
     /// standing in for it when given.
     fn automap_colour(map: &Map, index: usize, with: Option<&Linedef>) -> Option<Rgba> {
         let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-        let bounds = resolve_bounds(None, map).expect("the fixture map bounds itself");
+        let bounds = resolve_bounds(None, map, None).expect("the fixture map bounds itself");
         let view = fit(&bounds_plane(&bounds), 64, 64);
         let scene = Scene {
             map,
             defs: &defs,
             view,
             canvas: Canvas::new(8, 8, [0_u8, 0, 0, 255]),
+            notes: Vec::new(),
         };
         let line = match with {
             Some(replacement) => replacement,
@@ -2243,20 +3046,24 @@ mod tests {
             width: 200,
             height: 120,
             style: TopdownStyle::Editor,
-            bounds: resolve_bounds(None, map).expect("the fixture map bounds itself"),
+            bounds: resolve_bounds(None, map, None).expect("the fixture map bounds itself"),
             background: [0_u8, 0, 0, 255],
             show_things: Switch::new(true),
             show_vertices: Switch::new(false),
             fill_sectors: Switch::new(false),
             highlight: Highlights::default(),
+            underlay: None,
+            grid: None,
+            labels: Labels::default(),
+            annotations: Vec::new(),
+            label_scale: 1_u32,
         }
     }
 
     /// Paint the `map` and read one pixel of the result.
     fn pixel_of(map: &Map, request: &Request, x: u32, y: u32) -> Option<Rgba> {
         let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-        let (canvas, _) = paint_map(map, &defs, request);
-        canvas.pixel(x, y)
+        paint_map(map, &defs, request).canvas.pixel(x, y)
     }
 
     #[test]
@@ -2329,7 +3136,7 @@ mod tests {
     #[test]
     fn bounds_default_pads_and_explicit_refuses_flattened_rectangles() {
         let map = two_rooms();
-        let padded = resolve_bounds(None, &map).expect("the default frames the map");
+        let padded = resolve_bounds(None, &map, None).expect("the default frames the map");
         assert_eq!(
             (padded.min_x, padded.max_x, padded.min_y, padded.max_y),
             (-32_i64, 544, -32, 288),
@@ -2341,14 +3148,14 @@ mod tests {
             max_x: 0,
             max_y: 100,
         };
-        let error = resolve_bounds(Some(&flat), &map).expect_err("min_x == max_x");
+        let error = resolve_bounds(Some(&flat), &map, None).expect_err("min_x == max_x");
         assert_eq!(error.code(), "invalid_argument", "flat bounds code");
         assert!(
             error.to_string().contains("min_x < max_x"),
             "the message states the rule: {error}"
         );
         let empty = Map::default();
-        let missing = resolve_bounds(None, &empty).expect_err("nothing to frame");
+        let missing = resolve_bounds(None, &empty, None).expect_err("nothing to frame");
         assert_eq!(missing.code(), "invalid_argument", "empty map code");
         assert!(
             missing.to_string().contains("bounds"),
@@ -2493,7 +3300,7 @@ mod tests {
     fn iso_planes_span_the_projected_bounds_and_heights() {
         let map = two_rooms();
         assert_eq!(height_span(&map), (0_i64, 128), "floor 0, ceiling 128");
-        let bounds = resolve_bounds(None, &map).expect("the default bounds");
+        let bounds = resolve_bounds(None, &map, None).expect("the default bounds");
         let plane = iso_plane(&bounds, height_span(&map));
         assert_eq!(plane.min_u, -320, "west corner minus north");
         assert_eq!(plane.max_u, 576, "east corner minus south");
@@ -2564,7 +3371,9 @@ mod tests {
         let mut request = request_for(&map);
         request.projection = Projection::Isometric;
         let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-        let (canvas, view) = paint_map(&map, &defs, &request);
+        let painted = paint_map(&map, &defs, &request);
+        let canvas = painted.canvas;
+        let view = painted.view;
         assert!(view.is_none(), "isometric reports no transform");
         let blank = [0_u8, 0, 0, 255];
         let marks: usize = (0..canvas.height())
@@ -2579,7 +3388,7 @@ mod tests {
         let map = two_rooms();
         let settings = RenderSettings::default();
         let plain: RenderTopdownParams = serde_json::from_value(json!({})).expect("all optional");
-        let request = resolve_request(&settings, &plain, &map).expect("defaults resolve");
+        let request = resolve_request(&settings, &plain, &map, None).expect("defaults resolve");
         assert_eq!(
             (request.width, request.height),
             (640_u32, 400),
@@ -2598,7 +3407,7 @@ mod tests {
             "fill_sectors": true,
         }))
         .expect("the override object");
-        let overridden = resolve_request(&settings, &over, &map).expect("valid overrides");
+        let overridden = resolve_request(&settings, &over, &map, None).expect("valid overrides");
         assert_eq!(
             (overridden.width, overridden.height),
             (64_u32, 64),
@@ -2611,12 +3420,569 @@ mod tests {
 
         let bad_size: RenderTopdownParams =
             serde_json::from_value(json!({ "width": 8_u64 })).expect("one field");
-        let size_error = resolve_request(&settings, &bad_size, &map).expect_err("below the floor");
+        let size_error =
+            resolve_request(&settings, &bad_size, &map, None).expect_err("below the floor");
         assert_eq!(size_error.code(), "invalid_argument", "tiny width code");
         let bad_style: RenderTopdownParams =
             serde_json::from_value(json!({ "style": "wireframe" })).expect("one field");
-        let style_error = resolve_request(&settings, &bad_style, &map).expect_err("not a style");
+        let style_error =
+            resolve_request(&settings, &bad_style, &map, None).expect_err("not a style");
         assert_eq!(style_error.code(), "invalid_argument", "bad style code");
+    }
+
+    /// An `underlay.units` wire with `scale_num` `8` and the `y` mirror.
+    fn sketch_units() -> UnitsParam {
+        UnitsParam {
+            scale_num: 8_i64,
+            flip_y: true,
+            ..UnitsParam::default()
+        }
+    }
+
+    /// A `50x40` opaque picture: the left half red, the right half blue.
+    fn half_half_image() -> RgbaImage {
+        let mut row = Vec::new();
+        for _col in 0..25_u32 {
+            row.extend_from_slice(&[255_u8, 0, 0, 255]);
+        }
+        for _col in 0..25_u32 {
+            row.extend_from_slice(&[0, 0, 255, 255]);
+        }
+        let mut pixels = Vec::new();
+        for _row in 0..40_u32 {
+            pixels.extend_from_slice(&row);
+        }
+        RgbaImage::new(50, 40, pixels).expect("the buffer matches the shape")
+    }
+
+    /// The placed `50x40` underlay at `opacity` percent.
+    fn test_underlay(opacity: u8) -> Underlay {
+        Underlay {
+            image: half_half_image(),
+            units: to_overlay_units(Some(sketch_units())),
+            opacity,
+            rect: (0_i64, -320_i64, 400_i64, 0_i64),
+        }
+    }
+
+    #[test]
+    fn the_overlay_units_transform_is_unsnapped_and_the_rect_frames_the_image() {
+        let units = to_overlay_units(Some(sketch_units()));
+        assert_eq!(units.grid, 1_i64, "picture sampling never snaps");
+        let image = half_half_image();
+        assert_eq!(
+            underlay_rect(&units, &image).expect("the corners fit"),
+            (0_i64, -320, 400, 0),
+            "8 units per pixel with the mirror runs south"
+        );
+        assert_eq!(
+            underlay_rect(&Units::default(), &image).expect("identity fits"),
+            (0_i64, 0, 50, 40),
+            "the identity maps the raw pixel box"
+        );
+        let wild = Units {
+            scale_num: i64::MAX,
+            ..Units::default()
+        };
+        assert_eq!(
+            underlay_rect(&wild, &image)
+                .expect_err("a corner leaves the range")
+                .code(),
+            "invalid_argument",
+            "an overflowing rectangle is refused"
+        );
+    }
+
+    #[test]
+    fn bounds_union_the_map_with_the_underlay_and_an_underlay_frames_an_empty_map() {
+        let map = two_rooms();
+        let rect = (0_i64, -320, 400, 0);
+        let unioned = resolve_bounds(None, &map, Some(rect)).expect("the union frames");
+        assert_eq!(
+            (unioned.min_x, unioned.max_x, unioned.min_y, unioned.max_y),
+            (-32_i64, 544, -352, 288),
+            "the map reaches east, the picture reaches south"
+        );
+        let empty = Map::default();
+        let picture = resolve_bounds(None, &empty, Some(rect)).expect("an underlay frames");
+        assert_eq!(
+            (picture.min_x, picture.min_y, picture.max_x, picture.max_y),
+            (-32_i64, -352, 432, 32),
+            "the padded picture rectangle alone is enough"
+        );
+        let chosen = BoundsParams {
+            min_x: 0,
+            min_y: 0,
+            max_x: 100,
+            max_y: 100,
+        };
+        let explicit = resolve_bounds(Some(&chosen), &empty, Some(rect)).expect("bounds win");
+        assert_eq!(
+            (explicit.min_x, explicit.max_y),
+            (0_i64, 100),
+            "an explicit box is not unioned"
+        );
+    }
+
+    #[test]
+    fn overlays_are_refused_for_the_isometric_projection_only() {
+        for value in [
+            json!({"grid": 64_i64}),
+            json!({"underlay": {"source": "/tmp/sketch.png"}}),
+            json!({"labels": {"sectors": true}}),
+            json!({"annotations": [{"x": 0_i64, "y": 0_i64, "text": "A"}]}),
+            json!({"label_scale": 2_u64}),
+        ] {
+            let args: RenderTopdownParams = serde_json::from_value(value.clone()).expect("overlay");
+            check_overlays(&args, Projection::Topdown).expect("topdown takes every overlay");
+            let error = check_overlays(&args, Projection::Isometric)
+                .expect_err("isometric refuses the overlay");
+            assert_eq!(error.code(), "invalid_argument", "overlay isometric code");
+            assert!(
+                error
+                    .to_string()
+                    .contains("overlays need the topdown projection"),
+                "the message names the projection: {error}"
+            );
+        }
+        let bare: RenderTopdownParams =
+            serde_json::from_value(json!({"annotations": [], "labels": null})).expect("empties");
+        check_overlays(&bare, Projection::Isometric).expect("nothing asked for nothing");
+    }
+
+    #[test]
+    fn grid_spacing_and_label_scale_check_their_ranges() {
+        assert_eq!(
+            resolve_grid(None).expect("absent draws no grid"),
+            None,
+            "absent"
+        );
+        assert_eq!(
+            resolve_grid(Some(8)).expect("the floor"),
+            Some(8_i64),
+            "the floor passes"
+        );
+        assert_eq!(
+            resolve_grid(Some(1_024)).expect("the ceiling"),
+            Some(1_024),
+            "the ceiling passes"
+        );
+        for bad in [7_i64, 2_048_i64] {
+            let error = resolve_grid(Some(bad)).expect_err("outside the range");
+            assert_eq!(error.code(), "invalid_argument", "grid {bad} code");
+            assert!(
+                error.to_string().contains("8..=1024"),
+                "the message shows the range: {error}"
+            );
+        }
+        assert_eq!(
+            resolve_label_scale(None, 640).expect("a narrow default"),
+            1_u32,
+            "narrow output labels at one"
+        );
+        assert_eq!(
+            resolve_label_scale(None, 1_024).expect("a wide default"),
+            2_u32,
+            "wide output labels at two"
+        );
+        assert_eq!(
+            resolve_label_scale(Some(4), 100).expect("an explicit scale"),
+            4_u32,
+            "the ceiling passes"
+        );
+        for bad in [0_u32, 5_u32] {
+            let error = resolve_label_scale(Some(bad), 640).expect_err("outside the range");
+            assert_eq!(error.code(), "invalid_argument", "scale {bad} code");
+            assert!(
+                error.to_string().contains("1..=4"),
+                "the message shows the range: {error}"
+            );
+        }
+        assert_eq!(
+            resolve_label_scale(Some(2), 4_096).expect("an explicit wide scale"),
+            2_u32,
+            "an explicit scale beats the default"
+        );
+    }
+
+    #[test]
+    fn opacity_defaults_to_half_and_refuses_the_over_hundred() {
+        assert_eq!(resolve_opacity(None).expect("the default"), 50_u8, "half");
+        assert_eq!(
+            resolve_opacity(Some(0)).expect("clear"),
+            0_u8,
+            "clear passes"
+        );
+        assert_eq!(
+            resolve_opacity(Some(100)).expect("solid"),
+            100_u8,
+            "solid passes"
+        );
+        let error = resolve_opacity(Some(101)).expect_err("over the top");
+        assert_eq!(error.code(), "invalid_argument", "opacity code");
+        assert!(
+            error.to_string().contains("0..=100"),
+            "the message shows the range: {error}"
+        );
+    }
+
+    #[test]
+    fn annotations_uppercase_and_both_limits_and_bad_colours_are_refused() {
+        let rows: Vec<AnnotationParams> = serde_json::from_value(json!([
+            {"x": 8_i64, "y": -8_i64, "text": " armoury "},
+            {"x": 0_i64, "y": 0_i64, "text": "X", "color": "#102030"},
+        ]))
+        .expect("two rows");
+        let notes = resolve_annotations(Some(&rows)).expect("valid rows");
+        let first = notes.first().expect("two annotations");
+        assert_eq!(first.text, " ARMOURY ", "the text upper-cases in place");
+        assert_eq!(
+            first.colour,
+            rgb(255, 255, 255),
+            "the default colour is white"
+        );
+        let second = notes.get(1).expect("two annotations");
+        assert_eq!(second.colour, rgb(16, 32, 48), "the given colour");
+        assert!(
+            resolve_annotations(None).expect("absent").is_empty(),
+            "none asked"
+        );
+
+        let long_text = "X".repeat(33_usize);
+        let too_long: Vec<AnnotationParams> =
+            serde_json::from_value(json!([{"x": 0_i64, "y": 0_i64, "text": long_text}]))
+                .expect("one row");
+        let length = resolve_annotations(Some(&too_long)).expect_err("33 characters");
+        assert_eq!(length.code(), "invalid_argument", "long text code");
+        assert!(
+            length.to_string().contains("32"),
+            "the message names the limit: {length}"
+        );
+        let many: Vec<AnnotationParams> = (0_u32..65_u32)
+            .map(|index| AnnotationParams {
+                x: 0,
+                y: 0,
+                text: format!("N{index}"),
+                color: None,
+            })
+            .collect();
+        let count = resolve_annotations(Some(&many)).expect_err("65 rows");
+        assert_eq!(count.code(), "invalid_argument", "row count code");
+        assert!(
+            count.to_string().contains("64"),
+            "the message names the limit: {count}"
+        );
+        let bad_colour: Vec<AnnotationParams> = serde_json::from_value(json!(
+            [{"x": 0_i64, "y": 0_i64, "text": "A", "color": "green"}]
+        ))
+        .expect("one row");
+        assert_eq!(
+            resolve_annotations(Some(&bad_colour))
+                .expect_err("not a hex colour")
+                .code(),
+            "invalid_argument",
+            "bad colour code"
+        );
+    }
+
+    #[test]
+    fn labels_default_off_and_switch_individually() {
+        assert!(!resolve_labels(None).any(), "absent labels draw nothing");
+        let wanted: LabelsParams =
+            serde_json::from_value(json!({"sectors": true, "things": true})).expect("two switches");
+        let some = resolve_labels(Some(&wanted));
+        assert!(
+            some.sectors.is_on() && some.things.is_on(),
+            "the given switches land"
+        );
+        assert!(
+            !some.linedefs.is_on() && !some.vertices.is_on(),
+            "the left-out switches stay off"
+        );
+        assert!(some.any(), "two switches on is on");
+    }
+
+    #[test]
+    fn the_underlay_alpha_scales_by_the_opacity_percent() {
+        assert_eq!(scale_alpha(255, 50), 128, "half of full alpha rounds up");
+        assert_eq!(scale_alpha(255, 0), 0, "nothing stays nothing");
+        assert_eq!(scale_alpha(255, 100), 255, "solid stays solid");
+        assert_eq!(scale_alpha(100, 25), 25, "a quarter of a hundred");
+    }
+
+    /// The closed ring through `points` as edges.
+    fn ring(points: &[Pt]) -> Vec<Edge> {
+        let tail = points.iter().skip(1).copied();
+        let closing = core::iter::once(points.first().copied().expect("a ring has a first point"));
+        tail.chain(closing).zip(points.iter().copied()).collect()
+    }
+
+    /// Whether `at` sits inside the even-odd polygon of `edges`.
+    fn inside_edges(edges: &[Edge], at: Pt) -> bool {
+        let crossings = edges
+            .iter()
+            .filter(|edge| (edge.0.1 > at.1) != (edge.1.1 > at.1))
+            .filter(|edge| intersect_x(edge.0, edge.1, at.1) < at.0)
+            .count();
+        crossings.checked_rem(2_usize) == Some(1_usize)
+    }
+
+    /// The pixels of `canvas` within `radius` of `centre`, off-canvas
+    /// coordinates dropped.
+    fn sample_window(canvas: &Canvas, centre: Pt, radius: i64) -> Vec<Rgba> {
+        let rows = (centre.1.saturating_sub(radius)..=centre.1.saturating_add(radius))
+            .filter_map(|row| u32::try_from(row).ok());
+        let columns = (centre.0.saturating_sub(radius)..=centre.0.saturating_add(radius))
+            .filter_map(|col| u32::try_from(col).ok());
+        rows.flat_map(move |deep| columns.clone().map(move |col| (col, deep)))
+            .filter_map(|(column, deep)| canvas.pixel(column, deep))
+            .collect()
+    }
+
+    #[test]
+    fn sector_label_points_land_inside_concave_polygons() {
+        let l_shape = ring(&[(0, 0), (60, 0), (60, 20), (20, 20), (20, 60), (0, 60)]);
+        let at = sector_label_point(&l_shape).expect("an L has an anchor");
+        assert_eq!(at, (10_i64, 30), "the middle row's only span, centred");
+        assert!(inside_edges(&l_shape, at), "the L anchor is inside");
+        let u_shape = ring(&[
+            (0, 0),
+            (60, 0),
+            (60, 60),
+            (40, 60),
+            (40, 20),
+            (20, 20),
+            (20, 60),
+            (0, 60),
+        ]);
+        let anchor = sector_label_point(&u_shape).expect("a U has an anchor");
+        assert!(
+            inside_edges(&u_shape, anchor),
+            "the U anchor {anchor:?} is inside"
+        );
+        assert_eq!(
+            sector_label_point(&[((0, 0), (0, 10))]).expect("a fallback exists"),
+            (0_i64, 0),
+            "no inside interval falls back to the first vertex"
+        );
+        assert_eq!(sector_label_point(&[]), None, "nothing to anchor on");
+    }
+
+    #[test]
+    fn the_underlay_blends_under_the_map_at_its_opacity() {
+        let map = two_rooms();
+        let mut request = request_for(&map);
+        request.width = 200;
+        request.height = 160;
+        request.bounds = Bounds {
+            min_x: -32,
+            min_y: -352,
+            max_x: 432,
+            max_y: 32,
+        };
+        request.underlay = Some(test_underlay(100));
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let canvas = paint_map(&map, &defs, &request).canvas;
+        let view = fit(&bounds_plane(&request.bounds), 200, 160);
+        let at = |point: Pt| {
+            canvas.pixel(
+                u32::try_from(point.0).expect("a fitted column"),
+                u32::try_from(point.1).expect("a fitted row"),
+            )
+        };
+        assert_eq!(
+            at(view.point(100, -100)),
+            Some(rgb(255, 0, 0)),
+            "the red left half stands behind the map"
+        );
+        assert_eq!(
+            at(view.point(300, -100)),
+            Some(rgb(0, 0, 255)),
+            "the blue right half too"
+        );
+        assert_eq!(
+            at(view.point(-24, -100)),
+            Some([0, 0, 0, 255]),
+            "west of the picture the background stays"
+        );
+        request.underlay = Some(test_underlay(0));
+        let clear = paint_map(&map, &defs, &request).canvas;
+        let px = view.point(100, -100);
+        assert_eq!(
+            clear.pixel(
+                u32::try_from(px.0).expect("a fitted column"),
+                u32::try_from(px.1).expect("a fitted row"),
+            ),
+            Some([0, 0, 0, 255]),
+            "zero opacity draws no underlay"
+        );
+    }
+
+    #[test]
+    fn grid_lines_pick_their_colour_across_the_frame() {
+        let map = two_rooms();
+        let request = request_for(&map);
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let mut scene = Scene {
+            map: &map,
+            defs: &defs,
+            view: fit(&bounds_plane(&request.bounds), 200, 120),
+            canvas: Canvas::new(200, 120, [0_u8, 0, 0, 255]),
+            notes: Vec::new(),
+        };
+        paint_grid_line(
+            &mut scene,
+            &GridLine {
+                at: 64,
+                vertical: true,
+                low: -32,
+                high: 288,
+            },
+            1_i64,
+        );
+        paint_grid_line(
+            &mut scene,
+            &GridLine {
+                at: 0,
+                vertical: true,
+                low: -32,
+                high: 288,
+            },
+            8_i64,
+        );
+        assert_eq!(
+            scene.canvas.pixel(47, 60),
+            Some(GRID_MINOR),
+            "the k=1 line at x=64 is minor grey"
+        );
+        assert_eq!(
+            scene.canvas.pixel(30, 60),
+            Some(GRID_MAJOR),
+            "the k=8 line at x=0 is major grey"
+        );
+        assert_eq!(
+            scene.canvas.pixel(38, 60),
+            Some([0, 0, 0, 255]),
+            "between the lines stays background"
+        );
+    }
+
+    #[test]
+    fn the_grid_frame_is_the_unprojected_canvas_rectangle() {
+        let map = two_rooms();
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        assert_eq!(
+            grid_frame(&Scene {
+                map: &map,
+                defs: &defs,
+                view: View {
+                    num: 128,
+                    den: 384,
+                    offset_x: 16,
+                    offset_y: 80,
+                },
+                canvas: Canvas::new(200, 160, [0_u8, 0, 0, 255]),
+                notes: Vec::new(),
+            }),
+            (-48_i64, 240, 549, -237),
+            "the canvas corners unproject to the covered world rectangle"
+        );
+    }
+
+    #[test]
+    fn sector_labels_and_annotations_paint_their_text() {
+        let map = two_rooms();
+        let mut request = request_for(&map);
+        request.show_things = Switch::new(false);
+        request.labels = Labels {
+            sectors: Switch::new(true),
+            ..Labels::default()
+        };
+        let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
+        let canvas = paint_map(&map, &defs, &request).canvas;
+        let hits = (55..76_u32)
+            .flat_map(|row| (58..73_u32).map(move |col| (col, row)))
+            .filter(|&(col, row)| canvas.pixel(col, row) == Some(LABEL_COLOUR))
+            .count();
+        assert!(
+            hits > 4,
+            "the hall's number sits at its anchor (65, 60): {hits} label pixels"
+        );
+        let far = (4..14_u32)
+            .flat_map(|row| (4..14_u32).map(move |col| (col, row)))
+            .filter(|&(col, row)| canvas.pixel(col, row) == Some(LABEL_COLOUR))
+            .count();
+        assert_eq!(far, 0, "no label colour in the far margin");
+
+        let mut noted = request_for(&map);
+        noted.show_things = Switch::new(false);
+        noted.background = [10, 10, 10, 255];
+        noted.annotations = vec![Annotation {
+            x: -64,
+            y: -64,
+            text: "GO".to_owned(),
+            colour: rgb(255, 255, 255),
+        }];
+        let noted_canvas = paint_map(&map, &defs, &noted).canvas;
+        let view = fit(&bounds_plane(&noted.bounds), 200, 120);
+        let colours = sample_window(&noted_canvas, view.point(-64, -64), 9);
+        assert!(
+            colours.contains(&rgb(255, 255, 255)),
+            "the annotation draws its white text centred on the point"
+        );
+        assert!(
+            colours.contains(&[0, 0, 0, 255]),
+            "and its black outline against the lifted background"
+        );
+    }
+
+    #[test]
+    fn resolve_request_carries_the_overlays_and_the_empty_map_gains_a_frame() {
+        let map = two_rooms();
+        let settings = RenderSettings::default();
+        let args: RenderTopdownParams = serde_json::from_value(json!({
+            "width": 200_u64,
+            "height": 160_u64,
+            "grid": 64_i64,
+            "labels": {"sectors": true},
+            "annotations": [{"x": 0_i64, "y": 0_i64, "text": "a"}],
+        }))
+        .expect("the overlay call");
+        let request = resolve_request(&settings, &args, &map, Some(test_underlay(50)))
+            .expect("overlays resolve");
+        assert_eq!(request.grid, Some(64_i64), "the grid carries");
+        assert!(
+            request.labels.sectors.is_on() && !request.labels.vertices.is_on(),
+            "only the asked-for labels"
+        );
+        assert_eq!(
+            request.annotations.first().expect("one note").text,
+            "A",
+            "the text arrives upper-cased"
+        );
+        assert_eq!(
+            request
+                .underlay
+                .as_ref()
+                .expect("the underlay carries through")
+                .opacity,
+            50_u8,
+            "the default opacity"
+        );
+        assert_eq!(request.bounds.min_y, -352, "the underlay joined the frame");
+        assert_eq!(request.label_scale, 1_u32, "the narrow default");
+
+        let iso: RenderTopdownParams =
+            serde_json::from_value(json!({"projection": "isometric", "grid": 64_i64}))
+                .expect("one field");
+        let error =
+            resolve_request(&settings, &iso, &map, None).expect_err("isometric refuses the grid");
+        assert!(
+            error
+                .to_string()
+                .contains("overlays need the topdown projection"),
+            "the message names the projection: {error}"
+        );
     }
 
     /// The fixture palette: colour `i` is `(i, 255 - i, i)`.

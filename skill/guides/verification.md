@@ -11,7 +11,10 @@ run the loop:
 3. **`check_playability`** (arriving with the map tools) — starts, exits,
    reachable items and keys, monster paths.
 4. **`render_topdown` / `render_view`** — actually look: top-down for layout
-   and scale, first-person for what the player sees.
+   and scale, first-person for what the player sees. After building from a
+   sketch, render it with the sketch as `underlay` (same `units` as
+   `build_map_from_plan`) and `labels: {sectors: true}` so the built map and
+   the drawing line up and you can say "sector 7 is too small" by index.
 5. **Compare with intent** — does the render answer the original request?
    Dimensions, lighting and proportions are checked against the picture, not
    against your memory of the parameters.

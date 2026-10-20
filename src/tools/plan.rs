@@ -51,7 +51,7 @@
 //! `connections[1]`, `features[2]`) so the caller can point at the wire
 //! element that broke.
 
-mod params;
+pub(in crate::tools) mod params;
 
 use alloc::collections::BTreeMap;
 

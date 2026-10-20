@@ -617,7 +617,7 @@ fn scale_down(base: i64, delta: i64, num: i128, den: i128) -> i64 {
 }
 
 /// The column where the `start`-`end` line crosses row `y`, floor-rounded.
-fn intersect_x(start: Pt, end: Pt, y: i64) -> i64 {
+pub(crate) fn intersect_x(start: Pt, end: Pt, y: i64) -> i64 {
     let rise = i128::from(y).saturating_sub(i128::from(start.1));
     let span = i128::from(end.1).saturating_sub(i128::from(start.1));
     scale_down(start.0, end.0.saturating_sub(start.0), rise, span)

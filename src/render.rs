@@ -18,10 +18,13 @@
 //! depth buffer, and [`sprites`] then paints the transparent pass over
 //! it: the masked middles the walk collected and the sprite patches a
 //! caller prepared, sorted far to near in one ordering and depth-tested
-//! against that buffer. Nothing here knows about MCP; the `render` tool
+//! against that buffer. [`font`] carries the 5x7 bitmap font and the
+//! outlined [`draw_text`] the top-down overlays label and annotate with.
+//! Nothing here knows about MCP; the `render` tool
 //! group is the only caller that talks to clients.
 
 pub mod canvas;
+pub mod font;
 pub mod light;
 pub mod scene;
 pub mod settings;
@@ -32,6 +35,7 @@ pub mod view;
 use crate::render::settings::MAX_GAMMA;
 
 pub use canvas::{Canvas, Edge, Pt, Rgba, Stroke};
+pub use font::{GLYPH_HEIGHT, GLYPH_WIDTH, LETTER_GAP, TextStyle, draw_text, glyph};
 pub use light::{WallDir, colormap_index, shade};
 pub use scene::{Scene, build_scene, camera_sector, default_eye_z};
 pub use settings::{Lighting, RenderSettings, Switch, TopdownStyle};

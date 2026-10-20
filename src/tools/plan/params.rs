@@ -224,25 +224,27 @@ pub(super) struct RectParam {
     pub(super) h: i64,
 }
 
-/// One wire `units` object: the coordinate half of [`Units`] as JSON.
+/// One wire `units` object: the coordinate half of [`Units`] as `JSON`.
 /// The snap grid arrives beside it as the request's top-level `grid`;
-/// [`BuildPlanParams::to_units`] carries it in.
+/// [`BuildPlanParams::to_units`] carries it in. `render_topdown`'s
+/// `underlay.units` is the same object, so a sketch and the map built
+/// from it line up exactly.
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(default)]
-pub(super) struct UnitsParam {
+pub(in crate::tools) struct UnitsParam {
     /// Numerator of the scale: `4` with `scale_den: 1` makes one plan
     /// unit four map units (default `1`; `0` is refused).
-    pub(super) scale_num: i64,
+    pub(in crate::tools) scale_num: i64,
     /// Denominator of the scale (default `1`; `0` is refused).
-    pub(super) scale_den: i64,
+    pub(in crate::tools) scale_den: i64,
     /// Map `x` the plan origin lands on (default `0`).
-    pub(super) origin_x: i64,
+    pub(in crate::tools) origin_x: i64,
     /// Map `y` the plan origin lands on (default `0`) and the line
     /// `flip_y` mirrors about.
-    pub(super) origin_y: i64,
+    pub(in crate::tools) origin_y: i64,
     /// Mirror `y` about `origin_y` (default `false`): set it for
     /// image-space drawings, whose rows grow down while map `y` grows up.
-    pub(super) flip_y: bool,
+    pub(in crate::tools) flip_y: bool,
 }
 
 impl Default for UnitsParam {

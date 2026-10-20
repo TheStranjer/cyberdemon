@@ -132,7 +132,8 @@ brightest and darkest colours. `render_view` reports all of this in its
   - `width`, `height`: `16..=4096`, default from the settings.
   - `projection`: `"topdown"` (default) or `"isometric"`.
   - `bounds`: `{min_x, min_y, max_x, max_y}` in world units; the default
-    is the map's vertex bounds padded by 32 units. Needs
+    (when unset) is the map's vertex bounds, unioned with the underlay's
+    map rectangle when there is one, padded by 32 units. Needs
     `min_x < max_x` and `min_y < max_y`.
   - `style`: `"editor"` (default) or `"automap"`, the line colours below.
   - `fill_sectors` (default `false`): paint each sector's polygon with a
@@ -144,17 +145,57 @@ brightest and darkest colours. `render_view` reports all of this in its
     vertices: [...]}` index lists; highlighted linedefs draw red and 3 px
     wide, sectors get a red tint, things a white outline, vertices turn
     red. An index past the end of its table fails `not_found`.
+  - `underlay`: `{source, units, opacity}` draws a reference picture (the
+    sketch you built from) under the map. `source` is a file path,
+    `file://`/`http(s)://` URI or asset `URL` like every import tool's.
+    `units` — `{scale_num (1), scale_den (1), origin_x (0), origin_y (0),
+    flip_y (false)}` — is the same object you pass to
+    `build_map_from_plan.units`: image pixel `(px, py)` sits at map
+    `x = origin_x + px*scale_num/scale_den`,
+    `y = origin_y - py*scale_num/scale_den` (`+` when `flip_y` is false),
+    so the sketch lines up with the built map exactly. `opacity` is a
+    percent, `0..=100` (default `50`); every texel blends over the
+    background scaled by its own alpha. With `bounds` unset the frame is
+    the union of the map bounds and the underlay's map rectangle, padded
+    by 32 units — an empty map with an underlay needs no explicit bounds.
+  - `grid`: spacing in map units, `8..=1024`, drawn under the map: minor
+    lines `#2A2A2A`, every 8th line `#3C3C3C`. A spacing that measures
+    under 4 pixels at the current zoom is skipped and reported in `notes`.
+  - `labels`: `{sectors, linedefs, things, vertices}` (default all
+    `false`) draws those elements' indices in `#FFFF80` with a black
+    outline, on top of everything: sectors at a point guaranteed inside
+    them, linedefs at their midpoint, things and vertices beside their
+    marks.
+  - `annotations`: `[{x, y, text, color}]` free text (e.g. room names
+    from your plan) centred on world coordinates, colour
+    `"#RRGGBB"` (default `"#FFFFFF"`). Text upper-cases; characters
+    outside the built-in 5x7 font draw as `?`. At most 64 rows of at
+    most 32 characters each — beyond either limit is `invalid_argument`.
+  - `label_scale`: `1..=4` magnification of every label and annotation
+    (default `2` when the output is at least 1024 pixels wide, else `1`).
+  All five are overlays of the top-down projection: with
+  `projection: "isometric"` any of them fails `invalid_argument`
+  ("overlays need the topdown projection"). Drawing order: background,
+  underlay, grid, sector fills, lines, vertices, things, highlights,
+  labels, annotations.
 - Returns:
 
   ```json
   {"map": "MAP01", "projection": "topdown", "width": 200, "height": 120,
    "transform": {"scale_num": 88, "scale_den": 320,
                  "offset_x": 30, "offset_y": 95},
+   "underlay": {"width": 50, "height": 40,
+                "map_bounds": {"min_x": 0, "min_y": -320,
+                               "max_x": 400, "max_y": 0}},
+   "notes": [],
    "asset": {"url": "http://localhost:PORT/assets/ID/MAP01_topdown.png", ...}}
   ```
 
   `asset` is the overview `PNG` (the `gamma` setting is applied to the
-  output); `transform` is `null` for the isometric projection.
+  output); `transform` is `null` for the isometric projection; `underlay`
+  is `null` without one and otherwise reports the decoded picture's size
+  and the map-space rectangle its four corners land in; `notes` lists
+  what the render skipped (currently only the too-fine grid).
 
 ### Reading the picture: the colour legend
 
@@ -198,12 +239,21 @@ dots at their sector's floor. There is no hidden-line removal: it is a
 structure check, not a pretty picture. `transform` is `null` (two
 projections were fitted through one mapping, so pixel math back to world
 coordinates is not offered); `style`, `fill_sectors` and `show_vertices`
-do not apply, `show_things` does.
+do not apply, `show_things` does, and the overlay parameters (`underlay`,
+`grid`, `labels`, `annotations`, `label_scale`) fail `invalid_argument`
+("overlays need the topdown projection").
 
 - Errors: `not_found` for an unknown map or an out-of-range highlight
   index; `invalid_argument` when an empty map is requested without
-  `bounds`, when `bounds` has `min >= max`, for a size outside the
-  settings' ranges, and for an unknown `projection`/`style` name.
+  `bounds` and without an `underlay`, when `bounds` has `min >= max`, for
+  a size outside the settings' ranges, for an unknown `projection`/`style`
+  name, for a `grid` outside `8..=1024`, a `label_scale` outside `1..=4`
+  or an `underlay.opacity` outside `0..=100`, for more than 64
+  `annotations` or one longer than 32 characters, for a malformed
+  annotation colour, and for any overlay parameter on the isometric
+  projection; `format_error` when an `underlay.source` is no readable
+  picture; `fetch_error`/`not_found` when an `underlay.source` cannot be
+  fetched.
 - Example: a quick editor-style overview at the session's size, then a
   zoom into one corner:
 
@@ -213,7 +263,16 @@ do not apply, `show_things` does.
   {"bounds": {"min_x": 0, "min_y": 0, "max_x": 512, "max_y": 512},
    "style": "automap", "fill_sectors": true}
   {"highlight": {"linedefs": [12, 13], "sectors": [4]}}
+  {"grid": 64, "labels": {"sectors": true, "things": true}}
+  {"underlay": {"source": "/path/to/sketch.png",
+                "units": {"scale_num": 4, "flip_y": true}},
+   "labels": {"sectors": true},
+   "annotations": [{"x": 256, "y": 128, "text": "hall"}]}
   ```
+
+  The second line of the pair is the verification view: pass the same
+  `units` you gave `build_map_from_plan` and the sketch sits exactly
+  under the map you built from it.
 
 ## `render_minimap`
 

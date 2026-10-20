@@ -388,7 +388,21 @@ src/
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
                   model and the `CHECKS` pipeline (`references`,
                   `structure`, `things`, `specials` submodules, one per
-                  check group, each returning `Vec<Issue>`).
+                  check group, each returning `Vec<Issue>`), and
+                  `map/playability.rs` + `map/playability/` the pure
+                  can-the-player-finish-this-map analysis:
+                  `playability/specials.rs` the hand-written door/lift/
+                  teleport/exit/lock/key tables read into a map's feature
+                  inventory, `playability/graph.rs` the sector movement
+                  graph and the player-shaped step/gap/width passability
+                  tests, and `playability/reach.rs` the fixpoint that
+                  walks the sectors, collects the keys it reaches and
+                  opens the features both allow, answering with
+                  `Playability` (reachable sectors, exits, keys, locks,
+                  unopened doors, narrow lines, warnings).
+                  `map/flags.rs` names the two families' flag bits and
+                  carries the `Skill` whose bit a thing's presence is
+                  tested against.
 data/
   themes/         Per-game texture-theme TSV tables embedded in the binary
                   (`doom.tsv` also serves DOOM II and undetected sessions):

@@ -25,6 +25,9 @@ use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::plan::units::Units;
+/// A difficulty skill a planned thing can be limited to: the flag tables'
+/// own [`Skill`], re-exported where the plan writers read it.
+pub use crate::wad::map::flags::Skill;
 use crate::wad::map::flags::{FlagFamily, FlagKind, names as flag_names};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
 use crate::wad::map::{Map, Thing};
@@ -42,43 +45,6 @@ const MAX_AXIS_POINTS: usize = 4_096_usize;
 
 /// One `i128`-wide map point, for the exact distance tests.
 type End = (i128, i128);
-
-/// A difficulty skill a planned thing can be limited to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Skill {
-    /// The easy skill bit.
-    Easy,
-    /// The medium skill bit.
-    Medium,
-    /// The hard skill bit.
-    Hard,
-}
-
-impl Skill {
-    /// Every skill, in flag-table order.
-    pub const ALL: [Self; 3] = [Self::Easy, Self::Medium, Self::Hard];
-
-    /// The name of this skill's bit in both families' thing flag tables.
-    #[must_use]
-    #[inline]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Easy => "easy",
-            Self::Medium => "medium",
-            Self::Hard => "hard",
-        }
-    }
-
-    /// The skill the wire name `text` spells, case-insensitively.
-    #[must_use]
-    #[inline]
-    pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|skill| skill.as_str().eq_ignore_ascii_case(text))
-    }
-}
 
 /// Where one planned thing goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,7 +182,7 @@ pub fn presence_flags(family: FlagFamily, skills: Option<&[Skill]>, multiplayer_
     let wanted = skills.unwrap_or(Skill::ALL.as_slice());
     let mut bits = wanted
         .iter()
-        .fold(0_u32, |acc, skill| acc | thing_bit(family, skill.as_str()));
+        .fold(0_u32, |acc, skill| acc | skill.bit(family));
     if multiplayer_only {
         match family {
             FlagFamily::Doom => bits |= thing_bit(family, "notsingle"),

@@ -44,7 +44,10 @@
 //! pure map-health checks behind `validate_map`: reference integrity,
 //! line structure, thing
 //! presence and special/tag sanity, each returning its [`validate::Issue`]
-//! rows. [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
+//! rows. [`playability`] answers the player's question instead: it walks the
+//! sector graph from the player start, opens the doors, lifts and teleporters
+//! the walk can reach and the keys it finds, and reports what a player can
+//! and cannot get to. [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
 //! translation table (rows, flags and lookups) and the cross-family thing,
 //! sector and linedef stages [`convert`] runs.
 
@@ -61,6 +64,7 @@ pub mod model;
 pub mod nodes;
 pub mod ops;
 pub mod overlay;
+pub mod playability;
 pub mod reject;
 pub mod remove;
 pub mod stats;
@@ -73,7 +77,7 @@ mod common;
 
 pub use crate::wad::classify::MapFormat;
 pub use blockmap::Blockmap;
-pub use flags::{FlagFamily, FlagKind};
+pub use flags::{FlagFamily, FlagKind, Skill};
 pub use model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 pub use nodes::{
     BoundingBox, Child, Node, NodeSet, NodesFormat, Seg, Subsector, lump_format,

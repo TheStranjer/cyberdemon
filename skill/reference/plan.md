@@ -7,9 +7,11 @@ with. One call compiles the plan into a complete map block and writes
 it into the working archive as a single undoable edit.
 
 Things land in the same call: `things` rows and a mandatory
-`player_start` (or a thing of type `1`) populate the block. Door
-connectors still come out closed and un-wired, and `nodes` /
-`validation` in the result are reserved fields later slices fill.
+`player_start` (or a thing of type `1`) populate the block. `finalize`
+builds the node run into the block and validates the result, all inside
+the one undoable edit. Door connectors still come out closed and
+un-wired: the door sector carries special `0` until the follow-up
+behaviour ticket wires it.
 
 ## `build_map_from_plan`
 
@@ -18,9 +20,10 @@ connectors still come out closed and un-wired, and `nodes` /
 room, count? = 1, angle? = 0, skills?, multiplayer_only?}],
 player_start?: {x, y, angle?} | {room, angle?}, theme?, units?
 {scale_num? = 1, scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y?
-= false}, grid? = 8}` → `{map, format, rooms: {id: [sectors]},
-connections: [{id, kind, sectors}], things_placed, bounds: {x1, y1, x2,
-y2} | null, warnings, nodes: null, validation: null, next_steps}`
+= false}, grid? = 8, finalize? = false}` → `{map, format, rooms:
+{id: [sectors]}, connections: [{id, kind, sectors}], things_placed,
+bounds: {x1, y1, x2, y2} | null, warnings, nodes: {...} | null,
+validation: {errors, counts} | null, next_steps}`
 
 **The map**: `map` is the new block's header name (1 to 8 printable
 ASCII, case-insensitive). When the *working archive* already holds a
@@ -72,9 +75,9 @@ the connection and saying they *do not touch*.
 > **Doors have no action yet.** A `door` connector emits the doorway
 > geometry dressed with the theme's `door`/`door_track`/`door_floor`
 > roles, but the door sector carries **special `0`** and its lines no
-> trigger — until a later slice (or `add_door` on the finished map)
-> wires it, the door is a solid closed threshold. Read the reported
-> `sectors` and check with `assemble_map` / `render_topdown`.
+> trigger — until the follow-up door-wiring update (or `add_door` on the
+> finished map) wires it, the door is a solid closed threshold. Read the
+> reported `sectors` and check with `assemble_map` / `render_topdown`.
 
 **Units and the grid**: room footprints and connection `at` positions
 are plan coordinates, drawn in whatever units you think in (sketch
@@ -154,6 +157,34 @@ change, and they still apply under the override. A room's own
 the theme answers `"-"` (an empty session) leaves its faces undressed
 and adds a `warnings` note.
 
+**Finalize: node data and validation.** `finalize: true` runs the whole
+`build_all_nodes` set (`reference/nodes.md`) on the compiled model
+before the write, inside the same undoable edit — one `undo` still takes
+the whole block back, node run included:
+
+- A **binary** map (`doom`/`hexen`) gets the classic
+  `SEGS`/`SSECTORS`/`NODES` run (split vertices appended to
+  `VERTEXES`), a `zero` `REJECT` and a fresh `BLOCKMAP` — the same
+  defaults `build_all_nodes` picks for it.
+- A **`udmf`** map gets the compressed extended lump alone as
+  `ZNODES`; no `REJECT`/`BLOCKMAP`, which `ZDoom` builds at load.
+
+The result's `nodes` then carries the build summary
+`{variant: "classic" | "extended", segs, subsectors, nodes, warnings}`
+plus the layout's extra counts (`split_vertices` for `classic`;
+`format`, `bytes` and `new_vertices` for `extended`). `validation`
+carries an errors-only pass: every `validate_map` check run over the
+finished model with the session's definitions and merged resource index,
+reported as `{"errors": [...], "counts": {error, warning, info}}` —
+error rows in the `validate_map` issue shape, at most 20 of them, while
+`counts` is always exact over everything the checks found. **Validation
+errors do not roll the build back**: the map was built to plan, and the
+rows are for you to fix with the element tools. Door sectors still have
+special `0` and no triggers until the follow-up behaviour ticket —
+finalizing builds geometry, not gameplay. With `finalize` unset or
+`false`, `nodes` and `validation` stay `null` and the block ships
+without node data, as before.
+
 **Errors name the plan path.** Structural refusals from the compiler
 (bad rectangle edges, polygons with too few points, duplicate room
 ids, unknown or self-joined rooms, non-positive widths, too-short
@@ -172,45 +203,64 @@ and the player start included. `bounds` is the vertex box
 rooms unreachable from the first, rooms painted over, floor gaps taller
 than 24 units through an opening/door/window ("use stairs"), rooms that
 fit fewer things than asked — plus the theme notes. `nodes` and
-`validation` are `null` placeholders the later slices fill.
+`validation` are `null` unless `finalize: true` filled them (see the
+**Finalize** section above).
 
 ```json
 call build_map_from_plan {
-  "map": "MAP05",
+  "map": "MAP07",
+  "units": {"scale_num": 4, "flip_y": true},
   "rooms": [
-    {"id": "hall",   "rect": {"x": 0,   "y": 0, "w": 128, "h": 128}},
-    {"id": "vault",  "rect": {"x": 128, "y": 0, "w": 128, "h": 128}, "light": 200}
+    {"id": "court", "rect": {"x": 0,  "y": 0,  "w": 60, "h": 48}},
+    {"id": "hall",  "rect": {"x": 60, "y": 0,  "w": 48, "h": 48}, "light": 192},
+    {"id": "crypt", "rect": {"x": 60, "y": 48, "w": 48, "h": 36},
+     "floor": 64, "ceiling": 224, "light": 96}
   ],
   "connections": [
-    {"id": "vdoor", "from": "hall", "to": "vault", "kind": "door", "at": [128, 32]},
-    {"from": "hall", "to": "vault", "kind": "opening", "at": [128, 96]}
+    {"id": "gate", "from": "court", "to": "hall", "kind": "door",
+     "at": [60, 24], "width": 48, "style": "locked_red"},
+    {"from": "hall", "to": "crypt", "kind": "stairs",
+     "at": [84, 48], "width": 64}
   ],
-  "things": [{"name": "imp", "room": "hall", "count": 4}],
-  "player_start": {"room": "hall"}
+  "things": [
+    {"name": "imp", "room": "hall", "count": 3},
+    {"name": "barrel", "x": 16, "y": 40}
+  ],
+  "player_start": {"room": "court", "angle": 90},
+  "finalize": true
 }
--> {"map": "MAP05", "format": "doom",
-    "rooms": {"hall": [0], "vault": [1]},
+-> {"map": "MAP07", "format": "doom",
+    "rooms": {"court": [0], "crypt": [2], "hall": [1]},
     "connections": [
-      {"id": "vdoor", "kind": "door", "sectors": [2]},
-      {"id": "hall->vault", "kind": "opening", "sectors": [3]}],
+      {"id": "gate", "kind": "door", "sectors": [3]},
+      {"id": "hall->crypt", "kind": "stairs", "sectors": [4, 5, 6, 7]}],
     "things_placed": 5,
-    "bounds": {"x1": 0, "y1": 0, "x2": 256, "y2": 128},
+    "bounds": {"x1": 0, "y1": -336, "x2": 432, "y2": 0},
     "warnings": [],
-    "nodes": null, "validation": null,
+    "nodes": {"variant": "classic", "segs": 61, "subsectors": 15, "nodes": 14,
+              "split_vertices": 5, "warnings": []},
+    "validation": {"errors": [], "counts": {"error": 0, "warning": 4, "info": 6}},
     "next_steps": ["render_topdown to compare with the sketch",
                    "render_view from the player start"]}
 ```
 
-Two 128×128 rooms sharing the line `x = 128`: a door low on their
-shared wall, an opening high on it. The wall between them is the
-default 16 units thick; the door sector (2) is closed and carries no
-special until something wires it; four imps clear the hall's grid and
-the player start takes its bounding-box centre.
+A sketch measured in pixels: `units: {scale_num: 4, flip_y: true}` turns
+the 108x84 drawing into a 432x336 map with `y` mirrored, on the default
+`grid: 8`. The courtyard and hall share the line `x = 60` (px); the
+red-key door `gate` sits low on it and comes out closed, dressed, and
+still special-`0` until the behaviour ticket wires it. The crypt stands
+behind the hall with its floor 64 units up, reached by the four stair
+steps (sectors 4–7) the stairs connector grew. Three imps fill the
+hall's clearance grid, the barrel pins at plan pixel `(16, 40)`, and
+the player starts centre-courtyard facing east. `finalize` built the
+classic node run plus `REJECT` and `BLOCKMAP` into the same written
+block — one `undo` takes all of it back — and the errors-only
+validation came back clean.
 
 **After the call**: `render_topdown` compares the layout with the
 sketch you worked from, `render_view` walks it first-person from the
-placed player start, and `validate_map` judges the map (`nodes_missing`
-is expected on a fresh block: run `build_nodes` / `build_all_nodes`
-before playing the map in vanilla `Doom`, `reference/nodes.md`). Failed
-calls change nothing: no block is written and no undo entry is
-recorded.
+placed player start, and `validate_map` judges the map. A block built
+without `finalize` reports `nodes_missing`: play it in vanilla `Doom`
+only after `build_nodes` / `build_all_nodes` ran (`reference/nodes.md`),
+or build it with `finalize: true` from the start. Failed calls change
+nothing: no block is written and no undo entry is recorded.

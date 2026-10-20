@@ -255,9 +255,11 @@ src/
                   resolution over the session definitions, room grids,
                   presence flags; a type 1 row is mandatory) and
                   `wad::map::write_map`, and appends the block as one
-                  `Session::edit` via `maps::write_block` (the finalize slice
-                  later fills the reserved `nodes`/`validation` result fields
-                  and the door specials);
+                  `Session::edit` via `maps::write_block` (the `finalize`
+                  parameter runs the `nodes` tools' whole-set build on the
+                  model inside that step and fills the `nodes` summary and
+                  the errors-only `validation` result fields; the door
+                  specials come from the follow-up ticket);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

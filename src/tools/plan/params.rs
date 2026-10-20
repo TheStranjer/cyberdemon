@@ -119,6 +119,16 @@ pub(super) struct BuildPlanParams {
     /// session's game offers; the session itself never changes.
     #[serde(default)]
     pub(super) theme: Option<String>,
+    /// Build the node run into the block before the write and validate
+    /// the finished map (default `false`). `true` runs the whole
+    /// `build_all_nodes` set on the compiled model as part of this one
+    /// undoable edit — the classic `SEGS`/`SSECTORS`/`NODES` run plus a
+    /// `zero` `REJECT` and a fresh `BLOCKMAP` for a binary map, the
+    /// compressed extended `ZNODES` lump for a `UDMF` one — and fills
+    /// the result's `nodes` and `validation` fields. Unset, both stay
+    /// `null` and the block ships without node data.
+    #[serde(default)]
+    pub(super) finalize: bool,
 }
 
 /// One wire room: an id, exactly one of `rect`/`points`, and the sector

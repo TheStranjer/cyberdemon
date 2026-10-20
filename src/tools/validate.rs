@@ -6,6 +6,8 @@
 //! one lock, and applies the severity filter, the paging and the counting
 //! the client asked about. Later validation tickets add checks to
 //! [`crate::wad::map::validate::CHECKS`] without touching anything here.
+//! The [`Tables`], [`resource_index`] and [`Counts`] helpers are shared
+//! with `build_map_from_plan`'s `finalize` pass.
 
 use alloc::collections::BTreeSet;
 
@@ -64,8 +66,9 @@ struct ValidateMapParams {
 }
 
 /// The definition tables one validation run consults, owned so the
-/// [`Context`] can borrow them all.
-struct Tables {
+/// [`Context`] can borrow them all. Shared with `build_map_from_plan`'s
+/// `finalize` pass.
+pub(in crate::tools) struct Tables {
     /// The session's definitions: the detected game's tables with the
     /// loaded archives' custom things and specials overlaid (what the
     /// thing and `Doom`-family special checks consult).
@@ -78,7 +81,10 @@ struct Tables {
 impl Tables {
     /// The validation context borrowing both tables and the resource
     /// index the caller read from the merged view.
-    const fn context<'res>(&'res self, resources: &'res ResourceIndex) -> Context<'res> {
+    pub(in crate::tools) const fn context<'res>(
+        &'res self,
+        resources: &'res ResourceIndex,
+    ) -> Context<'res> {
         Context {
             definitions: &self.definitions,
             hexen_specials: &self.hexen_specials,
@@ -99,13 +105,14 @@ fn detected_game(session: &Session) -> Game {
 
 /// Read `session`'s validation tables: the detected game's definitions
 /// overlaid with the merged view's DEHACKED, DECORATE, `ZScript` and
-/// MAPINFO customs, plus the built-in `Hexen` specials.
+/// MAPINFO customs, plus the built-in `Hexen` specials. Shared with
+/// `build_map_from_plan`'s `finalize` pass.
 ///
 /// # Errors
 ///
 /// [`collect::custom_sources`]'s read errors and [`session_definitions`]'
 /// and [`definitions_for`]' refusals for malformed definition data.
-fn session_tables(session: &Session) -> Result<Tables, CyberError> {
+pub(in crate::tools) fn session_tables(session: &Session) -> Result<Tables, CyberError> {
     let (sources, _notes) = collect::custom_sources(session)?;
     Ok(Tables {
         definitions: session_definitions(detected_game(session), &sources)?,
@@ -133,8 +140,9 @@ fn push_tx_lump(index: &mut ResourceIndex, lump: &str) {
 /// # Errors
 ///
 /// [`common::directory`]'s errors and [`TextureSet::load`]'s
-/// [`CyberError::Format`] for a malformed texture lump.
-fn resource_index(session: &Session) -> Result<ResourceIndex, CyberError> {
+/// [`CyberError::Format`] for a malformed texture lump. Shared with
+/// `build_map_from_plan`'s `finalize` pass.
+pub(in crate::tools) fn resource_index(session: &Session) -> Result<ResourceIndex, CyberError> {
     let dir = common::directory(session, Scope::Merged)?;
     let mut index = ResourceIndex::default();
     for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {
@@ -244,9 +252,10 @@ fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
     Ok(limit)
 }
 
-/// How many issues of each severity the enabled checks found.
+/// How many issues of each severity the enabled checks found. Shared
+/// with `build_map_from_plan`'s `finalize` pass.
 #[derive(Debug, Default, Serialize)]
-struct Counts {
+pub(in crate::tools) struct Counts {
     /// The [`Severity::Error`] rows: the map is broken.
     error: usize,
     /// The [`Severity::Warning`] rows: the map is probably wrong.
@@ -257,7 +266,7 @@ struct Counts {
 
 impl Counts {
     /// The totals of `issues` by severity.
-    fn of(issues: &[Issue]) -> Self {
+    pub(in crate::tools) fn of(issues: &[Issue]) -> Self {
         let count = |severity: Severity| {
             issues
                 .iter()

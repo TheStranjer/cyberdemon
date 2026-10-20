@@ -263,14 +263,20 @@ src/
                   pure `wad::map::validate` checks, paging and counting the
                   issues outside them;
                   `tools/playability.rs` is the thin `check_playability`
-                  group: it parses `skill`, reads the map and the session's
-                  definitions under one lock, runs the pure
-                  `wad::map::playability` walk with its `blockers` and
-                  `stuck_things` readings, folds the reason-keyed hints
-                  and the plain summary, and sends `render: true` over the
-                  `tools/render.rs` overview machinery
-                  (`playability_overview`, the shared `render_topdown`
-                  internals with the report's problems highlighted);
+                  and `describe_map` group: the first parses `skill`,
+                  reads the map and the session's definitions under one
+                  lock, runs the pure `wad::map::playability` walk with
+                  its `blockers` and `stuck_things` readings, folds the
+                  reason-keyed hints and the plain summary, and sends
+                  `render: true` over the `tools/render.rs` overview
+                  machinery (`playability_overview`, the shared
+                  `render_topdown` internals with the report's problems
+                  highlighted); the second parses `sectors`/`offset`/
+                  `limit` (validate first, dedupe and sort, `not_found`
+                  naming the valid range), reads through the same one-lock
+                  path, pages the pure `wad::map::describe` rows beside
+                  its always-whole map summary, and publishes the same
+                  overview, unhighlighted, by default;
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,
@@ -365,7 +371,14 @@ src/
                   split and the seeded/face modes behind `place_things`,
                   `map/convert.rs` the pure within- and cross-flag-family
                   format conversion (`Target`, `convert_map`, `Conversion`)
-                  behind `convert_map_format`, `map/features.rs` +
+                  behind `convert_map_format`,
+                  `map/describe.rs` the pure description core behind
+                  `describe_map`: one `Describe` read per map folding
+                  per-sector fact rows (`SectorFacts`, `sector_facts`:
+                  shoelace area, bbox, label centre, flats, sky, named
+                  special, tag, wall-texture tally, counted things, role
+                  names and neighbour `via` rows) and the whole-map
+                  `MapOverview` summary, `map/features.rs` +
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
                   action table, `apply_door`'s doorway dressing and `next_free_tag`),
                   `map/features/place.rs` the door placement geometry,

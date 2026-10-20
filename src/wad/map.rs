@@ -17,7 +17,12 @@
 //! index; [`build_blockmap`] and [`build_reject`] compute the last two
 //! from a map's geometry. [`geometry`] answers the pure integer shape
 //! questions over a decoded map: sector boundaries, point containment,
-//! bounding boxes, line lengths and sector adjacency. [`convert`] rewrites
+//! bounding boxes, line lengths and sector adjacency. [`describe`] folds
+//! a decoded map into the geometry-and-identity fact rows
+//! ([`describe::SectorFacts`]) and the whole-map [`describe::MapOverview`]
+//! the `describe_map` tool reports: area, bounding box, label centre,
+//! flats, sky, named special, tag, wall-texture tally, counted things,
+//! roles and neighbours. [`convert`] rewrites
 //! a decoded map in another layout, inside one flag family mechanically and
 //! across the two families through the [`xlat`] table, the pure step
 //! behind `convert_map_format`. [`overlay`] paints one polygon onto a
@@ -57,6 +62,7 @@ pub mod blockmap;
 pub mod build_blockmap;
 pub mod build_reject;
 pub mod convert;
+pub mod describe;
 pub mod doom;
 pub mod features;
 pub mod flags;

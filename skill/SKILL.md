@@ -166,6 +166,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `transform_selection`    | `reference/geometry.md` |
 | `validate_map`           | `reference/validate.md` |
 | `check_playability`      | `reference/playability.md` |
+| `describe_map`           | `reference/playability.md` |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |

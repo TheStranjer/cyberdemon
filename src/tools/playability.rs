@@ -1,5 +1,6 @@
 //! Playability tools: [`Cyberdemon::check_playability`], the can-the-player-
-//! actually-finish-this-map report.
+//! actually-finish-this-map report, and [`Cyberdemon::describe_map`], the
+//! measured per-sector picture of a whole map.
 //!
 //! The analysis is the pure [`crate::wad::map::playability`] module's; this
 //! file resolves the parameters, reads the map and the session's definitions
@@ -14,6 +15,18 @@
 //! the unreachable sectors, blocker lines and stuck things highlighted and
 //! the sector labels on. A map with no player start is a normal
 //! `ok: false` result, never an error.
+//!
+//! `describe_map` folds the pure [`crate::wad::map::describe`] module's
+//! answer into the one reading picture an agent orients on before editing:
+//! the same [`load`] under one lock, the per-sector [`SectorFacts`] rows
+//! deduplicated, filtered and paged as the parameters ask, the whole-map
+//! [`MapOverview`] summary beside them whatever the paging says, and the
+//! same labelled [`playability_overview`] PNG with plain marks as the
+//! `render` flag asks for (default on).
+//!
+//! [`SectorFacts`]: crate::wad::map::describe::SectorFacts
+//! [`MapOverview`]: crate::wad::map::describe::MapOverview
+//! [`playability_overview`]: crate::tools::render::playability_overview
 
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -38,12 +51,14 @@ use crate::tools::maps::common;
 use crate::tools::render::{OverviewMarks, playability_overview};
 use crate::tools::{fail, ok};
 use crate::wad::map::Map;
+use crate::wad::map::describe::{Describe, MapOverview, SectorFacts};
 use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::playability::{
     self, Blocker, BlockerReason, LockInfo, Playability, Stuck, StuckReason, analyze_playability,
     blockers, stuck_things,
 };
+use crate::wad::name::LumpName;
 
 /// The half-side assumed for thing types the definitions do not know, for
 /// the in-wall hint's distance: the pure stuck test's own monster default.
@@ -599,6 +614,159 @@ async fn check_run(
     Ok(viewed(&analysis, render))
 }
 
+/// Default sector-row cap for [`Cyberdemon::describe_map`].
+const DESCRIBE_DEFAULT_LIMIT: usize = 150;
+/// Largest sector-row cap [`Cyberdemon::describe_map`] accepts.
+const DESCRIBE_MAX_LIMIT: usize = 500;
+
+/// Arguments for [`Cyberdemon::describe_map`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DescribeMapParams {
+    /// The map to describe, e.g. `"MAP01"`. Defaults to the session's active
+    /// map; with none active, the merged view's only map when it holds
+    /// exactly one. Without either the call fails with `invalid_argument`.
+    #[serde(default)]
+    map: Option<String>,
+    /// Describe only these sectors, by index; unset describes every sector.
+    /// The list is deduplicated and read in ascending order; an index at or
+    /// above the sector count fails with `not_found` naming the valid range.
+    #[serde(default)]
+    sectors: Option<Vec<usize>>,
+    /// Skip this many rows of the (possibly filtered) sector list before
+    /// returning (default 0). An offset past the end is never an error: the
+    /// rows simply come back empty.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Maximum sector rows returned (default 150, at most 500);
+    /// `next_offset` names the offset that continues where this page
+    /// stopped.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Also publish the labelled top-down overview PNG (default `true`):
+    /// sector fills, sector numbers and things drawn, the picture
+    /// `check_playability`'s `render` draws.
+    #[serde(default)]
+    render: Option<bool>,
+}
+
+/// The sector-row cap `describe_map`'s `limit` asks for,
+/// [`DESCRIBE_DEFAULT_LIMIT`] when unset.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for `0` or anything above
+/// [`DESCRIBE_MAX_LIMIT`].
+fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
+    let Some(limit) = value else {
+        return Ok(DESCRIBE_DEFAULT_LIMIT);
+    };
+    if limit == 0 || limit > DESCRIBE_MAX_LIMIT {
+        return Err(CyberError::InvalidArgument(format!(
+            "limit {limit} is out of range: pass a value between 1 and {DESCRIBE_MAX_LIMIT}"
+        )));
+    }
+    Ok(limit)
+}
+
+/// The sectors `describe_map` will report, ascending and deduplicated:
+/// every stored index when `wanted` is unset, else `wanted` with each
+/// index checked against the `count` of sectors `map` holds.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] naming the offending index, the valid
+/// `0..count` range and the `sectors` parameter.
+fn sector_selection(
+    wanted: Option<&[usize]>,
+    count: usize,
+    map: LumpName,
+) -> Result<Vec<usize>, CyberError> {
+    let Some(indices) = wanted else {
+        return Ok((0..count).collect());
+    };
+    let mut chosen: BTreeSet<usize> = BTreeSet::new();
+    for index in indices {
+        if *index >= count {
+            return Err(CyberError::NotFound(format!(
+                "sector index {index} is out of range for map {map}: it holds {count} sectors, \
+                 so `sectors` accepts indices 0..{count} (get_map_summary shows the count)"
+            )));
+        }
+        chosen.insert(*index);
+    }
+    Ok(chosen.into_iter().collect())
+}
+
+/// The `offset`/`limit` window over the selected `indices`: this page's
+/// indices and the `next_offset` that continues them (`None` when the page
+/// took everything left, which an offset past the end always does).
+fn page_rows(indices: &[usize], offset: usize, limit: usize) -> (Vec<usize>, Option<usize>) {
+    let start = offset.min(indices.len());
+    let stop = start.saturating_add(limit).min(indices.len());
+    let rows = indices.get(start..stop).unwrap_or_default().to_vec();
+    let next = (stop < indices.len()).then(|| offset.saturating_add(rows.len()));
+    (rows, next)
+}
+
+/// Structured result of [`Cyberdemon::describe_map`].
+#[derive(Debug, Serialize)]
+struct DescribeReport {
+    /// The map that was described.
+    map: LumpName,
+    /// The map-wide overview, computed in full whatever the `sectors`
+    /// filter and the paging say.
+    summary: MapOverview,
+    /// The described sector rows, in ascending index order, one page.
+    sectors: Vec<SectorFacts>,
+    /// The `offset` that returns the rows this page left behind, `null`
+    /// when the page took everything.
+    next_offset: Option<usize>,
+    /// The labelled overview image, `null` unless `render` was asked for.
+    image: Option<AssetRef>,
+}
+
+/// `describe_map`'s work: check the limit before the session is touched,
+/// read the map and the session's definitions under one lock exactly like
+/// [`check_run`] does, select and page the sector rows, fold the always-
+/// whole map summary, and publish the labelled overview through the render
+/// group's own machinery.
+///
+/// # Errors
+///
+/// [`parse_limit`]'s and [`sector_selection`]'s refusals, [`load`]'s
+/// errors and - with `render` - the [`playability_overview`] refusals.
+async fn describe_run(
+    state: &AppState,
+    args: &DescribeMapParams,
+) -> Result<DescribeReport, CyberError> {
+    let limit = parse_limit(args.limit)?;
+    let prepared = load(state, args.map.as_deref())?;
+    let selected = sector_selection(
+        args.sectors.as_deref(),
+        prepared.map.sectors.len(),
+        prepared.map.name,
+    )?;
+    let (page, next_offset) = page_rows(&selected, args.offset.unwrap_or(0), limit);
+    let describe = Describe::new(&prepared.map, &prepared.defs);
+    let sectors: Vec<SectorFacts> = page
+        .iter()
+        .filter_map(|index| describe.sector(*index))
+        .collect();
+    let summary = describe.summary();
+    let image = if args.render.unwrap_or(true) {
+        Some(playability_overview(state, args.map.as_deref(), OverviewMarks::default()).await?)
+    } else {
+        None
+    };
+    Ok(DescribeReport {
+        map: prepared.map.name,
+        summary,
+        sectors,
+        next_offset,
+        image,
+    })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -618,13 +786,29 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Describes a map's sectors as measured rows of facts, roles and
+    /// neighbours, beside a whole-map summary and a labelled overview.
+    #[tool(
+        description = "Describes one map the way its sectors can be read: per-sector rows in ascending index order beside a whole-map `summary`, over the merged view like the other map tools. Each row is {sector, area (even-odd floor square map units), bbox [min_x, min_y, max_x, max_y], center (a label point inside), floor, ceiling, height, light, floor_flat, ceiling_flat, sky, special {value, name} or null, tag, roles, wall_textures (texture name to side count), neighbours ({sector, via, lines, floor_delta} per sector across its two-sided boundary), things ({name, count} by definition name, count descending then name)}. roles name what a sector is: door (a door action raises it, or a shut band at most 8 units tall with two distinct neighbours), lift, teleport_destination, secret, damaging, light_effect, exit_room (a level-end line touches it), stair_step, sky (an F_SKY1 ceiling). A neighbour's via names the way through: door or lift when the neighbour wears that role, window or impassable for a blocking boundary with or without 16 units of light between the higher floor and the lower ceiling, else opening, step_up or step_down by the neighbour's floor. summary is the whole-map picture whatever the rows say: {format, bounds, counts, player_starts, exits, keys, locked_doors, teleporters, secret_sectors, monsters, items, top_wall_textures, top_flats, largest_sectors, playable {ok, summary}}. sectors keeps only those indices (deduplicated, sorted; one at or above the sector count fails not_found naming the valid 0..N range); offset (default 0) and limit (default 150, at most 500; anything else fails invalid_argument) page the list and next_offset names where the rows left behind continue (null when none do). To answer \"the room with the shotgun\", scan the rows' things for that definition name (or wall_textures and roles for a look), take that row's sector index, and confirm on the labelled image: render (default true) publishes the top-down PNG with sector fills, sector numbers and things in image, and a render failure fails the call; render: false answers image null."
+    )]
+    async fn describe_map(
+        &self,
+        Parameters(args): Parameters<DescribeMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match describe_run(self.state(), &args).await {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Analysis, CheckPlayabilityParams, blocker_hint, check_run, parse_skill, step_hint,
-        stuck_hint,
+        Analysis, CheckPlayabilityParams, DESCRIBE_DEFAULT_LIMIT, DESCRIBE_MAX_LIMIT,
+        DescribeMapParams, blocker_hint, check_run, describe_run, page_rows, parse_limit,
+        parse_skill, sector_selection, step_hint, stuck_hint,
     };
     use crate::defs::definitions_for;
     use crate::state::AppState;
@@ -634,6 +818,7 @@ mod tests {
         self, Blocker, BlockerReason, KeyColor, Stuck, StuckReason,
     };
     use crate::wad::map::{Map, Thing};
+    use crate::wad::name::LumpName;
 
     /// A `check_playability` call over just these parameter texts.
     fn args(skill: Option<&str>) -> CheckPlayabilityParams {
@@ -642,6 +827,23 @@ mod tests {
             skill: skill.map(str::to_owned),
             render: None,
         }
+    }
+
+    /// A `describe_map` call over just these parameter values, unpinned
+    /// fields at their defaults (`render` off so no call ever publishes).
+    fn describe_args(sectors: Option<Vec<usize>>, limit: Option<usize>) -> DescribeMapParams {
+        DescribeMapParams {
+            map: None,
+            sectors,
+            offset: None,
+            limit,
+            render: Some(false),
+        }
+    }
+
+    /// A parsed test map name.
+    fn test_name() -> LumpName {
+        LumpName::parse("MAP01").expect("test names are valid")
     }
 
     /// A border blocker on line 17 from sector 2 into sector 5.
@@ -793,6 +995,118 @@ mod tests {
         );
         assert_eq!(
             check_run(&state, &args(None))
+                .await
+                .expect_err("no maps at all")
+                .code(),
+            "invalid_argument",
+            "the empty-session no-map refusal comes from the shared resolver"
+        );
+    }
+
+    #[test]
+    fn parse_limit_defaults_to_a_page_and_names_the_range_when_refusing() {
+        assert_eq!(
+            parse_limit(None).expect("absent"),
+            DESCRIBE_DEFAULT_LIMIT,
+            "the default pages a hundred and fifty rows"
+        );
+        assert_eq!(parse_limit(Some(1)).expect("one"), 1, "one row is legal");
+        assert_eq!(
+            parse_limit(Some(DESCRIBE_MAX_LIMIT)).expect("max"),
+            DESCRIBE_MAX_LIMIT,
+            "the cap itself is legal"
+        );
+        for bad in [0_usize, DESCRIBE_MAX_LIMIT.checked_add(1).expect("small")] {
+            let error = parse_limit(Some(bad)).expect_err("this cap is out of range");
+            assert_eq!(error.code(), "invalid_argument", "bad limit code");
+            assert!(
+                error.to_string().contains("between 1 and 500"),
+                "the message names the range: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn sector_selection_sorts_dedupes_and_defaults_to_every_sector() {
+        assert_eq!(
+            sector_selection(None, 3, test_name()).expect("no filter"),
+            vec![0_usize, 1, 2],
+            "unset describes every stored sector"
+        );
+        assert!(
+            sector_selection(None, 0, test_name())
+                .expect("no sectors")
+                .is_empty(),
+            "an empty map selects nothing"
+        );
+        let wanted = vec![2_usize, 0, 2];
+        assert_eq!(
+            sector_selection(Some(&wanted), 5, test_name()).expect("two rows asked"),
+            vec![0_usize, 2],
+            "deduplicated and ascending"
+        );
+    }
+
+    #[test]
+    fn sector_selection_refuses_past_the_end_with_the_valid_range() {
+        let error =
+            sector_selection(Some(&[5_usize]), 5, test_name()).expect_err("5 is not below 5");
+        assert_eq!(error.code(), "not_found", "a past-the-end index refuses");
+        let message = error.to_string();
+        assert!(
+            message.contains("0..5") && message.contains("`sectors`"),
+            "the message names the valid range and the parameter: {message}"
+        );
+        let empty =
+            sector_selection(Some(&[0_usize]), 0, test_name()).expect_err("nothing to index into");
+        assert!(
+            empty.to_string().contains("0..0"),
+            "an empty map's range is empty too: {empty}"
+        );
+    }
+
+    #[test]
+    fn page_rows_windows_the_selection_and_points_at_the_rest() {
+        let all: Vec<usize> = (0..5).collect();
+        let (first, next) = page_rows(&all, 0, 2);
+        assert_eq!(first, vec![0_usize, 1], "the head of the list");
+        assert_eq!(next, Some(2), "and where the rest continues");
+        let (tail, done) = page_rows(&all, 3, 500);
+        assert_eq!(
+            tail,
+            vec![3_usize, 4],
+            "a page longer than the rest stops at it"
+        );
+        assert_eq!(done, None, "with nothing left behind");
+        let (nothing, past) = page_rows(&all, 9, 2);
+        assert!(nothing.is_empty(), "an offset past the end is no error");
+        assert_eq!(past, None, "and it has no next page");
+        let (empty, empty_next) = page_rows(&[], 0, DESCRIBE_DEFAULT_LIMIT);
+        assert!(empty.is_empty(), "nothing selected, nothing paged");
+        assert_eq!(empty_next, None, "and no next offset to chase");
+    }
+
+    #[tokio::test]
+    async fn describe_run_refuses_a_bad_limit_and_the_empty_session() {
+        let state = AppState::default();
+        let refused = describe_run(&state, &describe_args(None, Some(0)))
+            .await
+            .expect_err("zero rows");
+        assert_eq!(
+            refused.code(),
+            "invalid_argument",
+            "a bad limit is refused even with no WAD open"
+        );
+        assert_eq!(
+            describe_run(&state, &describe_args(None, Some(501)))
+                .await
+                .expect_err("rows over the cap")
+                .code(),
+            "invalid_argument",
+            "and so is one above the maximum page"
+        );
+        assert_eq!(
+            describe_run(&state, &describe_args(None, None))
                 .await
                 .expect_err("no maps at all")
                 .code(),

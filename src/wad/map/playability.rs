@@ -36,6 +36,11 @@
 //! their presence bits name them at the analysed [`Skill`], and only in the
 //! single-player game.
 //!
+//! [`feature_targets`] is the narrower read for a caller that only wants to
+//! know *which* sectors the map's door, lift and teleport actions work on,
+//! without walking anything: it folds the same inventory [`analyze_playability`]
+//! reads and throws the walk away.
+//!
 //! [`validate`]: crate::wad::map::validate
 
 mod explain;
@@ -60,6 +65,7 @@ use graph::World;
 use reach::Run;
 use reach::fixpoint;
 use reach::touches;
+use specials::Effect;
 use specials::Inventory;
 
 /// The shortest two-sided line a player can walk through: twice the 16-unit
@@ -143,6 +149,38 @@ pub struct LockInfo {
     pub opened: bool,
 }
 
+/// One teleport action the map carries: the line working it and the sector it
+/// lands a player in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Teleporter {
+    /// The linedef index carrying the teleport action.
+    pub line: usize,
+    /// The sector the read landed the player in: `None` when the line's tag or
+    /// `TID` answers no destination thing at all.
+    pub destination: Option<usize>,
+}
+
+/// The sectors and lines the map's door, lift and teleport actions work on.
+///
+/// A read of the map's own specials, not of any walk: it says which sectors are
+/// door bands and which are lift platforms, and which lines carry the actions,
+/// for a caller labelling map parts. [`analyze_playability`] starts from the
+/// same inventory and goes on to ask what a player can reach.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct FeatureTargets {
+    /// Every sector a door action raises its ceiling over: the sectors answering
+    /// a tagged door's tag, and the sector behind a manual door's line.
+    pub doors: BTreeSet<usize>,
+    /// Every linedef carrying a door action the tables read.
+    pub door_lines: BTreeSet<usize>,
+    /// Every sector a lift action drops to its lowest neighbouring floor.
+    pub lifts: BTreeSet<usize>,
+    /// Every linedef carrying a lift action the tables read.
+    pub lift_lines: BTreeSet<usize>,
+    /// One row per teleport action line the tables read, in linedef order.
+    pub teleporters: Vec<Teleporter>,
+}
+
 /// What a player can and cannot do in a map.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Playability {
@@ -219,6 +257,48 @@ pub fn thing_spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
     specials::spawns(flags, family, skill)
 }
 
+/// The sectors and lines `map`'s door, lift and teleport actions work on,
+/// reading its lines and things in the flag family `family`.
+///
+/// Nothing is walked here: the answer is what the map's specials say, at
+/// [`Skill::Medium`] - the skill every playability tool defaults to. Door and
+/// lift targets do not depend on the skill at all; a teleport's destination
+/// sector does, because only a destination thing that spawns at the analysed
+/// skill lands a player. A teleport line with no such thing is still a row,
+/// with [`Teleporter::destination`] `None`.
+///
+/// A line whose special the tables read as a door or a lift but that resolves
+/// to no sector at all is in neither set: like the walk, this read reports only
+/// actions with something to act on, and [`analyze_playability`] is the one
+/// that warns about the line.
+#[must_use]
+#[inline]
+pub fn feature_targets(map: &Map, family: FlagFamily) -> FeatureTargets {
+    let inventory = specials::read_inventory(map, family, Skill::Medium);
+    let mut found = FeatureTargets {
+        doors: inventory.door_sectors.clone(),
+        lifts: inventory.lift_sectors.clone(),
+        ..FeatureTargets::default()
+    };
+    for feature in &inventory.features {
+        match feature.effect {
+            Effect::Door => {
+                found.door_lines.insert(feature.line);
+                found.doors.extend(feature.targets.iter().copied());
+            }
+            Effect::Lift => {
+                found.lift_lines.insert(feature.line);
+                found.lifts.extend(feature.targets.iter().copied());
+            }
+            Effect::Teleport => found.teleporters.push(Teleporter {
+                line: feature.line,
+                destination: feature.destination,
+            }),
+        }
+    }
+    found
+}
+
 /// The exit rows: every exit line the map carries, with whether the walk
 /// reached a side the action works from.
 fn exit_report(inventory: &Inventory, walk: &Run) -> Vec<ExitInfo> {
@@ -281,7 +361,10 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{ExitInfo, KeyColor, KeyInfo, LockInfo, Playability, analyze_playability};
+    use super::{
+        ExitInfo, FeatureTargets, KeyColor, KeyInfo, LockInfo, Playability, Teleporter,
+        analyze_playability, feature_targets,
+    };
     use crate::plan::FeatureDress;
     use crate::plan::compile::compile;
     use crate::plan::features::{FeatureRow, apply_features};
@@ -1430,6 +1513,125 @@ mod tests {
                 .is_some_and(|warning| warning.contains("no player 1 start")),
             "the missing start is still the first thing said: {:?}",
             found.warnings
+        );
+    }
+
+    #[test]
+    fn feature_targets_reads_nothing_from_a_plain_hall() {
+        let map = hall(&[cell(0_i32), cell(0_i32)]);
+        let found = feature_targets(&map, FlagFamily::Doom);
+        assert!(
+            found.doors.is_empty() && found.door_lines.is_empty(),
+            "no doors"
+        );
+        assert!(
+            found.lifts.is_empty() && found.lift_lines.is_empty(),
+            "no lifts"
+        );
+        assert!(found.teleporters.is_empty(), "no teleporters");
+        assert_eq!(found, FeatureTargets::default(), "and so the default is it");
+    }
+
+    #[test]
+    fn feature_targets_names_a_manual_door_with_its_line() {
+        let mut map = hall(&[cell(0_i32), slab(0_i32), cell(0_i32)]);
+        wire(&mut map, 0, (1_i32, 0_i32, TWO_SIDED));
+        let found = feature_targets(&map, FlagFamily::Doom);
+        assert_eq!(found.doors, sectors(&[1]), "the band behind the use line");
+        assert_eq!(found.door_lines, sectors(&[0]), "the line carrying it");
+        assert!(
+            found.lifts.is_empty() && found.lift_lines.is_empty(),
+            "no lift"
+        );
+        assert!(found.teleporters.is_empty(), "and no teleporter");
+    }
+
+    #[test]
+    fn feature_targets_names_a_lifts_platform_and_its_call() {
+        let mut map = hall(&[cell(0_i32), cell(96_i32), cell(96_i32)]);
+        map.sectors.get_mut(1).expect("the platform").tag = 3_i32;
+        wire(&mut map, 0, (21_i32, 3_i32, TWO_SIDED));
+        let found = feature_targets(&map, FlagFamily::Doom);
+        assert_eq!(found.lifts, sectors(&[1]), "the tagged platform");
+        assert_eq!(found.lift_lines, sectors(&[0]), "called from the divider");
+        assert!(
+            found.doors.is_empty() && found.door_lines.is_empty(),
+            "no door"
+        );
+        assert!(found.teleporters.is_empty(), "and no teleporter");
+    }
+
+    #[test]
+    fn feature_targets_names_a_teleporter_and_where_it_lands() {
+        let mut map = hall(&[cell(0_i32), cell(0_i32)]);
+        map.sectors.get_mut(1).expect("the far room").tag = 5_i32;
+        wire(&mut map, 0, (97_i32, 5_i32, TWO_SIDED | BLOCKING));
+        stand(&mut map, TELEPORT_DEST, middle(1), 7);
+        let found = feature_targets(&map, FlagFamily::Doom);
+        assert_eq!(
+            found.teleporters,
+            vec![Teleporter {
+                line: 0,
+                destination: Some(1),
+            }],
+            "the pad's line and the room its destination thing stands in"
+        );
+        assert!(
+            found.doors.is_empty() && found.lifts.is_empty(),
+            "a teleport moves no sector: {found:?}"
+        );
+        assert!(
+            found.door_lines.is_empty() && found.lift_lines.is_empty(),
+            "and no line"
+        );
+
+        map.things.retain(|thing| thing.kind != TELEPORT_DEST);
+        let stranded = feature_targets(&map, FlagFamily::Doom);
+        assert_eq!(
+            stranded.teleporters,
+            vec![Teleporter {
+                line: 0,
+                destination: None,
+            }],
+            "strip the destination thing and the pad is still a teleporter"
+        );
+    }
+
+    #[test]
+    fn feature_targets_follows_the_flag_family_it_is_given() {
+        let mut map = hall(&[cell(0_i32), cell(96_i32), cell(96_i32)]);
+        map.sectors.get_mut(1).expect("the platform").tag = 3_i32;
+        wire(&mut map, 0, (21_i32, 3_i32, TWO_SIDED));
+        let doom = feature_targets(&map, FlagFamily::Doom);
+        assert_eq!(doom.lifts, sectors(&[1]), "special 21 is a Doom lift call");
+        let at_hexen = feature_targets(&map, FlagFamily::Hexen);
+        assert!(
+            at_hexen.lifts.is_empty() && at_hexen.lift_lines.is_empty(),
+            "and 21 is nobody's action in the Hexen table: {at_hexen:?}"
+        );
+    }
+
+    #[test]
+    fn feature_targets_answers_for_every_feature_a_map_holds() {
+        let mut map = hall(&[cell(0_i32), slab(0_i32), cell(96_i32), cell(0_i32)]);
+        map.sectors.get_mut(2).expect("the platform").tag = 6_i32;
+        map.sectors.get_mut(3).expect("the far room").tag = 5_i32;
+        wire(&mut map, 0, (1_i32, 0_i32, TWO_SIDED));
+        wire(&mut map, 1, (21_i32, 6_i32, TWO_SIDED));
+        wire(&mut map, 3, (97_i32, 5_i32, BLOCKING));
+        stand(&mut map, TELEPORT_DEST, middle(3), 7);
+        let found = feature_targets(&map, FlagFamily::Doom);
+        assert_eq!(found.doors, sectors(&[1]), "the band the door line opens");
+        assert_eq!(found.door_lines, sectors(&[0]), "on its own line");
+        assert_eq!(found.lifts, sectors(&[2]), "the platform the lift calls");
+        assert_eq!(found.lift_lines, sectors(&[1]), "on its own line");
+        assert_eq!(
+            found.teleporters,
+            vec![Teleporter {
+                line: 3,
+                destination: Some(3),
+            }],
+            "and the pad whose tag answers the far room: {found:?}"
         );
     }
 

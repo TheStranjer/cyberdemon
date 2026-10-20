@@ -365,7 +365,13 @@ src/
                   split and the seeded/face modes behind `place_things`,
                   `map/convert.rs` the pure within- and cross-flag-family
                   format conversion (`Target`, `convert_map`, `Conversion`)
-                  behind `convert_map_format`, `map/features.rs` +
+                  behind `convert_map_format`,
+                  `map/describe.rs` the pure per-sector fact row
+                  (`SectorFacts`, `sector_facts`: shoelace area, bbox,
+                  label centre, flats, sky, named special, tag,
+                  wall-texture tally and counted things) that is the
+                  geometry-and-identity half of the coming `describe_map`
+                  core, `map/features.rs` +
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
                   action table, `apply_door`'s doorway dressing and `next_free_tag`),
                   `map/features/place.rs` the door placement geometry,

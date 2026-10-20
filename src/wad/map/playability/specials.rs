@@ -300,8 +300,9 @@ pub(super) struct Feature {
     pub(super) lock: Option<KeyColor>,
     /// The sectors the action changes; empty for a teleport.
     pub(super) targets: BTreeSet<usize>,
-    /// The sector a teleport lands the player in; `None` for every other
-    /// effect.
+    /// The sector a teleport lands the player in: `None` for every other
+    /// effect, and for a teleport line whose destination resolves to no
+    /// sector.
     pub(super) destination: Option<usize>,
 }
 
@@ -616,6 +617,12 @@ impl<'map> Reader<'map> {
 
     /// Turns one planned action into the feature it describes for `line`, or
     /// into the warning the line deserves when it addresses nothing.
+    ///
+    /// A teleport line that lands the player nowhere is still kept as a
+    /// feature, with [`Feature::destination`] `None`: it moves no sector and
+    /// jumps no player, so the walk is unchanged by it, and
+    /// [`super::feature_targets`] can still name the pad whose destination
+    /// thing is missing.
     fn build(&mut self, index: usize, line: &Linedef, plan: &Plan) -> Reading {
         let effect = match plan.effect {
             RowEffect::ManualDoor | RowEffect::TaggedDoor => Effect::Door,
@@ -628,7 +635,6 @@ impl<'map> Reader<'map> {
                 "line {index} special {} has no teleport destination",
                 line.special
             ));
-            return Reading::Ignored;
         }
         let targets = self.targets(index, line, plan);
         if effect != Effect::Teleport && targets.is_empty() {

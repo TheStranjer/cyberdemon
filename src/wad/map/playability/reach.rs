@@ -75,6 +75,8 @@ fn moved(inventory: &Inventory, opened: &BTreeSet<usize>) -> Opened {
 }
 
 /// The sectors an opened teleporter worked from `sector` lands the player in.
+/// A teleporter whose line resolved to no destination sector lands nowhere, so
+/// it contributes nothing here.
 fn jumps(inventory: &Inventory, opened: &BTreeSet<usize>, sector: usize) -> Vec<usize> {
     inventory
         .features

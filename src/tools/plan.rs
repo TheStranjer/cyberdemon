@@ -7,13 +7,18 @@
 //! [`params`]; the pure [`crate::plan::compile`] engine grows the thick
 //! walls, places every connector band, emits the fresh [`Map`] and
 //! dresses it in the [`ThemeRoles`] this module resolves for the call.
+//! The [`crate::plan::things`] engine then stands the requested things
+//! in: names resolve against the session's game definitions (the same
+//! overlay the validate tools read), pinned points travel with the
+//! rooms through [`crate::plan::units`], room fills land row-major on
+//! the clearance grid, and every built map keeps a player 1 start.
 //! The compiled block is written into the working archive as exactly
 //! one [`Session::edit`] step through
 //! [`crate::tools::maps::write_block`], and the map becomes the
-//! session's active map. Geometry only: no things, specials or node
-//! data yet — later slices grow the `things`/`finalize` parameters and
-//! fill the reserved `nodes`/`validation` result fields. Before the
-//! compiler, the pure [`crate::plan::units`] transform carries the
+//! session's active map. No specials or node data yet — later slices
+//! grow the `finalize` parameter and fill the reserved `nodes`/
+//! `validation` result fields. Before the compiler, the pure
+//! [`crate::plan::units`] transform carries the
 //! drawn plan into map units: the `units` scale/origin/mirror and the
 //! `grid` snap, so a sketch measured in pixels lands grid-aligned at
 //! map size.
@@ -33,20 +38,27 @@ use rmcp::{ErrorData, tool, tool_router};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::plan::CompiledPlan;
 use crate::plan::compile;
 use crate::plan::model::ConnectionKind;
 use crate::plan::textures::{TextureRole, TextureRoles};
+use crate::plan::things::{
+    PLAYER_ONE_START, PlacementContext, PlannedThing, place, presence_flags, resolve_thing_kind,
+};
 use crate::plan::transform_plan;
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::themes::Role;
+use crate::tools::defs::collect;
 use crate::tools::maps::{parse_format, resolve_namespace, write_block};
-use crate::tools::plan::params::{BuildPlanParams, ConnectionParam};
+use crate::tools::plan::params::{BuildPlanParams, ConnectionParam, KindSource, ThingRequest};
 use crate::tools::themes::theme_roles;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
+use crate::wad::game::Game;
+use crate::wad::map::FlagFamily;
 use crate::wad::map::Map;
 use crate::wad::map::write_map;
 use crate::wad::name::LumpName;
@@ -178,6 +190,110 @@ fn bounds_of(map: &Map) -> Option<PlanBounds> {
         .map(|(x1, y1, x2, y2)| PlanBounds { x1, y1, x2, y2 })
 }
 
+/// The definitions game a plan run reads: the session's detected game,
+/// with an unidentified session standing for DOOM II (as the validate
+/// and defs tools do).
+fn plan_game(found: Game) -> Game {
+    if found == Game::Unknown {
+        return Game::Doom2;
+    }
+    found
+}
+
+/// The thing definitions `build_map_from_plan` resolves names against:
+/// the detected game's tables overlaid with the merged view's
+/// `DEHACKED`, `DECORATE`, `ZScript` and `MAPINFO` customs.
+///
+/// # Errors
+///
+/// [`collect::custom_sources`]' read errors and [`session_definitions`]'
+/// refusal for malformed embedded definition data.
+fn plan_definitions(session: &Session) -> Result<Definitions, CyberError> {
+    let (sources, _notes) = collect::custom_sources(session)?;
+    session_definitions(plan_game(session.game()), &sources)
+}
+
+/// The doomednum of a request row: its explicit `type`, the type its
+/// `name` resolves to (refused as `invalid_argument` prefixed with the
+/// wire path), or the player 1 start.
+fn resolved_kind(request: &ThingRequest, definitions: &Definitions) -> Result<u32, CyberError> {
+    match request.kind.clone() {
+        KindSource::Type(kind) => Ok(kind),
+        KindSource::PlayerOne => Ok(PLAYER_ONE_START),
+        KindSource::Name(name) => resolve_thing_kind(definitions, &name)
+            .map_err(|problem| CyberError::InvalidArgument(format!("{}: {problem}", request.path))),
+    }
+}
+
+/// Every request row with its doomednum and presence flags resolved
+/// against `definitions` and the compiled map's flag `family`.
+fn resolve_specs(
+    requests: &[ThingRequest],
+    family: FlagFamily,
+    definitions: &Definitions,
+) -> Result<Vec<PlannedThing>, CyberError> {
+    requests
+        .iter()
+        .map(|request| {
+            Ok(PlannedThing {
+                kind: resolved_kind(request, definitions)?,
+                spot: request.spot.clone(),
+                count: request.count,
+                angle: request.angle,
+                flags: presence_flags(family, request.skills.as_deref(), request.multiplayer_only),
+                path: request.path.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Refuse a plan whose resolved rows hold no player 1 start; the check
+/// runs after name resolution, so a `type: 1` or a `name` answering to
+/// type `1` satisfies it.
+fn ensure_player_start(specs: &[PlannedThing]) -> Result<(), CyberError> {
+    if specs.iter().any(|spec| spec.kind == PLAYER_ONE_START) {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(
+        "a map needs a player 1 start; pass player_start or a thing of type 1".to_owned(),
+    ))
+}
+
+/// Stand every planned thing in the compiled map: validate and resolve
+/// the wire rows, refuse a plan without a player start, run the pure
+/// [`place`] engine and extend the map's things and the plan's
+/// warnings. The number of thing rows placed (the player start
+/// included).
+///
+/// # Errors
+///
+/// [`params`]' shape refusals, [`plan_definitions`]' read errors, the
+/// resolution refusals naming `things[i]` or `player_start`,
+/// [`ensure_player_start`]' refusal and [`place`]'s placement refusals.
+fn place_planned(
+    session: &Session,
+    args: &BuildPlanParams,
+    compiled: &mut CompiledPlan,
+) -> Result<usize, CyberError> {
+    let requests = args.to_things()?;
+    let definitions = plan_definitions(session)?;
+    let family = compiled.map.flag_family();
+    let specs = resolve_specs(&requests, family, &definitions)?;
+    ensure_player_start(&specs)?;
+    let context = PlacementContext {
+        map: &compiled.map,
+        room_sectors: &compiled.room_sectors,
+        definitions: &definitions,
+        units: args.to_units(),
+        grid: args.grid,
+    };
+    let placement = place(&context, &specs)?;
+    compiled.warnings.extend(placement.warnings);
+    let placed = placement.things.len();
+    compiled.map.things.extend(placement.things);
+    Ok(placed)
+}
+
 /// The bounding box of the compiled map's vertices.
 #[derive(Debug, PartialEq, Serialize)]
 struct PlanBounds {
@@ -215,6 +331,9 @@ struct PlanReport {
     rooms: BTreeMap<String, Vec<usize>>,
     /// One row per connection, in plan order.
     connections: Vec<ConnectionReport>,
+    /// The thing rows standing in the written map, player start
+    /// included.
+    things_placed: usize,
     /// The vertex bounding box; `null` for a map without vertices.
     bounds: Option<PlanBounds>,
     /// The compiler's advisories (unreachable and painted-over rooms,
@@ -230,7 +349,7 @@ struct PlanReport {
 }
 
 /// The result frame for a compiled plan, before the archive write.
-fn reporting(compiled: &CompiledPlan) -> PlanReport {
+fn reporting(compiled: &CompiledPlan, things_placed: usize) -> PlanReport {
     PlanReport {
         map: compiled.map.name,
         format: compiled.map.format,
@@ -244,6 +363,7 @@ fn reporting(compiled: &CompiledPlan) -> PlanReport {
                 sectors: info.sectors.clone(),
             })
             .collect(),
+        things_placed,
         bounds: bounds_of(&compiled.map),
         warnings: compiled.warnings.clone(),
         nodes: None,
@@ -253,8 +373,9 @@ fn reporting(compiled: &CompiledPlan) -> PlanReport {
 }
 
 /// `build_map_from_plan`'s work: resolve the parameters, carry the
-/// drawn plan into map units, compile the plan, then write the block as
-/// one [`Session::edit`] step and make the map the session's active one.
+/// drawn plan into map units, compile the plan, stand the things in and
+/// write the block as one [`Session::edit`] step, making the map the
+/// session's active one.
 fn build_run(session: &mut Session, args: &BuildPlanParams) -> Result<PlanReport, CyberError> {
     let name = LumpName::parse(args.map.as_str())?;
     let format = parse_format(args.format.as_deref())?;
@@ -272,7 +393,8 @@ fn build_run(session: &mut Session, args: &BuildPlanParams) -> Result<PlanReport
         compile(&plan, name, format, &theme).map_err(|error| with_plan_path(error, args))?;
     compiled.map.udmf_namespace = namespace;
     compiled.warnings.extend(notes);
-    let report = reporting(&compiled);
+    let things_placed = place_planned(session, args, &mut compiled)?;
+    let report = reporting(&compiled, things_placed);
     let lumps = write_map(&compiled.map)?;
     let label = format!("build_map_from_plan {name}");
     let replace = args.replace;
@@ -300,7 +422,7 @@ where
 impl Cyberdemon {
     /// Builds a whole map block from a declarative rooms-and-connections plan in one undoable edit.
     #[tool(
-        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between - and writes the compiled block into the working archive as one undoable edit. Geometry only today: the map has no things, door specials or node data until later slices add them. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later slice wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], bounds {x1, y1, x2, y2}, warnings, nodes: null, validation: null, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, and nodes/validation stay null until the later slices fill them. Run undo to take the whole block back. Look at the result with render_topdown and check it with validate_map (no player start until things land)."
+        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between, things standing in the result - and writes the compiled block into the working archive as one undoable edit. Every built map needs a player start: pass player_start or a thing of type 1; door specials and node data come from later slices. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later slice wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). things: rows each give exactly one of type (a doomednum) and name (resolved against the session's definitions: a case-insensitive exact name, else a unique case-insensitive substring; no match or an ambiguous one is invalid_argument naming things[i], ambiguities listing the candidate names), and exactly one of an x/y plan point (transformed and snapped with the rooms) and a room id to fill. A room fill is deterministic: row-major from the sector bounding box's minimum corner raised by the thing's clearance (its definition's radius, else 16, plus 8 map units), one grid point per twice the clearance, every point kept at least that clearance inside the sector; up to count (default 1) copies land and a room that holds fewer warns \"room 'x' fits only N of M things\". angle (default 0) must be 0..=359; skills (some of easy/medium/hard) and multiplayer_only (notsingle in the Doom family, coop+dm in the Hexen one) set the presence flag bits, defaulting to present everywhere. player_start: {x, y, angle} or {room, angle} (the room form lands on the sector bounding box's centre) adds a type 1 thing; without it or a resolved thing of type 1 the call fails invalid_argument asking for a player start. theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], things_placed, bounds {x1, y1, x2, y2}, warnings, nodes: null, validation: null, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, things_placed counts the written thing rows (player start included), and nodes/validation stay null until the later slices fill them. Run undo to take the whole block back. Look at the result with render_topdown and render_view from the player start, and check it with validate_map."
     )]
     fn build_map_from_plan(
         &self,
@@ -319,12 +441,18 @@ mod tests {
 
     use super::{
         BuildPlanParams, ConnectionKind, PlanTheme, THEME_ROLES, TextureRole, bounds_of,
-        connection_label, kind_name, plan_path, quoted_first, with_plan_path,
+        connection_label, ensure_player_start, kind_name, plan_game, plan_path, quoted_first,
+        reporting, resolve_specs, with_plan_path,
     };
+    use crate::defs::definitions_for;
     use crate::error::CyberError;
     use crate::plan::compile;
     use crate::plan::textures::TextureRoles as _;
+    use crate::plan::things::{PlannedThing, Skill, ThingSpot};
+    use crate::tools::plan::params::{KindSource, ThingRequest};
     use crate::wad::classify::MapFormat;
+    use crate::wad::game::Game;
+    use crate::wad::map::FlagFamily;
     use crate::wad::map::Map;
     use crate::wad::name::LumpName;
 
@@ -533,5 +661,112 @@ mod tests {
             compiled.map.bounds().expect("vertices"),
             (0_i32, 0_i32, 64_i32, 64_i32)
         );
+    }
+
+    /// A request row with the shape tests' defaults.
+    fn request(kind: KindSource, path: &str) -> ThingRequest {
+        ThingRequest {
+            kind,
+            spot: ThingSpot::Point((8_i64, 8_i64)),
+            count: 1_u32,
+            angle: 0_i32,
+            skills: None,
+            multiplayer_only: false,
+            path: path.to_owned(),
+        }
+    }
+
+    #[test]
+    fn resolve_specs_reads_names_keeps_numbers_and_folds_flags() {
+        let definitions = definitions_for(Game::Doom).expect("the embedded tables parse");
+        let numbered = request(KindSource::Type(2035_u32), "things[0]");
+        let named = ThingRequest {
+            kind: KindSource::Name("imp".to_owned()),
+            spot: ThingSpot::Room { id: "a".to_owned() },
+            skills: Some(vec![Skill::Easy]),
+            path: "things[1]".to_owned(),
+            ..numbered
+        };
+        let start = request(KindSource::PlayerOne, "player_start");
+        let specs = resolve_specs(&[numbered, named, start], FlagFamily::Doom, &definitions)
+            .expect("the rows resolve");
+        assert_eq!(
+            specs.iter().map(|spec| spec.kind).collect::<Vec<u32>>(),
+            vec![2035_u32, 3001_u32, 1_u32],
+            "type passes, name resolves, player_start means type 1"
+        );
+        assert_eq!(
+            specs.iter().map(|spec| spec.flags).collect::<Vec<u32>>(),
+            vec![7_u32, 1_u32, 7_u32],
+            "defaults are all-skill presence; easy-only stays easy-only"
+        );
+        assert_eq!(specs.first().expect("three rows").path, "things[0]");
+    }
+
+    #[test]
+    fn an_unresolvable_name_is_refused_with_the_row_path() {
+        let definitions = definitions_for(Game::Doom).expect("the embedded tables parse");
+        let bad = request(KindSource::Name("platypus".to_owned()), "things[2]");
+        let error =
+            resolve_specs(&[bad], FlagFamily::Doom, &definitions).expect_err("no such thing");
+        assert_eq!(error.code(), "invalid_argument");
+        let message = error.to_string();
+        assert!(message.contains("things[2]"), "the path leads: {message}");
+        assert!(message.contains("no thing named 'platypus'"), "{message}");
+    }
+
+    #[test]
+    fn ensure_player_start_reads_resolved_kinds_not_wire_names() {
+        let monster = PlannedThing {
+            kind: 3001_u32,
+            spot: ThingSpot::Point((8_i64, 8_i64)),
+            count: 1_u32,
+            angle: 0_i32,
+            flags: 7_u32,
+            path: "things[0]".to_owned(),
+        };
+        let error = ensure_player_start(core::slice::from_ref(&monster)).expect_err("no type 1");
+        assert_eq!(error.code(), "invalid_argument");
+        assert_eq!(
+            error.to_string(),
+            "a map needs a player 1 start; pass player_start or a thing of type 1"
+        );
+        let start = PlannedThing {
+            kind: 1_u32,
+            ..monster.clone()
+        };
+        ensure_player_start(&[monster, start]).expect("the resolved type 1 satisfies the check");
+    }
+
+    #[test]
+    fn an_unidentified_session_stands_for_doom_ii() {
+        assert_eq!(plan_game(Game::Unknown), Game::Doom2, "the fallback");
+        assert_eq!(plan_game(Game::Doom), Game::Doom, "a detected game stands");
+        assert_eq!(plan_game(Game::Hexen), Game::Hexen);
+    }
+
+    #[test]
+    fn the_report_counts_placed_things_under_its_documented_field() {
+        let plan = args(
+            r#"{"map": "MAP05",
+                "rooms": [{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}],
+                "connections": []}"#,
+        );
+        let model = plan.to_model().expect("the wire maps onto the model");
+        let theme = PlanTheme { names: Vec::new() };
+        let compiled = compile(
+            &model,
+            LumpName::parse("MAP05").expect("a valid name"),
+            MapFormat::Doom,
+            &theme,
+        )
+        .expect("one room compiles");
+        let value = serde_json::to_value(reporting(&compiled, 5_usize)).expect("it serializes");
+        assert_eq!(
+            value["things_placed"],
+            serde_json::json!(5_u64),
+            "the live field"
+        );
+        assert_eq!(value["nodes"], serde_json::Value::Null, "still reserved");
     }
 }

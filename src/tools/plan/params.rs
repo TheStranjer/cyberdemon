@@ -13,6 +13,13 @@
 //! The `units` object and the `grid` are not model fields: [`BuildPlanParams::to_units`]
 //! builds the [`Units`] the caller carries the finished model plan
 //! through (`crate::plan::transform_plan`) before compiling it.
+//!
+//! The `things` rows and the `player_start` are not model fields either:
+//! [`BuildPlanParams::to_things`] validates their shape (type-or-name,
+//! coordinates-or-room, angle range, skill names) into
+//! [`ThingRequest`] rows; the doomednum, the presence flags and the
+//! placement itself need the session and the compiled map and live in
+//! [`super`] and [`crate::plan::things`].
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -20,6 +27,7 @@ use serde::Deserialize;
 use crate::error::CyberError;
 use crate::plan::Units;
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Plan, Room, Shape};
+use crate::plan::things::{Skill, ThingSpot};
 
 /// The [`Plan::wall_thickness`] the wire default carries.
 const DEFAULT_WALL_THICKNESS: i64 = 16_i64;
@@ -47,6 +55,8 @@ const DEFAULT_SCALE_NUM: i64 = 1_i64;
 const DEFAULT_SCALE_DEN: i64 = 1_i64;
 /// The snap grid the wire default carries, map units.
 const DEFAULT_GRID: i64 = 8_i64;
+/// The [`ThingParam::count`] the wire default carries.
+const DEFAULT_COUNT: u32 = 1_u32;
 
 /// Arguments for [`Cyberdemon::build_map_from_plan`](super::Cyberdemon::build_map_from_plan).
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -91,6 +101,18 @@ pub(super) struct BuildPlanParams {
     pub(super) rooms: Vec<RoomParam>,
     /// Openings, doors, windows and stairs joining the rooms.
     pub(super) connections: Vec<ConnectionParam>,
+    /// The things to stand in the compiled map. Each row gives exactly
+    /// one of `type` (a doomednum) and `name` (resolved against the
+    /// session's definitions), and exactly one of an `x`/`y` plan-point
+    /// pair and a `room` id to fill.
+    #[serde(default)]
+    pub(super) things: Vec<ThingParam>,
+    /// The player 1 start: exactly one of an `x`/`y` plan-point pair and
+    /// a `room` id (whose sector's bounding-box centre it lands on).
+    /// Every built map needs a player start here or as a thing of type
+    /// `1`.
+    #[serde(default)]
+    pub(super) player_start: Option<PlayerStartParam>,
     /// Texture theme to dress this map with, for this call only
     /// (case-insensitive; the session's theme stands when unset).
     /// Unknown names fail `invalid_argument` listing the themes the
@@ -245,6 +267,106 @@ const fn default_grid() -> i64 {
     DEFAULT_GRID
 }
 
+/// The `count` serde default, so the wire documents it.
+const fn default_count() -> u32 {
+    DEFAULT_COUNT
+}
+
+/// One wire thing: a type or name, a pinned point or a room to fill,
+/// and the placement details.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct ThingParam {
+    /// The thing type number (a doomednum). Exactly one of `type` and
+    /// `name`.
+    #[serde(default, rename = "type")]
+    pub(super) thing_type: Option<u32>,
+    /// The thing's editor name, resolved against the session's
+    /// definitions: an exact case-insensitive name first, else a
+    /// unique case-insensitive substring. Exactly one of `type` and
+    /// `name`.
+    #[serde(default)]
+    pub(super) name: Option<String>,
+    /// Plan-space `X` (transformed and snapped with the rooms). Exactly
+    /// one of the `x`/`y` pair and `room`.
+    #[serde(default)]
+    pub(super) x: Option<i64>,
+    /// Plan-space `Y`, always beside `x`.
+    #[serde(default)]
+    pub(super) y: Option<i64>,
+    /// The id of a plan room to fill on the clearance grid. Exactly one
+    /// of `room` and the `x`/`y` pair.
+    #[serde(default)]
+    pub(super) room: Option<String>,
+    /// How many copies a room fill places (default `1`; a pinned `x`/`y`
+    /// spot holds exactly one thing whatever this says).
+    #[serde(default = "default_count")]
+    pub(super) count: u32,
+    /// Facing in degrees, `0..=359` (default `0`).
+    #[serde(default)]
+    pub(super) angle: i32,
+    /// Skills the thing appears on: some of `"easy"`, `"medium"`,
+    /// `"hard"` (case-insensitive). Unset means every skill.
+    #[serde(default)]
+    pub(super) skills: Option<Vec<String>>,
+    /// Spawn the thing out of single-player (default `false`): the
+    /// `notsingle` bit in the `Doom` family, the `coop` and `dm` mode
+    /// bits in the `Hexen` one.
+    #[serde(default)]
+    pub(super) multiplayer_only: bool,
+}
+
+/// One wire `player_start`: exactly one of an `x`/`y` plan-point pair
+/// and a room id, plus the facing.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct PlayerStartParam {
+    /// Plan-space `X` (transformed and snapped with the rooms). Exactly
+    /// one of the `x`/`y` pair and `room`.
+    #[serde(default)]
+    pub(super) x: Option<i64>,
+    /// Plan-space `Y`, always beside `x`.
+    #[serde(default)]
+    pub(super) y: Option<i64>,
+    /// The id of a plan room whose sector's bounding-box centre the
+    /// start lands on. Exactly one of `room` and the `x`/`y` pair.
+    #[serde(default)]
+    pub(super) room: Option<String>,
+    /// Facing in degrees, `0..=359` (default `0`).
+    #[serde(default)]
+    pub(super) angle: i32,
+}
+
+/// The type half of a [`ThingRequest`], as the wire spelled it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum KindSource {
+    /// An explicit doomednum.
+    Type(u32),
+    /// A name to resolve against the session's definitions.
+    Name(String),
+    /// The player 1 start: type `1`, no resolution.
+    PlayerOne,
+}
+
+/// A validated wire row: everything about a planned thing except the
+/// doomednum (which may need the session's definitions) and the flag
+/// bits (which need the compiled map's flag family).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ThingRequest {
+    /// The type or the name to resolve.
+    pub(super) kind: KindSource,
+    /// Where the thing goes.
+    pub(super) spot: ThingSpot,
+    /// How many copies a room fill may place.
+    pub(super) count: u32,
+    /// Facing, validated to `0..=359`.
+    pub(super) angle: i32,
+    /// The requested skills (`None` means every skill).
+    pub(super) skills: Option<Vec<Skill>>,
+    /// Whether the thing stays out of single-player.
+    pub(super) multiplayer_only: bool,
+    /// The wire path error messages name.
+    pub(super) path: String,
+}
+
 /// The `invalid_argument` naming the plan path `at`.
 fn invalid_at(at: &str, problem: &str) -> CyberError {
     CyberError::InvalidArgument(format!("{at}: {problem}"))
@@ -302,6 +424,159 @@ impl BuildPlanParams {
             .map(|(index, connection)| connection.to_model(index))
             .collect()
     }
+
+    /// The `things` rows and the `player_start`, shape-validated under
+    /// their wire paths. The `player_start` row comes last, so room
+    /// fills land before the start is appended.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] naming `things[i]`,
+    /// `things[i].skills` or `player_start` for a row with neither or
+    /// both of `type`/`name` or of the `x`/`y` pair and `room`, an
+    /// angle outside `0..=359`, or a skill name that is not one.
+    pub(super) fn to_things(&self) -> Result<Vec<ThingRequest>, CyberError> {
+        let mut rows: Vec<ThingRequest> = Vec::with_capacity(
+            self.things
+                .len()
+                .saturating_add(usize::from(self.player_start.is_some())),
+        );
+        for (index, row) in self.things.iter().enumerate() {
+            rows.push(row.to_request(index)?);
+        }
+        if let Some(start) = self.player_start.as_ref() {
+            rows.push(start.to_request()?);
+        }
+        Ok(rows)
+    }
+}
+
+impl ThingParam {
+    /// The validated request row for the `things[index]` path.
+    fn to_request(&self, index: usize) -> Result<ThingRequest, CyberError> {
+        let path = format!("things[{index}]");
+        Ok(ThingRequest {
+            kind: self.kind(&path)?,
+            spot: self.spot(&path)?,
+            count: self.count,
+            angle: check_angle(self.angle, &path)?,
+            skills: parse_skills(self.skills.as_deref(), &path)?,
+            multiplayer_only: self.multiplayer_only,
+            path,
+        })
+    }
+
+    /// Exactly one of `type` and `name`.
+    fn kind(&self, path: &str) -> Result<KindSource, CyberError> {
+        match (self.thing_type, self.name.as_deref()) {
+            (Some(kind), None) => Ok(KindSource::Type(kind)),
+            (None, Some(name)) => Ok(KindSource::Name(name.to_owned())),
+            (Some(_), Some(_)) => Err(invalid_at(
+                path,
+                "give exactly one of type and name: both were passed",
+            )),
+            (None, None) => Err(invalid_at(
+                path,
+                "give one of type (a doomednum) and name (a thing name)",
+            )),
+        }
+    }
+
+    /// The `x`/`y` pair or the `room` id, never both and never half.
+    fn spot(&self, path: &str) -> Result<ThingSpot, CyberError> {
+        match (self.x, self.y, self.room.as_deref()) {
+            (Some(x), Some(y), None) => Ok(ThingSpot::Point((x, y))),
+            (None, None, Some(id)) => Ok(ThingSpot::Room { id: id.to_owned() }),
+            (_, _, Some(_)) => Err(invalid_at(
+                path,
+                "a room and coordinates are exclusive: give x/y or room",
+            )),
+            (Some(_), None, None) => Err(invalid_at(
+                path,
+                "x needs y: give both coordinates or use room",
+            )),
+            (None, Some(_), None) => Err(invalid_at(
+                path,
+                "y needs x: give both coordinates or use room",
+            )),
+            (None, None, None) => Err(invalid_at(
+                path,
+                "give an x/y plan point or a room id: where the thing goes",
+            )),
+        }
+    }
+}
+
+impl PlayerStartParam {
+    /// The validated request row on the `player_start` path: the player
+    /// 1 type, one copy, default presence flags.
+    fn to_request(&self) -> Result<ThingRequest, CyberError> {
+        let path = "player_start".to_owned();
+        Ok(ThingRequest {
+            kind: KindSource::PlayerOne,
+            spot: self.spot(&path)?,
+            count: DEFAULT_COUNT,
+            angle: check_angle(self.angle, &path)?,
+            skills: None,
+            multiplayer_only: false,
+            path,
+        })
+    }
+
+    /// The `x`/`y` pair or the room centre, never both and never half.
+    fn spot(&self, path: &str) -> Result<ThingSpot, CyberError> {
+        match (self.x, self.y, self.room.as_deref()) {
+            (Some(x), Some(y), None) => Ok(ThingSpot::Point((x, y))),
+            (None, None, Some(id)) => Ok(ThingSpot::RoomCentre { id: id.to_owned() }),
+            (_, _, Some(_)) => Err(invalid_at(
+                path,
+                "a room and coordinates are exclusive: give x/y or room",
+            )),
+            (None, None, None) => Err(invalid_at(
+                path,
+                "give an x/y plan point or a room id: where the player starts",
+            )),
+            (_, _, None) => Err(invalid_at(
+                path,
+                "x and y travel together: give both coordinates or use room",
+            )),
+        }
+    }
+}
+
+/// The angle of a planned row, refused outside `0..=359`.
+fn check_angle(angle: i32, path: &str) -> Result<i32, CyberError> {
+    if (0_i32..=359_i32).contains(&angle) {
+        return Ok(angle);
+    }
+    Err(invalid_at(
+        path,
+        &format!("angle {angle} is outside 0..=359; give a compass bearing in degrees"),
+    ))
+}
+
+/// The `skills` list parsed to [`Skill`]s, on the row's
+/// `things[i].skills` path (`None` stays every skill).
+fn parse_skills(wanted: Option<&[String]>, path: &str) -> Result<Option<Vec<Skill>>, CyberError> {
+    let Some(texts) = wanted else {
+        return Ok(None);
+    };
+    let skills_path = format!("{path}.skills");
+    texts
+        .iter()
+        .map(|text| {
+            Skill::parse(text).ok_or_else(|| {
+                invalid_at(
+                    &skills_path,
+                    &format!(
+                        "skill {text:?} is not a skill: pass easy, medium or hard, or leave \
+                         skills out for every skill"
+                    ),
+                )
+            })
+        })
+        .collect::<Result<Vec<Skill>, CyberError>>()
+        .map(Some)
 }
 
 impl RoomParam {
@@ -422,8 +697,9 @@ impl ConnectionParam {
 mod tests {
     use serde_json::from_str;
 
-    use super::{BuildPlanParams, DEFAULT_WIDTH};
+    use super::{BuildPlanParams, DEFAULT_WIDTH, KindSource};
     use crate::plan::model::{ConnectionKind, DoorStyle, KeyColor, Plan, Shape};
+    use crate::plan::things::{Skill, ThingSpot};
     use crate::plan::{Units, transform_plan};
 
     /// Wire parameters parsed from the two-room-and-door example.
@@ -797,6 +1073,141 @@ mod tests {
                 .expect_err("the refusal must surface at the tool");
             assert_eq!(error.code(), "invalid_argument", "{extra}");
             assert!(error.to_string().contains(needle), "{error} names {needle}");
+        }
+    }
+
+    /// A one-room request with `body` spliced in beside the required
+    /// fields.
+    fn plan_request(body: &str) -> BuildPlanParams {
+        let text = format!(
+            r#"{{"map": "MAP01",
+                "rooms": [{{"id": "a", "rect": {{"x": 0, "y": 0, "w": 64, "h": 64}}}}],
+                "connections": []{body}}}"#
+        );
+        from_str(&text).expect("the request parses")
+    }
+
+    #[test]
+    fn thing_rows_and_the_player_start_keep_their_wire_shape() {
+        let args = plan_request(
+            r#", "things": [
+                {"type": 2035, "x": 40, "y": 40},
+                {"name": "imp", "room": "a", "count": 4, "angle": 90,
+                 "skills": ["easy", "HARD"], "multiplayer_only": true}
+            ],
+            "player_start": {"room": "a", "angle": 270}"#,
+        );
+        let rows = args.to_things().expect("both rows and the start convert");
+        assert_eq!(rows.len(), 3, "things first, the player start last");
+        let pinned = rows.first().expect("three rows");
+        assert_eq!(pinned.kind, KindSource::Type(2035_u32));
+        assert_eq!(pinned.spot, ThingSpot::Point((40_i64, 40_i64)));
+        assert_eq!(pinned.count, 1_u32, "the documented count default");
+        assert_eq!(pinned.angle, 0_i32, "the documented angle default");
+        assert_eq!(pinned.skills, None, "unset skills mean every skill");
+        assert!(!pinned.multiplayer_only);
+        assert_eq!(pinned.path, "things[0]");
+        let filled = rows.get(1).expect("three rows");
+        assert_eq!(filled.kind, KindSource::Name("imp".to_owned()));
+        assert_eq!(filled.spot, ThingSpot::Room { id: "a".to_owned() });
+        assert_eq!(filled.count, 4_u32);
+        assert_eq!(filled.angle, 90_i32);
+        assert_eq!(
+            filled.skills,
+            Some(vec![Skill::Easy, Skill::Hard]),
+            "skills are case-insensitive"
+        );
+        assert!(filled.multiplayer_only);
+        let start = rows.get(2).expect("three rows");
+        assert_eq!(start.kind, KindSource::PlayerOne);
+        assert_eq!(
+            start.spot,
+            ThingSpot::RoomCentre { id: "a".to_owned() },
+            "the room form centres"
+        );
+        assert_eq!(start.angle, 270_i32);
+        assert_eq!(start.path, "player_start");
+    }
+
+    #[test]
+    fn an_omitted_things_list_and_player_start_ask_for_a_start_at_the_tool() {
+        let args = plan_request("");
+        let rows = args.to_things().expect("nothing to convert");
+        assert!(rows.is_empty(), "no rows to place means no rows to convert");
+    }
+
+    #[test]
+    fn a_type_or_name_that_is_both_or_neither_names_its_row() {
+        let both =
+            plan_request(r#", "things": [{"type": 2035, "name": "barrel", "x": 8, "y": 8}]"#);
+        let message = refuse(&both.to_things().expect_err("type and name are exclusive"));
+        assert!(message.contains("things[0]"), "{message}");
+        assert!(message.contains("exactly one"), "{message}");
+        let neither = plan_request(r#", "things": [{"room": "a"}]"#);
+        let bare = refuse(&neither.to_things().expect_err("no type or name"));
+        assert!(bare.contains("things[0]"), "{bare}");
+    }
+
+    #[test]
+    fn half_a_coordinate_or_a_room_and_a_point_names_its_row() {
+        for body in [
+            r#"{"type": 1, "x": 8, "room": "a"}"#,
+            r#"{"type": 1, "y": 8}"#,
+            r#"{"type": 1}"#,
+            r#"{"type": 1, "x": 8, "y": 8, "room": "a"}"#,
+        ] {
+            let args = plan_request(&format!(r#", "things": [{body}]"#));
+            let message = refuse(&args.to_things().expect_err("the row is malformed"));
+            assert!(message.contains("things[0]"), "{message} names things[0]");
+        }
+    }
+
+    #[test]
+    fn angles_outside_the_compass_and_unknown_skills_are_refused() {
+        for (extra, needle) in [
+            (r#""x": 8, "y": 8, "angle": 360"#, "0..=359"),
+            (r#""x": 8, "y": 8, "angle": -1"#, "0..=359"),
+            (
+                r#""room": "a", "skills": ["nightmare"]"#,
+                "things[0].skills",
+            ),
+        ] {
+            let args = plan_request(&format!(
+                r#", "things": [{{"type": 2035, {extra}}}],
+                    "player_start": {{"room": "a"}}"#
+            ));
+            let error = args.to_things().expect_err("the row is refused");
+            assert_eq!(error.code(), "invalid_argument", "{extra}");
+            assert!(error.to_string().contains(needle), "{error} names {needle}");
+        }
+    }
+
+    #[test]
+    fn the_player_start_shape_mirrors_the_thing_rows() {
+        let point = plan_request(
+            r#", "player_start": {"x": 16, "y": 24, "angle": 45},
+                "things": [{"type": 1, "room": "a"}]"#,
+        );
+        let rows = point.to_things().expect("a pinned start converts");
+        assert_eq!(
+            rows.first().expect("two rows").spot,
+            ThingSpot::Room { id: "a".to_owned() },
+            "the thing rows keep their order"
+        );
+        assert_eq!(
+            rows.get(1).expect("two rows").spot,
+            ThingSpot::Point((16_i64, 24_i64))
+        );
+        assert_eq!(rows.get(1).expect("two rows").angle, 45_i32);
+        for (start, needle) in [
+            (r#"{"x": 8}"#, "player_start"),
+            (r#"{"x": 8, "y": 8, "room": "a"}"#, "player_start"),
+            ("{}", "player_start"),
+            (r#"{"room": "a", "angle": 900}"#, "0..=359"),
+        ] {
+            let args = plan_request(&format!(r#", "player_start": {start}"#));
+            let message = refuse(&args.to_things().expect_err("the start is malformed"));
+            assert!(message.contains(needle), "{message} names {needle}");
         }
     }
 }

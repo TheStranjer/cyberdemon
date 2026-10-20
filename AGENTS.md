@@ -247,13 +247,17 @@ src/
                   against an optional one-call theme override;
                   `tools/plan.rs` is the `plan` group: `build_map_from_plan`
                   maps its wire `rooms`/`connections` onto `crate::plan::model`
-                  (`tools/plan/params.rs`), carries the coordinates through
+                  (`tools/plan/params.rs`, which also shape-validates the
+                  `things`/`player_start` rows), carries the coordinates through
                   `crate::plan::units` (`units`/`grid` parameters), resolves
-                  the eight `TextureRole` dressing slots through the theme, runs `crate::plan::compile`
-                  and `wad::map::write_map`, and appends the block as one
-                  `Session::edit` via `maps::write_block` (geometry only: the
-                  things and finalize slices later fill the reserved
-                  `nodes`/`validation` result fields and the door specials);
+                  the eight `TextureRole` dressing slots through the theme, runs `crate::plan::compile`,
+                  stands the things in with `crate::plan::things` (name
+                  resolution over the session definitions, room grids,
+                  presence flags; a type 1 row is mandatory) and
+                  `wad::map::write_map`, and appends the block as one
+                  `Session::edit` via `maps::write_block` (the finalize slice
+                  later fills the reserved `nodes`/`validation` result fields
+                  and the door specials);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

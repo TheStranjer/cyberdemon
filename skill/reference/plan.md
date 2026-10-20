@@ -2,22 +2,25 @@
 
 Build a whole map from a declarative plan: rooms with footprints and
 sector properties, connections joining them, thick walls grown in
-between, and a theme to dress it all with. One call compiles the plan
-into a complete map block and writes it into the working archive as a
-single undoable edit.
+between, things to stand in the result, and a theme to dress it all
+with. One call compiles the plan into a complete map block and writes
+it into the working archive as a single undoable edit.
 
-Geometry only for now: the compiled map has no things (no player start
-yet), door connectors come out closed but un-wired, and `nodes` /
+Things land in the same call: `things` rows and a mandatory
+`player_start` (or a thing of type `1`) populate the block. Door
+connectors still come out closed and un-wired, and `nodes` /
 `validation` in the result are reserved fields later slices fill.
 
 ## `build_map_from_plan`
 
 `{map, format? = "doom", namespace?, replace? = false, wall_thickness?
-= 16, rooms: [...], connections: [...], theme?, units? {scale_num? = 1,
-scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y? = false}, grid? =
-8}` → `{map, format, rooms: {id: [sectors]}, connections: [{id, kind,
-sectors}], bounds: {x1, y1, x2, y2} | null, warnings, nodes: null,
-validation: null, next_steps}`
+= 16, rooms: [...], connections: [...], things?: [{type | name, x + y |
+room, count? = 1, angle? = 0, skills?, multiplayer_only?}],
+player_start?: {x, y, angle?} | {room, angle?}, theme?, units?
+{scale_num? = 1, scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y?
+= false}, grid? = 8}` → `{map, format, rooms: {id: [sectors]},
+connections: [{id, kind, sectors}], things_placed, bounds: {x1, y1, x2,
+y2} | null, warnings, nodes: null, validation: null, next_steps}`
 
 **The map**: `map` is the new block's header name (1 to 8 printable
 ASCII, case-insensitive). When the *working archive* already holds a
@@ -96,6 +99,50 @@ is refused naming the plan path.
 > becomes 4 map units with `y` mirrored (the default `grid: 8` then
 > aligns everything to 2-pixel lines).
 
+**The things**: `things` is a list of rows, each naming *what* and
+*where*:
+
+- **What** — exactly one of `type` (a doomednum written straight into
+  `THINGS`) and `name`, resolved against the session's game definitions
+  (the same DEHACKED/DECORATE/MAPINFO-overlaid tables `validate_map`
+  reads): a case-insensitive exact thing name wins, else a
+  case-insensitive substring must match exactly one distinct type. No
+  match and an ambiguous match are both `invalid_argument` naming
+  `things[i]`; the ambiguity lists the candidate names so you can pick.
+- **Where** — exactly one of an `x`/`y` plan point (transformed and
+  snapped through `units` and `grid` exactly like the room footprints)
+  and a `room` id to fill. Half a coordinate pair, or both a point and
+  a room, is `invalid_argument` naming `things[i]`; an unknown room id
+  names `things[i].room`.
+- `count` (default `1`) is how many copies a room fill places; a pinned
+  point holds exactly one thing. `angle` (default `0`) must lie in
+  `0..=359`.
+
+A room fill is deterministic: starting at the room sector's bounding
+box minimum corner raised by the thing's *clearance* — its definition's
+blocking radius (16 when the definitions do not list the type) plus 8
+map units — candidate points run row-major on a grid spaced by twice
+the clearance, and a point is kept only when the sector contains it and
+it stands at least the clearance from every wall. When fewer points fit
+than `count` asks for, the call still succeeds and `warnings` gains
+`"room 'x' fits only N of M things"`.
+
+`skills` (some of `"easy"`, `"medium"`, `"hard"`, case-insensitive; an
+unknown name is `invalid_argument` naming `things[i].skills`) sets the
+skill presence bits, defaulting to all three. `multiplayer_only: true`
+keeps the thing out of single-player: the `notsingle` bit in the Doom
+family, the `coop` + `dm` mode bits in the Hexen one (where `single`
+clears the same way). Unset, a thing is present in every skill and
+game mode.
+
+**The player start**: every built map needs one. `player_start` is
+`{x, y, angle?}` (a plan point through the same transform) or
+`{room, angle?}` (the room sector's bounding-box centre); it adds a
+thing of type `1`. Without it — and without any `things` row whose
+`type` is `1` or whose `name` resolves to type `1` — the call fails
+`invalid_argument`: `a map needs a player 1 start; pass player_start or
+a thing of type 1`.
+
 **The theme**: textures resolve through the session's texture theme
 (`reference/themes.md`) once per call — the plan roles `floor`,
 `ceiling`, `wall`, `door`, `door_floor`, `door_track`, `window_sill`
@@ -112,18 +159,20 @@ and adds a `warnings` note.
 ids, unknown or self-joined rooms, non-positive widths, too-short
 boundaries…) already name the offending id; the tool prefixes them
 with the wire index — `rooms[0]: room 'a' has a 0x64 rectangle; both
-edges must be positive`.
+edges must be positive`. Thing rows fail the same way, naming
+`things[i]`, `things[i].room`, `things[i].skills` or `player_start`.
 
 **The result**: `rooms` maps each room id to the sector indices it
 owns (a fully painted-over room holds no entry and warns about it);
 `connections` reports `{id, kind, sectors}` per connection in plan
 order (`id` is the connection's `id`, or its derived `from->to`
-label). `bounds` is the vertex box `{x1, y1, x2, y2}`. `warnings`
-carries the compiler's advisories — rooms unreachable from the first,
-rooms painted over, floor gaps taller than 24 units through an
-opening/door/window ("use stairs") — plus the theme notes. `nodes` and
-`validation` are `null` placeholders the later slices fill; there is
-no `things_placed` count yet because no things are placed.
+label); `things_placed` counts the `THINGS` rows written, room fills
+and the player start included. `bounds` is the vertex box
+`{x1, y1, x2, y2}`. `warnings` carries the compiler's advisories —
+rooms unreachable from the first, rooms painted over, floor gaps taller
+than 24 units through an opening/door/window ("use stairs"), rooms that
+fit fewer things than asked — plus the theme notes. `nodes` and
+`validation` are `null` placeholders the later slices fill.
 
 ```json
 call build_map_from_plan {
@@ -135,13 +184,16 @@ call build_map_from_plan {
   "connections": [
     {"id": "vdoor", "from": "hall", "to": "vault", "kind": "door", "at": [128, 32]},
     {"from": "hall", "to": "vault", "kind": "opening", "at": [128, 96]}
-  ]
+  ],
+  "things": [{"name": "imp", "room": "hall", "count": 4}],
+  "player_start": {"room": "hall"}
 }
 -> {"map": "MAP05", "format": "doom",
     "rooms": {"hall": [0], "vault": [1]},
     "connections": [
       {"id": "vdoor", "kind": "door", "sectors": [2]},
       {"id": "hall->vault", "kind": "opening", "sectors": [3]}],
+    "things_placed": 5,
     "bounds": {"x1": 0, "y1": 0, "x2": 256, "y2": 128},
     "warnings": [],
     "nodes": null, "validation": null,
@@ -152,12 +204,13 @@ call build_map_from_plan {
 Two 128×128 rooms sharing the line `x = 128`: a door low on their
 shared wall, an opening high on it. The wall between them is the
 default 16 units thick; the door sector (2) is closed and carries no
-special until something wires it.
+special until something wires it; four imps clear the hall's grid and
+the player start takes its bounding-box centre.
 
 **After the call**: `render_topdown` compares the layout with the
-sketch you worked from, `render_view` walks it first-person (place
-start things first — no things exist yet), and `validate_map` judges
-the geometry (`nodes_missing` is expected on a fresh block: run
-`build_nodes` / `build_all_nodes` before playing the map in vanilla
-`Doom`, `reference/nodes.md`). Failed calls change nothing: no block
-is written and no undo entry is recorded.
+sketch you worked from, `render_view` walks it first-person from the
+placed player start, and `validate_map` judges the map (`nodes_missing`
+is expected on a fresh block: run `build_nodes` / `build_all_nodes`
+before playing the map in vanilla `Doom`, `reference/nodes.md`). Failed
+calls change nothing: no block is written and no undo entry is
+recorded.

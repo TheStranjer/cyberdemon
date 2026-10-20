@@ -243,7 +243,7 @@ merged view an engine would see. Building a level starts with `create_map`
 (an empty map block in the working archive; `copy_map` clones an existing
 one; `reference/maps.md`) — or declare the whole layout at once with
 `build_map_from_plan`, which compiles rooms, connections, thick walls and
-a theme into a finished geometry block in one undoable edit
+a theme into a finished, thing-inhabited block in one undoable edit
 (`reference/plan.md`). Draw whole
 rooms in one call with `create_sector_from_loop`, and carve solid rock out
 of the map with `carve_void` (`reference/sectors.md`). Put working doors in

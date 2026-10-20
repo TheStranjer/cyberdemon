@@ -2,12 +2,15 @@
 //! `build_map_from_plan` compiles a two-room plan with a `door` and an
 //! `opening` into one written block whose sector and geometry counts
 //! match the reported bookkeeping (and whose structural checks stay
-//! clean, though the door lands closed with no special and no player
-//! start exists yet), the active map adoption, `already_exists` for a
-//! working-archive block without `replace` and its overwrite, the
+//! clean, though the door lands closed with no special), the things and
+//! `player_start` parameters standing rows into the map by name, room
+//! fill and transformed point with presence flags round-tripping
+//! through the written block, the active map adoption, `already_exists`
+//! for a working-archive block without `replace` and its overwrite, the
 //! one-step `undo` that takes the whole block back, plan-path-named
 //! refusals (a flat rectangle, both or neither footprint, unknown kind
-//! and style names), the `units` scale-and-mirror and `grid` snap that
+//! and style names, an ambiguous thing name, a plan without a player
+//! start), the `units` scale-and-mirror and `grid` snap that
 //! carry an image-space plan into map units before compiling (with
 //! unusable `units.scale_den`/`grid` values refused), a `UDMF` block
 //! with its declared namespace, and a one-call `theme` override that
@@ -27,9 +30,8 @@ mod tests {
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
 
-    /// The structural checks a compiled plan must pass; the thing
-    /// checks are excluded because geometry-only plans place no player
-    /// start yet.
+    /// The structural checks a compiled plan must pass; thing checks
+    /// run separately because only the thing tests place a start.
     const STRUCTURAL_CODES: [&str; 7] = [
         "crossing_lines",
         "overlapping_lines",
@@ -55,7 +57,8 @@ mod tests {
     }
 
     /// The two-room plan: `a` west of `b`, sharing the line `x = 128`,
-    /// joined by a door low on the wall and an opening high on it.
+    /// joined by a door low on the wall and an opening high on it, with
+    /// the player start the tool now demands standing in `a`.
     fn plan_for(map: &str) -> Value {
         json!({
             "map": map,
@@ -66,7 +69,8 @@ mod tests {
             "connections": [
                 {"id": "d1", "from": "a", "to": "b", "kind": "door", "at": [128_i64, 32_i64]},
                 {"from": "a", "to": "b", "kind": "opening", "at": [128_i64, 96_i64]}
-            ]
+            ],
+            "player_start": {"room": "a"}
         })
     }
 
@@ -145,6 +149,11 @@ mod tests {
             "the plan's outer corners"
         );
         assert_eq!(result["nodes"], json!(null), "reserved for the nodes slice");
+        assert_eq!(
+            result["things_placed"],
+            json!(1_u64),
+            "just the player start in room a"
+        );
         assert_eq!(
             result["validation"],
             json!(null),
@@ -322,7 +331,8 @@ mod tests {
                 {"id": "shot", "rect": {"x": 0_i64, "y": 0_i64, "w": 100_i64, "h": 50_i64}}
             ],
             "connections": [],
-            "units": {"scale_num": 4_i64, "flip_y": true}
+            "units": {"scale_num": 4_i64, "flip_y": true},
+            "player_start": {"room": "shot"}
         });
         let result = call(&client, "build_map_from_plan", request).await;
         assert_eq!(
@@ -355,7 +365,8 @@ mod tests {
                 {"id": "a", "rect": {"x": 33_i64, "y": 33_i64, "w": 64_i64, "h": 64_i64}}
             ],
             "connections": [],
-            "grid": 16_i64
+            "grid": 16_i64,
+            "player_start": {"room": "a"}
         });
         let result = call(&client, "build_map_from_plan", request).await;
         assert_eq!(
@@ -437,5 +448,224 @@ mod tests {
             message.contains("tech") && message.contains("hell"),
             "the refusal lists the themes: {message}"
         );
+    }
+
+    /// The `things` rows of the working map's assembled graph.
+    async fn working_things(client: &Client, map: &str) -> Vec<Value> {
+        let report = call(
+            client,
+            "assemble_map",
+            json!({"map": map, "scope": "working", "include": ["things"]}),
+        )
+        .await;
+        report["things"]
+            .as_array()
+            .expect("things is an array")
+            .clone()
+    }
+
+    /// The thing rows of type `kind`, by type number.
+    fn things_of_kind(rows: &[Value], kind: i64) -> Vec<Value> {
+        rows.iter()
+            .filter(|row| row["type"].as_i64() == Some(kind))
+            .cloned()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn named_things_fill_a_room_and_the_start_lands_in_its_centre() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["things"] = json!([{"name": "imp", "room": "a", "count": 4_u64}]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        assert_eq!(
+            result["things_placed"],
+            json!(5_u64),
+            "four imps and the player start"
+        );
+        let summary = call(
+            &client,
+            "get_map_summary",
+            json!({"map": "MAP05", "scope": "working"}),
+        )
+        .await;
+        assert_eq!(
+            summary["counts"]["things"],
+            json!(5_u64),
+            "the written block holds every placed row"
+        );
+        assert_eq!(
+            summary["player_starts"],
+            json!([1_u64]),
+            "the room-form start is a real type 1"
+        );
+        let report = call(
+            &client,
+            "validate_map",
+            json!({"map": "MAP05", "scope": "working", "codes": ["no_player1_start"]}),
+        )
+        .await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(0_u64),
+            "no player-start error: {:?}",
+            report["issues"]
+        );
+        let imps = things_of_kind(&working_things(&client, "MAP05").await, 3001_i64);
+        assert_eq!(imps.len(), 4, "four imps in room a");
+        assert!(
+            imps.iter()
+                .all(|row| row["x"].as_i64().is_some_and(|x| x > 0_i64)
+                    && row["y"].as_i64().is_some_and(|y| y > 0_i64)),
+            "every imp stands clear of the walls: {imps:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pinned_named_point_travels_the_units_transform() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let request = json!({
+            "map": "MAP05",
+            "rooms": [
+                {"id": "a", "rect": {"x": 0_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}}
+            ],
+            "connections": [],
+            "units": {"scale_num": 4_i64},
+            "things": [{"name": "barrel", "x": 10_i64, "y": 10_i64}],
+            "player_start": {"room": "a"}
+        });
+        let result = call(&client, "build_map_from_plan", request).await;
+        assert_eq!(result["things_placed"], json!(2_u64), "barrel plus start");
+        let barrels = things_of_kind(&working_things(&client, "MAP05").await, 2035_i64);
+        let barrel = barrels.first().expect("one barrel");
+        assert_eq!(
+            (barrel["x"].as_i64(), barrel["y"].as_i64()),
+            (Some(40_i64), Some(40_i64)),
+            "plan (10, 10) at scale 4 lands on map (40, 40)"
+        );
+    }
+
+    #[tokio::test]
+    async fn skills_and_multiplayer_only_round_trip_into_thing_flags() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["things"] = json!([
+            {"type": 2035_u64, "x": 40_i64, "y": 40_i64,
+             "skills": ["easy"], "multiplayer_only": true},
+            {"type": 2035_u64, "room": "b", "count": 1_u64}
+        ]);
+        call(&client, "build_map_from_plan", request).await;
+        let barrels = things_of_kind(&working_things(&client, "MAP05").await, 2035_i64);
+        assert_eq!(barrels.len(), 2, "both barrel rows landed");
+        let pinned = barrels.first().expect("two barrels");
+        assert_eq!(
+            pinned["flags"],
+            json!(17_u64),
+            "easy (1) + notsingle (16) in the Doom family"
+        );
+        assert_eq!(
+            pinned["flag_names"],
+            json!(["easy", "notsingle"]),
+            "the names read back from the written block"
+        );
+        let plain = barrels.get(1).expect("two barrels");
+        assert_eq!(
+            plain["flag_names"],
+            json!(["easy", "medium", "hard"]),
+            "unset skills and mode default to present everywhere"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_name_is_refused_listing_the_candidates() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["things"] = json!([{"name": "skul", "room": "a"}]);
+        let (code, message) = call_err(&client, "build_map_from_plan", request).await;
+        assert_eq!(code, "invalid_argument", "several things match 'skul'");
+        assert!(message.contains("things[0]"), "the row is named: {message}");
+        assert!(
+            message.contains("Skull on Pole"),
+            "the candidates: {message}"
+        );
+        assert!(
+            message.contains("Pile of Skulls"),
+            "the candidates: {message}"
+        );
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "the refusal wrote nothing");
+    }
+
+    #[tokio::test]
+    async fn a_plan_without_any_player_start_is_refused_by_name() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request
+            .as_object_mut()
+            .expect("the plan object")
+            .remove("player_start");
+        let (code, message) = call_err(&client, "build_map_from_plan", request.clone()).await;
+        assert_eq!(code, "invalid_argument", "type 1 is mandatory");
+        assert!(
+            message.contains("a map needs a player 1 start"),
+            "the documented advice: {message}"
+        );
+        let mut named = request;
+        named["things"] = json!([{"type": 1_u64, "room": "a"}]);
+        let result = call(&client, "build_map_from_plan", named).await;
+        assert_eq!(
+            result["things_placed"],
+            json!(1_u64),
+            "a thing of type 1 satisfies the check"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_count_larger_than_the_room_warns_fits_only_and_keeps_what_fit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let request = json!({
+            "map": "MAP05",
+            "rooms": [
+                {"id": "closet", "rect": {"x": 0_i64, "y": 0_i64, "w": 64_i64, "h": 64_i64}}
+            ],
+            "connections": [],
+            "things": [{"name": "imp", "room": "closet", "count": 4_u64}],
+            "player_start": {"room": "closet"}
+        });
+        let result = call(&client, "build_map_from_plan", request).await;
+        let warnings = result["warnings"].as_array().expect("a warning list");
+        assert!(
+            warnings
+                .iter()
+                .any(|note| note.as_str() == Some("room 'closet' fits only 1 of 4 things")),
+            "the short room is noted: {warnings:?}"
+        );
+        assert_eq!(
+            result["things_placed"],
+            json!(2_u64),
+            "one imp cleared the walls, plus the centre start"
+        );
+        let summary = call(
+            &client,
+            "get_map_summary",
+            json!({"map": "MAP05", "scope": "working"}),
+        )
+        .await;
+        assert_eq!(summary["counts"]["things"], json!(2_u64), "as written");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_thing_room_names_its_row_and_room() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["things"] = json!([{"name": "imp", "room": "ghost"}]);
+        refuse_with(&client, request, "things[0].room").await;
     }
 }

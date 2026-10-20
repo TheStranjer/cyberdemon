@@ -238,7 +238,11 @@ src/
                   pad and destination squares, the type-14 destination
                   things and their outward-facing border actions, one-way
                   or `two_way`) as one step;
-                  the `add_switch`/`add_exit` tickets grow in place here, and
+                  the `add_switch`/`add_exit` tools are one step over the
+                  `features::switches` mount core (`build_switch`'s panel
+                  fit, `split_linedef` isolation, tag resolution and
+                  dressing; `build_walk_over_exit`'s sector-boundary level
+                  ends), and
                   the `mark_secret`/`set_light_effect` tools are the two
                   special-bit steps over `features::specials`);
                   `tools/inspect.rs`' `diff_wads` resolves side strings
@@ -271,8 +275,10 @@ src/
                   `Session::edit` via `maps::write_block` (the `finalize`
                   parameter runs the `nodes` tools' whole-set build on the
                   model inside that step and fills the `nodes` summary and
-                  the errors-only `validation` result fields; the door
-                  specials come from the follow-up ticket);
+                  the errors-only `validation` result fields; the door,
+                  switch and exit wiring comes from `crate::plan::features`,
+                  the lift, teleporter, light and secret steps follow with
+                  their tickets);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.
@@ -353,7 +359,11 @@ src/
                   `build_teleporter`'s pad and destination squares, the
                   type-14 destination things it places and their
                   outward-facing borders, with the `two_way` return leg),
-                  `map/features/switches.rs` the switch action table and
+                  `map/features/switches.rs` the pure switch core (the
+                  `switch_special` action table, `build_switch`'s wall
+                  mount: panel chunk fit, `split_linedef` isolation, tag
+                  resolution and dressing, and `build_walk_over_exit`'s
+                  two-sided-boundary level ends) and
                   `map/features/specials.rs` the pure sector-special builders
                   (`secret_edit`'s per-family secret bit and `light_special`'s
                   per-family light effect, each keeping every bit outside its

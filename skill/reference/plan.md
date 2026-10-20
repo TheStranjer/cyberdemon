@@ -12,9 +12,11 @@ builds the node run into the block and validates the result, all inside
 the one undoable edit. Door connectors are wired: the band sector takes
 a fresh tag and the room-facing lines the style's door special
 (coloured jambs for locked doors, a bare tagged band for `remote`).
-`features` rows — `exit`, `switch`, `lift`
-and `teleporter` declarations — parse, transform and validate now and
-install nothing until the follow-up CD-95 wiring slices land.
+`features` rows — `exit`, `switch`, `lift` and `teleporter`
+declarations — install too: a `switch` row mounts a panel on its room's
+wall that fires a remote door's tag, and an `exit` row ends the level
+by panel or by walk-over. `lift` and `teleporter` rows parse, transform
+and validate now and install nothing until their wiring slices land.
 
 ## `build_map_from_plan`
 
@@ -61,7 +63,7 @@ sky unless it names a flat), `secret` (default `false`) and
 `light_effect` (unset by default; one of `none`, `flicker`,
 `strobe_fast`, `strobe_slow`, `glow` or `random_off`,
 case-insensitive). `secret` and `light_effect` describe the room for
-the follow-up CD-95 wiring slices and install nothing yet.
+the follow-up wiring slices and install nothing yet.
 
 **The walls**: `wall_thickness` (default `16`) is the map-unit wall
 grown between and around rooms; `0` lets rooms share their walls
@@ -99,12 +101,19 @@ the connection and saying they *do not touch*.
 beside the geometry. Each row gives a `kind` (case-insensitive) plus
 that kind's fields:
 
-| kind         | Fields | Declares |
+| kind         | Fields | Installs |
 |--------------|--------|----------|
-| `exit`       | `room`, `style?` = `switch` or `walk_over` (default `switch`), `secret?` = false, `wall?` | The level end standing in `room`; `wall` is `north`, `south`, `east` or `west` (unset lets the wiring decide). |
-| `switch`     | `room`, `opens`, `wall?`, `repeatable?` = false | A wall switch in `room` operating the connection whose `id` is `opens`. |
-| `lift`       | `room`, `low_floor?`, `style?` = `use_wall` or `walk_trigger` (default `use_wall`), `repeatable?` = true | A platform in `room` lowering to `low_floor` (default: the lowest neighbouring floor). |
-| `teleporter` | `from_room`, `to_room`, `pad?`, `destination?`, `angle?` = 0, `two_way?` = false | A pad in `from_room` and a destination in `to_room`; the squares are plan points `[x, y]` carried through the same transform as the rooms (the room centres by default), `angle` is the arrival facing. |
+| `exit`       | `room`, `style?` = `switch` or `walk_over` (default `switch`), `secret?` = false, `wall?` | The level end standing in `room`. `switch` mounts the 32-unit exit panel on a wall of `room` (`Doom` specials `11`/`51`, Hexen portal `243`/`244`); `walk_over` dresses every two-sided boundary of the room's sectors with the family's walk-over exit (`W1` `52`/`124`, tag kept as the destination map number — a plan-built room's bare `0` ends the game). `secret: true` picks the secret form. `wall` is `north`, `south`, `east` or `west`; unset takes the room's longest one-sided wall. |
+| `switch`     | `room`, `opens`, `wall?`, `repeatable?` = false | A 32-unit switch panel centred on the chosen wall of `room`, opening the remote door whose connection `id` is `opens` (`Doom` `S1` `103`, or `SR` `61` with `repeatable: true`; `Hexen` `Door_Open`). The switch fires exactly the tag the door's band sector carries. `opens` must name a `remote` door: any other connection fails `invalid_argument`. |
+| `lift`       | `room`, `low_floor?`, `style?` = `use_wall` or `walk_trigger` (default `use_wall`), `repeatable?` = true | Declares a platform in `room` lowering to `low_floor` (default: the lowest neighbouring floor). Installs with a later slice. |
+| `teleporter` | `from_room`, `to_room`, `pad?`, `destination?`, `angle?` = 0, `two_way?` = false | Declares a pad in `from_room` and a destination in `to_room`; the squares are plan points `[x, y]` carried through the same transform as the rooms (the room centres by default), `angle` is the arrival facing. Installs with a later slice. |
+
+> **The wall a panel mounts on.** Among the room's one-sided walls
+> whose outward normal points at `wall` (`north` is `+y`, `south` `-y`,
+> `east` `+x`, `west` `-x`), the longest wins and ties fall to the
+> lowest linedef index; with `wall` unset any one-sided wall competes.
+> A room with no wall on the asked side (or none at all) fails
+> `invalid_argument` naming the room and the side.
 
 The rows reference-check like connections: a feature naming a room the
 plan does not hold, a `switch` whose `opens` matches no connection `id`
@@ -113,11 +122,6 @@ missing its `room` (its `from_room`/`to_room`, or the switch's
 `opens`), and a bad `kind`, `style` or `wall` name are all
 `invalid_argument` naming `features[i]` — the vocabulary refusals list
 the accepted names.
-
-> **Features install nothing yet.** They parse, transform and validate
-> now; dressing them onto the compiled map arrives with the follow-up
-> CD-95 wiring slices on this branch. A plan with features compiles
-> exactly like the plan without them.
 
 **Units and the grid**: room footprints, connection `at` positions and
 teleporter `pad`/`destination` squares are plan coordinates, drawn in
@@ -191,10 +195,13 @@ a thing of type 1`.
 **The theme**: textures resolve through the session's texture theme
 (`reference/themes.md`) once per call — the plan roles `floor`,
 `ceiling`, `wall`, `door`, `door_floor`, `door_track`, `window_sill`
-and `step`. The door step additionally consults `door_track_red`,
+and `step`. The feature steps additionally consult `door_track_red`,
 `door_track_blue` and `door_track_yellow` (the theme table falls them
-back to `door_track`); a coloured track the theme answers `"-"` leaves
-a locked door's jambs in the plain track and adds its own note. `theme`
+back to `door_track`), plus `switch` and `exit_switch` for the mounted
+panels (falling back to `wall` and `switch`). A feature role the theme
+answers `"-"` leaves its faces as the compiler dressed them — a locked
+door's jambs in the plain track, a switch panel on the wall's own
+middle — and adds its own note. `theme`
 names a different theme **for this call only**
 (case-insensitive; unknown names fail `invalid_argument` listing the
 game's themes); the session's theme and per-role overrides never
@@ -249,8 +256,11 @@ label); `features` reports one `{kind, room, sectors, lines, tag}` row
 per installed game feature in pipeline order — doors first, in
 connection order, each with `kind` `door`, `room` `null`, its band
 `sectors`, the room-facing `lines` carrying the action (a `remote`'s
-stay bare) and the shared `tag`; the follow-up slices append the
-switch, lift, teleporter and exit rows. `things_placed` counts the
+stay bare) and the shared `tag`; then switches (`kind` `switch`, the
+room, its door's band sector, the mounted line and the door's tag);
+then exits (`kind` `exit`, the room and its sectors, the dressed lines
+and no tag). The lift, teleporter, light and secret rows report nothing
+until their slices land. `things_placed` counts the
 `THINGS` rows written, room fills
 and the player start included. `bounds` is the vertex box
 `{x1, y1, x2, y2}`. `warnings` carries the compiler's advisories —

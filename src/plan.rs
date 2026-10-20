@@ -10,8 +10,10 @@
 //! vertical mirror and a snap grid. After it, [`things`] fills the
 //! compiled geometry: name resolution, room grids and presence flags,
 //! and [`features`] installs the game behaviour: door connectors take
-//! their tags, specials and facing today, the follow-up wiring slices
-//! fill in the rest. Nothing in this module touches
+//! their tags, specials and facing, `switch` rows mount their panels on
+//! room walls firing a remote door's tag, and `exit` rows end the level
+//! by panel or walk-over; the lift, teleporter, light and secret
+//! wiring comes with the follow-up slices. Nothing in this module touches
 //! archives, sessions or `MCP` types; it is data, measurement and
 //! validation only.
 

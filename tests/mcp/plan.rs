@@ -21,9 +21,12 @@
 //! the extended `ZNODES` lump alone for `UDMF` ones) with the result's
 //! `nodes` summary and errors-only `validation` pass, and the null
 //! pair when `finalize` is not asked for. The `features` rows: a plan
-//! carrying an exit, a switch, a lift and a teleporter builds exactly
-//! like its feature-free twin, and a feature naming an unknown room or
-//! an `opens` id no connection carries refuses naming `features[i]`.
+//! carrying only a lift and a teleporter builds exactly like its
+//! feature-free twin; a `switch` row mounts its panel on the chosen
+//! wall and fires the remote door's own tag, an `exit` row ends the
+//! level on the room's wall (`switch`) or shared boundaries
+//! (`walk_over`), and rows naming an unknown room or an `opens` id no
+//! connection carries refuse naming `features[i]`.
 //! The door wiring: a blue-key plan's `features` row matches the written
 //! block — its lines carry special `26` and the band's tag with fronts
 //! facing their rooms, validation stays error-free and one `undo` takes
@@ -293,6 +296,41 @@ mod tests {
         assert_eq!(row["room"], json!(null), "a door belongs to the wall");
         assert_eq!(row["sectors"], json!([2_u64]), "the band sector");
         assert_eq!(row["tag"], json!(1_u64), "the fresh shared tag");
+    }
+
+    /// The row of linedef `index` in an assembled `lines` list.
+    fn line_row(lines: &[Value], index: u64) -> &Value {
+        lines
+            .iter()
+            .find(|row| row["index"] == json!(index))
+            .unwrap_or_else(|| panic!("line {index} is in the block"))
+    }
+
+    /// The first linedef index a `features` row reports.
+    fn first_line(row: &Value) -> u64 {
+        row["lines"][0].as_u64().expect("one reported line")
+    }
+
+    /// Assert every row of `lines` whose index is in `indices` carries
+    /// the `W1` walk-over level end.
+    fn assert_walk_lines(lines: &[Value], indices: &[u64]) {
+        let crossed: Vec<&Value> = lines
+            .iter()
+            .filter(|line| indices.contains(&line["index"].as_u64().expect("an index")))
+            .collect();
+        assert_eq!(
+            crossed.len(),
+            indices.len(),
+            "every reported line is in the block"
+        );
+        for line in crossed {
+            let index = line["index"].as_u64().expect("an index");
+            assert_eq!(
+                line["special"],
+                json!(52_i64),
+                "the W1 exit on line {index}"
+            );
+        }
     }
 
     /// Assert every row of `lines` whose index is in `indices` is a
@@ -1027,38 +1065,140 @@ mod tests {
         );
     }
 
+    /// The deferred kinds still compile untouched, and every row
+    /// reference-checks by path.
     #[tokio::test]
-    async fn feature_rows_build_like_their_feature_free_twin_and_refuse_by_path() {
+    async fn deferred_feature_rows_build_like_the_feature_free_twin_and_refuse_by_path() {
         let dir = tempfile::tempdir().expect("temp dir");
         let client = features_loaded(dir.path()).await;
-        let mut dressed = plan_for("MAP05");
-        dressed["features"] = json!([
-            {"kind": "exit", "room": "b", "style": "walk_over",
-             "secret": true, "wall": "north"},
-            {"kind": "switch", "room": "a", "opens": "d1", "wall": "east"},
+        let mut deferred = plan_for("MAP05");
+        deferred["features"] = json!([
             {"kind": "lift", "room": "b", "low_floor": 0_i64, "style": "use_wall"},
             {"kind": "teleporter", "from_room": "a", "to_room": "b",
              "pad": [64_i64, 32_i64], "destination": [192_i64, 96_i64],
              "angle": 90_i64, "two_way": true}
         ]);
-        let with_features = call(&client, "build_map_from_plan", dressed.clone()).await;
+        let with_features = call(&client, "build_map_from_plan", deferred.clone()).await;
         let assembled_dressed = call(&client, "assemble_map", json!({"map": "MAP05"})).await;
         call(&client, "undo", json!({})).await;
         let plain = call(&client, "build_map_from_plan", plan_for("MAP05")).await;
         let assembled_plain = call(&client, "assemble_map", json!({"map": "MAP05"})).await;
         assert_eq!(
             with_features, plain,
-            "features install nothing yet: the results agree row for row"
+            "lift and teleporter install nothing yet: the results agree row for row"
         );
         assert_eq!(
             assembled_dressed, assembled_plain,
             "and the written block is the block the feature-free plan builds"
         );
+        let mut dressed = deferred;
+        dressed["features"] = json!([
+            {"kind": "exit", "room": "b", "style": "walk_over"},
+            {"kind": "switch", "room": "a", "opens": "d1"}
+        ]);
         let mut ghost = dressed.clone();
         ghost["features"][0]["room"] = json!("ghost");
         refuse_with(&client, ghost, "features[0]").await;
         let mut orphan = dressed;
         orphan["features"][1]["opens"] = json!("nope");
         refuse_with(&client, orphan, "features[1]").await;
+    }
+
+    /// A remote door and its switch: the build reports the rows in
+    /// pipeline order and the written block carries the action, the
+    /// door's own tag and the theme's panel.
+    #[tokio::test]
+    async fn a_switch_fires_the_remote_door_it_opens() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["connections"][0]["style"] = json!("remote");
+        request["features"] =
+            json!([{"kind": "switch", "room": "a", "opens": "d1", "wall": "west"}]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(
+            rows.len(),
+            2,
+            "the door leads, the switch follows: {rows:?}"
+        );
+        assert_eq!(rows[0]["kind"], json!("door"), "the door is wired first");
+        assert_eq!(rows[0]["tag"], json!(1_u64), "the band keeps its tag");
+        assert_eq!(rows[1]["kind"], json!("switch"), "the switch mounts after");
+        assert_eq!(rows[1]["room"], json!("a"), "in room a");
+        assert_eq!(rows[1]["sectors"], json!([2_u64]), "firing the door band");
+        assert_eq!(rows[1]["tag"], json!(1_u64), "with the door's own tag");
+        let lines = working_lines(&client, "MAP05").await;
+        let panel = line_row(&lines, first_line(&rows[1]));
+        assert_eq!(panel["special"], json!(103_i64), "S1 opens the remote door");
+        assert_eq!(panel["tag"], json!(1_i64), "on the door's own tag");
+        assert_eq!(
+            panel["front"]["middle"],
+            json!("SW1STRTN"),
+            "the theme's switch panel"
+        );
+        call(&client, "undo", json!({})).await;
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "one undo takes the wiring back");
+    }
+
+    /// Both exit styles land on the written block: the walk-over row
+    /// dresses the room's shared boundaries with `52` and the switch
+    /// row carries the secret level end in the theme's exit panel.
+    #[tokio::test]
+    async fn the_two_exit_styles_end_the_level_where_the_room_stands() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["features"] = json!([
+            {"kind": "exit", "room": "b", "style": "walk_over"},
+            {"kind": "exit", "room": "b", "style": "switch", "secret": true, "wall": "east"}
+        ]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(rows[0]["kind"], json!("door"), "the plain door wires first");
+        let walked = rows.get(1).expect("the walk-over row");
+        let mounted = rows.get(2).expect("the switch row");
+        assert_eq!(walked["kind"], json!("exit"), "exits come after the door");
+        assert_eq!(walked["room"], json!("b"), "the room it stands in");
+        assert_eq!(walked["sectors"], json!([1_u64]), "its own sector");
+        assert_eq!(walked["tag"], json!(null), "an exit carries no tag");
+        assert_eq!(mounted["kind"], json!("exit"));
+        let walk_lines: Vec<u64> = walked["lines"]
+            .as_array()
+            .expect("a line list")
+            .iter()
+            .map(|slot| slot.as_u64().expect("an index"))
+            .collect();
+        assert!(!walk_lines.is_empty(), "room b shares its band walls");
+        let lines = working_lines(&client, "MAP05").await;
+        assert_walk_lines(&lines, &walk_lines);
+        let secret = line_row(&lines, first_line(mounted));
+        assert_eq!(secret["special"], json!(51_i64), "the S1 secret exit");
+        assert_eq!(secret["tag"], json!(0_i64), "an exit acts on no tag");
+        assert_eq!(
+            secret["front"]["middle"],
+            json!("SW1EXIT"),
+            "the theme's exit panel"
+        );
+    }
+
+    /// A switch pointed at a non-remote door is refused, and nothing is
+    /// written.
+    #[tokio::test]
+    async fn a_switch_on_a_plain_door_is_refused_as_not_remote() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["features"] =
+            json!([{"kind": "switch", "room": "a", "opens": "d1", "wall": "west"}]);
+        let (code, message) = call_err(&client, "build_map_from_plan", request).await;
+        assert_eq!(code, "invalid_argument", "a plain door is no target");
+        assert!(
+            message.contains("switch opens d1 which is not a remote door"),
+            "the refusal words: {message}"
+        );
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "the refusal wrote nothing");
     }
 }

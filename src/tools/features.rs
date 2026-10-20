@@ -16,13 +16,12 @@
 //! sector with the family's walk-over level-end special as one
 //! [`build_walk_over_exit`] edit step.
 //!
-//! `add_switch` composes the same pure engines: [`project_onto_line`]
-//! and [`door_segment`] fit the panel to the wall,
-//! [`crate::wad::map::ops::split_linedef`]
-//! isolates the chunk as its own linedef (skipped when the line already
-//! is exactly that chunk), [`switch_special`] is the per-family action
-//! table and [`next_free_tag`] mints the tag an untagged target sector
-//! answers with.
+//! `add_switch` runs the pure [`crate::wad::map::features::switches`]
+//! core as one [`crate::session::Session::edit_map`] step:
+//! [`crate::wad::map::features::switches`] fits the panel chunk to the
+//! wall, isolates it as its own linedef, resolves the tag its target
+//! sector answers with and dresses the line from the [`switch_special`]
+//! table.
 //!
 //! `add_door` composes the pure engines: [`crate::wad::map::features`]
 //! selects the wall ([`longest_boundary`], [`nearest_boundary`]), fits
@@ -148,17 +147,16 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
-    DEFAULT_PAD_SIZE, DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures,
-    DoorWall, LiftBuild, LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep, SecretEdit,
-    StairSpec, SwitchAction, TeleportBuild, TeleportSpec, VertexPair, WindowHeights, WindowSides,
-    WindowTextures, apply_door, apply_window, boundary_lines, build_lift, build_stairs,
-    build_teleporter, door_rect, door_segment, door_specials, door_wall, light_special,
-    longest_boundary, nearest_boundary, next_free_tag, outward_depth, project_onto_line,
-    secret_edit, switch_special, void_strip, window_record,
+    DEFAULT_PAD_SIZE, DEFAULT_SWITCH_WIDTH, DOOM_SECRET_SPECIAL, DoorSides, DoorStyle,
+    DoorTextures, DoorWall, LiftBuild, LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep,
+    PlacedSwitch, SecretEdit, StairSpec, SwitchAction, SwitchSpec, TeleportBuild, TeleportSpec,
+    WindowHeights, WindowSides, WindowTextures, action_name, apply_door, apply_window,
+    boundary_lines, build_lift, build_stairs, build_switch, build_teleporter, build_walk_over_exit,
+    door_rect, door_specials, door_wall, light_special, longest_boundary, nearest_boundary,
+    next_free_tag, outward_depth, project_onto_line, secret_edit, void_strip, window_record,
 };
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
-use crate::wad::map::ops::{self, Point};
+use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::{Linedef, Map, Sector};
 use crate::wad::name::LumpName;
@@ -169,8 +167,6 @@ const DEFAULT_WIDTH: i32 = 64_i32;
 const DEFAULT_SILL: i32 = 32_i32;
 /// The `add_window` default lintel depth below the lower room ceiling.
 const DEFAULT_LINTEL: i32 = 24_i32;
-/// The `add_switch` default panel width in map units: one switch face.
-const DEFAULT_SWITCH_WIDTH: i32 = 32_i32;
 /// The void strip `add_door` and `add_window` carve between touching
 /// rooms, in map units.
 const STRIP_THICKNESS: i32 = 16_i32;
@@ -1698,17 +1694,6 @@ fn add_teleporter_run(
     })
 }
 
-/// The canonical wire name of `action`.
-const fn action_name(action: SwitchAction) -> &'static str {
-    match action {
-        SwitchAction::OpenDoor => "open_door",
-        SwitchAction::Exit => "exit",
-        SwitchAction::SecretExit => "secret_exit",
-        SwitchAction::RaiseFloor => "raise_floor",
-        SwitchAction::LowerFloor => "lower_floor",
-    }
-}
-
 /// Every action name, in [`SwitchAction::all`] order.
 fn action_names() -> Vec<&'static str> {
     SwitchAction::all().map(action_name).to_vec()
@@ -1741,188 +1726,6 @@ const fn switch_role(action: SwitchAction) -> Role {
     }
 }
 
-/// Everything [`build_switch`] needs once the wire parameters resolved.
-#[derive(Debug)]
-struct SwitchSpec {
-    /// The wall to mount the panel on.
-    linedef: usize,
-    /// The requested panel centre, if any.
-    at: Option<Point>,
-    /// The panel width in map units.
-    width: i32,
-    /// The action to install.
-    action: SwitchAction,
-    /// The sector the switch acts on (sector-moving actions).
-    target_sector: Option<usize>,
-    /// Whether the line keeps working after use.
-    repeatable: bool,
-    /// The theme-resolved panel texture.
-    texture: String,
-}
-
-/// The [`Map`] endpoints of the wall switch `linedef`, refused with
-/// switch-role instructions when the index dangles or a vertex is gone
-/// ([`door_segment`] speaks of doors, so the wall is checked first).
-fn switch_span(map: &Map, index: usize) -> Result<(Point, Point), CyberError> {
-    let count = map.linedefs.len();
-    if index >= count {
-        return Err(out_of_range("linedef", index, count));
-    }
-    line_ends(map, index).ok_or_else(|| {
-        invalid(&format!(
-            "switch linedef {index} references a vertex the map does not hold: resolve \
-             its endpoints first"
-        ))
-    })
-}
-
-/// The `width`-wide panel chunk of the wall, centred on `at` (or the
-/// midpoint): [`project_onto_line`] and [`door_segment`] on a wall
-/// already checked for [`switch_span`], so only the width, zero-length
-/// and fit refusals can reach the caller.
-fn switch_cut(map: &Map, spec: &SwitchSpec) -> Result<(VertexPair, i32), CyberError> {
-    switch_span(map, spec.linedef)?;
-    if spec.width <= 0_i32 {
-        return Err(invalid(
-            "the switch width must be a positive number of map units (the default 32 \
-             covers one switch panel)",
-        ));
-    }
-    let centre = project_onto_line(map, spec.linedef, spec.at);
-    door_segment(map, spec.linedef, centre, spec.width)
-}
-
-/// The isolated panel chunk: which linedef carries it and whether the
-/// wall had to be cut.
-#[derive(Debug)]
-struct Chunk {
-    /// Index in [`Map::linedefs`] of the switch line.
-    line: usize,
-    /// Whether [`build_switch`] split the wall to isolate the chunk.
-    split: bool,
-}
-
-/// Make the `start`-`finish` chunk of linedef `linedef` its own linedef
-/// with [`ops::split_linedef`], cutting only where the chunk does not
-/// already meet an endpoint; the chunk keeps the wall's sides (split
-/// copies them) and the pieces beyond its ends stand aside.
-fn isolate_chunk(
-    map: &mut Map,
-    linedef: usize,
-    start: Point,
-    finish: Point,
-) -> Result<Chunk, CyberError> {
-    let (from, to) = switch_span(map, linedef)?;
-    let mut chunk = Chunk {
-        line: linedef,
-        split: false,
-    };
-    if start != from {
-        chunk.line = ops::split_linedef(map, chunk.line, Some(start))?.new_linedef;
-        chunk.split = true;
-    }
-    if finish != to {
-        ops::split_linedef(map, chunk.line, Some(finish))?;
-        chunk.split = true;
-    }
-    Ok(chunk)
-}
-
-/// The refusal for a sector-moving action that names no target sector.
-fn target_required(action: SwitchAction) -> CyberError {
-    invalid(&format!(
-        "the {} action needs target_sector: pass the index of the sector the switch \
-         moves (add_door reports the door sector of its remote door)",
-        action_name(action)
-    ))
-}
-
-/// The tag the switch line answers with: the target sector's existing
-/// one, or a fresh [`next_free_tag`] stamped onto the sector when it
-/// carries none. Exit actions level-end and act on no tag.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] when a sector-moving action names no
-/// `target_sector` or an index past the map's sectors.
-fn switch_tag(map: &mut Map, spec: &SwitchSpec) -> Result<i32, CyberError> {
-    if !spec.action.needs_target() {
-        return Ok(0_i32);
-    }
-    let index = spec
-        .target_sector
-        .ok_or_else(|| target_required(spec.action))?;
-    let current = map
-        .sectors
-        .get(index)
-        .ok_or_else(|| out_of_range("sector", index, map.sectors.len()))?
-        .tag;
-    if current != 0_i32 {
-        return Ok(current);
-    }
-    let fresh = next_free_tag(map);
-    if let Some(sector) = map.sectors.get_mut(index) {
-        sector.tag = fresh;
-    }
-    Ok(fresh)
-}
-
-/// The front sidedef index of the switch `line`, when the line has one
-/// and the sidedef resolves.
-fn switch_side(map: &Map, line: usize) -> Option<usize> {
-    map.linedefs
-        .get(line)?
-        .front
-        .filter(|index| map.sidedefs.get(*index).is_some())
-}
-
-/// Write the action onto the isolated line and the panel onto its front
-/// side; the `Hexen` family replaces the activation field with the
-/// setup's `playeruse` bits, the `Doom` family keeps the line's flags.
-fn dress_switch(
-    map: &mut Map,
-    line: usize,
-    setup: &DoorLineSetup,
-    texture: &str,
-) -> Result<(), CyberError> {
-    let hexen = map.flag_family() == FlagFamily::Hexen;
-    let Some(side) = switch_side(map, line) else {
-        return Err(invalid(&format!(
-            "linedef {line} has no front sidedef to wear the switch: give the wall a \
-             front side facing the triggering room first (see add_sidedef)"
-        )));
-    };
-    if let Some(def) = map.linedefs.get_mut(line) {
-        def.special = setup.special;
-        def.tag = setup.tag;
-        def.args = setup.args;
-        if hexen {
-            def.flags = (def.flags & !ACTIVATION_MASK) | setup.flags_activation;
-        }
-    }
-    if let Some(worn) = map.sidedefs.get_mut(side) {
-        texture.clone_into(&mut worn.middle);
-    }
-    Ok(())
-}
-
-/// What one [`build_switch`] step did, as the tool reports it.
-#[derive(Debug, Serialize)]
-struct PlacedSwitch {
-    /// Index of the linedef carrying the switch (new when split).
-    linedef: usize,
-    /// Whether the wall was split to isolate the panel.
-    split: bool,
-    /// The canonical action name the switch got.
-    action: &'static str,
-    /// The line special installed.
-    special: i32,
-    /// The tag the line answers with (`0` for the exit actions).
-    tag: i32,
-    /// The panel texture installed on the front middle.
-    texture: String,
-}
-
 /// Structured result of [`Cyberdemon::add_switch`].
 #[derive(Serialize)]
 struct SwitchReport {
@@ -1932,24 +1735,6 @@ struct SwitchReport {
     /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
-}
-
-/// The whole switch as one map edit: fit the chunk, isolate it, resolve
-/// the tag it answers with and dress the line with the table's action.
-fn build_switch(map: &mut Map, spec: &SwitchSpec) -> Result<PlacedSwitch, CyberError> {
-    let ((start, finish), _available) = switch_cut(map, spec)?;
-    let chunk = isolate_chunk(map, spec.linedef, start, finish)?;
-    let tag = switch_tag(map, spec)?;
-    let setup = switch_special(map.flag_family(), spec.action, spec.repeatable, tag);
-    dress_switch(map, chunk.line, &setup, &spec.texture)?;
-    Ok(PlacedSwitch {
-        linedef: chunk.line,
-        split: chunk.split,
-        action: action_name(spec.action),
-        special: setup.special,
-        tag,
-        texture: spec.texture.clone(),
-    })
 }
 
 /// The shared switch step's outcome: what was placed and the standard
@@ -2021,91 +1806,6 @@ fn kind_of(text: &str) -> Result<ExitKind, CyberError> {
                  linedef) or \"walk_over\" (every two-sided boundary of sector)"
             ))
         })
-}
-
-/// The walk-over exit special flag family `family` installs for a
-/// normal or `secret` level end: the `Doom` family's `W1` 52/124, the
-/// `Hexen` family's portal 243/244.
-const fn walk_over_special(family: FlagFamily, secret: bool) -> i32 {
-    match family {
-        FlagFamily::Doom => {
-            if secret {
-                124_i32
-            } else {
-                52_i32
-            }
-        }
-        FlagFamily::Hexen => {
-            if secret {
-                244_i32
-            } else {
-                243_i32
-            }
-        }
-    }
-}
-
-/// Whether `line` is two-sided (both sides resolving to sectors) with
-/// `sector` opening on either of them.
-fn sector_boundary(map: &Map, line: &Linedef, sector: usize) -> bool {
-    let front = side_sector(map, line.front);
-    let back = side_sector(map, line.back);
-    front.is_some() && back.is_some() && (front == Some(sector) || back == Some(sector))
-}
-
-/// The lines [`build_walk_over_exit`] dressed and the special they carry.
-#[derive(Debug)]
-struct WalkOverExit {
-    /// The level-end special installed on every boundary line.
-    special: i32,
-    /// Indices of the two-sided lines that now end the level.
-    lines: Vec<usize>,
-}
-
-/// Set one boundary line's level-end special; in the `Hexen` family
-/// clear its activation field to the `playercross` value (the field's
-/// zero), keeping the other flag bits, the tag and the args.
-fn mark_walk_over(map: &mut Map, index: usize, special: i32, hexen: bool) {
-    if let Some(line) = map.linedefs.get_mut(index) {
-        line.special = special;
-        if hexen {
-            line.flags &= !ACTIVATION_MASK;
-        }
-    }
-}
-
-/// Dress every two-sided boundary of `sector` with the family's
-/// walk-over level end. The `Doom` family's `W1` 52/124 read the line's
-/// tag as the destination map number, so existing tags stay as they are
-/// (a plain 0 ends the game, or the secret level on 124).
-fn build_walk_over_exit(
-    map: &mut Map,
-    sector: usize,
-    secret: bool,
-) -> Result<WalkOverExit, CyberError> {
-    if map.sectors.get(sector).is_none() {
-        return Err(out_of_range("sector", sector, map.sectors.len()));
-    }
-    let special = walk_over_special(map.flag_family(), secret);
-    let hexen = map.flag_family() == FlagFamily::Hexen;
-    let lines: Vec<usize> = map
-        .linedefs
-        .iter()
-        .enumerate()
-        .filter(|&(_, line)| sector_boundary(map, line, sector))
-        .map(|(index, _line)| index)
-        .collect();
-    if lines.is_empty() {
-        return Err(invalid(&format!(
-            "sector {sector} has no two-sided boundary to walk over: draw a shared wall \
-             to the next sector (add_door, or create_sector_from_loop overlapping it) or \
-             trigger the exit with kind \"switch\" instead"
-        )));
-    }
-    for index in &lines {
-        mark_walk_over(map, *index, special, hexen);
-    }
-    Ok(WalkOverExit { special, lines })
 }
 
 /// Structured result of [`Cyberdemon::add_exit`].
@@ -2691,11 +2391,10 @@ mod tests {
         WindowHeights, WindowSkins, WindowSpec, action_name, action_names, action_of, build_door,
         build_stairs, build_switch, build_walk_over_exit, build_window, centroid,
         check_light_level, choose_between, choose_linedef, door_groups, door_record, dress_door,
-        dress_switch, effect_names, effect_of, half_axis, isolate_chunk, kind_name, kind_of,
-        lift_platform_of, lift_style_name, lift_style_names, lift_style_of, mark_secrets,
-        out_of_range, recess_depth, sector_selection, set_lights, side_sector, stair_spec,
-        strip_face_lost, strip_wall, style_name, style_names, style_of, switch_cut, switch_role,
-        switch_span, switch_tag, target_of, teleport_spec, track_role, walk_over_special,
+        effect_names, effect_of, half_axis, kind_name, kind_of, lift_platform_of, lift_style_name,
+        lift_style_names, lift_style_of, mark_secrets, out_of_range, recess_depth,
+        sector_selection, set_lights, side_sector, stair_spec, strip_face_lost, strip_wall,
+        style_name, style_names, style_of, switch_role, target_of, teleport_spec, track_role,
     };
     use crate::error::CyberError;
     use crate::themes::Role;
@@ -2704,6 +2403,9 @@ mod tests {
     use crate::wad::map::features::SwitchAction;
     use crate::wad::map::features::door_wall;
     use crate::wad::map::features::switch_special;
+    use crate::wad::map::features::{
+        dress_switch, isolate_chunk, switch_cut, switch_span, switch_tag, walk_over_special,
+    };
     use crate::wad::map::flags::FlagFamily;
     use crate::wad::map::ops::Point;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};

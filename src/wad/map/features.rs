@@ -10,9 +10,12 @@
 //! placement geometry: wall selection, width fit and the outward depth
 //! raycast that turn a room and a desire into a concrete [`DoorWall`]
 //! cut and the [`BoundaryStrip`] and [`door_rect`] polygons to draw.
-//! [`switches`] is the pure switch action table of [`switch_special`]:
-//! the specials a wall switch installs per flag family, in the same
-//! [`DoorLineSetup`] shape the door engine writes. [`window`] is the
+//! [`switches`] is the pure switch core: the specials a wall switch
+//! installs per flag family is the [`switch_special`] table, and
+//! [`switches::build_switch`] mounts one on a named wall — fit the panel
+//! chunk, isolate it as its own linedef and dress the line with the
+//! action — while [`switches::build_walk_over_exit`] ends the level on
+//! every two-sided boundary of a sector. [`window`] is the
 //! pure window core: [`window::window_record`] computes the strip
 //! sector's sill/lintel heights and [`window::apply_window`] closes off
 //! the drawn strip with two-sided blocking view lines. [`stairs`] is
@@ -68,7 +71,11 @@ pub use stairs::{
     DEPTH_TOLERANCE, MAX_STEP_HEIGHT, MIN_HEADROOM, MIN_STEP_HEIGHT, PaintedStep, StairBuild,
     StairPlan, StairSpec, StairStep, build_stairs, plan_stairs,
 };
-pub use switches::{SwitchAction, switch_special};
+pub use switches::{
+    Chunk, DEFAULT_SWITCH_WIDTH, PlacedSwitch, SwitchAction, SwitchSpec, WalkOverExit, action_name,
+    build_switch, build_walk_over_exit, dress_switch, isolate_chunk, switch_cut, switch_span,
+    switch_special, switch_tag, walk_over_special,
+};
 pub use teleport::{
     DEFAULT_PAD_SIZE, TELEPORT_DESTINATION_THING, TeleportBuild, TeleportSpec, build_teleporter,
     teleport_specials,

@@ -3,7 +3,7 @@
 //!
 //! A [`Plan`] is pure data: the room footprints and sector properties a
 //! caller draws, the connections between them, the game features
-//! ([`Feature`]) the follow-up wiring slices will install, and the
+//! ([`Feature`]) the wiring slices install, and the
 //! scalar taste knobs (wall thickness, opening widths, sill and step
 //! sizes). This module knows nothing about maps or archives: it only
 //! checks that a plan is well-formed ([`Plan::validate`]) and turns a
@@ -241,10 +241,13 @@ pub enum KeyColor {
     Red,
 }
 
-/// A game structure the plan carries and the follow-up wiring slices
-/// install once the map is compiled. Nothing acts on a feature yet:
-/// [`compile`](fn@crate::plan::compile) validates them and passes them
-/// to no engine.
+/// A game structure the plan carries and the wiring steps install.
+///
+/// [`apply_features`](crate::plan::features::apply_features) mounts the
+/// `exit` and `switch` rows once the map is compiled;
+/// [`compile`](fn@crate::plan::compile) itself validates every row and
+/// draws no geometry for it, and the `lift` and `teleporter` kinds wait
+/// for their slices.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Feature {

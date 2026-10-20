@@ -5,9 +5,10 @@
 //! a fixed-order pipeline — `doors`, `switches`, `lifts`, `teleporters`,
 //! `exits`, `lights` and `secrets` — so a later step always sees what
 //! the earlier ones allocated; the private `FeatureRun` carries that
-//! state (the tag every connector got, the rows applied so far) between
-//! them. Only the door step has behaviour on this branch; the follow-up
-//! wiring slices fill the rest.
+//! state (the tag and band sector every connector got, the rows applied
+//! so far) between them. The door, switch and exit steps have
+//! behaviour on this branch; the lift and teleporter wiring slices fill
+//! the rest.
 //!
 //! The door step walks the plan's placed door connectors in connection
 //! order: a fresh [`next_free_tag`] is stamped on the band sector
@@ -18,9 +19,18 @@
 //! faces are re-dressed in the coloured track [`FeatureDress`] names for
 //! the style's [`track_role_name`]; plain styles keep what
 //! [`apply_textures`](crate::plan::textures::apply_textures) dressed
-//! there. Every installed feature reports one [`FeatureRow`]. Nothing
-//! here touches archives, sessions or `MCP` types; the theme names
-//! arrive already resolved.
+//! there. The switch step then mounts each `switch` row's panel on its
+//! room's wall (`choose_switch_wall`: the longest one-sided room wall
+//! facing the row's `wall`, or the longest outright when `wall` is
+//! unset), centred with the [`build_switch`] core at the default 32
+//! units, and fires the `opens` door's own tag — refused unless the
+//! row names a wired [`DoorStyle::Remote`] door. The exit step ends the
+//! level: its `switch` style mounts the panel the same way carrying the
+//! exit action, and its `walk_over` style dresses every two-sided
+//! boundary of the room's sectors with [`build_walk_over_exit`]. Every
+//! installed feature reports one [`FeatureRow`]. Nothing here touches
+//! archives, sessions or `MCP` types; the theme names arrive already
+//! resolved.
 //!
 //! [`DoorStyle::Remote`]: crate::wad::map::features::DoorStyle::Remote
 //! [`door_specials`]: crate::wad::map::features::door_specials
@@ -34,10 +44,14 @@ use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::plan::emit::{CompiledPlan, ConnectorInfo};
-use crate::plan::model::{ConnectionKind, DoorStyle, KeyColor, Plan};
+use crate::plan::model::{ConnectionKind, DoorStyle, ExitStyle, Feature, KeyColor, Plan, Side};
 use crate::wad::map::Map;
 use crate::wad::map::features::DoorStyle as WadDoorStyle;
-use crate::wad::map::features::{door_specials, face_room_line, next_free_tag};
+use crate::wad::map::features::{
+    DEFAULT_SWITCH_WIDTH, PlacedSwitch, SwitchAction, SwitchSpec, build_switch,
+    build_walk_over_exit, door_specials, face_room_line, next_free_tag,
+};
+use crate::wad::map::model::Linedef;
 
 /// The model's name for "draw nothing here" on a texture face: what an
 /// unresolved theme role arrives as, leaving faces as the compiler
@@ -49,8 +63,10 @@ const NO_NAME: &str = "-";
 /// The tool resolves these against the session's theme before the run;
 /// a role the theme could not answer arrives as `"-"` and its faces
 /// keep what [`apply_textures`](crate::plan::textures::apply_textures)
-/// dressed them. The door step reads the coloured tracks today; the
-/// plain [`door`](FeatureDress::door) face and [`track`](FeatureDress::track)
+/// dressed them. The door step reads the coloured tracks; the switch
+/// and exit steps read [`switch`](FeatureDress::switch) and
+/// [`exit_switch`](FeatureDress::exit_switch), and the plain
+/// [`door`](FeatureDress::door) face and [`track`](FeatureDress::track)
 /// names serve the follow-up slices.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FeatureDress {
@@ -64,6 +80,10 @@ pub struct FeatureDress {
     pub track_blue: String,
     /// The track beside a yellow-key door (role `door_track_yellow`).
     pub track_yellow: String,
+    /// The wall-switch panel (theme role `switch`).
+    pub switch: String,
+    /// The exit-switch panel (theme role `exit_switch`).
+    pub exit_switch: String,
 }
 
 impl FeatureDress {
@@ -80,6 +100,8 @@ impl FeatureDress {
             "door_track_red" => self.track_red.as_str(),
             "door_track_blue" => self.track_blue.as_str(),
             "door_track_yellow" => self.track_yellow.as_str(),
+            "switch" => self.switch.as_str(),
+            "exit_switch" => self.exit_switch.as_str(),
             _ => "",
         };
         (!name.is_empty() && name != NO_NAME).then_some(name)
@@ -89,13 +111,14 @@ impl FeatureDress {
 /// One game structure the run installed, as the result reports it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FeatureRow {
-    /// The feature class: `door` today; `switch`, `lift`, `teleporter`,
-    /// `exit`, `light` and `secret` come with the follow-up slices.
+    /// The feature class: `door`, `switch` and `exit` today; `lift`,
+    /// `teleporter`, `light` and `secret` come with the follow-up slices.
     pub kind: &'static str,
     /// The room the feature stands in; `None` for a connector feature
     /// like a door, which belongs to the wall between two rooms.
     pub room: Option<String>,
-    /// The sectors the feature dresses (a door: its band sector).
+    /// The sectors the feature dresses (a door: its band sector; a
+    /// switch: the door band it fires; an exit: its room's sectors).
     pub sectors: Vec<usize>,
     /// The linedefs the feature carries its action on (a door: the
     /// room-facing trigger lines; a reported empty list with a tag is a
@@ -111,11 +134,12 @@ pub struct FeatureRow {
 /// The pipeline is fixed-order — `doors -> switches -> lifts ->
 /// teleporters -> exits -> lights -> secrets` — so a later step can
 /// find what an earlier one allocated (the switch step looks a door's
-/// tag up in the run state); today only the door step acts, and the
-/// [`Feature`](crate::plan::model::Feature) rows of the plan install
-/// nothing until the follow-up wiring slices land. `dress` carries the
-/// theme-resolved texture names; a role answered `"-"` leaves its faces
-/// as [`compile`](fn@crate::plan::compile) dressed them. `compiled` must
+/// tag up in the run state); the door, switch and exit steps act on the
+/// [`Feature`] rows of the plan, and the
+/// lift, teleporter, light and secret steps stay placeholders until
+/// their wiring slices land. `dress` carries the theme-resolved texture
+/// names; a role answered `"-"` leaves its faces as
+/// [`compile`](fn@crate::plan::compile) dressed them. `compiled` must
 /// be the plan's own compilation: the steps act on the connector
 /// bookkeeping, never re-derive it.
 ///
@@ -123,7 +147,10 @@ pub struct FeatureRow {
 ///
 /// [`CyberError::Internal`] when a door connector names a band sector
 /// the compiled map does not hold — the signature of a `compiled` from
-/// a different plan. The follow-up slices add their refusals.
+/// a different plan. The switch step refuses a row whose `opens` names
+/// no wired [`DoorStyle::Remote`] door and a room with no wall to mount
+/// on; the exit step refuses the same way, and a `walk_over` room whose
+/// sectors share no two-sided boundary with anything.
 #[inline]
 pub fn apply_features(
     plan: &Plan,
@@ -132,22 +159,25 @@ pub fn apply_features(
 ) -> Result<Vec<FeatureRow>, CyberError> {
     let mut run = FeatureRun::default();
     doors(compiled, dress, &mut run)?;
-    switches(plan, &run);
+    switches(plan, compiled, dress, &mut run)?;
     lifts(plan, &run);
     teleporters(plan, &run);
-    exits(plan, &run);
+    exits(plan, compiled, dress, &mut run)?;
     lights(plan, &run);
     secrets(plan, &run);
     Ok(run.rows)
 }
 
 /// The state one [`apply_features`] run threads through the pipeline:
-/// the tags allocated so far and the rows applied. The switch slice
-/// reads [`FeatureRun::tags`] to find the door an `opens` id names.
+/// the tags and band sectors allocated so far and the rows applied. The
+/// switch step reads [`FeatureRun::tags`] and [`FeatureRun::bands`] to
+/// find the door an `opens` id names.
 #[derive(Default)]
 struct FeatureRun {
     /// Connection id to the tag its door band carries.
     tags: BTreeMap<String, i32>,
+    /// Connection id to the band sector the door step tagged.
+    bands: BTreeMap<String, usize>,
     /// The rows applied so far, in pipeline order.
     rows: Vec<FeatureRow>,
 }
@@ -165,10 +195,114 @@ fn doors(
     Ok(())
 }
 
-/// The switch step: empty until the follow-up slice installs the wall
-/// switches of the plan's `switch` rows, finding the door each `opens`
-/// names through the tags [`FeatureRun::tags`] records.
-const fn switches(_plan: &Plan, _run: &FeatureRun) {}
+/// The switch step: mount every `switch` row's panel on its room's wall
+/// firing the remote door's tag, in plan order.
+fn switches(
+    plan: &Plan,
+    compiled: &mut CompiledPlan,
+    dress: &FeatureDress,
+    run: &mut FeatureRun,
+) -> Result<(), CyberError> {
+    for feature in plan.features.clone() {
+        let Feature::Switch {
+            room,
+            opens,
+            wall,
+            repeatable,
+        } = feature
+        else {
+            continue;
+        };
+        let door = remote_door(plan, run, &opens)?;
+        let sectors = room_sectors_of(compiled, &room)?;
+        let mount = SwitchMount {
+            action: SwitchAction::OpenDoor,
+            role: "switch",
+            target: Some(door.band),
+            repeatable,
+            dress,
+            room: &room,
+        };
+        let placed = mount_panel(&mut compiled.map, &sectors, wall, &mount)?;
+        run.rows.push(FeatureRow {
+            kind: "switch",
+            room: Some(room),
+            sectors: vec![door.band],
+            lines: vec![placed.linedef],
+            tag: Some(placed.tag),
+        });
+    }
+    Ok(())
+}
+
+/// One wall-mounted panel to place: what it does, which dressed role it
+/// wears, and the room it stands in for the refusal wording.
+struct SwitchMount<'mount> {
+    /// The action the [`build_switch`] core installs.
+    action: SwitchAction,
+    /// The [`FeatureDress`] role naming the panel texture.
+    role: &'mount str,
+    /// The sector the action fires on (tagged actions only).
+    target: Option<usize>,
+    /// Whether the line keeps working after use.
+    repeatable: bool,
+    /// The theme-resolved names the run dresses with.
+    dress: &'mount FeatureDress,
+    /// The room the panel is mounted in, for the wall-refusal wording.
+    room: &'mount str,
+}
+
+/// Choose the room's switch wall and mount `mount`'s panel centred on
+/// it.
+fn mount_panel(
+    map: &mut Map,
+    sectors: &[usize],
+    wall: Option<Side>,
+    mount: &SwitchMount<'_>,
+) -> Result<PlacedSwitch, CyberError> {
+    let linedef = choose_switch_wall(map, sectors, wall, mount.room)?;
+    place_switch(map, linedef, mount)
+}
+
+/// Run the [`build_switch`] core for one mount: the default-width panel
+/// centred on `linedef`'s midpoint, carrying the door's own tag.
+fn place_switch(
+    map: &mut Map,
+    linedef: usize,
+    mount: &SwitchMount<'_>,
+) -> Result<PlacedSwitch, CyberError> {
+    let texture = panel_texture(map, linedef, mount);
+    let spec = SwitchSpec {
+        linedef,
+        at: None,
+        width: DEFAULT_SWITCH_WIDTH,
+        action: mount.action,
+        target_sector: mount.target,
+        repeatable: mount.repeatable,
+        texture,
+    };
+    build_switch(map, &spec)
+}
+
+/// The panel texture: the theme's answer for the mount's role, or the
+/// wall's own current middle when the theme left the role unnamed —
+/// those faces keep what the compiler dressed, door-slice style.
+fn panel_texture(map: &Map, linedef: usize, mount: &SwitchMount<'_>) -> String {
+    mount
+        .dress
+        .texture(mount.role)
+        .map_or_else(|| wall_middle(map, linedef), str::to_owned)
+}
+
+/// The chosen wall's front-side `middle` texture, `"-"` when the line
+/// wears nothing.
+fn wall_middle(map: &Map, linedef: usize) -> String {
+    map.linedefs
+        .get(linedef)
+        .and_then(|line| line.front)
+        .and_then(|side| map.sidedefs.get(side))
+        .map_or_else(|| NO_NAME.to_owned(), |side| side.middle.clone())
+}
 
 /// The lift step: empty until the follow-up slice lowers the platforms
 /// the plan's `lift` rows ask for.
@@ -178,9 +312,83 @@ const fn lifts(_plan: &Plan, _run: &FeatureRun) {}
 /// and destinations of the plan's `teleporter` rows.
 const fn teleporters(_plan: &Plan, _run: &FeatureRun) {}
 
-/// The exit step: empty until the follow-up slice ends the level where
-/// the plan's `exit` rows stand.
-const fn exits(_plan: &Plan, _run: &FeatureRun) {}
+/// The exit step: end the level where every `exit` row stands, in plan
+/// order — its `switch` style through the same wall-mounted panel as
+/// the switch step, its `walk_over` style on every two-sided boundary
+/// of the room's sectors.
+fn exits(
+    plan: &Plan,
+    compiled: &mut CompiledPlan,
+    dress: &FeatureDress,
+    run: &mut FeatureRun,
+) -> Result<(), CyberError> {
+    for feature in plan.features.clone() {
+        let Feature::Exit {
+            room,
+            style,
+            secret,
+            wall,
+        } = feature
+        else {
+            continue;
+        };
+        let sectors = room_sectors_of(compiled, &room)?;
+        let lines = match style {
+            ExitStyle::Switch => {
+                let mount = exit_mount(dress, &room, secret);
+                vec![mount_panel(&mut compiled.map, &sectors, wall, &mount)?.linedef]
+            }
+            ExitStyle::WalkOver => walk_over_exit(&mut compiled.map, &sectors, secret)?,
+        };
+        run.rows.push(FeatureRow {
+            kind: "exit",
+            room: Some(room),
+            sectors,
+            lines,
+            tag: None,
+        });
+    }
+    Ok(())
+}
+
+/// The `switch`-style exit mount: the (secret) exit action on the
+/// room's chosen wall, wearing the theme's `exit_switch` panel.
+const fn exit_mount<'mount>(
+    dress: &'mount FeatureDress,
+    room: &'mount str,
+    secret: bool,
+) -> SwitchMount<'mount> {
+    let action = if secret {
+        SwitchAction::SecretExit
+    } else {
+        SwitchAction::Exit
+    };
+    SwitchMount {
+        action,
+        role: "exit_switch",
+        target: None,
+        repeatable: false,
+        dress,
+        room,
+    }
+}
+
+/// Dress every two-sided boundary of `sectors` with the family's
+/// walk-over level end, keeping the tags those lines carry — a plan
+/// room's lines hold tag `0`, which in the `Doom` family ends the game.
+fn walk_over_exit(
+    map: &mut Map,
+    sectors: &[usize],
+    secret: bool,
+) -> Result<Vec<usize>, CyberError> {
+    let mut lines = Vec::new();
+    for &sector in sectors {
+        lines.extend(build_walk_over_exit(map, sector, secret)?.lines);
+    }
+    lines.sort_unstable();
+    lines.dedup();
+    Ok(lines)
+}
 
 /// The lights step: empty until the follow-up slice installs the rooms'
 /// `light_effect` sector specials.
@@ -190,12 +398,160 @@ const fn lights(_plan: &Plan, _run: &FeatureRun) {}
 /// the plan marks `secret` (and the `exit` rows carried `secret`).
 const fn secrets(_plan: &Plan, _run: &FeatureRun) {}
 
+/// A remote door a switch row may fire: its tagged band sector.
+#[derive(Debug)]
+struct RemoteDoor {
+    /// The band sector `target_sector` points at; the door step already
+    /// stamped its tag, so [`build_switch`] keeps it instead of minting
+    /// a second one.
+    band: usize,
+}
+
+/// Find the wired remote door `opens` names: the plan row must carry
+/// the id, be a [`DoorStyle::Remote`] door, and have been tagged by the
+/// door step (a band a later room painted over allocated nothing).
+fn remote_door(plan: &Plan, run: &FeatureRun, opens: &str) -> Result<RemoteDoor, CyberError> {
+    let styled = plan.connections.iter().any(|row| {
+        row.id.as_deref() == Some(opens)
+            && matches!(
+                row.kind,
+                ConnectionKind::Door {
+                    style: DoorStyle::Remote
+                }
+            )
+    });
+    let wired = styled
+        .then(|| {
+            Some(RemoteDoor {
+                band: *run.bands.get(opens)?,
+            })
+        })
+        .flatten();
+    wired.ok_or_else(|| not_remote(opens))
+}
+
+/// The refusal for a switch whose `opens` names no wired remote door.
+fn not_remote(opens: &str) -> CyberError {
+    invalid(&format!(
+        "switch opens {opens} which is not a remote door: point it at a door connection \
+         of style remote, or leave the door for its own trigger"
+    ))
+}
+
+/// The sectors `room` owns in the compiled map, refusing a room the
+/// emission kept none of (fully painted over by a later one).
+fn room_sectors_of(compiled: &CompiledPlan, room: &str) -> Result<Vec<usize>, CyberError> {
+    compiled.room_sectors.get(room).cloned().ok_or_else(|| {
+        invalid(&format!(
+            "feature names room '{room}', which the compiled map holds no sector for: it \
+             was painted over by a later room; move the rooms apart or drop the feature"
+        ))
+    })
+}
+
+/// The `InvalidArgument` with an actionable `message`.
+fn invalid(message: &str) -> CyberError {
+    CyberError::InvalidArgument(message.to_owned())
+}
+
+/// The linedef a wall-mounted feature takes in the room owning
+/// `room_sectors`: the longest of the room's one-sided walls — no back,
+/// front side in one of those sectors — whose outward normal points at
+/// `wall` ([`Side`]'s compass axis), or, with `wall: None`, the room's
+/// longest one-sided wall outright. Ties go to the lowest linedef
+/// index, and lines whose vertices do not resolve never win. All
+/// integer: the facing test is the sign of the outward normal's
+/// (`-dy`, `dx`) dot product with the side's axis vector, the length
+/// comparison that of the squared run.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming `room` and, when given, the
+/// side, when the room holds no such wall.
+fn choose_switch_wall(
+    map: &Map,
+    room_sectors: &[usize],
+    wall: Option<Side>,
+    room: &str,
+) -> Result<usize, CyberError> {
+    let mut best: Option<(i128, usize)> = None;
+    for (index, line) in map.linedefs.iter().enumerate() {
+        let Some((dx, dy)) = wall_vector(map, line, room_sectors) else {
+            continue;
+        };
+        if wall.is_some_and(|side| !faces_toward(side, dx, dy)) {
+            continue;
+        }
+        let squared = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+        if best.is_none_or(|(known, _)| squared > known) {
+            best = Some((squared, index));
+        }
+    }
+    best.map(|(_, index)| index)
+        .ok_or_else(|| no_switch_wall(room, wall))
+}
+
+/// The `v1` to `v2` vector of `line` when it is one-sided, its front
+/// side belongs to one of `room_sectors`, and both vertices resolve.
+fn wall_vector(map: &Map, line: &Linedef, room_sectors: &[usize]) -> Option<(i128, i128)> {
+    if line.back.is_some() {
+        return None;
+    }
+    let sector = map.sidedefs.get(line.front?)?.sector;
+    if !room_sectors.contains(&sector) {
+        return None;
+    }
+    let first = map.vertices.get(line.v1)?;
+    let second = map.vertices.get(line.v2)?;
+    Some((
+        i128::from(second.x).saturating_sub(i128::from(first.x)),
+        i128::from(second.y).saturating_sub(i128::from(first.y)),
+    ))
+}
+
+/// Whether the outward normal (`-dy`, `dx`) of a line running `(dx, dy)`
+/// points toward `side`: a positive dot product with the side's axis.
+/// The room sits on the front (right) side of a one-sided wall, so the
+/// void behind it is to the line's left.
+const fn faces_toward(side: Side, dx: i128, dy: i128) -> bool {
+    match side {
+        Side::North => dx > 0_i128,
+        Side::South => dx < 0_i128,
+        Side::East => dy < 0_i128,
+        Side::West => dy > 0_i128,
+    }
+}
+
+/// The refusal for a room with no wall to mount on, naming the asked
+/// side when there is one.
+fn no_switch_wall(room: &str, wall: Option<Side>) -> CyberError {
+    let facing = wall.map_or_else(
+        || "no one-sided wall".to_owned(),
+        |side| format!("no one-sided wall facing {}", side_name(side)),
+    );
+    invalid(&format!(
+        "room '{room}' has {facing} to mount a switch on: every boundary line is shared \
+         with another sector; pick another room, leave `wall` unset, or give the plan a \
+         wall thickness"
+    ))
+}
+
+/// The wire name of a compass `side`.
+const fn side_name(side: Side) -> &'static str {
+    match side {
+        Side::North => "north",
+        Side::South => "south",
+        Side::East => "east",
+        Side::West => "west",
+    }
+}
+
 /// Install one door connector: stamp a fresh tag on its band sector,
 /// give the band's room-facing lines the style's action, dress a locked
 /// band's jamb faces in their coloured track, and record the row and
 /// the tag under the connector id. A [`DoorStyle::Remote`] band keeps
 /// its lines bare — the tagged sector is the handle a remote trigger
-/// (the follow-up switch slice, or the caller's own line) fires on.
+/// (the switch step's panel, or the caller's own line) fires on.
 ///
 /// A band a later connector painted over owns no sector: there is
 /// nothing to tag and no line to face, so the door reports no row.
@@ -227,6 +583,7 @@ fn wire_door(
     }
     dress_locked_jambs(map, band, core, dress);
     run.tags.insert(info.id.clone(), tag);
+    run.bands.insert(info.id.clone(), band);
     run.rows.push(FeatureRow {
         kind: "door",
         room: None,
@@ -313,10 +670,12 @@ const fn wad_style(style: DoorStyle) -> WadDoorStyle {
 mod tests {
     use super::{
         CompiledPlan, FeatureDress, FeatureRow, FeatureRun, Plan, WadDoorStyle, apply_features,
-        doors, wad_style,
+        choose_switch_wall, doors, remote_door, wad_style,
     };
     use crate::plan::compile::compile;
-    use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Room, Shape};
+    use crate::plan::model::{
+        Connection, ConnectionKind, DoorStyle, ExitStyle, Feature, KeyColor, Room, Shape, Side,
+    };
     use crate::plan::textures::{TextureRole, TextureRoles};
     use crate::wad::classify::MapFormat;
     use crate::wad::map::{Linedef, Map, Sidedef};
@@ -423,6 +782,8 @@ mod tests {
             track_red: "REDTRAK".to_owned(),
             track_blue: "BLUETRAK".to_owned(),
             track_yellow: "YELTRAK".to_owned(),
+            switch: "SWTROLE".to_owned(),
+            exit_switch: "EXTPANE".to_owned(),
         }
     }
 
@@ -771,6 +1132,8 @@ mod tests {
         assert_eq!(themed.texture("door_track_red"), Some("REDTRAK"));
         assert_eq!(themed.texture("door_track_blue"), Some("BLUETRAK"));
         assert_eq!(themed.texture("door_track_yellow"), Some("YELTRAK"));
+        assert_eq!(themed.texture("switch"), Some("SWTROLE"));
+        assert_eq!(themed.texture("exit_switch"), Some("EXTPANE"));
         assert_eq!(themed.texture("wall"), None, "no such dressing field");
         assert_eq!(themed.texture(""), None, "the empty name answers nothing");
         let bare = FeatureDress::default();
@@ -811,5 +1174,408 @@ mod tests {
                 .all(|&index| line_at(&compiled.map, index).flags & 4_u32 == 4_u32),
             "use lines stay two-sided"
         );
+    }
+    /// A named plain opening between rooms `from` and `to`.
+    fn opening(id: &str, from: &str, to: &str) -> Connection {
+        Connection {
+            id: Some(id.to_owned()),
+            from: from.to_owned(),
+            to: to.to_owned(),
+            kind: ConnectionKind::Opening,
+            at: None,
+            width: 48_i64,
+        }
+    }
+
+    /// A `switch` feature row.
+    fn switch_feature(room: &str, opens: &str, wall: Option<Side>, repeatable: bool) -> Feature {
+        Feature::Switch {
+            room: room.to_owned(),
+            opens: opens.to_owned(),
+            wall,
+            repeatable,
+        }
+    }
+
+    /// An `exit` feature row.
+    fn exit_feature(room: &str, style: ExitStyle, secret: bool, wall: Option<Side>) -> Feature {
+        Feature::Exit {
+            room: room.to_owned(),
+            style,
+            secret,
+            wall,
+        }
+    }
+
+    /// The two-room remote-door plan carrying `features`.
+    fn door_features(features: Vec<Feature>) -> Plan {
+        let mut plan = two_rooms(vec![door("d1", DoorStyle::Remote, (128_i64, 32_i64))]);
+        plan.features = features;
+        plan
+    }
+
+    /// Two stacked 128 x 128 rooms joined by a remote door off-centre:
+    /// the lower room's north wall comes out as two equal 36-unit
+    /// segments either side of the band.
+    fn stacked_doors() -> Plan {
+        let band = Connection {
+            id: Some("d1".to_owned()),
+            from: "a".to_owned(),
+            to: "b".to_owned(),
+            kind: ConnectionKind::Door {
+                style: DoorStyle::Remote,
+            },
+            at: Some((64_i64, 128_i64)),
+            width: 48_i64,
+        };
+        Plan {
+            rooms: vec![
+                rect_room("a", (0, 0), (128, 128)),
+                rect_room("b", (0, 128), (128, 128)),
+            ],
+            connections: vec![band],
+            features: Vec::new(),
+            wall_thickness: 16_i64,
+        }
+    }
+
+    /// Three 128 x 128 rooms in a row at zero thickness, joined by
+    /// openings: the middle room owns no one-sided east or west wall.
+    fn three_in_row() -> Plan {
+        Plan {
+            rooms: vec![
+                rect_room("a", (0, 0), (128, 128)),
+                rect_room("b", (128, 0), (128, 128)),
+                rect_room("c", (256, 0), (128, 128)),
+            ],
+            connections: vec![opening("o1", "a", "b"), opening("o2", "b", "c")],
+            features: Vec::new(),
+            wall_thickness: 0_i64,
+        }
+    }
+
+    /// The two endpoint coordinates of a linedef.
+    type Corners = ((i32, i32), (i32, i32));
+
+    /// The `(x, y)` endpoints of linedef `index`.
+    fn ends(map: &Map, index: usize) -> Corners {
+        let line = map.linedefs.get(index).expect("test index");
+        let first = map.vertices.get(line.v1).expect("test vertex");
+        let second = map.vertices.get(line.v2).expect("test vertex");
+        ((first.x, first.y), (second.x, second.y))
+    }
+
+    /// The front side's `middle` texture of linedef `line`.
+    fn front_middle(map: &Map, line: usize) -> String {
+        let side = map
+            .linedefs
+            .get(line)
+            .expect("test index")
+            .front
+            .expect("mounted lines keep a front");
+        map.sidedefs.get(side).expect("test row").middle.clone()
+    }
+
+    /// The `index`th line's special and tag.
+    fn action_of_line(map: &Map, index: usize) -> (i32, i32) {
+        let line = map.linedefs.get(index).expect("test index");
+        (line.special, line.tag)
+    }
+
+    /// Room `a`'s chosen wall in the two-room remote-door fixture.
+    fn a_wall(map: &Map, side: Option<Side>) -> usize {
+        choose_switch_wall(map, &[0], side, "a").expect("a wall on the asked side")
+    }
+
+    #[test]
+    fn the_wall_choice_follows_the_compass_side() {
+        let plan = two_rooms(vec![door("d1", DoorStyle::Remote, (128_i64, 32_i64))]);
+        let (compiled, _) = wired(&plan);
+        let map = &compiled.map;
+        assert_eq!(
+            ends(map, a_wall(map, Some(Side::North))),
+            ((0_i32, 128_i32), (120_i32, 128_i32)),
+            "the north wall answers north"
+        );
+        assert_eq!(
+            ends(map, a_wall(map, Some(Side::South))),
+            ((120_i32, 0_i32), (0_i32, 0_i32)),
+            "the south wall answers south"
+        );
+        assert_eq!(
+            ends(map, a_wall(map, Some(Side::West))),
+            ((0_i32, 0_i32), (0_i32, 128_i32)),
+            "the west wall answers west"
+        );
+    }
+
+    #[test]
+    fn the_longest_line_wins_within_the_chosen_side() {
+        let plan = two_rooms(vec![door("d1", DoorStyle::Remote, (128_i64, 32_i64))]);
+        let (compiled, _) = wired(&plan);
+        let map = &compiled.map;
+        let east = choose_switch_wall(map, &[0], Some(Side::East), "a").expect("an east wall");
+        let ((x1, y1), (x2, y2)) = ends(map, east);
+        assert_eq!((x1, x2), (120_i32, 120_i32), "the band-cut east wall");
+        assert_eq!(
+            y1.abs_diff(y2),
+            72_u32,
+            "the long of the two segments (the door band left an 8-unit stub below)"
+        );
+    }
+
+    #[test]
+    fn without_a_side_the_longest_wall_wins() {
+        let plan = two_rooms(vec![door("d1", DoorStyle::Remote, (128_i64, 32_i64))]);
+        let (compiled, _) = wired(&plan);
+        let map = &compiled.map;
+        assert_eq!(
+            ends(map, a_wall(map, None)),
+            ((0_i32, 0_i32), (0_i32, 128_i32)),
+            "the untouched 128-unit west wall outsides the 120-unit north and south"
+        );
+    }
+
+    #[test]
+    fn equal_walls_fall_to_the_lowest_index() {
+        let (compiled, _) = wired(&stacked_doors());
+        let map = &compiled.map;
+        let tied: Vec<usize> = (0..map.linedefs.len())
+            .filter(|&index| {
+                let ((x1, y1), (x2, y2)) = ends(map, index);
+                y1 == y2 && y1 == 120_i32 && x1.abs_diff(x2) == 40_u32
+            })
+            .collect();
+        assert_eq!(tied.len(), 2, "the centred band leaves two equal segments");
+        let chosen = choose_switch_wall(map, &[0], Some(Side::North), "a")
+            .expect("two equal north segments");
+        assert_eq!(
+            chosen,
+            *tied.iter().min().expect("two tied candidates"),
+            "ties go to the lowest linedef index"
+        );
+    }
+
+    #[test]
+    fn a_side_without_a_wall_names_the_room_and_the_side() {
+        let (compiled, _) = wired(&three_in_row());
+        let error = choose_switch_wall(&compiled.map, &[1], Some(Side::East), "b")
+            .expect_err("room b meets room c on its east side");
+        assert_eq!(error.code(), "invalid_argument", "a wall-less side");
+        let message = error.to_string();
+        assert!(
+            message.contains("'b'") && message.contains("east"),
+            "the refusal names room and side: {message}"
+        );
+    }
+
+    #[test]
+    fn a_switch_on_a_plain_door_is_refused() {
+        let mut plan = two_rooms(vec![door("d1", DoorStyle::Normal, (128_i64, 32_i64))]);
+        plan.features = vec![switch_feature("a", "d1", Some(Side::West), false)];
+        let error = refuse_features(&plan);
+        assert!(
+            error
+                .to_string()
+                .contains("switch opens d1 which is not a remote door"),
+            "the refusal words: {error}"
+        );
+    }
+
+    #[test]
+    fn a_remote_door_the_wiring_never_tagged_is_no_switch_target() {
+        let plan = door_features(Vec::new());
+        let error = remote_door(&plan, &FeatureRun::default(), "d1")
+            .expect_err("a remote row with no wired band");
+        assert!(
+            error
+                .to_string()
+                .contains("switch opens d1 which is not a remote door"),
+            "unwired reads as not-a-target: {error}"
+        );
+    }
+
+    /// Compile `plan` and require the feature run to refuse.
+    #[track_caller]
+    fn refuse_features(plan: &Plan) -> crate::error::CyberError {
+        let mut compiled =
+            compile(plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+        let error = apply_features(plan, &mut compiled, &dress());
+        error.expect_err("the feature must be refused")
+    }
+
+    #[test]
+    fn a_feature_in_a_painted_over_room_names_it() {
+        let plan = Plan {
+            rooms: vec![
+                rect_room("a", (0, 0), (128, 128)),
+                rect_room("b", (0, 0), (128, 128)),
+            ],
+            connections: Vec::new(),
+            features: vec![exit_feature("a", ExitStyle::WalkOver, false, None)],
+            wall_thickness: 16_i64,
+        };
+        plan.validate().expect("the plan validates");
+        let message = refuse_features(&plan).to_string();
+        assert!(
+            message.contains("room 'a'") && message.contains("painted over"),
+            "the refusal names the vanished room: {message}"
+        );
+    }
+
+    #[test]
+    fn the_switch_centers_on_the_wall_and_fires_the_doors_own_tag() {
+        let plan = door_features(vec![switch_feature("a", "d1", Some(Side::West), false)]);
+        let (compiled, rows) = wired(&plan);
+        let map = &compiled.map;
+        let row = rows
+            .iter()
+            .find(|r| r.kind == "switch")
+            .expect("a switch row");
+        assert_eq!(row.room.as_deref(), Some("a"), "the room it stands in");
+        assert_eq!(row.sectors, vec![BAND], "the door band it fires");
+        assert_eq!(
+            row.tag,
+            Some(TAG_ONE),
+            "the door's tag answers, no second mint"
+        );
+        assert_eq!(row.lines.len(), 1, "one switch line");
+        let line = row.lines.first().copied().expect("one line");
+        assert_eq!(
+            action_of_line(map, line),
+            (103_i32, TAG_ONE),
+            "S1 opens the tagged door"
+        );
+        assert_eq!(
+            front_middle(map, line),
+            "SWTROLE",
+            "the theme's switch panel"
+        );
+        let ((x1, y1), (x2, y2)) = ends(map, line);
+        assert_eq!((x1, x2), (0_i32, 0_i32), "still on the west wall");
+        assert_eq!(
+            (y1.min(y2), y1.max(y2)),
+            (48_i32, 80_i32),
+            "the 32-unit panel centred on the wall's midpoint"
+        );
+        assert_eq!(
+            map.sectors
+                .iter()
+                .filter(|space| space.tag != 0_i32)
+                .count(),
+            1,
+            "only the band carries a tag: the switch reused the door's"
+        );
+    }
+
+    #[test]
+    fn a_repeatable_switch_takes_the_sr_special() {
+        let plan = door_features(vec![switch_feature("a", "d1", None, true)]);
+        let (compiled, rows) = wired(&plan);
+        let row = rows
+            .iter()
+            .find(|r| r.kind == "switch")
+            .expect("a switch row");
+        let line = row.lines.first().copied().expect("one line");
+        assert_eq!(
+            action_of_line(&compiled.map, line),
+            (61_i32, TAG_ONE),
+            "SR keeps working after use"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_switch_panel_keeps_the_wall_texture() {
+        let themed = FeatureDress {
+            switch: "-".to_owned(),
+            ..dress()
+        };
+        let plan = door_features(vec![switch_feature("a", "d1", Some(Side::West), false)]);
+        let (compiled, rows) = wired_dressed(&plan, MapFormat::Doom, &themed);
+        let row = rows
+            .iter()
+            .find(|r| r.kind == "switch")
+            .expect("a switch row");
+        let line = row.lines.first().copied().expect("one line");
+        assert_eq!(
+            front_middle(&compiled.map, line),
+            "WALROLE",
+            "the \"-\" answer keeps the wall's own middle"
+        );
+        assert_eq!(
+            action_of_line(&compiled.map, line).0,
+            103_i32,
+            "the action still lands"
+        );
+    }
+
+    #[test]
+    fn the_exit_switch_carries_the_level_end() {
+        let plan = door_features(vec![exit_feature(
+            "b",
+            ExitStyle::Switch,
+            false,
+            Some(Side::East),
+        )]);
+        let (compiled, rows) = wired(&plan);
+        let map = &compiled.map;
+        let row = rows.iter().find(|r| r.kind == "exit").expect("an exit row");
+        assert_eq!(row.room.as_deref(), Some("b"));
+        assert_eq!(row.sectors, vec![1_usize], "the room it stands in");
+        assert_eq!(row.tag, None, "an exit acts on no tag");
+        let line = row.lines.first().copied().expect("one line");
+        assert_eq!(action_of_line(map, line), (11_i32, 0_i32), "the S1 exit");
+        assert_eq!(front_middle(map, line), "EXTPANE", "the theme's exit panel");
+    }
+
+    #[test]
+    fn a_secret_exit_switch_takes_the_s1_secret() {
+        let plan = door_features(vec![exit_feature("b", ExitStyle::Switch, true, None)]);
+        let (compiled, rows) = wired(&plan);
+        let row = rows.iter().find(|r| r.kind == "exit").expect("an exit row");
+        let line = row.lines.first().copied().expect("one line");
+        assert_eq!(
+            action_of_line(&compiled.map, line).0,
+            51_i32,
+            "the S1 secret exit"
+        );
+    }
+
+    #[test]
+    fn a_walk_over_exit_dresses_the_rooms_two_sided_boundaries() {
+        let mut plan = three_in_row();
+        plan.features = vec![exit_feature("b", ExitStyle::WalkOver, false, None)];
+        let (compiled, rows) = wired(&plan);
+        let map = &compiled.map;
+        let expected: Vec<usize> = map
+            .linedefs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| boundary_of(map, line, 1_usize).then_some(index))
+            .collect();
+        assert!(!expected.is_empty(), "the fixture shares walls");
+        let row = rows.iter().find(|r| r.kind == "exit").expect("an exit row");
+        assert_eq!(row.lines, expected, "every two-sided boundary of the room");
+        assert_eq!(row.sectors, vec![1_usize]);
+        assert_eq!(row.tag, None);
+        for &index in &expected {
+            assert_eq!(
+                action_of_line(map, index),
+                (52_i32, 0_i32),
+                "W1 exits keep the bare tags"
+            );
+        }
+    }
+
+    /// Whether `line` is two-sided with sector `sector` on one side.
+    fn boundary_of(map: &Map, line: &Linedef, sector: usize) -> bool {
+        let side = |slot: Option<usize>| {
+            slot.and_then(|index| map.sidedefs.get(index))
+                .map(|row| row.sector)
+        };
+        let (Some(front), Some(back)) = (side(line.front), side(line.back)) else {
+            return false;
+        };
+        front == sector || back == sector
     }
 }

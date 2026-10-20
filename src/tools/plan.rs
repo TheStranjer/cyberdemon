@@ -104,11 +104,14 @@ const THEME_ROLES: [(TextureRole, Role); 8] = [
     (TextureRole::Step, Role::Step),
 ];
 /// The theme roles the feature step dresses on top of the eight
-/// compiler roles: the coloured tracks of the locked door styles.
-const FEATURE_TRACK_ROLES: [Role; 3] = [
+/// compiler roles: the coloured tracks of the locked door styles and
+/// the switch and exit-switch panels.
+const FEATURE_ROLES: [Role; 5] = [
     Role::DoorTrackRed,
     Role::DoorTrackBlue,
     Role::DoorTrackYellow,
+    Role::Switch,
+    Role::ExitSwitch,
 ];
 
 /// The resolved [`TextureRole`] names one [`crate::plan::compile`] call
@@ -149,7 +152,7 @@ struct ResolvedTheme {
 /// [`theme_roles`]' refusals for an unknown `theme` override.
 fn plan_theme(session: &Session, theme: Option<&str>) -> Result<ResolvedTheme, CyberError> {
     let mut wanted: Vec<Role> = THEME_ROLES.iter().map(|&(_, role)| role).collect();
-    wanted.extend(FEATURE_TRACK_ROLES);
+    wanted.extend(FEATURE_ROLES);
     let resolved = theme_roles(session, theme, &wanted)?;
     let mut names = Vec::new();
     let mut notes = Vec::new();
@@ -176,17 +179,30 @@ fn undressed_note(role: Role) -> String {
 }
 
 /// The names the feature step dresses with: the plain door face and
-/// track ride on the compiler's own answers, and a coloured track the
-/// theme left unnamed notes itself like a missing dressing role — its
-/// jambs keep the plain track the compiler dressed.
+/// track ride on the compiler's own answers, and a coloured track or
+/// switch panel the theme left unnamed notes itself like a missing
+/// dressing role — its jambs keep the plain track the compiler dressed
+/// and its switch panels keep the wall's own middle.
 fn feature_dress(resolved: &BTreeMap<Role, String>, notes: &mut Vec<String>) -> FeatureDress {
     FeatureDress {
         door: resolved_name(resolved, Role::Door),
         track: resolved_name(resolved, Role::DoorTrack),
-        track_red: coloured_track(resolved, Role::DoorTrackRed, notes),
-        track_blue: coloured_track(resolved, Role::DoorTrackBlue, notes),
-        track_yellow: coloured_track(resolved, Role::DoorTrackYellow, notes),
+        track_red: unthemed_note(resolved, Role::DoorTrackRed, notes),
+        track_blue: unthemed_note(resolved, Role::DoorTrackBlue, notes),
+        track_yellow: unthemed_note(resolved, Role::DoorTrackYellow, notes),
+        switch: unthemed_note(resolved, Role::Switch, notes),
+        exit_switch: unthemed_note(resolved, Role::ExitSwitch, notes),
     }
+}
+
+/// `role`'s resolved name, `"-"` when the theme answers nothing, noting
+/// itself when it does not.
+fn unthemed_note(resolved: &BTreeMap<Role, String>, role: Role, notes: &mut Vec<String>) -> String {
+    let name = resolved_name(resolved, role);
+    if name == NO_TEXTURE {
+        notes.push(undressed_note(role));
+    }
+    name
 }
 
 /// `role`'s resolved name, `"-"` when the theme answers nothing.
@@ -195,19 +211,6 @@ fn resolved_name(resolved: &BTreeMap<Role, String>, role: Role) -> String {
         .get(&role)
         .cloned()
         .unwrap_or_else(|| NO_TEXTURE.to_owned())
-}
-
-/// A coloured track name, noting itself when the theme left it `"-"`.
-fn coloured_track(
-    resolved: &BTreeMap<Role, String>,
-    role: Role,
-    notes: &mut Vec<String>,
-) -> String {
-    let name = resolved_name(resolved, role);
-    if name == NO_TEXTURE {
-        notes.push(undressed_note(role));
-    }
-    name
 }
 
 /// The wire string naming `kind`'s class, as the result reports it.
@@ -613,7 +616,7 @@ where
 impl Cyberdemon {
     /// Builds a whole map block from a declarative rooms-and-connections plan in one undoable edit.
     #[tool(
-        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between, things standing in the result - and writes the compiled block into the working archive as one undoable edit. Every built map needs a player start: pass player_start or a thing of type 1; door connectors come wired: their band sector takes a fresh tag and their room-facing lines the style's door special. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and is wired: the band sector takes a fresh tag and the two room-facing linedefs the style's action in the map's flag family - Doom DR/D1 specials 1/117/31 and 28/26/27 for red/blue/yellow with the jambs re-dressed in the coloured track, Hexen Door_Raise/Door_Open/Door_LockedRaise with playeruse activation and the key or speed arguments; remote tags the sector alone and writes nothing on its lines, leaving the handle for a trigger - style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks the action and the dressing), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). features: rows (default none) each give a kind - exit, switch, lift or teleporter (case-insensitive) - plus that kind's fields: exit {room, style: switch (default) or walk_over, secret: false, wall: north/south/east/west}, switch {room, opens: the id of a connection of the plan, wall, repeatable: false}, lift {room, low_floor: the lowest neighbouring floor by default, style: use_wall (default) or walk_trigger, repeatable: true}, teleporter {from_room, to_room, pad: [x, y] and destination: [x, y] plan points (transformed and snapped with the rooms; the room centres by default), angle: 0, two_way: false}. Features parse, transform and validate now - a feature naming an unknown room, or a switch opens no connection of the plan carries as its id, is invalid_argument naming the feature - and installing them on the compiled map arrives with a later update: a plan with features compiles exactly like the plan without them. things: rows each give exactly one of type (a doomednum) and name (resolved against the session's definitions: a case-insensitive exact name, else a unique case-insensitive substring; no match or an ambiguous one is invalid_argument naming things[i], ambiguities listing the candidate names), and exactly one of an x/y plan point (transformed and snapped with the rooms) and a room id to fill. A room fill is deterministic: row-major from the sector bounding box's minimum corner raised by the thing's clearance (its definition's radius, else 16, plus 8 map units), one grid point per twice the clearance, every point kept at least that clearance inside the sector; up to count (default 1) copies land and a room that holds fewer warns \"room 'x' fits only N of M things\". angle (default 0) must be 0..=359; skills (some of easy/medium/hard) and multiplayer_only (notsingle in the Doom family, coop+dm in the Hexen one) set the presence flag bits, defaulting to present everywhere. player_start: {x, y, angle} or {room, angle} (the room form lands on the sector bounding box's centre) adds a type 1 thing; without it or a resolved thing of type 1 the call fails invalid_argument asking for a player start. theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. finalize: true (default false) builds the node run into the block before the write - the whole build_all_nodes set on the compiled model inside this same undoable edit: the classic SEGS/SSECTORS/NODES run plus a zero REJECT and a fresh BLOCKMAP for a binary map, the compressed extended ZNODES lump (that one lump only) for a UDMF one - and validates the finished map. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], features: [{kind, room, sectors, lines, tag}], things_placed, bounds {x1, y1, x2, y2}, warnings, nodes, validation, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, features report every installed game structure in pipeline order (doors first: kind door, room null, the band sector, the room-facing lines and the shared tag), things_placed counts the written thing rows (player start included), and with finalize nodes carries the build summary {variant (classic|extended), segs, subsectors, nodes, warnings, the layout's extra counts} while validation carries an errors-only pass {errors: [at most 20 issue rows as validate_map reports them], counts: {error, warning, info} over every issue found}. Validation errors never roll the build back: the map was built to plan; fix the rows with the element tools. Without finalize, nodes and validation are null and the block ships without node data. Run undo to take the whole block back - node run included. Look at the result with render_topdown and render_view from the player start, and check it with validate_map."
+        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between, things standing in the result - and writes the compiled block into the working archive as one undoable edit. Every built map needs a player start: pass player_start or a thing of type 1; door connectors come wired: their band sector takes a fresh tag and their room-facing lines the style's door special. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and is wired: the band sector takes a fresh tag and the two room-facing linedefs the style's action in the map's flag family - Doom DR/D1 specials 1/117/31 and 28/26/27 for red/blue/yellow with the jambs re-dressed in the coloured track, Hexen Door_Raise/Door_Open/Door_LockedRaise with playeruse activation and the key or speed arguments; remote tags the sector alone and writes nothing on its lines, leaving the handle for a trigger - style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks the action and the dressing), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). features: rows (default none) each give a kind - exit, switch, lift or teleporter (case-insensitive) - plus that kind's fields: exit {room, style: switch (default) or walk_over, secret: false, wall: north/south/east/west}, switch {room, opens: the id of a connection of the plan, wall, repeatable: false}, lift {room, low_floor: the lowest neighbouring floor by default, style: use_wall (default) or walk_trigger, repeatable: true}, teleporter {from_room, to_room, pad: [x, y] and destination: [x, y] plan points (transformed and snapped with the rooms; the room centres by default), angle: 0, two_way: false}. A feature naming an unknown room, or a switch opens no connection of the plan carries as its id, is invalid_argument naming the feature. Switch and exit rows install now: a switch mounts a 32-unit panel centred on its room's wall - the longest one-sided room wall facing wall (north/south/east/west; unset takes the room's longest one-sided wall) - carrying the open-door action on the exact tag of the remote door named by opens (a switch on any other connection is invalid_argument), repeatable picks the SR form, and the panel wears the theme's switch role. An exit of style switch mounts the same panel carrying the exit (or secret exit) action in the theme's exit_switch panel; an exit of style walk_over ends the level on every two-sided boundary of the room's sectors (the Doom family's W1 52/124 keep the lines' tags, so a plan room's bare 0 ends the game). Lift and teleporter rows parse and validate; installing them arrives with a later update. things: rows each give exactly one of type (a doomednum) and name (resolved against the session's definitions: a case-insensitive exact name, else a unique case-insensitive substring; no match or an ambiguous one is invalid_argument naming things[i], ambiguities listing the candidate names), and exactly one of an x/y plan point (transformed and snapped with the rooms) and a room id to fill. A room fill is deterministic: row-major from the sector bounding box's minimum corner raised by the thing's clearance (its definition's radius, else 16, plus 8 map units), one grid point per twice the clearance, every point kept at least that clearance inside the sector; up to count (default 1) copies land and a room that holds fewer warns \"room 'x' fits only N of M things\". angle (default 0) must be 0..=359; skills (some of easy/medium/hard) and multiplayer_only (notsingle in the Doom family, coop+dm in the Hexen one) set the presence flag bits, defaulting to present everywhere. player_start: {x, y, angle} or {room, angle} (the room form lands on the sector bounding box's centre) adds a type 1 thing; without it or a resolved thing of type 1 the call fails invalid_argument asking for a player start. theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it; installed switch and exit panels wear the theme's switch and exit_switch roles, and a role answered \"-\" leaves those faces as the compiler dressed them (the wall's own middle for a panel) and notes itself in warnings. finalize: true (default false) builds the node run into the block before the write - the whole build_all_nodes set on the compiled model inside this same undoable edit: the classic SEGS/SSECTORS/NODES run plus a zero REJECT and a fresh BLOCKMAP for a binary map, the compressed extended ZNODES lump (that one lump only) for a UDMF one - and validates the finished map. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], features: [{kind, room, sectors, lines, tag}], things_placed, bounds {x1, y1, x2, y2}, warnings, nodes, validation, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, features report every installed game structure in pipeline order (doors first: kind door, room null, the band sector, the room-facing lines and the shared tag; then kind switch with the mounting room, the door band, the switch line and the door's tag; then kind exit with the room, its sectors and the dressed lines), things_placed counts the written thing rows (player start included), and with finalize nodes carries the build summary {variant (classic|extended), segs, subsectors, nodes, warnings, the layout's extra counts} while validation carries an errors-only pass {errors: [at most 20 issue rows as validate_map reports them], counts: {error, warning, info} over every issue found}. Validation errors never roll the build back: the map was built to plan; fix the rows with the element tools. Without finalize, nodes and validation are null and the block ships without node data. Run undo to take the whole block back - node run included. Look at the result with render_topdown and render_view from the player start, and check it with validate_map."
     )]
     fn build_map_from_plan(
         &self,
@@ -631,7 +634,7 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        BuildPlanParams, CompiledPlan, ConnectionKind, FEATURE_TRACK_ROLES, PlanTheme, THEME_ROLES,
+        BuildPlanParams, CompiledPlan, ConnectionKind, FEATURE_ROLES, PlanTheme, THEME_ROLES,
         TextureRole, VALIDATION_ERROR_CAP, bounds_of, connection_label, ensure_player_start,
         feature_dress, finalize_nodes, kind_name, plan_game, plan_path, quoted_first, reporting,
         resolve_specs, validation_view, with_plan_path,
@@ -746,6 +749,8 @@ mod tests {
             (Role::DoorTrackRed, "DOORRED"),
             (Role::DoorTrackBlue, "DOORBLU"),
             (Role::DoorTrackYellow, "DOORYEL"),
+            (Role::Switch, "SW1STRTN"),
+            (Role::ExitSwitch, "SW1EXIT"),
         ]
         .into_iter()
         .map(|(role, name)| (role, name.to_owned()))
@@ -760,6 +765,8 @@ mod tests {
                 track_red: "DOORRED".to_owned(),
                 track_blue: "DOORBLU".to_owned(),
                 track_yellow: "DOORYEL".to_owned(),
+                switch: "SW1STRTN".to_owned(),
+                exit_switch: "SW1EXIT".to_owned(),
             },
             "every name carries through"
         );
@@ -767,23 +774,24 @@ mod tests {
     }
 
     #[test]
-    fn unnamed_colour_tracks_note_themselves_like_dressing_roles() {
+    fn unnamed_feature_roles_note_themselves_like_dressing_roles() {
         let mut resolved = BTreeMap::new();
         resolved.insert(Role::DoorTrack, "-".to_owned());
         let mut notes = Vec::new();
         let dress = feature_dress(&resolved, &mut notes);
         assert_eq!(dress.door, "-", "an absent face is dashed like the rest");
         assert_eq!(dress.track_blue, "-", "and so is an absent colour");
+        assert_eq!(dress.switch, "-", "and an absent switch panel");
         assert_eq!(
             notes,
-            FEATURE_TRACK_ROLES
+            FEATURE_ROLES
                 .iter()
                 .map(|role| format!(
                     "the theme answers \"-\" for role {}: those faces stay undressed",
                     role.as_str()
                 ))
                 .collect::<Vec<String>>(),
-            "all three colours note themselves, in table order"
+            "all five feature roles note themselves, in table order"
         );
     }
 

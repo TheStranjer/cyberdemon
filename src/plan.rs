@@ -16,7 +16,10 @@
 //! run the platform and pad cores, `exit` rows end the level
 //! by panel or walk-over, and the room `light_effect` and `secret`
 //! flags paint the family's sector specials — lights before
-//! secrets. Nothing in this module touches
+//! secrets. [`features::playable_checks`] then reports the judgment
+//! gaps the wiring cannot see as advisory warnings — a locked door
+//! without its key, a plan without an exit, a remote door no switch
+//! opens. Nothing in this module touches
 //! archives, sessions or `MCP` types; it is data, measurement and
 //! validation only.
 
@@ -32,7 +35,7 @@ pub mod walls;
 
 pub use compile::compile;
 pub use emit::{CompiledPlan, ConnectorInfo};
-pub use features::{FeatureDress, FeatureRow, apply_features};
+pub use features::{FeatureDress, FeatureRow, apply_features, playable_checks};
 pub use model::*;
 pub use textures::{TextureRole, TextureRoles};
 pub use things::{

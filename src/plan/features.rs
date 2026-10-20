@@ -45,6 +45,16 @@
 //! `secret` room's sectors with [`secret_edit`], passing each
 //! [`SecretEdit::boom_warning`] through [`boom_note`] into the compiled
 //! plan's warnings. Every installed feature reports one [`FeatureRow`].
+//! After the pipeline, [`playable_checks`] turns the judgment gaps the
+//! wiring cannot see into advisory warnings — never errors: every locked
+//! door whose key colour stands nowhere among the finished map's things
+//! (matched through the thing definitions: the `Keys` category and the
+//! colour word in the name, skull keys included, since their names carry
+//! the colour), a plan carrying no `exit` row, and every `remote` door
+//! whose id no `switch` row names in its `opens`. The notes come out in
+//! plan order — key warnings per door in connection order, then the exit
+//! note, then the remote notes in connection order — and the tool
+//! appends them after the compiled plan's existing warnings.
 //! Nothing here touches archives, sessions or `MCP` types; the theme
 //! names arrive already resolved.
 //!
@@ -55,10 +65,11 @@
 //! [`next_free_tag`]: crate::wad::map::features::next_free_tag
 //! [`track_role_name`]: crate::wad::map::features::DoorStyle::track_role_name
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::plan::emit::{CompiledPlan, ConnectorInfo};
@@ -74,7 +85,7 @@ use crate::wad::map::features::{
     next_free_tag, secret_edit,
 };
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
-use crate::wad::map::model::Linedef;
+use crate::wad::map::model::{Linedef, Thing};
 use crate::wad::map::ops::Point;
 
 /// The model's name for "draw nothing here" on a texture face: what an
@@ -221,7 +232,61 @@ pub fn apply_features(
     exits(plan, compiled, dress, &mut run)?;
     lights(plan, compiled, &mut run);
     secrets(plan, compiled, &mut run);
+    reface_action_lines(&mut compiled.map, &run.rows);
     Ok(run.rows)
+}
+
+/// Put the wired action lines back facing their players after the run:
+/// a teleporter square rebuilds the whole map through
+/// [`apply_overlay`](crate::wad::map::overlay::apply_overlay), and the
+/// rebuild re-labels line sides by its own convention, so a door or lift
+/// line the earlier steps turned to face its room can come out with the
+/// moving sector — the row's band or platform — on the front instead of
+/// behind. This last pass swaps the sides (and the vertices with them)
+/// of exactly those lines, restoring the engine-facing rule the `doors`
+/// and `lifts` steps installed: room or lower area in front, moving
+/// sector behind. One-sided faces (a switch panel's wall), lines whose
+/// orientation survived and lines a rebuild dropped (already out of the
+/// rows) are untouched.
+fn reface_action_lines(map: &mut Map, rows: &[FeatureRow]) {
+    for row in rows {
+        reface_row(map, row);
+    }
+}
+
+/// Re-face the one wired row's action lines: doors and lifts only, each
+/// with its moving sector (band or platform, the row's first sector)
+/// kept behind the line so the room or the lower area stays the front.
+fn reface_row(map: &mut Map, row: &FeatureRow) {
+    if row.kind != "door" && row.kind != "lift" {
+        return;
+    }
+    let Some(behind) = row.sectors.first().copied() else {
+        return;
+    };
+    let flipped: Vec<usize> = row
+        .lines
+        .iter()
+        .copied()
+        .filter(|&line| has_sector_in_front(map, line, behind))
+        .collect();
+    for line in flipped {
+        if let Some(def) = map.linedefs.get_mut(line) {
+            core::mem::swap(&mut def.front, &mut def.back);
+            core::mem::swap(&mut def.v1, &mut def.v2);
+        }
+    }
+}
+
+/// Whether `line` is two-sided with sector `sector` on its front side.
+fn has_sector_in_front(map: &Map, line: usize, sector: usize) -> bool {
+    map.linedefs.get(line).is_some_and(|def| {
+        def.back.is_some()
+            && def
+                .front
+                .and_then(|side| map.sidedefs.get(side))
+                .is_some_and(|row| row.sector == sector)
+    })
 }
 
 /// The state one [`apply_features`] run threads through the pipeline:
@@ -926,6 +991,134 @@ fn secret_room(compiled: &mut CompiledPlan, room: &str, run: &mut FeatureRun) {
     }
 }
 
+/// The `Keys` thing-definition category the key check matches
+/// (`data/defs/doom_things.tsv` files the cards and skull keys under it).
+const KEYS_CATEGORY: &str = "Keys";
+
+/// The lower-case colour word the key check finds in a key definition's
+/// name; skull keys carry the same word, so they count alike.
+const fn color_word(color: KeyColor) -> &'static str {
+    match color {
+        KeyColor::Blue => "blue",
+        KeyColor::Yellow => "yellow",
+        KeyColor::Red => "red",
+    }
+}
+
+/// The never-error playability checks beside the pipeline: the judgment
+/// gaps a wired plan can still carry, reported as advisory warnings.
+///
+/// Three checks, in this order: every locked door connector whose colour
+/// no thing of `map` answers as a key (matched through `definitions`: a
+/// `Keys`-category row whose name carries the colour word), one warning
+/// per door in connection order; the plan's whole set of features, which
+/// earns `"the map has no exit"` when it carries no `exit` row; and
+/// every `remote` door whose id no `switch` row names in its `opens`,
+/// one warning per door in connection order. `map` is the finished map —
+/// the check reads the things that actually stand in it, planned rows
+/// and the teleporter's own alike, since only their doomednums are
+/// known. Nothing here refuses: the warnings join the compiled plan's
+/// list beside [`apply_features`]' notes, and what to do about each is
+/// the caller's judgment.
+#[must_use]
+#[inline]
+pub fn playable_checks(plan: &Plan, map: &Map, definitions: &Definitions) -> Vec<String> {
+    let mut notes = missing_keys(plan, map, definitions);
+    if !has_exit(plan) {
+        notes.push("the map has no exit".to_owned());
+    }
+    notes.extend(unswitched_remotes(plan));
+    notes
+}
+
+/// The locked-door warnings: one per locked connector with no key of its
+/// colour among the map's things, in connection order.
+fn missing_keys(plan: &Plan, map: &Map, definitions: &Definitions) -> Vec<String> {
+    let mut notes = Vec::new();
+    for connection in &plan.connections {
+        let Some(color) = locked_color(connection) else {
+            continue;
+        };
+        if map
+            .things
+            .iter()
+            .any(|spawn| definition_is_key(spawn, definitions, color))
+        {
+            continue;
+        }
+        let word = color_word(color);
+        notes.push(format!(
+            "{word} door at {} but no {word} key in the plan",
+            connection_name(connection)
+        ));
+    }
+    notes
+}
+
+/// The key colour of a locked-door connection, `None` for every other
+/// row.
+const fn locked_color(connection: &Connection) -> Option<KeyColor> {
+    match connection.kind {
+        ConnectionKind::Door {
+            style: DoorStyle::Locked(color),
+        } => Some(color),
+        ConnectionKind::Opening
+        | ConnectionKind::Window { .. }
+        | ConnectionKind::Stairs { .. }
+        | ConnectionKind::Door { .. } => None,
+    }
+}
+
+/// Whether `spawn` stands as a key of `color`'s colour in `definitions`:
+/// its row in [`KEYS_CATEGORY`] with the [`color_word`] in its name.
+fn definition_is_key(spawn: &Thing, definitions: &Definitions, color: KeyColor) -> bool {
+    let word = color_word(color);
+    u32::try_from(spawn.kind)
+        .ok()
+        .and_then(|kind| definitions.thing(kind))
+        .is_some_and(|row| {
+            row.category == KEYS_CATEGORY && row.name.to_ascii_lowercase().contains(word)
+        })
+}
+
+/// Whether the plan carries any `exit` feature at all.
+fn has_exit(plan: &Plan) -> bool {
+    plan.features
+        .iter()
+        .any(|feature| matches!(feature, Feature::Exit { .. }))
+}
+
+/// The remote-door warnings: one per remote connector no `switch` row
+/// names in its `opens`, in connection order. An unnamed connection can
+/// never be named, so it always reports, under its derived label.
+fn unswitched_remotes(plan: &Plan) -> Vec<String> {
+    let mut switched: BTreeSet<String> = BTreeSet::new();
+    for feature in plan.features.clone() {
+        if let Feature::Switch { opens, .. } = feature {
+            switched.insert(opens);
+        }
+    }
+    let mut notes = Vec::new();
+    for connection in &plan.connections {
+        if !matches!(
+            connection.kind,
+            ConnectionKind::Door {
+                style: DoorStyle::Remote
+            }
+        ) {
+            continue;
+        }
+        let label = connection_name(connection);
+        if !switched.contains(label.as_str()) {
+            notes.push(format!(
+                "remote door at {label} is opened by no switch: add a switch feature \
+                 whose opens is {label}"
+            ));
+        }
+    }
+    notes
+}
+
 /// A remote door a switch row may fire: its tagged band sector.
 #[derive(Debug)]
 struct RemoteDoor {
@@ -1206,10 +1399,11 @@ const fn wad_style(style: DoorStyle) -> WadDoorStyle {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompiledPlan, FeatureDress, FeatureRow, FeatureRun, Plan, WadDoorStyle, apply_features,
-        choose_switch_wall, doors, lift_join_rule, lift_side, remap_rows, remote_door,
-        teleport_wall, wad_style,
+        CompiledPlan, Definitions, FeatureDress, FeatureRow, FeatureRun, Plan, Thing, WadDoorStyle,
+        apply_features, choose_switch_wall, doors, lift_join_rule, lift_side, playable_checks,
+        remap_rows, remote_door, teleport_wall, wad_style,
     };
+    use crate::defs::definitions_for;
     use crate::geom::Pt;
     use crate::plan::compile::compile;
     use crate::plan::model::{
@@ -1217,6 +1411,7 @@ mod tests {
     };
     use crate::plan::textures::{TextureRole, TextureRoles};
     use crate::wad::classify::MapFormat;
+    use crate::wad::game::Game;
     use crate::wad::map::features::{LiftStyle, LightEffect, TELEPORT_DESTINATION_THING};
     use crate::wad::map::geometry::point_in_sector;
     use crate::wad::map::{Linedef, Map, Sidedef};
@@ -2222,7 +2417,7 @@ mod tests {
     }
 
     /// The teleport-destination things (type 14) of the map.
-    fn destination_things(map: &Map) -> Vec<&crate::wad::map::model::Thing> {
+    fn destination_things(map: &Map) -> Vec<&Thing> {
         map.things
             .iter()
             .filter(|thing| thing.kind == TELEPORT_DESTINATION_THING)
@@ -2639,6 +2834,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_later_rebuild_cannot_turn_the_wired_doors_around() {
+        let mut plan = two_rooms(vec![door(
+            "d1",
+            DoorStyle::Locked(KeyColor::Blue),
+            (128_i64, 64_i64),
+        )]);
+        plan.wall_thickness = 0_i64;
+        plan.features = vec![teleporter_feature("a", "b", 0, false)];
+        let (compiled, rows) = wired(&plan);
+        let door_row = rows.first().expect("the door row");
+        let band = door_row.sectors.first().copied().expect("the band");
+        for &line in &door_row.lines {
+            let def = line_at(&compiled.map, line);
+            assert_eq!(def.special, 26_i32, "the lock survives on line {line}");
+            assert_eq!(
+                back_sector(&compiled.map, def),
+                Some(band),
+                "the rebuild cannot put the band in front of line {line}"
+            );
+            assert!(
+                matches!(front_sector(&compiled.map, def), 0_usize | 1_usize),
+                "the room faces line {line} from the front: {}",
+                front_sector(&compiled.map, def)
+            );
+        }
+    }
+
     /// A one-room plan with the given light effect and secret flag.
     fn lit_room_plan(effect: Option<LightEffect>, secret: bool) -> Plan {
         let mut room = rect_room("a", (0, 0), (128, 128));
@@ -2831,11 +3054,32 @@ mod tests {
             space.special, 131_i32,
             "the lit secret survives in the order"
         );
+        let platform = row(&rows, "lift")
+            .sectors
+            .first()
+            .copied()
+            .expect("one platform");
+        let lower = *compiled
+            .room_sectors
+            .get("a")
+            .expect("room a")
+            .first()
+            .expect("one");
         for &line in &row(&rows, "lift").lines {
+            let def = line_at(&compiled.map, line);
             assert_eq!(
-                line_at(&compiled.map, line).special,
-                62_i32,
+                def.special, 62_i32,
                 "the lift lines still name the ride after the teleporter rebuild"
+            );
+            assert_eq!(
+                back_sector(&compiled.map, def),
+                Some(platform),
+                "the rebuild leaves the platform behind ride line {line}"
+            );
+            assert_eq!(
+                front_sector(&compiled.map, def),
+                lower,
+                "and the lower room faces ride line {line} from the front"
             );
         }
         let panel = row(&rows, "switch")
@@ -2854,6 +3098,127 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("sector") && note.contains("special 131")),
             "the boom note rides along: {warnings:?}"
+        );
+    }
+
+    /// The embedded `DOOM` thing tables the key check reads.
+    fn doom_defs() -> Definitions {
+        definitions_for(Game::Doom).expect("the embedded tables parse")
+    }
+
+    /// Wire `plan`, stand things of these doomednums into the finished
+    /// map and run the playability checks.
+    #[track_caller]
+    fn checked(plan: &Plan, kinds: &[i32]) -> Vec<String> {
+        let (mut compiled, _) = wired(plan);
+        compiled.map.things.extend(kinds.iter().map(|&kind| Thing {
+            kind,
+            ..Default::default()
+        }));
+        playable_checks(plan, &compiled.map, &doom_defs())
+    }
+
+    /// The one-door `style` plan carrying an `exit` row, so only a key
+    /// or remote warning can speak; the door's id is `d1`.
+    fn door_feature_plan(style: DoorStyle) -> Plan {
+        let mut plan = door_plan(style);
+        plan.features = vec![exit_feature("b", ExitStyle::WalkOver, false, None)];
+        plan
+    }
+
+    #[test]
+    fn locked_doors_without_their_keys_warn_per_door_in_connection_order() {
+        let plan = two_rooms(vec![
+            door("gate", DoorStyle::Locked(KeyColor::Blue), (128_i64, 32_i64)),
+            door("vault", DoorStyle::Locked(KeyColor::Red), (128_i64, 96_i64)),
+        ]);
+        assert_eq!(
+            checked(&plan, &[]),
+            vec![
+                "blue door at gate but no blue key in the plan".to_owned(),
+                "red door at vault but no red key in the plan".to_owned(),
+                "the map has no exit".to_owned(),
+            ],
+            "the key notes lead in connection order, the exit note follows"
+        );
+    }
+
+    #[test]
+    fn the_matching_key_or_skull_key_silences_the_door_warning() {
+        let plan = door_feature_plan(DoorStyle::Locked(KeyColor::Blue));
+        for (kind, who) in [(5_i32, "the card"), (40_i32, "the skull key")] {
+            assert!(checked(&plan, &[kind]).is_empty(), "{who} opens it");
+        }
+    }
+
+    #[test]
+    fn a_wrong_colour_key_leaves_the_door_warned() {
+        let plan = door_feature_plan(DoorStyle::Locked(KeyColor::Blue));
+        assert_eq!(
+            checked(&plan, &[6_i32]),
+            vec!["blue door at d1 but no blue key in the plan".to_owned()],
+            "a yellow card opens nothing"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_locked_door_warns_under_its_derived_label() {
+        let mut plan = door_feature_plan(DoorStyle::Locked(KeyColor::Yellow));
+        if let Some(first) = plan.connections.first_mut() {
+            first.id = None;
+        }
+        assert_eq!(
+            checked(&plan, &[]),
+            vec!["yellow door at a->b but no yellow key in the plan".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_plan_without_an_exit_row_says_so_plainly() {
+        let plan = two_rooms(vec![door("d1", DoorStyle::Normal, (128_i64, 32_i64))]);
+        assert_eq!(
+            checked(&plan, &[]),
+            vec!["the map has no exit".to_owned()],
+            "a plain door needs no key and no switch"
+        );
+    }
+
+    #[test]
+    fn an_unswitched_remote_door_names_itself_and_the_way_out() {
+        let plan = door_feature_plan(DoorStyle::Remote);
+        assert_eq!(
+            checked(&plan, &[]),
+            vec![
+                "remote door at d1 is opened by no switch: add a switch feature whose \
+                 opens is d1"
+                    .to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_switch_naming_the_remote_door_silences_it() {
+        let plan = door_features(vec![
+            switch_feature("a", "d1", Some(Side::West), false),
+            exit_feature("b", ExitStyle::WalkOver, false, None),
+        ]);
+        assert!(checked(&plan, &[]).is_empty(), "the pair is complete");
+    }
+
+    #[test]
+    fn an_unnamed_remote_door_warns_under_its_derived_label() {
+        let mut plan = door_features(vec![exit_feature("b", ExitStyle::WalkOver, false, None)]);
+        if let Some(first) = plan.connections.first_mut() {
+            first.id = None;
+        }
+        assert_eq!(
+            checked(&plan, &[]),
+            vec![
+                "remote door at a->b is opened by no switch: add a switch feature whose \
+                 opens is a->b"
+                    .to_owned()
+            ],
+            "an unnamed door can never be named"
         );
     }
 }

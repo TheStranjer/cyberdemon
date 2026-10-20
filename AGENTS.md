@@ -278,7 +278,11 @@ src/
                   the errors-only `validation` result fields; the fixed-order
                   feature pipeline in `crate::plan::features` — doors,
                   switches, lifts, teleporters, exits, then the rooms' lights
-                  and secrets — runs between the compile and the things);
+                  and secrets, ending in a re-face of the wired door and lift
+                  lines a teleporter rebuild turned — runs between the
+                  compile and the things, and `plan::playable_checks` appends
+                  its never-error key/exit/remote warnings after the
+                  things);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

@@ -247,11 +247,14 @@ severity-ranked issues you fix with the editing tools before saving
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`
 (an empty map block in the working archive; `copy_map` clones an existing
-one; `reference/maps.md`) — or declare the whole layout at once with
-`build_map_from_plan`, which compiles rooms, connections, thick walls and
-a theme into a finished, thing-inhabited block in one undoable edit, and
-with `finalize: true` builds its node data and reports an errors-only
-validation in the same call (`reference/plan.md`). Draw whole
+one; `reference/maps.md`) — or one plan describes the whole playable
+map: `build_map_from_plan` compiles geometry (rooms, connections, thick
+walls, a theme), things and behaviour features (wired doors, switches,
+lifts, teleporters, exits, light effects, secrets) into a finished,
+thing-inhabited block in one undoable edit, warns about the judgment
+gaps it cannot fix (a lock without its key, an unswitched remote, no
+exit) and with `finalize: true` builds its node data and reports an
+errors-only validation in the same call (`reference/plan.md`). Draw whole
 rooms in one call with `create_sector_from_loop`, and carve solid rock out
 of the map with `carve_void` (`reference/sectors.md`). Put working doors in
 with `add_door`, glaze the rooms' shared walls with `add_window`, climb

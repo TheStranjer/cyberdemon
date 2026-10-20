@@ -6,7 +6,8 @@ between, things to stand in the result, and a theme to dress it all
 with. One call compiles the plan into a complete map block and writes
 it into the working archive as a single undoable edit.
 
-Things land in the same call: `things` rows and a mandatory
+One plan describes the whole playable map: geometry, things and
+behaviour. Things land in the same call: `things` rows and a mandatory
 `player_start` (or a thing of type `1`) populate the block. `finalize`
 builds the node run into the block and validates the result, all inside
 the one undoable edit. Door connectors are wired: the band sector takes
@@ -20,7 +21,10 @@ dresses its room's sector as a tagged platform, a `teleporter` row
 draws the pad and destination squares and stands its type-14 things,
 and an `exit` row ends the level by panel or by walk-over. Rooms'
 `secret` and `light_effect` fields paint the family's sector specials
-— lights before secrets.
+— lights before secrets. When the wiring leaves a judgment gap — a
+locked door whose key stands nowhere in the plan, a remote door no
+switch opens, a map with no exit — the result says so in `warnings`;
+the build never fails on them.
 
 ## `build_map_from_plan`
 
@@ -108,9 +112,29 @@ the connection and saying they *do not touch*.
 > later `switch` row (or your own trigger line) fires on. Every door
 > lands in the result's `features` list with its sector, lines and tag.
 
-**The features**: `features` (default none) declares game structures
-beside the geometry. Each row gives a `kind` (case-insensitive) plus
-that kind's fields:
+**The features**, one plain-English line each, across the whole set a
+plan can carry:
+
+- **Door wiring** (a `door` connection) — the closed band opens on use,
+  on touch, on its key card, or from a remote switch; wired the moment
+  the map compiles.
+- **Switch** (`kind: switch`) — a wall panel that fires the remote door
+  whose id it names.
+- **Lift** (`kind: lift`) — the room's own sector becomes a platform
+  that rides down to its low floor and back up.
+- **Teleporter** (`kind: teleporter`) — walk onto the pad, arrive at
+  the destination square facing the angle you set.
+- **Exit** (`kind: exit`) — the level ends at its panel or across its
+  walked-over boundaries.
+- **Light effect** (a room's `light_effect`) — flicker, strobe, glow or
+  random-off painted onto every sector of the room.
+- **Secret** (a room's `secret`) — the family's secret flag over
+  whatever special the room carries; a lit secret keeps both.
+
+`features` (default none) declares the middle four beside the geometry;
+`light_effect` and `secret` ride on the rooms and the door wiring comes
+with the connections. Each `features` row gives a `kind`
+(case-insensitive) plus that kind's fields:
 
 | kind         | Fields | Installs |
 |--------------|--------|----------|
@@ -133,6 +157,101 @@ missing its `room` (its `from_room`/`to_room`, or the switch's
 `opens`), and a bad `kind`, `style` or `wall` name are all
 `invalid_argument` naming `features[i]` — the vocabulary refusals list
 the accepted names.
+
+> **Playability warnings.** After the last feature installs, three
+> checks read the finished map and their notes ride in `warnings` —
+> never errors, always plan order: every `locked` door whose colour no
+> placed thing answers as a key (a thing definition in the `Keys`
+> category naming that colour — skull keys count, their names carry it)
+> warns `"{colour} door at {connection id} but no {colour} key in the
+> plan"`, one note per door in connection order; a plan with no `exit`
+> row warns `"the map has no exit"`; and every `remote` door no
+> `switch` row names warns `"remote door at {connection id} is opened
+> by no switch: add a switch feature whose opens is {connection id}"`,
+> again in connection order. The keys are what the map actually holds,
+> so a card pinned by `type` counts like one named. Stand a key for
+> every lock, set an exit somewhere, and switch every remote, and these
+> three notes stay silent.
+
+A whole playable map in one plan — six rooms, every feature kind, and
+the card that opens it all:
+
+```json
+call build_map_from_plan {
+  "map": "MAP12",
+  "wall_thickness": 0,
+  "rooms": [
+    {"id": "start",    "rect": {"x": 0,    "y": 0,   "w": 128, "h": 128}},
+    {"id": "corridor", "rect": {"x": 128,  "y": 0,   "w": 128, "h": 128}},
+    {"id": "secret",   "rect": {"x": 256,  "y": 0,   "w": 128, "h": 128},
+     "secret": true},
+    {"id": "ledge",    "rect": {"x": 128,  "y": 128, "w": 128, "h": 128},
+     "floor": 24},
+    {"id": "exit",     "rect": {"x": 128,  "y": 256, "w": 128, "h": 128},
+     "floor": 24, "light_effect": "strobe_slow"},
+    {"id": "foyer",    "rect": {"x": -128, "y": 0,   "w": 128, "h": 128}}
+  ],
+  "connections": [
+    {"id": "blue_door", "from": "start", "to": "corridor",
+     "kind": "door", "style": "locked_blue"},
+    {"id": "cell_door", "from": "corridor", "to": "secret", "kind": "door"},
+    {"id": "gap",   "from": "corridor", "to": "ledge", "kind": "opening"},
+    {"id": "gate",  "from": "ledge", "to": "exit", "kind": "door",
+     "style": "remote"},
+    {"id": "home",  "from": "start", "to": "foyer", "kind": "opening"}
+  ],
+  "features": [
+    {"kind": "lift", "room": "ledge", "style": "use_wall", "low_floor": -40},
+    {"kind": "teleporter", "from_room": "corridor", "to_room": "ledge"},
+    {"kind": "switch", "room": "ledge", "opens": "gate", "wall": "east"},
+    {"kind": "exit", "room": "exit", "style": "walk_over"}
+  ],
+  "things": [{"name": "Blue Keycard", "room": "start"}],
+  "player_start": {"room": "start"}
+}
+-> {"map": "MAP12", "format": "doom",
+    "rooms": {"start": [0], "corridor": [1], "secret": [2], "ledge": [3],
+              "exit": [4], "foyer": [5]},
+    "connections": [
+      {"id": "blue_door", "kind": "door", "sectors": [6]},
+      {"id": "cell_door", "kind": "door", "sectors": [7]},
+      {"id": "gap", "kind": "opening", "sectors": [8]},
+      {"id": "gate", "kind": "door", "sectors": [9]},
+      {"id": "home", "kind": "opening", "sectors": [10]}],
+    "features": [
+      {"kind": "door", "room": null, "sectors": [6], "lines": [13, 14, 15, 18, 20, 26],
+       "tag": 1},
+      {"kind": "door", "room": null, "sectors": [7], "lines": [49, 50, 51, 54, 56, 62],
+       "tag": 2},
+      {"kind": "door", "room": null, "sectors": [9], "lines": [37, 38, 39, 40, 46, 47],
+       "tag": 3},
+      {"kind": "switch", "room": "ledge", "sectors": [9], "lines": [59], "tag": 3},
+      {"kind": "lift", "room": "ledge", "sectors": [3], "lines": [22, 44], "tag": 4},
+      {"kind": "teleporter", "room": "corridor", "sectors": [11, 12],
+       "lines": [27, 28, 29, 41], "tag": 5},
+      {"kind": "exit", "room": "exit", "sectors": [4], "lines": [24, 39, 40, 47, 48],
+       "tag": null},
+      {"kind": "light", "room": "exit", "sectors": [4], "lines": [], "tag": null},
+      {"kind": "secret", "room": "secret", "sectors": [2], "lines": [], "tag": null}],
+    "things_placed": 2,
+    "bounds": {"x1": -128, "y1": 0, "x2": 384, "y2": 384},
+    "warnings": [],
+    "nodes": null, "validation": null, "…": "…"}
+```
+
+The card stands in `start` beside the player, so the blue `start →
+corridor` lock opens; the `ledge` room's own sector becomes the
+platform riding down to `-40` on a use of its south wall; the teleporter
+flips corridor and ledge; the ledge's wall switch fires the remote
+`gate`'s own tag to unlock the strobing `exit` room, whose every
+two-sided boundary ends the level; and a plain door hides the `secret`
+room. The `features` rows come back in pipeline order — the three doors
+tagged `1`, `2` and `3`, the switch reusing the gate's `3`, the lift `4`,
+the teleporter's destination `5` — then the exit and the two painted
+room rows. The zero-thickness door bands meet their rooms along several
+cuts and a later teleporter rebuild re-sorts the lines, so the doors'
+and lift's lines are more than the two use faces and every row reports
+the finished indices, facing the player as wired.
 
 **Units and the grid**: room footprints, connection `at` positions and
 teleporter `pad`/`destination` squares are plan coordinates, drawn in
@@ -289,8 +408,10 @@ rooms unreachable from the first, rooms painted over, floor gaps taller
 than 24 units through an opening/door/window ("use stairs"), rooms that
 fit fewer things than asked — plus the theme notes, the feature steps'
 notes (a plan lift dropping under 64 units, the Boom secret-bit
-warning for a lit `Doom` secret) and the overlay notes of the drawn
-teleporter squares. `nodes` and
+warning for a lit `Doom` secret), the overlay notes of the drawn
+teleporter squares and the playability notes (a locked door with no key
+of its colour, no `exit` feature, a `remote` door no `switch` opens —
+see the block above the six-room example). `nodes` and
 `validation` are `null` unless `finalize: true` filled them (see the
 **Finalize** section above).
 
@@ -326,7 +447,7 @@ call build_map_from_plan {
       {"kind": "door", "room": null, "sectors": [3], "lines": [5, 17], "tag": 1}],
     "things_placed": 5,
     "bounds": {"x1": 0, "y1": -336, "x2": 432, "y2": 0},
-    "warnings": [],
+    "warnings": ["red door at gate but no red key in the plan", "the map has no exit"],
     "nodes": {"variant": "classic", "segs": 61, "subsectors": 15, "nodes": 14,
               "split_vertices": 5, "warnings": []},
     "validation": {"errors": [], "counts": {"error": 0, "warning": 4, "info": 6}},
@@ -347,7 +468,10 @@ hall's clearance grid, the barrel pins at plan pixel `(16, 40)`, and
 the player starts centre-courtyard facing east. `finalize` built the
 classic node run plus `REJECT` and `BLOCKMAP` into the same written
 block — one `undo` takes all of it back — and the errors-only
-validation came back clean.
+validation came back clean. The two `warnings` are the playability
+checks: this plan locks `gate` behind a red card it never places and
+declares no exit — stand a red key in a `things` row and add an `exit`
+row and they fall silent.
 
 **After the call**: `render_topdown` compares the layout with the
 sketch you worked from, `render_view` walks it first-person from the

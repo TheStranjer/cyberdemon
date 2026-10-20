@@ -32,7 +32,9 @@
 //! idea: [`secret_edit`] folds the secret flag of each flag family into
 //! a sector's current special and [`light_special`] does the same for a
 //! [`LightEffect`], keeping every bit outside the family's basic-type
-//! field. [`teleport`] is the pure teleporter core:
+//! field; [`boom_note`] is the shared vanilla-Doom warning a flagged
+//! vanilla type earns, emitted by both the `mark_secret` tool and the
+//! plan feature engine's secret step. [`teleport`] is the pure teleporter core:
 //! [`teleport::teleport_specials`] is the walk-on action of a pad border
 //! per flag family, and [`teleport::build_teleporter`] draws the pad and
 //! destination squares through the overlay engine, places the type-14
@@ -65,7 +67,7 @@ pub use place::{
 };
 pub use specials::{
     BOOM_SECRET_BIT, DOOM_SECRET_SPECIAL, GENERALIZED_SECTOR_MIN, HEXEN_SECRET_BIT, LightEffect,
-    SecretEdit, light_special, secret_edit,
+    SecretEdit, boom_note, light_special, secret_edit,
 };
 pub use stairs::{
     DEPTH_TOLERANCE, MAX_STEP_HEIGHT, MIN_HEADROOM, MIN_STEP_HEIGHT, PaintedStep, StairBuild,

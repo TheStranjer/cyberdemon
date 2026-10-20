@@ -275,10 +275,10 @@ src/
                   `Session::edit` via `maps::write_block` (the `finalize`
                   parameter runs the `nodes` tools' whole-set build on the
                   model inside that step and fills the `nodes` summary and
-                  the errors-only `validation` result fields; the door,
-                  switch and exit wiring comes from `crate::plan::features`,
-                  the lift, teleporter, light and secret steps follow with
-                  their tickets);
+                  the errors-only `validation` result fields; the fixed-order
+                  feature pipeline in `crate::plan::features` — doors,
+                  switches, lifts, teleporters, exits, then the rooms' lights
+                  and secrets — runs between the compile and the things);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.
@@ -358,16 +358,18 @@ src/
                   (`teleport_specials`' per-family pad-border action and
                   `build_teleporter`'s pad and destination squares, the
                   type-14 destination things it places and their
-                  outward-facing borders, with the `two_way` return leg),
+                  outward-facing borders, with the `two_way` return leg and
+                  the `line_remap` index handoff over the squares' rebuilds),
                   `map/features/switches.rs` the pure switch core (the
                   `switch_special` action table, `build_switch`'s wall
                   mount: panel chunk fit, `split_linedef` isolation, tag
                   resolution and dressing, and `build_walk_over_exit`'s
                   two-sided-boundary level ends) and
                   `map/features/specials.rs` the pure sector-special builders
-                  (`secret_edit`'s per-family secret bit and `light_special`'s
-                  per-family light effect, each keeping every bit outside its
-                  field), `map/xlat.rs` the pure
+                  (`secret_edit`'s per-family secret bit, `light_special`'s
+                  per-family light effect — each keeping every bit outside
+                  its field — and the `boom_note` vanilla-Doom warning the
+                  `mark_secret` tool and the plan secret step share), `map/xlat.rs` the pure
                   Doom↔ZDoom linedef-special translation tables
                   (`XlatFlags`, `XlatRow`, `parse_xlat_table` and the
                   embedded-table lookups `xlat_rows`, `rows_for_doom` and

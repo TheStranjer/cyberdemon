@@ -9,11 +9,14 @@
 //! from its own units into map units: an integer scale, an optional
 //! vertical mirror and a snap grid. After it, [`things`] fills the
 //! compiled geometry: name resolution, room grids and presence flags,
-//! and [`features`] installs the game behaviour: door connectors take
+//! and [`features`] installs the game behaviour in fixed pipeline
+//! order: door connectors take
 //! their tags, specials and facing, `switch` rows mount their panels on
-//! room walls firing a remote door's tag, and `exit` rows end the level
-//! by panel or walk-over; the lift, teleporter, light and secret
-//! wiring comes with the follow-up slices. Nothing in this module touches
+//! room walls firing a remote door's tag, `lift` and `teleporter` rows
+//! run the platform and pad cores, `exit` rows end the level
+//! by panel or walk-over, and the room `light_effect` and `secret`
+//! flags paint the family's sector specials — lights before
+//! secrets. Nothing in this module touches
 //! archives, sessions or `MCP` types; it is data, measurement and
 //! validation only.
 

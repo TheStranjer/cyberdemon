@@ -5,7 +5,9 @@
 //! [`secret_edit`] answers what marking (or clearing) a sector's secret
 //! flag turns its special into, and [`light_special`] answers what a
 //! [`LightEffect`] turns it into. The `features` tools `mark_secret` and
-//! `set_light_effect` write the answers; nothing here reads a session, an
+//! `set_light_effect` write the answers, and so does the plan feature
+//! engine's light and secret steps; [`boom_note`] is the one vanilla-Doom
+//! warning both secret paths emit. Nothing here reads a session, an
 //! archive or the `MCP` layer.
 //!
 //! The two flag families disagree about where the meaning lives. The `Doom`
@@ -224,11 +226,32 @@ pub const fn light_special(family: FlagFamily, special: i32, effect: LightEffect
     }
 }
 
+/// The Boom-bit warning for sector `index`, whose special now carries
+/// the secret flag on top of a vanilla `Doom` type.
+///
+/// The effect and the secret survive only in ports that read bits, so
+/// a map that has to work in vanilla wants its own sector with the
+/// vanilla type instead.
+///
+/// Shared by the `mark_secret` tool and the plan feature engine's
+/// secret step so both paths emit the identical warning.
+#[must_use]
+#[inline]
+pub fn boom_note(index: usize, flagged: i32) -> String {
+    format!(
+        "sector {index} now carries special {flagged}: vanilla Doom ignores Boom bits, so \
+         that engine reads neither the old effect nor the secret (only a Boom-compatible \
+         or ZDoom port does); mark it with the vanilla type {DOOM_SECRET_SPECIAL} instead \
+         if it has to stay hidden from every engine"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         BOOM_SECRET_BIT, DOOM_SECRET_SPECIAL, DOOM_TYPE_MASK, GENERALIZED_SECTOR_MIN,
-        HEXEN_SECRET_BIT, HEXEN_TYPE_MASK, LightEffect, SecretEdit, light_special, secret_edit,
+        HEXEN_SECRET_BIT, HEXEN_TYPE_MASK, LightEffect, SecretEdit, boom_note, light_special,
+        secret_edit,
     };
     use crate::wad::map::flags::FlagFamily;
 
@@ -425,5 +448,18 @@ mod tests {
                 "the Hexen family's {effect:?} from a plain sector"
             );
         }
+    }
+
+    #[test]
+    fn the_boom_note_names_the_sector_the_flagged_special_and_the_fix() {
+        let flagged = BOOM_SECRET_BIT | 3_i32;
+        let note = boom_note(3_usize, flagged);
+        assert!(note.contains("sector 3"), "{note}");
+        assert!(note.contains("special 131"), "{note}");
+        assert!(
+            note.contains("vanilla Doom ignores Boom bits")
+                && note.contains(&format!("vanilla type {DOOM_SECRET_SPECIAL}")),
+            "the note explains the engine gap and the fix: {note}"
+        );
     }
 }

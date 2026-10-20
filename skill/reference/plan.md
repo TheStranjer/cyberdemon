@@ -13,10 +13,14 @@ the one undoable edit. Door connectors are wired: the band sector takes
 a fresh tag and the room-facing lines the style's door special
 (coloured jambs for locked doors, a bare tagged band for `remote`).
 `features` rows — `exit`, `switch`, `lift` and `teleporter`
-declarations — install too: a `switch` row mounts a panel on its room's
-wall that fires a remote door's tag, and an `exit` row ends the level
-by panel or by walk-over. `lift` and `teleporter` rows parse, transform
-and validate now and install nothing until their wiring slices land.
+declarations — install too, in a fixed pipeline order (doors, switches,
+lifts, teleporters, exits, lights, secrets): a `switch` row mounts a
+panel on its room's wall that fires a remote door's tag, a `lift` row
+dresses its room's sector as a tagged platform, a `teleporter` row
+draws the pad and destination squares and stands its type-14 things,
+and an `exit` row ends the level by panel or by walk-over. Rooms'
+`secret` and `light_effect` fields paint the family's sector specials
+— lights before secrets.
 
 ## `build_map_from_plan`
 
@@ -62,8 +66,15 @@ ones), `outdoor` (default `false`; an outdoor room's ceiling is the
 sky unless it names a flat), `secret` (default `false`) and
 `light_effect` (unset by default; one of `none`, `flicker`,
 `strobe_fast`, `strobe_slow`, `glow` or `random_off`,
-case-insensitive). `secret` and `light_effect` describe the room for
-the follow-up wiring slices and install nothing yet.
+case-insensitive). The feature run installs both: `light_effect`
+paints the family's basic light type onto every sector of the room
+(keeping the room's `light` and the bits above the type field), and
+`secret` sets the family's secret flag over whatever the earlier steps
+left — the lights step always runs before the secrets step, so a lit
+secret room keeps both. A `Doom`-family room that already carries a
+vanilla type (a light effect, say) gets a `Boom` secret *bit* rather
+than a second type, and the vanilla-engine warning for that rides in
+`warnings`.
 
 **The walls**: `wall_thickness` (default `16`) is the map-unit wall
 grown between and around rooms; `0` lets rooms share their walls
@@ -105,8 +116,8 @@ that kind's fields:
 |--------------|--------|----------|
 | `exit`       | `room`, `style?` = `switch` or `walk_over` (default `switch`), `secret?` = false, `wall?` | The level end standing in `room`. `switch` mounts the 32-unit exit panel on a wall of `room` (`Doom` specials `11`/`51`, Hexen portal `243`/`244`); `walk_over` dresses every two-sided boundary of the room's sectors with the family's walk-over exit (`W1` `52`/`124`, tag kept as the destination map number — a plan-built room's bare `0` ends the game). `secret: true` picks the secret form. `wall` is `north`, `south`, `east` or `west`; unset takes the room's longest one-sided wall. |
 | `switch`     | `room`, `opens`, `wall?`, `repeatable?` = false | A 32-unit switch panel centred on the chosen wall of `room`, opening the remote door whose connection `id` is `opens` (`Doom` `S1` `103`, or `SR` `61` with `repeatable: true`; `Hexen` `Door_Open`). The switch fires exactly the tag the door's band sector carries. `opens` must name a `remote` door: any other connection fails `invalid_argument`. |
-| `lift`       | `room`, `low_floor?`, `style?` = `use_wall` or `walk_trigger` (default `use_wall`), `repeatable?` = true | Declares a platform in `room` lowering to `low_floor` (default: the lowest neighbouring floor). Installs with a later slice. |
-| `teleporter` | `from_room`, `to_room`, `pad?`, `destination?`, `angle?` = 0, `two_way?` = false | Declares a pad in `from_room` and a destination in `to_room`; the squares are plan points `[x, y]` carried through the same transform as the rooms (the room centres by default), `angle` is the arrival facing. Installs with a later slice. |
+| `lift`       | `room`, `low_floor?`, `style?` = `use_wall` or `walk_trigger` (default `use_wall`), `repeatable?` = true | The room's own sector becomes the platform: it takes a fresh tag, its edges facing lower sectors turn front-down onto the player below and carry the family's down-wait-up action (`Doom` `SR` `62` / `S1` `21` for `use_wall`, `WR` `88` / `W1` `10` for `walk_trigger`, `repeatable` picking the pair; `Hexen` `Plat_DownWaitUpStayLip` `206` with tag, speed and wait args), and those faces wear the theme's `step` texture. `low_floor` is the ride's bottom (default: the lowest neighbouring floor). Every connection from the lift room to a room with a lower floor must be an `opening` — anything else fails `invalid_argument` (*a lift needs openings to the lower rooms*, naming the rooms and the connection) — and a drop under 64 units notes that stairs will do. |
+| `teleporter` | `from_room`, `to_room`, `pad?`, `destination?`, `angle?` = 0, `two_way?` = false | A 64-unit pad square in `from_room` and a destination square in `to_room`, centred on `pad`/`destination` (plan points carried through the same transform as the rooms; the room sectors' bounding-box centres by default). Every square corner inset 8 units must resolve into its room, else `invalid_argument` names that room. The pad's borders carry the family's walk-on teleport (`Doom` `WR` `97` answering the destination's fresh sector tag, `Hexen` `Teleport` `70` with the destination thing's TID); a type-14 destination thing stands at the destination facing `angle`, and the pad keeps the room's own floor flat. `two_way` runs the return leg — its own tag, and a thing at the pad facing back. |
 
 > **The wall a panel mounts on.** Among the room's one-sided walls
 > whose outward normal points at `wall` (`north` is `+y`, `south` `-y`,
@@ -198,7 +209,10 @@ a thing of type 1`.
 and `step`. The feature steps additionally consult `door_track_red`,
 `door_track_blue` and `door_track_yellow` (the theme table falls them
 back to `door_track`), plus `switch` and `exit_switch` for the mounted
-panels (falling back to `wall` and `switch`). A feature role the theme
+panels (falling back to `wall` and `switch`). A lift's platform side
+wears `step` (falling back to `wall`, the name the compiler's fill pass
+already dressed the height gaps in); a teleporter square's bare new
+edges fall back to `wall`. A feature role the theme
 answers `"-"` leaves its faces as the compiler dressed them — a locked
 door's jambs in the plain track, a switch panel on the wall's own
 middle — and adds its own note. `theme`
@@ -258,15 +272,25 @@ connection order, each with `kind` `door`, `room` `null`, its band
 `sectors`, the room-facing `lines` carrying the action (a `remote`'s
 stay bare) and the shared `tag`; then switches (`kind` `switch`, the
 room, its door's band sector, the mounted line and the door's tag);
-then exits (`kind` `exit`, the room and its sectors, the dressed lines
-and no tag). The lift, teleporter, light and secret rows report nothing
-until their slices land. `things_placed` counts the
-`THINGS` rows written, room fills
-and the player start included. `bounds` is the vertex box
+then lifts (`kind` `lift`, the room, its platform sector, the
+down-facing activation lines and the fresh tag); then teleporters
+(`kind` `teleporter`, the pad room, the pad then destination sectors,
+the pad's border lines and the destination's tag); then exits (`kind`
+`exit`, the room and its sectors, the dressed lines and no tag); then
+the light and secret rows (`kind` `light` / `secret`, the room, the
+sectors painted, no lines and no tag) — a later teleporter rebuild
+renumbers the map's lines, and every earlier row reports the finished
+indices. `things_placed` counts the
+`THINGS` rows the plan asked for written, room fills
+and the player start included (a teleporter's own type-14 destination
+things ride along in the block beside them). `bounds` is the vertex box
 `{x1, y1, x2, y2}`. `warnings` carries the compiler's advisories —
 rooms unreachable from the first, rooms painted over, floor gaps taller
 than 24 units through an opening/door/window ("use stairs"), rooms that
-fit fewer things than asked — plus the theme notes. `nodes` and
+fit fewer things than asked — plus the theme notes, the feature steps'
+notes (a plan lift dropping under 64 units, the Boom secret-bit
+warning for a lit `Doom` secret) and the overlay notes of the drawn
+teleporter squares. `nodes` and
 `validation` are `null` unless `finalize: true` filled them (see the
 **Finalize** section above).
 

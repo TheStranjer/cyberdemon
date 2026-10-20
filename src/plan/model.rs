@@ -93,9 +93,9 @@ pub struct Plan {
     pub rooms: Vec<Room>,
     /// Openings, doors, windows and stairs joining the rooms.
     pub connections: Vec<Connection>,
-    /// Game structures the follow-up wiring slices install once the map
-    /// is compiled: exits, wall switches, lifts and teleporters. The
-    /// compiler itself acts on none of them yet.
+    /// Game structures the feature run installs once the map is
+    /// compiled: exits, wall switches, lifts and teleporters. The
+    /// compiler itself acts on none of them.
     #[serde(default)]
     pub features: Vec<Feature>,
     /// Thickness of the walls grown between rooms, map units; `0` makes
@@ -132,11 +132,13 @@ pub struct Room {
     #[serde(default)]
     pub outdoor: bool,
     /// Whether the room counts as a secret area. Default `false`; the
-    /// follow-up wiring slices are the first to act on it.
+    /// feature run's secret step (always after the lights step) flags
+    /// the room's sectors with the family's secret special.
     #[serde(default)]
     pub secret: bool,
-    /// A light effect for the room's sector, if any; the follow-up
-    /// wiring slices are the first to install it.
+    /// A light effect for the room's sector, if any; the feature run's
+    /// lights step installs it on every sector of the room, keeping the
+    /// light level and the bits above the family's basic-type field.
     #[serde(default)]
     pub light_effect: Option<LightEffect>,
 }
@@ -244,10 +246,10 @@ pub enum KeyColor {
 /// A game structure the plan carries and the wiring steps install.
 ///
 /// [`apply_features`](crate::plan::features::apply_features) mounts the
-/// `exit` and `switch` rows once the map is compiled;
+/// `exit` and `switch` rows, dresses `lift` rooms as platforms and
+/// stands `teleporter` pads and destinations once the map is compiled;
 /// [`compile`](fn@crate::plan::compile) itself validates every row and
-/// draws no geometry for it, and the `lift` and `teleporter` kinds wait
-/// for their slices.
+/// draws no geometry for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Feature {

@@ -90,7 +90,10 @@
 //! (plus [`Sector::light`] for `set_light_effect`) with no drawing at all:
 //! [`secret_edit`] is the per-family secret bit behind `mark_secret`,
 //! [`light_special`] the per-family basic type behind `set_light_effect`,
-//! and each refused index is named before anything is written.
+//! and each refused index is named before anything is written. A Boom
+//! secret bit on a vanilla `Doom` type earns [`boom_note`]'s warning,
+//! shared with the plan feature engine's secret step so both paths say
+//! the same thing.
 //!
 //! The opening rule: after the recess is drawn, every two-sided line
 //! facing the door sector is a room-facing door line (the vanilla
@@ -147,13 +150,13 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
-    DEFAULT_PAD_SIZE, DEFAULT_SWITCH_WIDTH, DOOM_SECRET_SPECIAL, DoorSides, DoorStyle,
-    DoorTextures, DoorWall, LiftBuild, LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep,
-    PlacedSwitch, SecretEdit, StairSpec, SwitchAction, SwitchSpec, TeleportBuild, TeleportSpec,
-    WindowHeights, WindowSides, WindowTextures, action_name, apply_door, apply_window,
-    boundary_lines, build_lift, build_stairs, build_switch, build_teleporter, build_walk_over_exit,
-    door_rect, door_specials, door_wall, light_special, longest_boundary, nearest_boundary,
-    next_free_tag, outward_depth, project_onto_line, secret_edit, void_strip, window_record,
+    DEFAULT_PAD_SIZE, DEFAULT_SWITCH_WIDTH, DoorSides, DoorStyle, DoorTextures, DoorWall,
+    LiftBuild, LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep, PlacedSwitch,
+    SecretEdit, StairSpec, SwitchAction, SwitchSpec, TeleportBuild, TeleportSpec, WindowHeights,
+    WindowSides, WindowTextures, action_name, apply_door, apply_window, boom_note, boundary_lines,
+    build_lift, build_stairs, build_switch, build_teleporter, build_walk_over_exit, door_rect,
+    door_specials, door_wall, light_special, longest_boundary, nearest_boundary, next_free_tag,
+    outward_depth, project_onto_line, secret_edit, void_strip, window_record,
 };
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
 use crate::wad::map::ops::Point;
@@ -2037,19 +2040,6 @@ fn sector_state(map: &Map, index: usize) -> Result<(i32, i32), CyberError> {
         .get(index)
         .map(|row| (row.special, row.light))
         .ok_or_else(|| out_of_range("sector", index, map.sectors.len()))
-}
-
-/// The Boom-bit note for sector `index`, whose special now carries the
-/// secret flag on top of a vanilla `Doom` type: the effect and the secret
-/// survive only in ports that read bits, so a map that has to work in
-/// vanilla wants its own sector with the vanilla type instead.
-fn boom_note(index: usize, flagged: i32) -> String {
-    format!(
-        "sector {index} now carries special {flagged}: vanilla Doom ignores Boom bits, so \
-         that engine reads neither the old effect nor the secret (only a Boom-compatible \
-         or ZDoom port does); mark it with the vanilla type {DOOM_SECRET_SPECIAL} instead \
-         if it has to stay hidden from every engine"
-    )
 }
 
 /// Store `special` in sector `index`, reporting whether the row changed.

@@ -122,8 +122,9 @@ pub(super) struct BuildPlanParams {
     pub(super) connections: Vec<ConnectionParam>,
     /// Game structures the plan carries: `{"kind": "exit" | "switch" |
     /// "lift" | "teleporter", …}` rows. They parse, transform and
-    /// validate; installing them on the map arrives with the follow-up
-    /// wiring updates.
+    /// validate, and [`crate::plan::features`] installs them on the
+    /// compiled map in fixed pipeline order (doors, switches, lifts,
+    /// teleporters, exits, lights, secrets).
     #[serde(default)]
     pub(super) features: Vec<FeatureParam>,
     /// The things to stand in the compiled map. Each row gives exactly
@@ -196,12 +197,15 @@ pub(super) struct RoomParam {
     #[serde(default)]
     pub(super) outdoor: bool,
     /// Whether the room counts as a secret area (default `false`). The
-    /// follow-up wiring updates are the first to act on it.
+    /// feature run's secret step flags the room's sectors with the
+    /// family's secret special, after the lights step.
     #[serde(default)]
     pub(super) secret: bool,
     /// A light effect for the room's sector: `"none"`, `"flicker"`,
     /// `"strobe_fast"`, `"strobe_slow"`, `"glow"` or `"random_off"`
-    /// (case-insensitive; unset keeps the room's static `light`).
+    /// (case-insensitive; unset keeps the room's static `light`). The
+    /// feature run's lights step installs it on every sector of the
+    /// room, keeping the light level.
     #[serde(default)]
     pub(super) light_effect: Option<String>,
 }
@@ -278,9 +282,9 @@ pub(super) struct ConnectionParam {
     #[serde(default)]
     pub(super) width: Option<i64>,
     /// Door only: `normal` (default), `fast`, `stay_open`,
-    /// `locked_red`, `locked_blue`, `locked_yellow` or `remote`.
-    /// No action is installed yet — the style only picks the door's
-    /// dressing.
+    /// `locked_red`, `locked_blue`, `locked_yellow` or `remote`. It
+    /// picks the door's action (installed on the band's room-facing
+    /// lines) and its dressing.
     #[serde(default)]
     pub(super) style: Option<String>,
     /// Window only: height of the glass bottom above the lower floor
@@ -322,8 +326,8 @@ pub(super) struct FeatureParam {
     #[serde(default)]
     pub(super) secret: bool,
     /// Exit and switch only: which wall carries it — `"north"`,
-    /// `"south"`, `"east"` or `"west"` (case-insensitive; unset lets
-    /// the follow-up wiring pick).
+    /// `"south"`, `"east"` or `"west"` (case-insensitive; unset takes
+    /// the room's longest one-sided wall).
     #[serde(default)]
     pub(super) wall: Option<String>,
     /// Switch only: the `id` of the connection this switch operates.

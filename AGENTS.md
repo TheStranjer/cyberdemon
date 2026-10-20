@@ -247,8 +247,9 @@ src/
                   against an optional one-call theme override;
                   `tools/plan.rs` is the `plan` group: `build_map_from_plan`
                   maps its wire `rooms`/`connections` onto `crate::plan::model`
-                  (`tools/plan/params.rs`), resolves the eight `TextureRole`
-                  dressing slots through the theme, runs `crate::plan::compile`
+                  (`tools/plan/params.rs`), carries the coordinates through
+                  `crate::plan::units` (`units`/`grid` parameters), resolves
+                  the eight `TextureRole` dressing slots through the theme, runs `crate::plan::compile`
                   and `wad::map::write_map`, and appends the block as one
                   `Session::edit` via `maps::write_block` (geometry only: the
                   things and finalize slices later fill the reserved

@@ -13,10 +13,11 @@ yet), door connectors come out closed but un-wired, and `nodes` /
 ## `build_map_from_plan`
 
 `{map, format? = "doom", namespace?, replace? = false, wall_thickness?
-= 16, rooms: [...], connections: [...], theme?}` → `{map, format,
-rooms: {id: [sectors]}, connections: [{id, kind, sectors}], bounds:
-{x1, y1, x2, y2} | null, warnings, nodes: null, validation: null,
-next_steps}`
+= 16, rooms: [...], connections: [...], theme?, units? {scale_num? = 1,
+scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y? = false}, grid? =
+8}` → `{map, format, rooms: {id: [sectors]}, connections: [{id, kind,
+sectors}], bounds: {x1, y1, x2, y2} | null, warnings, nodes: null,
+validation: null, next_steps}`
 
 **The map**: `map` is the new block's header name (1 to 8 printable
 ASCII, case-insensitive). When the *working archive* already holds a
@@ -71,6 +72,29 @@ the connection and saying they *do not touch*.
 > trigger — until a later slice (or `add_door` on the finished map)
 > wires it, the door is a solid closed threshold. Read the reported
 > `sectors` and check with `assemble_map` / `render_topdown`.
+
+**Units and the grid**: room footprints and connection `at` positions
+are plan coordinates, drawn in whatever units you think in (sketch
+pixels, half-tiles, centimetres). `units` turns them into map units
+before compiling: `x` maps to `origin_x + x * scale_num / scale_den`,
+`y` to `origin_y + y * scale_num / scale_den` — or `origin_y` minus the
+scaled `y` when `flip_y: true` mirrors an image-space drawing (image
+rows grow down, map `y` grows up). Everything is integer and rounds
+half away from zero. Omitted, the transform is the identity (scale
+`1/1`, origins `0`, no mirror). Then `grid` (default `8`) snaps every
+transformed coordinate to its nearest multiple; `1` switches snapping
+off. A `grid` below `1`, a `scale_den` of `0` and a `scale_num` of `0`
+are each `invalid_argument` naming the parameter. **Sizes are not
+transformed**: `wall_thickness`, connection `width` and the
+`sill`/`lintel`/`step_height`/`step_depth` values are map units
+already. Rectangles have both corners snapped and their `w`/`h`
+re-derived, so they stay grid-aligned; an edge the grid collapses to 0
+is refused naming the plan path.
+
+> **Image-space recipe**: traced a sketch at pixel scale? Draw the plan
+> in pixels and pass `units: {scale_num: 4, flip_y: true}` — one pixel
+> becomes 4 map units with `y` mirrored (the default `grid: 8` then
+> aligns everything to 2-pixel lines).
 
 **The theme**: textures resolve through the session's texture theme
 (`reference/themes.md`) once per call — the plan roles `floor`,

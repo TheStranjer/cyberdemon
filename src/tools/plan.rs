@@ -11,8 +11,12 @@
 //! one [`Session::edit`] step through
 //! [`crate::tools::maps::write_block`], and the map becomes the
 //! session's active map. Geometry only: no things, specials or node
-//! data yet — later slices grow the `units`/`things`/`finalize`
-//! parameters and fill the reserved `nodes`/`validation` result fields.
+//! data yet — later slices grow the `things`/`finalize` parameters and
+//! fill the reserved `nodes`/`validation` result fields. Before the
+//! compiler, the pure [`crate::plan::units`] transform carries the
+//! drawn plan into map units: the `units` scale/origin/mirror and the
+//! `grid` snap, so a sketch measured in pixels lands grid-aligned at
+//! map size.
 //!
 //! Compiler refusals already name the offending id;
 //! [`with_plan_path`] prefixes them with the plan path (`rooms[0]`,
@@ -34,6 +38,7 @@ use crate::plan::CompiledPlan;
 use crate::plan::compile;
 use crate::plan::model::ConnectionKind;
 use crate::plan::textures::{TextureRole, TextureRoles};
+use crate::plan::transform_plan;
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::themes::Role;
@@ -247,9 +252,9 @@ fn reporting(compiled: &CompiledPlan) -> PlanReport {
     }
 }
 
-/// `build_map_from_plan`'s work: resolve the parameters, compile the
-/// plan, then write the block as one [`Session::edit`] step and make
-/// the map the session's active one.
+/// `build_map_from_plan`'s work: resolve the parameters, carry the
+/// drawn plan into map units, compile the plan, then write the block as
+/// one [`Session::edit`] step and make the map the session's active one.
 fn build_run(session: &mut Session, args: &BuildPlanParams) -> Result<PlanReport, CyberError> {
     let name = LumpName::parse(args.map.as_str())?;
     let format = parse_format(args.format.as_deref())?;
@@ -258,7 +263,10 @@ fn build_run(session: &mut Session, args: &BuildPlanParams) -> Result<PlanReport
     } else {
         None
     };
-    let plan = args.to_model()?;
+    let drawn = args.to_model()?;
+    let units = args.to_units();
+    units.check()?;
+    let plan = transform_plan(&drawn, &units, args.grid)?;
     let (theme, notes) = plan_theme(session, args.theme.as_deref())?;
     let mut compiled =
         compile(&plan, name, format, &theme).map_err(|error| with_plan_path(error, args))?;
@@ -292,7 +300,7 @@ where
 impl Cyberdemon {
     /// Builds a whole map block from a declarative rooms-and-connections plan in one undoable edit.
     #[tool(
-        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between - and writes the compiled block into the working archive as one undoable edit. Geometry only today: the map has no things, door specials or node data until later slices add them. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later slice wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], bounds {x1, y1, x2, y2}, warnings, nodes: null, validation: null, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, and nodes/validation stay null until the later slices fill them. Run undo to take the whole block back. Look at the result with render_topdown and check it with validate_map (no player start until things land)."
+        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between - and writes the compiled block into the working archive as one undoable edit. Geometry only today: the map has no things, door specials or node data until later slices add them. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later slice wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], bounds {x1, y1, x2, y2}, warnings, nodes: null, validation: null, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, and nodes/validation stay null until the later slices fill them. Run undo to take the whole block back. Look at the result with render_topdown and check it with validate_map (no player start until things land)."
     )]
     fn build_map_from_plan(
         &self,

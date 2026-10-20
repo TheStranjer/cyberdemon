@@ -9,11 +9,16 @@
 //! edges, unique ids, touching rooms — stays with [`Plan::validate`] and
 //! the compiler, whose refusals [`super::with_plan_path`] then prefixes
 //! with the plan path.
+//!
+//! The `units` object and the `grid` are not model fields: [`BuildPlanParams::to_units`]
+//! builds the [`Units`] the caller carries the finished model plan
+//! through (`crate::plan::transform_plan`) before compiling it.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::CyberError;
+use crate::plan::Units;
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Plan, Room, Shape};
 
 /// The [`Plan::wall_thickness`] the wire default carries.
@@ -36,6 +41,12 @@ const DEFAULT_STEP_HEIGHT: i32 = 16_i32;
 const DEFAULT_STEP_DEPTH: i32 = 24_i32;
 /// The [`DoorStyle`] a plain `"door"` connection asks for.
 const DEFAULT_DOOR_STYLE: &str = "normal";
+/// The [`Units::scale_num`] the wire default carries.
+const DEFAULT_SCALE_NUM: i64 = 1_i64;
+/// The [`Units::scale_den`] the wire default carries.
+const DEFAULT_SCALE_DEN: i64 = 1_i64;
+/// The snap grid the wire default carries, map units.
+const DEFAULT_GRID: i64 = 8_i64;
 
 /// Arguments for [`Cyberdemon::build_map_from_plan`](super::Cyberdemon::build_map_from_plan).
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -62,6 +73,20 @@ pub(super) struct BuildPlanParams {
     /// the room polygons touch directly (default `16`).
     #[serde(default = "default_wall_thickness")]
     pub(super) wall_thickness: i64,
+    /// How the plan's coordinates become map units: an integer scale,
+    /// an origin and an optional vertical mirror, applied to every room
+    /// footprint and connection placement before compiling. Sizes
+    /// (`wall_thickness`, connection `width`, `sill`, `lintel`,
+    /// `step_height`, `step_depth`) are map units already and never
+    /// scale. Unset (or `null`) is the identity (`scale_num: 1`,
+    /// `scale_den: 1`, origins `0`, `flip_y: false`).
+    #[serde(default)]
+    pub(super) units: Option<UnitsParam>,
+    /// Snap grid in map units every transformed coordinate is pulled to
+    /// the nearest line of (default `8`; `1` switches snapping off, `0`
+    /// and negatives are refused).
+    #[serde(default = "default_grid")]
+    pub(super) grid: i64,
     /// The rooms to lay out, in painter's order (bottom first).
     pub(super) rooms: Vec<RoomParam>,
     /// Openings, doors, windows and stairs joining the rooms.
@@ -129,6 +154,41 @@ pub(super) struct RectParam {
     pub(super) h: i64,
 }
 
+/// One wire `units` object: the coordinate half of [`Units`] as JSON.
+/// The snap grid arrives beside it as the request's top-level `grid`;
+/// [`BuildPlanParams::to_units`] carries it in.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[serde(default)]
+pub(super) struct UnitsParam {
+    /// Numerator of the scale: `4` with `scale_den: 1` makes one plan
+    /// unit four map units (default `1`; `0` is refused).
+    pub(super) scale_num: i64,
+    /// Denominator of the scale (default `1`; `0` is refused).
+    pub(super) scale_den: i64,
+    /// Map `x` the plan origin lands on (default `0`).
+    pub(super) origin_x: i64,
+    /// Map `y` the plan origin lands on (default `0`) and the line
+    /// `flip_y` mirrors about.
+    pub(super) origin_y: i64,
+    /// Mirror `y` about `origin_y` (default `false`): set it for
+    /// image-space drawings, whose rows grow down while map `y` grows up.
+    pub(super) flip_y: bool,
+}
+
+impl Default for UnitsParam {
+    /// The documented identity defaults: scale `1/1`, both origins `0`,
+    /// no mirror.
+    fn default() -> Self {
+        Self {
+            scale_num: DEFAULT_SCALE_NUM,
+            scale_den: DEFAULT_SCALE_DEN,
+            origin_x: 0_i64,
+            origin_y: 0_i64,
+            flip_y: false,
+        }
+    }
+}
+
 /// One wire connection: two room ids, a kind name and the kind's extra
 /// fields beside it.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -180,6 +240,11 @@ const fn default_wall_thickness() -> i64 {
     DEFAULT_WALL_THICKNESS
 }
 
+/// The `grid` serde default, so the wire documents it.
+const fn default_grid() -> i64 {
+    DEFAULT_GRID
+}
+
 /// The `invalid_argument` naming the plan path `at`.
 fn invalid_at(at: &str, problem: &str) -> CyberError {
     CyberError::InvalidArgument(format!("{at}: {problem}"))
@@ -201,6 +266,23 @@ impl BuildPlanParams {
             connections: self.to_connections()?,
             wall_thickness: self.wall_thickness,
         })
+    }
+
+    /// The [`Units`] this request asks for, carrying its top-level
+    /// `grid` in so [`Units::check`] sees one snap grid everywhere. A
+    /// missing or `null` `units` object is the identity scale. The
+    /// values themselves are only *checked* there; this mapping cannot
+    /// fail.
+    pub(super) fn to_units(&self) -> Units {
+        let wire = self.units.unwrap_or_default();
+        Units {
+            scale_num: wire.scale_num,
+            scale_den: wire.scale_den,
+            origin_x: wire.origin_x,
+            origin_y: wire.origin_y,
+            grid: self.grid,
+            flip_y: wire.flip_y,
+        }
     }
 
     /// The rooms, each converted under its own plan path.
@@ -342,6 +424,7 @@ mod tests {
 
     use super::{BuildPlanParams, DEFAULT_WIDTH};
     use crate::plan::model::{ConnectionKind, DoorStyle, KeyColor, Plan, Shape};
+    use crate::plan::{Units, transform_plan};
 
     /// Wire parameters parsed from the two-room-and-door example.
     const FULL: &str = r#"{
@@ -564,6 +647,156 @@ mod tests {
                 ConnectionKind::Door { style },
                 "{text}"
             );
+        }
+    }
+
+    /// A request with `extra` spliced in beside the required fields.
+    fn request_with(extra: &str) -> BuildPlanParams {
+        let text = format!(
+            r#"{{"map": "MAP01",
+                "rooms": [{{"id": "a", "rect": {{"x": 0, "y": 0, "w": 64, "h": 64}}}}],
+                "connections": []{extra}}}"#
+        );
+        from_str(&text).expect("the request parses")
+    }
+
+    #[test]
+    fn omitted_units_stay_the_identity_and_grid_defaults_to_eight() {
+        let args = request_with("");
+        assert_eq!(args.grid, 8_i64, "the documented snap grid");
+        assert_eq!(
+            args.to_units(),
+            Units {
+                grid: 8_i64,
+                ..Units::default()
+            },
+            "identity scale and origins, the request grid carried in"
+        );
+        let explicit_null = request_with(r#", "units": null"#);
+        assert_eq!(
+            explicit_null.to_units(),
+            Units {
+                grid: 8_i64,
+                ..Units::default()
+            },
+            "an explicit null units object is the identity too"
+        );
+    }
+
+    #[test]
+    fn a_partial_units_object_fills_the_documented_defaults() {
+        let args = request_with(r#", "units": {"scale_num": 4, "flip_y": true}"#);
+        assert_eq!(
+            args.to_units(),
+            Units {
+                scale_num: 4_i64,
+                scale_den: 1_i64,
+                origin_x: 0_i64,
+                origin_y: 0_i64,
+                grid: 8_i64,
+                flip_y: true,
+            },
+            "the sketch recipe: unset fields keep their defaults"
+        );
+    }
+
+    #[test]
+    fn a_full_units_object_and_grid_lands_on_the_transform() {
+        let args = request_with(
+            r#", "units": {"scale_num": 2, "scale_den": 4, "origin_x": 10,
+                 "origin_y": 20, "flip_y": true}, "grid": 16"#,
+        );
+        assert_eq!(args.grid, 16_i64, "the wire grid");
+        let units = args.to_units();
+        assert_eq!(
+            units,
+            Units {
+                scale_num: 2_i64,
+                scale_den: 4_i64,
+                origin_x: 10_i64,
+                origin_y: 20_i64,
+                grid: 16_i64,
+                flip_y: true,
+            }
+        );
+        let moved = transform_plan(
+            &args.to_model().expect("the plan converts"),
+            &units,
+            args.grid,
+        )
+        .expect("the wired transform runs");
+        assert_eq!(
+            moved.rooms.first().expect("the room").shape,
+            Shape::Rect {
+                x: 16,
+                y: -16,
+                w: 32,
+                h: 32
+            },
+            "half scale, mirrored y, 16 grid: 10 snaps to 16, 42 to 48, 20 to 16, -12 to -16"
+        );
+    }
+
+    #[test]
+    fn the_grid_snaps_untransformed_coordinates_too() {
+        let text = r#"{"map": "MAP01",
+            "rooms": [{"id": "a", "rect": {"x": 3, "y": 0, "w": 10, "h": 8}}],
+            "connections": []}"#;
+        let args: BuildPlanParams = from_str(text).expect("the request parses");
+        let moved = transform_plan(
+            &args.to_model().expect("the plan converts"),
+            &args.to_units(),
+            args.grid,
+        )
+        .expect("the default 8 grid runs");
+        assert_eq!(
+            moved.rooms.first().expect("the room").shape,
+            Shape::Rect {
+                x: 0,
+                y: 0,
+                w: 16,
+                h: 8
+            },
+            "identity scale still snaps: 3 goes to 0, 13 to 16"
+        );
+    }
+
+    #[test]
+    fn a_grid_aligned_plan_passes_the_default_snap_untouched() {
+        let args = request_with("");
+        let moved = transform_plan(
+            &args.to_model().expect("the plan converts"),
+            &args.to_units(),
+            args.grid,
+        )
+        .expect("the default 8 grid runs");
+        assert_eq!(
+            moved.rooms.first().expect("the room").shape,
+            Shape::Rect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 64
+            },
+            "the existing grid-aligned plans compile exactly as before"
+        );
+    }
+
+    #[test]
+    fn unusable_units_are_refused_naming_the_parameter() {
+        for (extra, needle) in [
+            (r#", "units": {"scale_den": 0}"#, "scale_den"),
+            (r#", "units": {"scale_num": 0}"#, "scale_num"),
+            (r#", "grid": 0"#, "grid"),
+            (r#", "grid": -8"#, "grid"),
+        ] {
+            let args = request_with(extra);
+            let error = args
+                .to_units()
+                .check()
+                .expect_err("the refusal must surface at the tool");
+            assert_eq!(error.code(), "invalid_argument", "{extra}");
+            assert!(error.to_string().contains(needle), "{error} names {needle}");
         }
     }
 }

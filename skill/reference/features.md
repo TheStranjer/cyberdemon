@@ -4,7 +4,8 @@ Complete game structures built on a map you have already drawn.
 `add_door` cuts working doors; `add_window` glazes the walls between
 rooms; `add_stairs` climbs a height change with evenly rising steps;
 `add_lift` drops the high floor so a player standing below can ride up;
-`add_switch` mounts the triggers that fire
+`add_teleporter` wires a pad to a destination so players step across the
+map; `add_switch` mounts the triggers that fire
 tagged sectors — including a `remote` door's; `add_exit` ends the level,
 from a switch or by walking over a line. `mark_secret` and
 `set_light_effect` are the two smallest: whole-sector edits of
@@ -292,6 +293,70 @@ call add_lift {"sector": 1}
     "map": "MAP01", "nodes_invalidated": false, "copied_to_working": true}
 ```
 
+## `add_teleporter`
+
+`{map?, pad: {x, y}, destination: {x, y, angle? = 0}, pad_size? = 64,
+two_way? = false}` → `{pad_sector, destination_sector, things, pad_lines,
+destination_lines, tag, return_tag, pad_size, two_way, notes, map,
+nodes_invalidated, copied_to_working}`
+
+Places a working teleporter in one undoable edit (label `add teleporter`,
+or `add two-way teleporter`): a floor pad the player walks onto and a
+destination square they arrive in.
+
+**The two squares**: `pad: {x, y}` is the centre of the pad and
+`destination: {x, y, angle?}` the centre of the destination, with the
+angle (default 0, wrapped into `0..=359`) the arriving player faces.
+Both points are required — a missing one is `invalid_argument` naming
+it — and each must lie inside a sector (the refusal names the point).
+`pad_size` (default 64, positive) is the side length of **both**
+squares, centred on their points. The squares go through the same
+overlay engine as `create_sector_from_loop`: each copies the floor,
+ceiling, flats and light of the sector under its centre; the pad's
+floor flat becomes the theme's `teleport_floor` role and the theme's
+`wall` role dresses any new edge across nothing (both validated for the
+map's format). A square whose borders face only solid rock is
+`invalid_argument`.
+
+**The destination** is a `TeleportDestination` Thing (type 14) standing
+at the destination point. Which number makes the trip depends on the
+flag family:
+
+| Family | Pad lines | Destination |
+|--------|-----------|-------------|
+| `Doom` | special `97` (`WR` teleport, repeatable) on every two-sided pad border, answering with the fresh tag | the destination sector carries the tag (`97` picks the type-14 thing inside it) |
+| `Hexen` | special `70` `Teleport` with the fresh TID in `args[0]`, the line's activation field replaced with `playercross` plus `repeatspecial` | the Thing itself carries the fresh TID (its sectors stay untagged) |
+
+Every dressed border is oriented with its **front facing out of the
+pad** and unblocked — players walk onto the pad from the surrounding
+rooms, crossing the line front-first. The fresh tag/TID is one above
+every tag the map carries (the result's `tag`).
+
+**`two_way: true`** makes the destination a pad leading back as well: a
+second type-14 Thing stands at the pad (facing the way back,
+`angle + 180`), with its own fresh tag/TID (`return_tag`; `Doom`
+stamps it on the pad sector, `Hexen` on the Thing), and every
+two-sided border of the destination sector carries the same action
+pointing at it. A one-way call leaves `return_tag` null and
+`destination_lines` empty.
+
+**After the call**: this is geometry, so `nodes_invalidated` is true —
+run `build_nodes` before vanilla play. `pad_sector` and
+`destination_sector` name the drawn squares, `things` the placed
+indices (destination first, the return thing after), `pad_lines` and
+`destination_lines` the dressed borders. Look at the result with
+`render_topdown` (`reference/render.md`) and check it with
+`validate_map`; one `undo` rolls the whole teleporter back.
+
+```json
+call add_teleporter {"pad": {"x": 64, "y": 64},
+                     "destination": {"x": 384, "y": 64, "angle": 90}}
+-> {"pad_sector": 2, "destination_sector": 3, "things": [2],
+    "pad_lines": [11, 12, 13, 14], "destination_lines": [], "tag": 2,
+    "return_tag": null, "pad_size": 64, "two_way": false, "notes": [],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
 ## `add_switch`
 
 `{map?, linedef: N, at?: {x, y}, width? = 32, action, target_sector?,
@@ -495,7 +560,7 @@ call set_light_effect {"sectors": [7], "effect": "flicker", "light": 176}
 
 ## Growth points
 
-- All eight feature tools (`add_door`, `add_window`, `add_stairs`,
-  `add_lift`, `add_switch`, `add_exit`, `mark_secret`,
+- All nine feature tools (`add_door`, `add_window`, `add_stairs`,
+  `add_lift`, `add_teleporter`, `add_switch`, `add_exit`, `mark_secret`,
   `set_light_effect`) are in place. Lower-level control stays with the
   `edit_*` groups and `run_batch`.

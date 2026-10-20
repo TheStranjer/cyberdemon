@@ -152,6 +152,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `add_window`             | `reference/features.md` |
 | `add_stairs`             | `reference/features.md` |
 | `add_lift`               | `reference/features.md` |
+| `add_teleporter`         | `reference/features.md` |
 | `add_switch`             | `reference/features.md` |
 | `add_exit`               | `reference/features.md` |
 | `mark_secret`            | `reference/features.md` |
@@ -250,7 +251,7 @@ rooms in one call with `create_sector_from_loop`, and carve solid rock out
 of the map with `carve_void` (`reference/sectors.md`). Put working doors in
 with `add_door`, glaze the rooms' shared walls with `add_window`, climb
 height changes with `add_stairs`, ride the tall ones down
-with `add_lift`, wire
+with `add_lift`, step between distant rooms with `add_teleporter`, wire
 their triggers with `add_switch`, and end the level
 with `add_exit` — a switch panel or walk-over lines; hide a room with
 `mark_secret` and give it flickering or strobing light with

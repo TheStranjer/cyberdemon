@@ -1,6 +1,7 @@
 //! Map-feature tools: `add_door`, `add_window`, `add_stairs`, `add_lift`,
-//! `add_switch`, `add_exit`, `mark_secret` and `set_light_effect` (see
-//! the `features` router on [`crate::server::Cyberdemon`]).
+//! `add_teleporter`, `add_switch`, `add_exit`, `mark_secret` and
+//! `set_light_effect` (see the `features` router on
+//! [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
 //! drawn map: the [`DoorSpec`] pipeline runs inside one
@@ -69,6 +70,20 @@
 //! [`MIN_LIFT_DROP`] is reported as a note (use stairs) rather than a
 //! refusal.
 //!
+//! `add_teleporter` runs the pure [`crate::wad::map::features::teleport`]
+//! core as one [`crate::session::Session::edit_map`] step: [`build_teleporter`]
+//! folds the pad and destination squares over the map with two
+//! [`apply_overlay`] [`Paint::Sector`] paints (each copying the sector
+//! under its centre, the pad's floor wearing the theme's
+//! `teleport_floor` role), pushes a type-14 teleport-destination
+//! [`Thing`] at the destination answering with a fresh [`next_free_tag`]
+//! — through the tagged destination sector in the `Doom` family, through
+//! the thing's own TID in the `Hexen` one — and dresses every
+//! two-sided pad border with [`teleport_specials`], fronts turned to
+//! face out of the pad so players walking on from the surrounding rooms
+//! make the jump. `two_way` runs the same pattern back with its own
+//! tag/TID, all inside a single undo.
+//!
 //! The two sector-special tools stay on this side of the `features` group
 //! because they answer the same question the feature tables answer: what
 //! number makes a plain map element do something. Both are one
@@ -104,6 +119,9 @@
 //! [`build_lift`]: crate::wad::map::features::build_lift
 //! [`lift_specials`]: crate::wad::map::features::lift_specials
 //! [`MIN_LIFT_DROP`]: crate::wad::map::features::MIN_LIFT_DROP
+//! [`build_teleporter`]: crate::wad::map::features::build_teleporter
+//! [`teleport_specials`]: crate::wad::map::features::teleport_specials
+//! [`Thing`]: crate::wad::map::Thing
 //! [`theme_wall`]: theme_wall
 //! [`choose_wall`]: choose_wall
 //! [`carve_strip`]: carve_strip
@@ -130,12 +148,13 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{
-    DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures, DoorWall, LiftBuild,
-    LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep, SecretEdit, StairSpec,
-    SwitchAction, VertexPair, WindowHeights, WindowSides, WindowTextures, apply_door, apply_window,
-    boundary_lines, build_lift, build_stairs, door_rect, door_segment, door_specials, door_wall,
-    light_special, longest_boundary, nearest_boundary, next_free_tag, outward_depth,
-    project_onto_line, secret_edit, switch_special, void_strip, window_record,
+    DEFAULT_PAD_SIZE, DOOM_SECRET_SPECIAL, DoorLineSetup, DoorSides, DoorStyle, DoorTextures,
+    DoorWall, LiftBuild, LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep, SecretEdit,
+    StairSpec, SwitchAction, TeleportBuild, TeleportSpec, VertexPair, WindowHeights, WindowSides,
+    WindowTextures, apply_door, apply_window, boundary_lines, build_lift, build_stairs,
+    build_teleporter, door_rect, door_segment, door_specials, door_wall, light_special,
+    longest_boundary, nearest_boundary, next_free_tag, outward_depth, project_onto_line,
+    secret_edit, switch_special, void_strip, window_record,
 };
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
@@ -1547,6 +1566,138 @@ fn add_lift_run(session: &mut Session, args: &AddLiftParams) -> Result<LiftRepor
     })
 }
 
+/// Arguments for [`Cyberdemon::add_teleporter`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddTeleporterParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The centre of the pad the player walks onto, `{x, y}`.
+    #[serde(default)]
+    pad: Option<DoorPointParam>,
+    /// The centre of the destination the player arrives in, `{x, y}`,
+    /// with the facing `angle` in degrees (default 0).
+    #[serde(default)]
+    destination: Option<TeleportDestinationParam>,
+    /// The side length of both the pad and the destination square in map
+    /// units (default 64).
+    #[serde(default)]
+    pad_size: Option<i32>,
+    /// Whether the destination sector leads back to the pad as well
+    /// (default false).
+    #[serde(default)]
+    two_way: bool,
+}
+
+/// The `destination` point of [`Cyberdemon::add_teleporter`]: where the
+/// player arrives and which way they face there.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, JsonSchema)]
+struct TeleportDestinationParam {
+    /// `X` coordinate in map units.
+    x: i32,
+    /// `Y` coordinate in map units.
+    y: i32,
+    /// Facing direction in degrees (default 0; any value is wrapped into
+    /// `0..=359`).
+    #[serde(default)]
+    angle: i32,
+}
+
+/// The theme-resolved textures a teleporter wears.
+#[derive(Debug)]
+struct TeleportSkins {
+    /// The pad's floor flat (kept as the base's when the theme names none).
+    floor_flat: String,
+    /// The plain wall texture bare new edges fall back to.
+    wall: String,
+}
+
+/// Structured result of [`Cyberdemon::add_teleporter`].
+#[derive(Serialize)]
+struct TeleporterReport {
+    /// What the step built, inlined next to the size echo and the edit
+    /// fragment.
+    #[serde(flatten)]
+    built: TeleportBuild,
+    /// The square side both squares got, in map units.
+    pad_size: i32,
+    /// Whether the destination leads back.
+    two_way: bool,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// The textures a teleporter wears: the theme's `teleport_floor` flat and
+/// `wall` fallback, validated for the map's format (the same resolution
+/// pattern [`lift_skins`] runs).
+///
+/// # Errors
+///
+/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+fn teleport_skins(session: &Session, format: MapFormat) -> Result<TeleportSkins, CyberError> {
+    let floor_flat = theme_texture(session, Role::TeleportFloor)?;
+    let wall = theme_wall(session)?;
+    Ok(TeleportSkins {
+        floor_flat: validate_texture_name(&floor_flat, format)?,
+        wall: validate_texture_name(&wall, format)?,
+    })
+}
+
+/// The [`TeleportSpec`] the wire parameters and the theme resolve to; a
+/// missing `pad` or `destination` is `invalid_argument` naming it.
+fn teleport_spec(
+    args: &AddTeleporterParams,
+    skins: &TeleportSkins,
+) -> Result<TeleportSpec, CyberError> {
+    let pad_param = args.pad.ok_or_else(|| {
+        invalid("pad is required: the {x, y} centre of the pad the player walks onto")
+    })?;
+    let wanted = args.destination.as_ref().ok_or_else(|| {
+        invalid(
+            "destination is required: the {x, y, angle} centre of the sector the \
+             player arrives in",
+        )
+    })?;
+    Ok(TeleportSpec {
+        pad: point_of(pad_param),
+        destination: Point {
+            x: wanted.x,
+            y: wanted.y,
+        },
+        angle: wanted.angle,
+        pad_size: args.pad_size.unwrap_or(DEFAULT_PAD_SIZE),
+        two_way: args.two_way,
+        floor_flat: skins.floor_flat.clone(),
+        wall: skins.wall.clone(),
+    })
+}
+
+/// `add_teleporter`'s work: resolve the parameters, then run the whole
+/// teleporter as one [`crate::session::Session::edit_map`] step.
+fn add_teleporter_run(
+    session: &mut Session,
+    args: &AddTeleporterParams,
+) -> Result<TeleporterReport, CyberError> {
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let format = current_map(session, name)?.format;
+    let skins = teleport_skins(session, format)?;
+    let spec = teleport_spec(args, &skins)?;
+    let label = if args.two_way {
+        "add two-way teleporter"
+    } else {
+        "add teleporter"
+    };
+    let (built, report) = session.edit_map(name, label, |map| build_teleporter(map, &spec))?;
+    Ok(TeleporterReport {
+        pad_size: spec.pad_size,
+        two_way: spec.two_way,
+        built,
+        edit: edit_result_fragment(&report),
+    })
+}
+
 /// The canonical wire name of `action`.
 const fn action_name(action: SwitchAction) -> &'static str {
     match action {
@@ -2456,6 +2607,20 @@ impl Cyberdemon {
         )
     }
 
+    /// Places a working teleporter pad and destination in one undoable edit.
+    #[tool(
+        description = "Places a working teleporter in one undoable edit: a floor pad a player walks onto and a destination square they arrive in. pad: {x, y} is the centre of the pad; destination: {x, y, angle?} the centre of the destination and the angle (default 0) the arriving player faces. Both points are required and each must lie inside a sector, else invalid_argument naming it; pad_size (default 64) is the side of both squares (positive or invalid_argument). The squares are drawn with the same overlay engine as create_sector_from_loop: each copies the floor, ceiling, flats and light of the sector under its centre, and the pad's floor flat becomes the theme's teleport_floor role (both roles validated for the map's format; the theme's wall role dresses any new wall across nothing). A TeleportDestination thing (type 14) stands at destination. Doom family (binary Doom, UDMF doom/heretic/strife): the destination sector is tagged with a fresh unused tag (the reported tag, one above every tag the map carries) and every two-sided border line of the pad gets special 97 WR_teleport answering with it, oriented with its FRONT facing out of the pad and unblocked - players walk onto the pad from the surrounding rooms, and vanilla finds the arrival spot as the type-14 thing standing in the tagged destination sector. Hexen family (binary Hexen, other UDMF namespaces): the thing carries the fresh TID (the reported tag; the sectors stay untagged) and every pad border gets special 70 Teleport with the TID in args[0], the line's activation field replaced with playercross plus repeatspecial - a repeatable cross. two_way (default false) makes the destination a pad leading back as well: a second type-14 thing stands at the pad facing the way back (angle + 180) with its own fresh tag/TID (the reported return_tag), the Doom family stamps that tag on the pad sector for the vanilla search to find, and every two-sided border of the destination sector carries the same action pointing at it. A square whose borders face only solid rock is invalid_argument. Returns {pad_sector, destination_sector, things (the placed thing indices, destination first then the return thing), pad_lines, destination_lines (two_way only), tag, return_tag (null one-way), notes, pad_size, two_way, map, nodes_invalidated, copied_to_working}. This is geometry: nodes_invalidated is true - run build_nodes before vanilla play. Look at it with render_topdown and render_view, walk the jump after build_nodes, and check it with validate_map."
+    )]
+    fn add_teleporter(
+        &self,
+        Parameters(args): Parameters<AddTeleporterParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| add_teleporter_run(session, &args)),
+        )
+    }
+
     /// Mounts a working switch on a wall chunk in one undoable edit.
     #[tool(
         description = "Mounts a working switch on a wall in one undoable edit: a width-wide panel chunk isolated as its own linedef, wearing the theme's switch texture and a use action. linedef: N is the wall. at: {x, y} optionally centres the panel there (a point off the wall is projected onto it); without it the panel sits at the wall's midpoint. width (default 32) is the panel: a longer wall is split so the chunk becomes its own linedef (the result's linedef names it and split is true), a line already exactly that chunk is dressed as it stands (split false), and a wall too short for the width is invalid_argument naming its available length. action (case-insensitive) picks what it does: open_door (opens the tagged door, closing it after its wait: Doom S1 103, SR 61 when repeatable; Hexen Door_Open 11 speed 16), raise_floor (raises the tagged floor to the highest neighbouring floor: S1 18, SR 69; Floor_RaiseToNearest 25 speed 8), lower_floor (lowers it to the lowest neighbouring floor: S1 23, SR 60; Floor_LowerToLowest 21 speed 8), exit (ends the level: S1 11; Portal 243) or secret_exit (ends it through the secret exit: S1 51; Portal 244). An unknown action is invalid_argument listing all five. open_door, raise_floor and lower_floor require target_sector - the sector they act on: missing or out of range is invalid_argument naming it. The sector's existing tag is what the line answers with; an untagged sector (tag 0) is stamped with a fresh unused tag (the reported tag), so an add_door remote door is triggered by passing its door_sector: the tags match. exit and secret_exit ignore target_sector and repeatable (the Doom family ships no SR exit and a level change fires once). repeatable (default false) picks the SR specials in the Doom family and adds repeatspecial activation in the Hexen family, whose switch lines also get their activation field replaced with playeruse (a Doom-family line keeps its flags). The panel texture comes from the session's theme: the switch role, or exit_switch for the level-changing actions; the isolated line's front middle wears it, and a line with no front sidedef is invalid_argument (see add_sidedef). Result: {linedef, split, action, special, tag, texture} plus the standard edit fragment; nodes_invalidated is true when the wall had to be split (the map's geometry changed)."
@@ -2519,9 +2684,10 @@ mod tests {
 
     use super::{
         AddDoorParams, AddExitParams, AddLiftParams, AddStairsParams, AddSwitchParams,
-        AddWindowParams, BuiltWindow, Chosen, DoorPointParam, DoorSkins, DoorSpec, DoorStyle,
-        Dress, ExitKind, Groups, LIGHT_MAX, LIGHT_MIN, LiftPlatform, LiftStyle, LightSpec,
-        MarkSecretParams, Placed, SecretSpec, SetLightParams, StairSpec, SwitchSpec, Target,
+        AddTeleporterParams, AddWindowParams, BuiltWindow, Chosen, DEFAULT_PAD_SIZE,
+        DoorPointParam, DoorSkins, DoorSpec, DoorStyle, Dress, ExitKind, Groups, LIGHT_MAX,
+        LIGHT_MIN, LiftPlatform, LiftStyle, LightSpec, MarkSecretParams, Placed, SecretSpec,
+        SetLightParams, StairSpec, SwitchSpec, Target, TeleportDestinationParam, TeleportSkins,
         WindowHeights, WindowSkins, WindowSpec, action_name, action_names, action_of, build_door,
         build_stairs, build_switch, build_walk_over_exit, build_window, centroid,
         check_light_level, choose_between, choose_linedef, door_groups, door_record, dress_door,
@@ -2529,7 +2695,7 @@ mod tests {
         lift_platform_of, lift_style_name, lift_style_names, lift_style_of, mark_secrets,
         out_of_range, recess_depth, sector_selection, set_lights, side_sector, stair_spec,
         strip_face_lost, strip_wall, style_name, style_names, style_of, switch_cut, switch_role,
-        switch_span, switch_tag, target_of, track_role, walk_over_special,
+        switch_span, switch_tag, target_of, teleport_spec, track_role, walk_over_special,
     };
     use crate::error::CyberError;
     use crate::themes::Role;
@@ -4354,6 +4520,90 @@ mod tests {
         assert!(
             from_str::<AddLiftParams>(r#"{"platform": {}}"#).is_err(),
             "the polygon needs its points"
+        );
+    }
+
+    /// An `add_teleporter` request parsed from `json`.
+    fn teleport_args(json: &str) -> AddTeleporterParams {
+        from_str(json).expect("test teleporter requests parse")
+    }
+
+    /// The skins the tests dress teleporters with.
+    fn pad_skins() -> TeleportSkins {
+        TeleportSkins {
+            floor_flat: "GATE1".to_owned(),
+            wall: "WALL1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn add_teleporter_params_read_the_wire_shape() {
+        let full = teleport_args(
+            r#"{"pad": {"x": 64, "y": 64}, "destination": {"x": 384, "y": 64, "angle": 90},
+                "pad_size": 128, "two_way": true, "map": "MAP01"}"#,
+        );
+        assert_eq!(full.pad, Some(DoorPointParam { x: 64, y: 64 }));
+        assert_eq!(
+            full.destination,
+            Some(TeleportDestinationParam {
+                x: 384,
+                y: 64,
+                angle: 90_i32,
+            })
+        );
+        assert_eq!(full.pad_size, Some(128_i32), "the side arrives");
+        assert!(full.two_way, "the flag arrives");
+        assert_eq!(full.map.as_deref(), Some("MAP01"));
+        let minimal =
+            teleport_args(r#"{"pad": {"x": 0, "y": 0}, "destination": {"x": 1, "y": 1}}"#);
+        assert_eq!(
+            minimal.destination,
+            Some(TeleportDestinationParam {
+                x: 1,
+                y: 1,
+                angle: 0_i32,
+            }),
+            "the angle defaults to zero"
+        );
+        assert!(minimal.pad_size.is_none(), "and the square side");
+        assert!(!minimal.two_way, "and the return leg stands aside");
+    }
+
+    #[test]
+    fn teleport_spec_fills_defaults_and_demands_both_points() {
+        let minimal =
+            teleport_args(r#"{"pad": {"x": 8, "y": 8}, "destination": {"x": 12, "y": 12}}"#);
+        let spec = teleport_spec(&minimal, &pad_skins()).expect("both points given");
+        assert_eq!(
+            spec.pad_size, DEFAULT_PAD_SIZE,
+            "the documented default side"
+        );
+        assert_eq!(
+            (
+                spec.pad.x,
+                spec.pad.y,
+                spec.destination.x,
+                spec.destination.y
+            ),
+            (8_i32, 8_i32, 12_i32, 12_i32),
+            "the points ride through"
+        );
+        assert_eq!(
+            (spec.floor_flat.as_str(), spec.wall.as_str()),
+            ("GATE1", "WALL1"),
+            "the skins ride through"
+        );
+        assert!(!spec.two_way, "one-way by default");
+        let no_pad = teleport_args(r#"{"destination": {"x": 1, "y": 1}}"#);
+        let message = refuse(&teleport_spec(&no_pad, &pad_skins()).unwrap_err());
+        assert!(message.contains("pad is required"), "{message}");
+        let no_destination = teleport_args(r#"{"pad": {"x": 1, "y": 1}}"#);
+        let asked = refuse(&teleport_spec(&no_destination, &pad_skins()).unwrap_err());
+        assert!(asked.contains("destination is required"), "{asked}");
+        let neither = teleport_args("{}");
+        assert!(
+            refuse(&teleport_spec(&neither, &pad_skins()).unwrap_err()).contains("pad is required"),
+            "the pad is asked for first"
         );
     }
 }

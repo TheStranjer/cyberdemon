@@ -27,8 +27,16 @@
 //! idea: [`secret_edit`] folds the secret flag of each flag family into
 //! a sector's current special and [`light_special`] does the same for a
 //! [`LightEffect`], keeping every bit outside the family's basic-type
-//! field. Like the rest of [`crate::wad`] this is pure model arithmetic
-//! and table lookup: no sessions, no archives, no MCP.
+//! field. [`teleport`] is the pure teleporter core:
+//! [`teleport::teleport_specials`] is the walk-on action of a pad border
+//! per flag family, and [`teleport::build_teleporter`] draws the pad and
+//! destination squares through the overlay engine, places the type-14
+//! destination things (a `Doom` one found through the tagged
+//! destination sector, a `Hexen` one carrying its own TID) and dresses
+//! the squares' outward-facing borders with it — [`TeleportSpec::two_way`]
+//! running the same pattern back with its own tag/TID. Like the rest of
+//! [`crate::wad`] this is pure model arithmetic and table lookup: no
+//! sessions, no archives, no MCP.
 
 pub mod doors;
 pub mod lift;
@@ -36,6 +44,7 @@ pub mod place;
 pub mod specials;
 pub mod stairs;
 pub mod switches;
+pub mod teleport;
 pub mod window;
 
 pub use doors::{
@@ -57,6 +66,10 @@ pub use stairs::{
     StairPlan, StairSpec, StairStep, build_stairs, plan_stairs,
 };
 pub use switches::{SwitchAction, switch_special};
+pub use teleport::{
+    DEFAULT_PAD_SIZE, TELEPORT_DESTINATION_THING, TeleportBuild, TeleportSpec, build_teleporter,
+    teleport_specials,
+};
 pub use window::{
     MIN_OPENING, WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines,
     window_heights, window_record,

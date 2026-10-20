@@ -27,7 +27,7 @@ It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a su
 > `redo`, `get_session_info`, `get_wad_info`), a `render` group
 > (`render_topdown`, `render_minimap`, `render_view`, `set_render_resolution`,
 > `set_render_options`, `get_render_settings`), a `textures` group (`list_textures`,
-> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `playability` group (`check_playability`: a player's-eye sector walk reporting reachability, per-blocker reasons and fix hints, stuck and unreachable things), a `themes` group
+> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `playability` group (`check_playability`: a player's-eye sector walk reporting reachability, per-blocker reasons and fix hints, stuck and unreachable things; `describe_map`: whole-map summary, paged per-sector fact rows with roles, neighbours, thing and texture tallies, and a labelled top-down overview image), a `themes` group
 > (`get_texture_theme`, `set_texture_theme`, `auto_texture`, `align_textures`) and a `palette` group (`get_palette`, `set_palette`),
 > and defines the structured JSON result/error contract every WAD tool uses. Generated files are
 > served to clients as `http://localhost:<port>` URLs by a lazily started

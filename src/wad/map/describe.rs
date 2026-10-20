@@ -1,6 +1,6 @@
 //! Pure per-sector descriptions and the map-wide overview over a decoded
-//! [`Map`]: the geometry, identity and role half of the future
-//! `describe_map` core.
+//! [`Map`]: the geometry, identity and role core behind the `describe_map`
+//! tool.
 //!
 //! [`Describe::sector`] turns one sector into a [`SectorFacts`] row: what
 //! it measures (an integer shoelace [`SectorFacts::area`] over its

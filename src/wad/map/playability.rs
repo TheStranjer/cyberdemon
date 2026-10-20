@@ -19,7 +19,10 @@
 //! and key the walk has already reached, until the answer stops changing.
 //! [`analyze_playability`] folds the two walks it needs (the strict one, and
 //! a wider one that lets the player squeeze through short lines to see what
-//! they would have connected) into [`Playability`].
+//! they would have connected) into [`Playability`]. [`blockers`] explains a
+//! finished walk sector by sector - which rule kept the player out of each
+//! unreachable one - and [`stuck_things`] reads the map's bodies to say
+//! which things cannot stand where they are.
 //!
 //! Heights are taken exactly as stored, with one deliberate liberty: a closed
 //! door sector is evaluated in its *open* state once the walk has reached a
@@ -35,15 +38,20 @@
 //!
 //! [`validate`]: crate::wad::map::validate
 
+mod explain;
 mod graph;
 mod reach;
 mod specials;
+mod stuck;
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use serde::Serialize;
+
+pub use explain::{Blocker, BlockerReason, blockers};
+pub use stuck::{Stuck, StuckReason, stuck_things};
 
 use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::model::Map;
@@ -191,6 +199,24 @@ pub fn analyze_playability(map: &Map, family: FlagFamily, skill: Skill) -> Playa
         warnings,
         reachable: walk.reachable,
     }
+}
+
+/// The index of the player 1 start the reachability walk begins from: the
+/// first type-1 thing that spawns for a single player at `skill` in the
+/// flag family `family`, `None` when the map holds no such thing.
+#[must_use]
+#[inline]
+pub fn start_thing(map: &Map, family: FlagFamily, skill: Skill) -> Option<usize> {
+    specials::start_thing(map, family, skill)
+}
+
+/// Whether a thing carrying `flags` spawns for a single player at `skill`
+/// in the flag family `family`: its skill bit set, and the family's own
+/// answer to "is this thing in the game at all".
+#[must_use]
+#[inline]
+pub fn thing_spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
+    specials::spawns(flags, family, skill)
 }
 
 /// The exit rows: every exit line the map carries, with whether the walk

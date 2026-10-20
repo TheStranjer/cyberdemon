@@ -99,7 +99,7 @@ pub(super) fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
 
 /// The two sectors `line` joins, `None` when either side fails to resolve or
 /// both sides share one sector.
-fn sides(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
+pub(super) fn sides(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
     let front = side_sector(map, line.front)?;
     let back = side_sector(map, line.back)?;
     (front != back).then_some((front, back))
@@ -108,7 +108,7 @@ fn sides(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
 /// Whether nothing can cross `line`: the shared `blocking` bit, plus the two
 /// `Hexen` bits that keep players out. The `blockmonsters` bit is deliberately
 /// not among them: a player walks past a wall that only holds monsters.
-const fn impassable(flags: u32, family: FlagFamily) -> bool {
+pub(super) const fn impassable(flags: u32, family: FlagFamily) -> bool {
     if flags & BLOCKING == BLOCKING {
         return true;
     }

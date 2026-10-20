@@ -1872,6 +1872,61 @@ async fn topdown_report(
     })
 }
 
+/// Which elements [`Cyberdemon::check_playability`]'s verification
+/// overview draws as highlights: the report's problems, painted through the
+/// shared top-down machinery with sector fills and sector labels on.
+#[derive(Debug, Default)]
+pub(in crate::tools) struct OverviewMarks {
+    /// Sector indices to tint red (the unreachable ones).
+    pub(in crate::tools) sectors: Vec<usize>,
+    /// Linedef indices to draw red and thick (the blocker lines).
+    pub(in crate::tools) lines: Vec<usize>,
+    /// Thing indices to ring in white (the stuck things).
+    pub(in crate::tools) things: Vec<usize>,
+}
+
+/// The `check_playability` overview: the top-down drawing internals behind
+/// [`Cyberdemon::render_topdown`] run over `map` with `marks` highlighted,
+/// thing markers and sector fills on and sector labels on, published as a
+/// `PNG` asset.
+///
+/// # Errors
+///
+/// [`topdown_report`]'s errors: the same map-resolution refusals the
+/// standalone render gives, plus its encode and publish failures.
+pub(in crate::tools) async fn playability_overview(
+    state: &AppState,
+    map: Option<&str>,
+    marks: OverviewMarks,
+) -> Result<AssetRef, CyberError> {
+    let args = RenderTopdownParams {
+        map: map.map(str::to_owned),
+        width: None,
+        height: None,
+        projection: None,
+        bounds: None,
+        show_things: Some(true),
+        show_vertices: None,
+        fill_sectors: Some(true),
+        style: None,
+        highlight: Some(HighlightParams {
+            linedefs: Some(marks.lines),
+            sectors: Some(marks.sectors),
+            things: Some(marks.things),
+            vertices: None,
+        }),
+        underlay: None,
+        grid: None,
+        labels: Some(LabelsParams {
+            sectors: Some(true),
+            ..Default::default()
+        }),
+        annotations: None,
+        label_scale: None,
+    };
+    Ok(topdown_report(state, &args).await?.asset)
+}
+
 /// Arguments for `render_minimap`' `center` and `player` parameters: one
 /// world point.
 #[derive(Debug, Deserialize, JsonSchema)]

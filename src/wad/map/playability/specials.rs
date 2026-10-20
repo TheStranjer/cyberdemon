@@ -417,7 +417,7 @@ struct Reader<'map> {
 /// "is this thing in the game at all" - the `Doom` family leaves its
 /// multiplayer-only things out, the `Hexen` one asks for the single-player
 /// mode bit.
-fn spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
+pub(super) fn spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
     let bit = skill.bit(family);
     if bit == 0_u32 || flags & bit != bit {
         return false;
@@ -783,6 +783,16 @@ impl<'map> Reader<'map> {
     }
 }
 
+/// The index of the player 1 start the walk begins from: the first type-1
+/// thing that spawns at `skill`, `None` when the map holds no such thing.
+pub(super) fn start_thing(map: &Map, family: FlagFamily, skill: Skill) -> Option<usize> {
+    map.things
+        .iter()
+        .enumerate()
+        .find(|entry| entry.1.kind == PLAYER_START && spawns(entry.1.flags, family, skill))
+        .map(|entry| entry.0)
+}
+
 /// The sector the player 1 start stands in.
 ///
 /// The first type-1 thing that spawns at `skill` decides. A map holding more
@@ -794,32 +804,31 @@ pub(super) fn start_sector(
     skill: Skill,
     warnings: &mut Vec<String>,
 ) -> Option<usize> {
-    let starts: Vec<usize> = map
-        .things
-        .iter()
-        .enumerate()
-        .filter(|entry| entry.1.kind == PLAYER_START && spawns(entry.1.flags, family, skill))
-        .map(|entry| entry.0)
-        .collect();
-    let Some(first) = starts.first().copied() else {
+    let first = start_thing(map, family, skill);
+    let Some(spawn_index) = first else {
         warnings.push(format!(
             "no player 1 start spawns at {} skill: nothing can be reached",
             skill.as_str()
         ));
         return None;
     };
-    if starts.len() > 1_usize {
+    let extra = map
+        .things
+        .iter()
+        .enumerate()
+        .filter(|entry| entry.1.kind == PLAYER_START && spawns(entry.1.flags, family, skill))
+        .count();
+    if extra > 1_usize {
         warnings.push(format!(
-            "{} player 1 starts spawn at {} skill: the walk begins at thing {first}",
-            starts.len(),
+            "{extra} player 1 starts spawn at {} skill: the walk begins at thing {spawn_index}",
             skill.as_str()
         ));
     }
-    let spawn = map.things.get(first)?;
+    let spawn = map.things.get(spawn_index)?;
     let sector = point_in_sector(map, i64::from(spawn.x), i64::from(spawn.y));
     if sector.is_none() {
         warnings.push(format!(
-            "player 1 start thing {first} stands outside every sector: nothing can be reached"
+            "player 1 start thing {spawn_index} stands outside every sector: nothing can be reached"
         ));
     }
     sector

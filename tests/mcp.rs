@@ -23,7 +23,8 @@
 //! palette-group tests in `palette`, the
 //! patches-group tests in `patches`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
-//! the plan-group tests in `plan`, the textures-group tests in
+//! the plan-group tests in `plan`, the playability-group tests in
+//! `playability`, the textures-group tests in
 //! `textures`, the themes-group tests in
 //! `themes`, the validate-group tests in `validate`, and the
 //! documentation-layout
@@ -122,6 +123,9 @@ mod patches;
 #[cfg(test)]
 #[path = "mcp/plan.rs"]
 mod plan;
+#[cfg(test)]
+#[path = "mcp/playability.rs"]
+mod playability;
 #[cfg(test)]
 #[path = "mcp/render.rs"]
 mod render;

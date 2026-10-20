@@ -39,7 +39,7 @@ pub use features::{FeatureDress, FeatureRow, apply_features, playable_checks};
 pub use model::*;
 pub use textures::{TextureRole, TextureRoles};
 pub use things::{
-    PLAYER_ONE_START, Placement, PlacementContext, PlannedThing, Skill, ThingSpot, fits, place,
+    PLAYER_ONE_START, Placement, PlacementContext, PlannedThing, Skill, ThingSpot, place,
     presence_flags, resolve_thing_kind,
 };
 pub use units::{Units, transform_plan};

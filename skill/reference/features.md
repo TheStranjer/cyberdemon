@@ -7,10 +7,11 @@ rooms; `add_stairs` climbs a height change with evenly rising steps;
 `add_teleporter` wires a pad to a destination so players step across the
 map; `add_switch` mounts the triggers that fire
 tagged sectors — including a `remote` door's; `add_exit` ends the level,
-from a switch or by walking over a line. `mark_secret` and
-`set_light_effect` are the two smallest: whole-sector edits of
-`Sector::special` (and of `Sector::light`), for rooms and lighting you
-have already drawn.
+from a switch or by walking over a line. `place_things` distributes
+monsters and items across sectors, a box or a circle with clearance.
+`mark_secret` and `set_light_effect` are the two smallest: whole-sector
+edits of `Sector::special` (and of `Sector::light`), for rooms and
+lighting you have already drawn.
 
 A **feature is ordinary map elements plus the action that makes them do
 something**: `add_door` draws the doorway geometry (through the same
@@ -558,9 +559,82 @@ call set_light_effect {"sectors": [7], "effect": "flicker", "light": 176}
     "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
 ```
 
+## `place_things`
+
+`{map?, thing: number | "name", sectors: [...] | bbox: [x0,y0,x1,y1] |
+near: {x, y, radius}, count | per_sector, clearance?, skills?,
+multiplayer_only? = false, ambush? = false, angle? = 0, seed? = 1, tid?,
+special?: {number, args}, dry_run? = false}` → `{placed, requested,
+things, positions, warnings, next_steps, dry_run, map,
+nodes_invalidated, copied_to_working}`
+
+Distributes copies of one thing type across whole sectors, a bounding box
+or a circle in one undoable step. *How many* and *where roughly* stay
+your judgment; the tool computes the exact non-overlapping positions with
+wall clearance. `add_thing` places one thing at coordinates you chose;
+this places many at coordinates it chose.
+
+**What**: `thing` is a doomednum or a definition name resolved like
+`build_map_from_plan` resolves names — exact case-insensitive name, else
+a unique case-insensitive substring; an unknown or ambiguous name is
+`invalid_argument`, the ambiguity listing the candidates.
+
+**Where** (exactly one; both or neither is `invalid_argument`):
+`sectors: [i, ...]` (duplicates collapse; an index the map does not hold
+is `not_found`), `bbox: [x0, y0, x1, y1]` (map units, `x0 < x1` and
+`y0 < y1`) or `near: {x, y, radius}` (positive radius). The open shapes
+place only points that sit inside *some* sector — never in the void.
+
+**How many** (exactly one; both or neither is `invalid_argument`, and so
+is a value outside `1..=256`): `count` is the total, split across the
+sectors in proportion to their bounding-box areas (largest-remainder
+method, ties to the lower sector index); `per_sector` fills every area
+with that many.
+
+**The grid** (deterministic): each area gets a square grid spaced twice
+the clearance (never under 16 units), centred in the area's bounding box.
+A candidate is kept only if it lies inside the area, keeps `clearance`
+from every one-sided or blocking linedef, and keeps `clearance` plus the
+other body's radius from every existing thing. Kept points are ordered by
+distance from the area centre (ties by `y` then `x`) and spread by taking
+every k-th, so things land evenly across the room instead of clustered.
+An area that cannot hold its share places what fits and warns
+`"sector 3 fits only 2 of 4 things"` — a shortfall is a warning, never an
+error. `clearance` (positive map units) defaults to the thing's
+definition radius (`20` for an unlisted type) plus 8.
+
+**Presence and facing**: `skills` (some of `easy`, `medium`, `hard`;
+default all three), `multiplayer_only` (the Doom family's `notsingle`,
+the Hexen family's `coop` + `dm`) and `ambush` (the family's ambush bit)
+set the flag bits. `angle` is degrees or a mode: `"face_player_start"`
+(turns each thing at the map's thing type 1 — `invalid_argument` when it
+has none), `"face_center"` (at the area centre) or `"random_seeded"`
+(the eight compass points from a deterministic xorshift32 seeded by
+`seed`; the only randomness, reproducible). Every angle snaps to a
+multiple of 45. `tid` and `special: {number, args}` are copied onto each
+thing; they are `Hexen`-family fields — nonzero on a Doom-family map is
+`invalid_argument`.
+
+**The result** reports `placed`, `requested`, the new THINGS `things`
+indices and their `positions` in the same order, plus the warnings. One
+`undo` (labelled `place things`) removes them all;
+`nodes_invalidated` is `false` (things are no geometry). `dry_run: true`
+computes the whole placement over the merged view and reports it without
+writing. Afterwards check the bodies with `check_playability`
+(`stuck_things`) and look at the spread with `render_topdown`.
+
+```json
+call place_things {"thing": "imp", "sectors": [4], "count": 5}
+-> {"placed": 5, "requested": 5, "things": [41, 42, 43, 44, 45],
+    "positions": [[344, 128], [232, 216], [456, 216], [232, 40], [456, 40]],
+    "warnings": [], "next_steps": ["check_playability (stuck_things) and render_topdown"],
+    "dry_run": false,
+    "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
+```
+
 ## Growth points
 
-- All nine feature tools (`add_door`, `add_window`, `add_stairs`,
-  `add_lift`, `add_teleporter`, `add_switch`, `add_exit`, `mark_secret`,
-  `set_light_effect`) are in place. Lower-level control stays with the
-  `edit_*` groups and `run_batch`.
+- All ten feature tools (`add_door`, `add_window`, `add_stairs`,
+  `add_lift`, `add_teleporter`, `add_switch`, `add_exit`, `place_things`,
+  `mark_secret`, `set_light_effect`) are in place. Lower-level control
+  stays with the `edit_*` groups and `run_batch`.

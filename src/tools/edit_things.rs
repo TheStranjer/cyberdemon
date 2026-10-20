@@ -253,7 +253,10 @@ fn is_doom_plain(spawn: &Thing) -> bool {
 /// Refuses a nonzero `z`, `tid`, `special` or `args` on a `Doom`-family
 /// map: binary `Doom` blocks and `UDMF` maps in the `doom`, `heretic` or
 /// `strife` namespace have no columns for them.
-fn check_doom_plain(family: FlagFamily, spawn: &Thing) -> Result<(), CyberError> {
+pub(in crate::tools) fn check_doom_plain(
+    family: FlagFamily,
+    spawn: &Thing,
+) -> Result<(), CyberError> {
     if family == FlagFamily::Doom && !is_doom_plain(spawn) {
         return Err(doom_field_error());
     }
@@ -283,7 +286,10 @@ fn check_hexen_script(spawn: &Thing) -> Result<(), CyberError> {
 
 /// Range-checks one thing against the binary `THINGS` record layouts; a
 /// `UDMF` map stores full integers and needs none of it.
-fn check_binary_ranges(format: MapFormat, spawn: &Thing) -> Result<(), CyberError> {
+pub(in crate::tools) fn check_binary_ranges(
+    format: MapFormat,
+    spawn: &Thing,
+) -> Result<(), CyberError> {
     match format {
         MapFormat::Doom | MapFormat::Hexen => {
             fits_field("type", spawn.kind, FIELD_MIN, TYPE_MAX)?;

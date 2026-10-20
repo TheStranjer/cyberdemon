@@ -1,6 +1,6 @@
 //! Map-feature tools: `add_door`, `add_window`, `add_stairs`, `add_lift`,
-//! `add_teleporter`, `add_switch`, `add_exit`, `mark_secret` and
-//! `set_light_effect` (see the `features` router on
+//! `add_teleporter`, `add_switch`, `add_exit`, `mark_secret`,
+//! `set_light_effect` and `place_things` (see the `features` router on
 //! [`crate::server::Cyberdemon`]).
 //!
 //! The `features` group builds complete game structures on an already
@@ -95,6 +95,14 @@
 //! shared with the plan feature engine's secret step so both paths say
 //! the same thing.
 //!
+//! `place_things` runs the pure [`crate::wad::map::placement`]
+//! distribution engine as one [`crate::session::Session::edit_map`] step:
+//! the thing resolves through the same [`resolve_thing_kind`] the plan
+//! builder uses, the areas (sectors, a box, a circle) are laid on the
+//! shared clearance grid and spread centre-outward, and every landed thing
+//! carries the [`presence_flags`] of its `skills`/`multiplayer_only`
+//! (`ambush` on top) and the snapped [`Facing`] of its `angle`.
+//!
 //! The opening rule: after the recess is drawn, every two-sided line
 //! facing the door sector is a room-facing door line (the vanilla
 //! multi-room doorway: each opening carries the action and acts on the
@@ -138,17 +146,22 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
+use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::geom::segment::{Delta, round_quotient};
+use crate::plan::things::{presence_flags, resolve_thing_kind};
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::themes::Role;
+use crate::tools::defs::collect;
+use crate::tools::edit_things::{check_binary_ranges, check_doom_plain};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
 use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
+use crate::wad::game::Game;
 use crate::wad::map::features::{
     DEFAULT_PAD_SIZE, DEFAULT_SWITCH_WIDTH, DoorSides, DoorStyle, DoorTextures, DoorWall,
     LiftBuild, LiftPlatform, LiftSpec, LiftStyle, LightEffect, PaintedStep, PlacedSwitch,
@@ -158,10 +171,15 @@ use crate::wad::map::features::{
     door_specials, door_wall, light_special, longest_boundary, nearest_boundary, next_free_tag,
     outward_depth, project_onto_line, secret_edit, void_strip, window_record,
 };
+use crate::wad::map::flags::{self, FlagFamily, FlagKind, Skill};
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
 use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
-use crate::wad::map::{Linedef, Map, Sector};
+use crate::wad::map::placement::{
+    Area, DistributeSpec, Distribution, Facing, distribute, player_start, snap_angle,
+    split_proportional, thing_clearance,
+};
+use crate::wad::map::{Linedef, Map, Sector, Thing};
 use crate::wad::name::LumpName;
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
@@ -2224,6 +2242,648 @@ fn set_light_run(
     })
 }
 
+/// The `place_things` count ceiling per call.
+const COPIES_MAX: u32 = 256_u32;
+/// The blocking radius `place_things` assumes for a thing type the
+/// definitions do not list, map units.
+const PLACE_UNKNOWN_RADIUS: i64 = 20_i64;
+/// The all-zero script argument list of a thing the call dressed.
+const PLACE_ZERO_ARGS: [i32; 5] = [0_i32; 5];
+/// The `next_steps` every `place_things` result carries.
+const PLACE_NEXT_STEPS: [&str; 1] = ["check_playability (stuck_things) and render_topdown"];
+
+/// Arguments for [`Cyberdemon::place_things`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PlaceThingsParams {
+    /// The map to edit. Defaults to the session's active map; with none
+    /// active, the merged view's only map when it holds exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// What to place: a doomednum or a definition name resolved against
+    /// the session's definitions (an exact case-insensitive name, else a
+    /// unique substring; ambiguity is `invalid_argument` listing the
+    /// candidates).
+    thing: ThingKindParam,
+    /// The sectors to fill, as a list of indices (duplicates collapse):
+    /// exactly one of `sectors`, `bbox` and `near`.
+    #[serde(default)]
+    sectors: Option<Vec<usize>>,
+    /// The box to fill, as `[x0, y0, x1, y1]` in map units: exactly one
+    /// of `sectors`, `bbox` and `near`.
+    #[serde(default)]
+    bbox: Option<[i32; 4]>,
+    /// The circle to fill, `{x, y, radius}` in map units: exactly one of
+    /// `sectors`, `bbox` and `near`.
+    #[serde(default)]
+    near: Option<NearParam>,
+    /// How many things to place in total, `1..=256`, split across the
+    /// sectors by area: exactly one of `count` and `per_sector`.
+    #[serde(default)]
+    count: Option<u32>,
+    /// How many things to place in every area: exactly one of `count`
+    /// and `per_sector`.
+    #[serde(default)]
+    per_sector: Option<u32>,
+    /// The distance every placed thing keeps from walls and other things,
+    /// positive map units (default: the thing's definition radius, else
+    /// 20, plus 8).
+    #[serde(default)]
+    clearance: Option<i32>,
+    /// Skills the things appear on: some of `"easy"`, `"medium"`,
+    /// `"hard"` (default all three).
+    #[serde(default)]
+    skills: Option<Vec<String>>,
+    /// Confine the things to the multiplayer modes (default false).
+    #[serde(default)]
+    multiplayer_only: bool,
+    /// Spawn the things deaf, ambushing whatever they can see
+    /// (default false).
+    #[serde(default)]
+    ambush: bool,
+    /// The facing: a number of degrees, or `"face_player_start"`,
+    /// `"face_center"` or `"random_seeded"` (default 0). Angles snap to
+    /// multiples of 45.
+    #[serde(default)]
+    angle: Option<AngleParam>,
+    /// The seed of `angle: "random_seeded"` (default 1); the only use of
+    /// randomness, deterministic from it.
+    #[serde(default = "default_place_seed")]
+    seed: u32,
+    /// Thing id copied onto every placed thing (`Hexen` family only).
+    #[serde(default)]
+    tid: Option<i32>,
+    /// Thing special copied onto every placed thing, `{number, args}`
+    /// (`Hexen` family only).
+    #[serde(default)]
+    special: Option<ThingSpecialParam>,
+    /// Compute and report the placement without writing anything
+    /// (default false).
+    #[serde(default)]
+    dry_run: WireBool,
+}
+
+/// A boolean wire parameter kept out of the parameter struct's bool
+/// budget: it deserializes as a plain `true`/`false` `JSON` boolean.
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
+#[serde(transparent)]
+struct WireBool {
+    /// The flag as the client sent it.
+    flag: bool,
+}
+
+impl WireBool {
+    /// The wrapped state.
+    const fn get(self) -> bool {
+        self.flag
+    }
+}
+
+/// Default [`PlaceThingsParams::seed`].
+const fn default_place_seed() -> u32 {
+    1_u32
+}
+
+/// The `thing` parameter: a doomednum or a definition name.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum ThingKindParam {
+    /// The thing type number to place.
+    Type(
+        /// The doomednum.
+        u32,
+    ),
+    /// A definition name to resolve.
+    Name(
+        /// The name to look up.
+        String,
+    ),
+}
+
+/// The `angle` parameter: degrees or a facing mode.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum AngleParam {
+    /// A fixed facing in degrees (snapped to a multiple of 45).
+    Degrees(
+        /// The facing in degrees.
+        i32,
+    ),
+    /// One of `face_player_start`, `face_center`, `random_seeded`.
+    Mode(
+        /// The mode name.
+        String,
+    ),
+}
+
+/// The `near` circle parameter.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+struct NearParam {
+    /// The centre `X` in map units.
+    x: i32,
+    /// The centre `Y` in map units.
+    y: i32,
+    /// The radius in map units (positive).
+    radius: i32,
+}
+
+/// The `special` parameter: the thing action and its five arguments.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+struct ThingSpecialParam {
+    /// The thing special number.
+    number: i32,
+    /// The five script arguments (default zeros).
+    #[serde(default)]
+    args: Option<[i32; 5]>,
+}
+
+/// Where a resolved [`place_on`] call looks: exactly one wire shape.
+#[derive(Clone, Debug)]
+enum WhereSpec {
+    /// Whole sectors, ascending and deduplicated.
+    Sectors(Vec<usize>),
+    /// One open shape: a box or a circle.
+    Area(Area),
+}
+
+/// How many things a resolved [`place_on`] call demands.
+#[derive(Clone, Copy, Debug)]
+enum NeedSpec {
+    /// A total, split across the areas by bounding-box area.
+    Total(usize),
+    /// This many in every area.
+    PerSector(usize),
+}
+
+/// The `place_things` wire parameters resolved into one request.
+#[derive(Debug)]
+struct PlaceRequest {
+    /// The doomednum to place.
+    kind: u32,
+    /// The one area kind the call named.
+    target: WhereSpec,
+    /// How the count is demanded.
+    demand: NeedSpec,
+    /// The explicit clearance in map units (`None`: radius plus 8).
+    clearance: Option<i64>,
+    /// The named skills (`None`: every skill).
+    skills: Option<Vec<Skill>>,
+    /// Whether the things are confined to the multiplayer modes.
+    multiplayer_only: bool,
+    /// Whether the things spawn deaf.
+    ambush: bool,
+    /// How the facings are chosen.
+    facing: Facing,
+    /// The script tid copied onto each thing.
+    tid: i32,
+    /// The script special copied onto each thing.
+    special: i32,
+    /// The five script arguments copied onto each thing.
+    args: [i32; 5],
+}
+
+/// What one [`place_on`] step wrote (or, in a dry run, would write).
+#[derive(Debug)]
+struct PlacedStep {
+    /// Indices of the thing rows the step appended.
+    indices: Vec<usize>,
+    /// Where each landed, `[x, y]` pairs.
+    positions: Vec<[i32; 2]>,
+    /// How many were asked for in total.
+    requested: usize,
+    /// The shortfall notes.
+    warnings: Vec<String>,
+}
+
+impl PlacedStep {
+    /// The tool's structured result for this step: `dry_run` says whether
+    /// anything was written, `edit` carries the standard fragment.
+    fn report(self, dry_run: bool, edit: JsonMap<String, Value>) -> PlaceReport {
+        PlaceReport {
+            placed: self.indices.len(),
+            requested: self.requested,
+            things: self.indices,
+            positions: self.positions,
+            warnings: self.warnings,
+            next_steps: PLACE_NEXT_STEPS.as_slice(),
+            dry_run,
+            edit,
+        }
+    }
+}
+
+/// Structured result of [`Cyberdemon::place_things`].
+#[derive(Serialize)]
+struct PlaceReport {
+    /// How many things were (or, dry, would be) placed.
+    placed: usize,
+    /// How many were asked for in total.
+    requested: usize,
+    /// The indices of the placed thing rows, in placement order.
+    things: Vec<usize>,
+    /// Their positions as `[x, y]` pairs, same order.
+    positions: Vec<[i32; 2]>,
+    /// The shortfall notes (a fit-too-few is a warning, never an error).
+    warnings: Vec<String>,
+    /// What to look at next.
+    next_steps: &'static [&'static str],
+    /// Whether nothing changed because the call only reported.
+    dry_run: bool,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+}
+
+/// Resolve the wire parameters into a [`PlaceRequest`] (everything that
+/// does not need the map).
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for an unresolvable name, none or
+/// several of the area parameters, neither or both of the count
+/// parameters, a count outside `1..=256`, a non-positive `clearance`, an
+/// empty `sectors` list, a backwards `bbox`, a non-positive `near`
+/// radius, an unknown skill or angle mode.
+fn place_request(
+    args: &PlaceThingsParams,
+    definitions: &Definitions,
+) -> Result<PlaceRequest, CyberError> {
+    let kind = place_kind(&args.thing, definitions)?;
+    Ok(PlaceRequest {
+        kind,
+        target: where_spec(args)?,
+        demand: need_spec(args)?,
+        clearance: clearance_of(args.clearance)?,
+        skills: args.skills.as_deref().map(place_skills).transpose()?,
+        multiplayer_only: args.multiplayer_only,
+        ambush: args.ambush,
+        facing: facing_of(args.angle.as_ref(), args.seed)?,
+        tid: args.tid.unwrap_or_default(),
+        special: args.special.as_ref().map_or(0_i32, |row| row.number),
+        args: args
+            .special
+            .as_ref()
+            .and_then(|row| row.args)
+            .unwrap_or(PLACE_ZERO_ARGS),
+    })
+}
+
+/// The doomednum to place: the number as given, the name resolved
+/// against `definitions` (its refusal an `invalid_argument`).
+fn place_kind(param: &ThingKindParam, definitions: &Definitions) -> Result<u32, CyberError> {
+    match param.clone() {
+        ThingKindParam::Type(number) => Ok(number),
+        ThingKindParam::Name(text) => {
+            resolve_thing_kind(definitions, &text).map_err(|problem| invalid(&problem))
+        }
+    }
+}
+
+/// The one area parameter the call named.
+fn where_spec(args: &PlaceThingsParams) -> Result<WhereSpec, CyberError> {
+    match (args.sectors.clone(), args.bbox, args.near) {
+        (Some(list), None, None) => Ok(WhereSpec::Sectors(sector_selection(&list)?)),
+        (None, Some(edges), None) => Ok(WhereSpec::Area(rect_area(edges)?)),
+        (None, None, Some(around)) => Ok(WhereSpec::Area(circle_area(around)?)),
+        _ => Err(invalid(
+            "pass exactly one of sectors, bbox and near: the tool places into one kind of area",
+        )),
+    }
+}
+
+/// The `bbox` parameter as a [`Area::Rect`]; a backwards box is refused.
+fn rect_area(edges: [i32; 4]) -> Result<Area, CyberError> {
+    let [x0, y0, x1, y1] = edges;
+    if x0 >= x1 || y0 >= y1 {
+        return Err(invalid(&format!(
+            "bbox [{x0}, {y0}, {x1}, {y1}] is empty or backwards: pass [x0, y0, x1, y1] with \
+             x0 < x1 and y0 < y1"
+        )));
+    }
+    Ok(Area::Rect {
+        min_x: i64::from(x0),
+        min_y: i64::from(y0),
+        max_x: i64::from(x1),
+        max_y: i64::from(y1),
+    })
+}
+
+/// The `near` parameter as a [`Area::Circle`]; a zero or negative radius
+/// is refused.
+fn circle_area(around: NearParam) -> Result<Area, CyberError> {
+    if around.radius < 1_i32 {
+        let radius = around.radius;
+        return Err(invalid(&format!(
+            "near radius {radius} is not a circle: pass a positive radius in map units"
+        )));
+    }
+    Ok(Area::Circle {
+        centre: (i64::from(around.x), i64::from(around.y)),
+        radius: i64::from(around.radius),
+    })
+}
+
+/// The one demand parameter the call named, its count checked.
+fn need_spec(args: &PlaceThingsParams) -> Result<NeedSpec, CyberError> {
+    match (args.count, args.per_sector) {
+        (Some(total), None) => Ok(NeedSpec::Total(check_copies("count", total)?)),
+        (None, Some(each)) => Ok(NeedSpec::PerSector(check_copies("per_sector", each)?)),
+        (Some(_), Some(_)) => Err(invalid(
+            "pass one of count and per_sector, not both: count splits across the areas, \
+             per_sector fills every one of them",
+        )),
+        (None, None) => Err(invalid(
+            "pass count (1..=256 things in total) or per_sector (that many in every area)",
+        )),
+    }
+}
+
+/// A requested copy count inside `1..=256`, as a `usize`.
+fn check_copies(name: &str, value: u32) -> Result<usize, CyberError> {
+    if value == 0_u32 || value > COPIES_MAX {
+        return Err(invalid(&format!(
+            "{name} {value} is out of range: pass 1..={COPIES_MAX}"
+        )));
+    }
+    usize::try_from(value).map_err(|conversion| {
+        invalid(&format!(
+            "{name} {value} exceeds the supported count: {conversion}"
+        ))
+    })
+}
+
+/// The explicit `clearance`, positive; `None` means the thing's radius
+/// plus the shared margin.
+fn clearance_of(given: Option<i32>) -> Result<Option<i64>, CyberError> {
+    let Some(value) = given else {
+        return Ok(None);
+    };
+    if value < 1_i32 {
+        return Err(invalid(&format!(
+            "clearance {value} is out of range: pass a positive distance in map units, or leave \
+             it out for the thing's radius plus 8"
+        )));
+    }
+    Ok(Some(i64::from(value)))
+}
+
+/// The `skills` list parsed to [`Skill`]s; an empty list would hide the
+/// things on no skill at all, so it is refused.
+fn place_skills(texts: &[String]) -> Result<Vec<Skill>, CyberError> {
+    if texts.is_empty() {
+        return Err(invalid(
+            "skills is empty: pass some of easy, medium and hard, or leave skills out for every \
+             skill",
+        ));
+    }
+    texts
+        .iter()
+        .map(|text| {
+            Skill::parse(text).ok_or_else(|| {
+                invalid(&format!(
+                    "skill {text:?} is not a skill: pass easy, medium or hard, or leave skills \
+                     out for every skill"
+                ))
+            })
+        })
+        .collect()
+}
+
+/// The `angle` parameter resolved into a [`Facing`] (a fixed angle
+/// already snapped).
+fn facing_of(param: Option<&AngleParam>, seed: u32) -> Result<Facing, CyberError> {
+    match param.cloned() {
+        None => Ok(Facing::Fixed(0_i32)),
+        Some(AngleParam::Degrees(degrees)) => Ok(Facing::Fixed(snap_angle(degrees))),
+        Some(AngleParam::Mode(text)) => match text.to_ascii_lowercase().as_str() {
+            "face_player_start" => Ok(Facing::PlayerStart),
+            "face_center" => Ok(Facing::Centre),
+            "random_seeded" => Ok(Facing::Seeded(seed)),
+            other => Err(invalid(&format!(
+                "angle {other:?} is not an angle: pass a number of degrees or one of \
+                 face_player_start, face_center, random_seeded"
+            ))),
+        },
+    }
+}
+
+/// The `Thing` flag bit `wanted` names in `family`' table, `0` when none.
+fn thing_bit(family: FlagFamily, wanted: &str) -> u32 {
+    flags::names(FlagKind::Thing, family)
+        .iter()
+        .find(|entry| entry.0 == wanted)
+        .map_or(0_u32, |entry| entry.1)
+}
+
+/// The areas a [`place_on`] call fills and each area's share of the
+/// demand, parallel lists.
+type AreaPlan = (Vec<Area>, Vec<usize>);
+
+/// The areas the request names, checked against `map`, and each area's
+/// share of the demand.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] for a sector index the map does not hold.
+fn target_areas(map: &Map, request: &PlaceRequest) -> Result<AreaPlan, CyberError> {
+    match request.target.clone() {
+        WhereSpec::Sectors(list) => {
+            check_sectors(map, &list)?;
+            let areas: Vec<Area> = list.iter().map(|sector| Area::Sector(*sector)).collect();
+            let needs = match request.demand {
+                NeedSpec::Total(total) => split_proportional(map, &list, total),
+                NeedSpec::PerSector(each) => vec![each; areas.len()],
+            };
+            Ok((areas, needs))
+        }
+        WhereSpec::Area(area) => {
+            let need = match request.demand {
+                NeedSpec::Total(total) => total,
+                NeedSpec::PerSector(each) => each,
+            };
+            Ok((vec![area], vec![need]))
+        }
+    }
+}
+
+/// Refuse the first sector index `list` holds past the map's sectors.
+fn check_sectors(map: &Map, list: &[usize]) -> Result<(), CyberError> {
+    for sector in list {
+        if map.sectors.get(*sector).is_none() {
+            return Err(CyberError::NotFound(format!(
+                "sector {sector} is out of range: the map holds {}; get_map_summary lists them",
+                map.sectors.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Run the whole placement over `map` and append the thing rows: one
+/// undoable step's work, shared by the live and dry runs.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] for an unknown sector,
+/// [`CyberError::InvalidArgument`] for `angle: "face_player_start"` on a
+/// map without a player 1 start or `Hexen`-only fields on a `Doom`-family
+/// map, [`CyberError::LimitExceeded`] for a type or coordinate no map
+/// format can store.
+fn place_on(
+    map: &mut Map,
+    request: &PlaceRequest,
+    definitions: &Definitions,
+) -> Result<PlacedStep, CyberError> {
+    if request.facing == Facing::PlayerStart && player_start(map).is_none() {
+        return Err(invalid(
+            "the map holds no player 1 start (thing type 1): add one with add_thing or choose \
+             another angle",
+        ));
+    }
+    let (areas, needs) = target_areas(map, request)?;
+    let requested = needs
+        .iter()
+        .fold(0_usize, |acc, need| acc.saturating_add(*need));
+    let clearance = request
+        .clearance
+        .unwrap_or_else(|| thing_clearance(definitions, request.kind, PLACE_UNKNOWN_RADIUS));
+    let spec = DistributeSpec {
+        areas,
+        needs,
+        clearance,
+        facing: request.facing,
+        unknown_radius: PLACE_UNKNOWN_RADIUS,
+    };
+    let spread = distribute(map, definitions, &spec);
+    write_places(map, request, &spread, requested)
+}
+
+/// Append the distributed things, range-checked against the map's format.
+fn write_places(
+    map: &mut Map,
+    request: &PlaceRequest,
+    spread: &Distribution,
+    requested: usize,
+) -> Result<PlacedStep, CyberError> {
+    let family = map.flag_family();
+    let format = map.format;
+    let bits = presence_bits(request, family);
+    let mut step = PlacedStep {
+        indices: Vec::new(),
+        positions: Vec::new(),
+        requested,
+        warnings: spread.warnings.clone(),
+    };
+    for spot in &spread.placed {
+        let spawn = placed_thing(request, bits, spot)?;
+        check_doom_plain(family, &spawn)?;
+        check_binary_ranges(format, &spawn)?;
+        step.indices.push(map.things.len());
+        step.positions.push([spawn.x, spawn.y]);
+        map.things.push(spawn);
+    }
+    Ok(step)
+}
+
+/// The presence flags of one placed thing: the plan-shared skill,
+/// multiplayer and ambush bits for `family`.
+fn presence_bits(request: &PlaceRequest, family: FlagFamily) -> u32 {
+    let mut bits = presence_flags(family, request.skills.as_deref(), request.multiplayer_only);
+    if request.ambush {
+        bits |= thing_bit(family, "ambush");
+    }
+    bits
+}
+
+/// The [`Thing`] row for one distributed spot, `Hexen` script fields and
+/// all.
+fn placed_thing(
+    request: &PlaceRequest,
+    bits: u32,
+    spot: &crate::wad::map::placement::Placed,
+) -> Result<Thing, CyberError> {
+    let Ok(kind) = i32::try_from(request.kind) else {
+        return Err(CyberError::LimitExceeded(format!(
+            "thing type {} is above the storable thing-type range; use a doomednum the game \
+             defines",
+            request.kind
+        )));
+    };
+    let Ok(map_x) = i32::try_from(spot.at.0) else {
+        return Err(coordinate_refusal("x", spot.at.0));
+    };
+    let Ok(map_y) = i32::try_from(spot.at.1) else {
+        return Err(coordinate_refusal("y", spot.at.1));
+    };
+    Ok(Thing {
+        tid: request.tid,
+        x: map_x,
+        y: map_y,
+        angle: spot.angle,
+        kind,
+        flags: bits,
+        special: request.special,
+        args: request.args,
+        ..Default::default()
+    })
+}
+
+/// The `LimitExceeded` for one placement coordinate no format holds.
+fn coordinate_refusal(axis: &str, value: i64) -> CyberError {
+    CyberError::LimitExceeded(format!(
+        "{axis} {value} is outside the 32-bit map coordinate range; place inside the map's \
+         coordinates"
+    ))
+}
+
+/// The definitions game the tool reads: the session's detected game, an
+/// unidentified session standing for DOOM II (as the plan and validate
+/// tools do).
+fn place_game(found: Game) -> Game {
+    if found == Game::Unknown {
+        return Game::Doom2;
+    }
+    found
+}
+
+/// The thing definitions `place_things` resolves names against: the
+/// detected game's tables overlaid with the merged view's customs.
+fn place_definitions(session: &Session) -> Result<Definitions, CyberError> {
+    let (sources, _notes) = collect::custom_sources(session)?;
+    session_definitions(place_game(session.game()), &sources)
+}
+
+/// The edit fragment of a dry run: the map it inspected, nothing written.
+fn dry_edit(name: LumpName) -> JsonMap<String, Value> {
+    [
+        ("map".to_owned(), Value::String(name.to_string())),
+        ("nodes_invalidated".to_owned(), Value::Bool(false)),
+        ("copied_to_working".to_owned(), Value::Bool(false)),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// `place_things`' work: resolve the request, then run the whole
+/// distribution as one [`crate::session::Session::edit_map`] step (a dry
+/// run computes it over the merged view's copy and only reports).
+fn place_things_run(
+    session: &mut Session,
+    args: &PlaceThingsParams,
+) -> Result<PlaceReport, CyberError> {
+    let definitions = place_definitions(session)?;
+    let request = place_request(args, &definitions)?;
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    if args.dry_run.get() {
+        let mut map = common::load_map(session, name, Scope::Merged)?;
+        let step = place_on(&mut map, &request, &definitions)?;
+        return Ok(step.report(true, dry_edit(name)));
+    }
+    let (step, report) = session.edit_map(name, "place things", |map| {
+        place_on(map, &request, &definitions)
+    })?;
+    Ok(step.report(false, edit_result_fragment(&report)))
+}
+
 /// Hand an outcome to the client as the documented structured result.
 fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
 where
@@ -2364,6 +3024,20 @@ impl Cyberdemon {
         reported(
             self.state()
                 .with_session(|session| set_light_run(session, &args)),
+        )
+    }
+
+    /// Distributes monsters and items across sectors with clearance.
+    #[tool(
+        description = "Distributes monsters, items and decorations across whole sectors, a bounding box or a circle in one undoable edit: how many and where roughly is your judgment; the exact, non-overlapping positions are this tool's reflex. thing is a doomednum or a definition name resolved against the session's definitions (exact case-insensitive name first, then a unique case-insensitive substring; an unknown or ambiguous name is invalid_argument, the ambiguity listing the candidate names). Name the area exactly one way (both or neither is invalid_argument): sectors: [i, ...] for whole sectors (duplicates collapse; an index the map does not hold is not_found), bbox: [x0, y0, x1, y1] for an axis-aligned box in map units (x0 < x1 and y0 < y1), or near: {x, y, radius} for a circle (positive radius). Name the count exactly one way (both or neither is invalid_argument): count is the total, 1..=256, split across sectors in proportion to their bounding-box areas (largest-remainder method, ties to the lower sector index), or per_sector is how many every area holds (also 1..=256). Placement is deterministic: each area gets a square grid spaced twice the clearance (never under 16 units) centred in its bounding box; a candidate is kept only if it lies inside the area (and inside some sector, for the open shapes), keeps clearance from every one-sided or blocking linedef (exact integer squared distance to segment) and clearance plus the other body's radius from every existing thing; kept points are ordered by distance from the area centre (ties by y then x) and spread by taking every k-th, k = kept/needed. An area that cannot hold its share places what fits and warns \"sector 3 fits only 2 of 4 things\" - a shortfall is a warning, never an error. clearance (positive map units; default the thing's definition radius, 20 for an unlisted type, plus 8) is the distance kept from walls and other things. skills (some of easy, medium, hard; default all three) and multiplayer_only (the Doom family's notsingle bit, the Hexen family's coop+dm) set the presence flags; ambush (default false) adds the family's ambush bit. angle (default 0) is degrees or a mode name: face_player_start turns each thing at the map's thing type 1 (invalid_argument when the map holds none), face_center at the area centre, and random_seeded draws the eight compass points from seed (default 1) with a deterministic xorshift32 - the only randomness here, reproducible from the seed. Every angle snaps to a multiple of 45 degrees. tid and special: {number, args} are copied onto every placed thing; they are Hexen-family fields - nonzero on a Doom-family map is invalid_argument (the same refusal as add_thing). dry_run computes the whole placement over the merged view and reports it without writing anything or touching the undo stack. Returns {placed, requested, things (the new THINGS indices in placement order), positions ([[x, y], ...], same order), warnings, next_steps, dry_run, map, nodes_invalidated, copied_to_working}; one undo (labelled \"place things\") removes every thing the call added. Placing things changes no geometry, so nodes_invalidated is false. Afterwards check the bodies stand free with check_playability (its stuck_things list) and look at the spread with render_topdown."
+    )]
+    fn place_things(
+        &self,
+        Parameters(args): Parameters<PlaceThingsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reported(
+            self.state()
+                .with_session(|session| place_things_run(session, &args)),
         )
     }
 }
@@ -4296,6 +4970,341 @@ mod tests {
         assert!(
             refuse(&teleport_spec(&neither, &pad_skins()).unwrap_err()).contains("pad is required"),
             "the pad is asked for first"
+        );
+    }
+
+    use super::{
+        AngleParam, PlaceRequest, PlaceThingsParams, ThingKindParam, check_sectors, dry_edit,
+        facing_of, need_spec, place_kind, place_on, place_request, presence_bits, target_areas,
+        thing_bit,
+    };
+    use crate::defs::definitions_for;
+    use crate::wad::game::Game;
+    use crate::wad::map::Thing;
+    use crate::wad::map::placement::{Facing, player_start, snap_angle};
+
+    /// Wire JSON parsed into `place_things` arguments.
+    fn place_args(text: &str) -> PlaceThingsParams {
+        from_str(text).expect("test parameters parse")
+    }
+
+    /// The DOOM definitions every `place_things` test resolves against.
+    fn place_definitions() -> crate::defs::Definitions {
+        definitions_for(Game::Doom).expect("the embedded tables parse")
+    }
+
+    /// The minimum legal request these tests vary.
+    const MINIMAL: &str = r#"{"thing": 3001, "sectors": [0], "count": 1}"#;
+
+    /// A resolved request, panicking on refusals the test did not expect.
+    fn resolved(text: &str) -> PlaceRequest {
+        place_request(&place_args(text), &place_definitions()).expect("test parameters resolve")
+    }
+
+    /// The refusal message of a failed resolution.
+    fn refused(text: &str) -> CyberError {
+        place_request(&place_args(text), &place_definitions())
+            .expect_err("the test asks for a refusal")
+    }
+
+    #[test]
+    fn place_params_read_numbers_names_boxes_circles_and_angles() {
+        let typed = place_args(MINIMAL);
+        assert!(
+            matches!(typed.thing, ThingKindParam::Type(3001)),
+            "a number is a doomednum"
+        );
+        assert_eq!(typed.seed, 1_u32, "the seed defaults to one");
+        assert!(
+            !typed.multiplayer_only && !typed.ambush && !typed.dry_run.get(),
+            "bits default off"
+        );
+        let named = place_args(
+            r#"{"thing": "imp", "bbox": [0, 0, 64, 64], "per_sector": 2, "angle": "face_center"}"#,
+        );
+        assert!(
+            matches!(named.thing, ThingKindParam::Name(text) if text == "imp"),
+            "a string is a name"
+        );
+        assert!(
+            matches!(named.angle, Some(AngleParam::Mode(_))),
+            "a mode string"
+        );
+        let degrees = place_args(
+            r#"{"thing": 2035, "near": {"x": 0, "y": 0, "radius": 8}, "angle": 70, "count": 1}"#,
+        );
+        assert!(
+            matches!(degrees.angle, Some(AngleParam::Degrees(70_i32))),
+            "a number is degrees"
+        );
+        let dressed = place_args(
+            r#"{"thing": 2035, "sectors": [0], "count": 1, "tid": 7, "special": {"number": 10, "args": [1, 2, 3, 4, 5]}}"#,
+        );
+        assert_eq!(dressed.tid, Some(7_i32), "the script fields ride along");
+        assert_eq!(
+            dressed.special.map(|row| row.number),
+            Some(10_i32),
+            "the special number too"
+        );
+    }
+
+    #[test]
+    fn place_kind_resolves_names_and_refuses_ambiguity() {
+        let definitions = place_definitions();
+        let request = place_args(r#"{"thing": "imp", "sectors": [0], "count": 1}"#);
+        assert_eq!(
+            place_kind(&request.thing, &definitions).expect("Imp is exact"),
+            3001_u32
+        );
+        let skul = refused(r#"{"thing": "skul", "sectors": [0], "count": 1}"#);
+        assert_eq!(skul.code(), "invalid_argument", "an ambiguous name");
+        assert!(skul.to_string().contains("ambiguous"), "{skul}");
+        assert!(skul.to_string().contains("Skull on Pole"), "{skul}");
+        let ghost = refused(r#"{"thing": "platypus", "sectors": [0], "count": 1}"#);
+        assert!(
+            ghost.to_string().contains("no thing named 'platypus'"),
+            "{ghost}"
+        );
+    }
+
+    #[test]
+    fn place_wires_refuse_the_area_and_count_violations() {
+        let neither = refused(r#"{"thing": 3001, "count": 1}"#);
+        assert!(
+            neither.to_string().contains("exactly one of sectors"),
+            "{neither}"
+        );
+        let both_areas =
+            refused(r#"{"thing": 3001, "sectors": [0], "bbox": [0, 0, 8, 8], "count": 1}"#);
+        assert_eq!(both_areas.code(), "invalid_argument", "two areas");
+        let both_counts =
+            refused(r#"{"thing": 3001, "sectors": [0], "count": 2, "per_sector": 2}"#);
+        assert!(
+            both_counts.to_string().contains("not both"),
+            "{both_counts}"
+        );
+        let no_counts = refused(r#"{"thing": 3001, "sectors": [0]}"#);
+        assert!(no_counts.to_string().contains("pass count"), "{no_counts}");
+        let zero = refused(r#"{"thing": 3001, "sectors": [0], "count": 0}"#);
+        assert!(
+            zero.to_string().contains("count 0 is out of range"),
+            "{zero}"
+        );
+        let huge = refused(r#"{"thing": 3001, "sectors": [0], "count": 257}"#);
+        assert!(
+            huge.to_string().contains("count 257 is out of range"),
+            "{huge}"
+        );
+        let empty = refused(r#"{"thing": 3001, "sectors": [], "count": 1}"#);
+        assert!(empty.to_string().contains("sectors is empty"), "{empty}");
+        let backwards = refused(r#"{"thing": 3001, "bbox": [8, 8, 0, 0], "count": 1}"#);
+        assert!(backwards.to_string().contains("backwards"), "{backwards}");
+        let flat_circle =
+            refused(r#"{"thing": 3001, "near": {"x": 0, "y": 0, "radius": 0}, "count": 1}"#);
+        assert!(
+            flat_circle.to_string().contains("not a circle"),
+            "{flat_circle}"
+        );
+        let cold = refused(r#"{"thing": 3001, "sectors": [0], "count": 1, "clearance": 0}"#);
+        assert!(
+            cold.to_string().contains("clearance 0 is out of range"),
+            "{cold}"
+        );
+        let nightmare =
+            refused(r#"{"thing": 3001, "sectors": [0], "count": 1, "skills": ["nightmare"]}"#);
+        assert!(nightmare.to_string().contains("not a skill"), "{nightmare}");
+        let blank = refused(r#"{"thing": 3001, "sectors": [0], "count": 1, "skills": []}"#);
+        assert!(blank.to_string().contains("skills is empty"), "{blank}");
+    }
+
+    #[test]
+    fn the_demand_and_facing_shapes_resolve_exactly_one_way() {
+        let total = need_spec(&place_args(MINIMAL)).expect("a total");
+        assert!(
+            matches!(total, super::NeedSpec::Total(1)),
+            "count is the total"
+        );
+        let facing = facing_of(Some(&AngleParam::Degrees(70)), 3).expect("degrees");
+        assert_eq!(facing, Facing::Fixed(90_i32), "70 snaps to 90");
+        assert_eq!(
+            facing_of(Some(&AngleParam::Mode("Face_Player_Start".to_owned())), 1).expect("a mode"),
+            Facing::PlayerStart,
+            "modes are case-insensitive"
+        );
+        assert_eq!(
+            facing_of(Some(&AngleParam::Mode("random_seeded".to_owned())), 7).expect("seeded"),
+            Facing::Seeded(7_u32),
+            "the seed rides through"
+        );
+        let spin =
+            facing_of(Some(&AngleParam::Mode("spin".to_owned())), 1).expect_err("no such mode");
+        assert!(
+            spin.to_string()
+                .contains("face_player_start, face_center, random_seeded"),
+            "{spin}"
+        );
+        assert_eq!(
+            facing_of(None, 1).expect("the default"),
+            Facing::Fixed(0_i32)
+        );
+    }
+
+    #[test]
+    fn target_areas_checks_sectors_and_splits_the_total() {
+        let map = two_rooms();
+        let request = resolved(r#"{"thing": 3001, "sectors": [0, 1], "count": 3}"#);
+        let (areas, needs) = target_areas(&map, &request).expect("both sectors exist");
+        assert_eq!(areas.len(), 2, "two areas");
+        assert_eq!(
+            needs,
+            vec![2_usize, 1_usize],
+            "equal areas: the extra copy is the lower index's"
+        );
+        let missing = resolved(r#"{"thing": 3001, "sectors": [9], "count": 1}"#);
+        let lost = target_areas(&map, &missing).expect_err("sector 9 does not exist");
+        assert_eq!(lost.code(), "not_found", "an unknown sector is not_found");
+        assert!(lost.to_string().contains("sector 9"), "{lost}");
+        let each = resolved(r#"{"thing": 3001, "sectors": [0, 1, 0], "per_sector": 2}"#);
+        let (twice, twice_needs) = target_areas(&map, &each).expect("duplicates collapse");
+        assert_eq!(twice.len(), 2, "the doubled sector 0 fills once");
+        assert_eq!(
+            twice_needs,
+            vec![2_usize, 2_usize],
+            "per_sector skips the split"
+        );
+        check_sectors(&map, &[0, 1]).expect("in range");
+    }
+
+    #[test]
+    fn place_on_spreads_the_hall_and_notes_the_shortfall() {
+        let mut map = two_rooms();
+        let definitions = place_definitions();
+        let request = resolved(r#"{"thing": "imp", "sectors": [0], "count": 4}"#);
+        let step = place_on(&mut map, &request, &definitions).expect("the hall holds four imps");
+        assert_eq!(step.indices.len(), 4, "four landed");
+        assert_eq!(step.requested, 4, "four were asked");
+        assert_eq!(
+            step.indices,
+            vec![0_usize, 1, 2, 3],
+            "the map held no things"
+        );
+        assert!(step.warnings.is_empty(), "no shortfall");
+        for position in &step.positions {
+            assert!(
+                position[0] >= 28_i32 && position[0] <= 256_i32,
+                "{position:?} west-clear and inside"
+            );
+            assert!(
+                position[1] >= 28_i32 && position[1] <= 228_i32,
+                "{position:?} off the flat walls"
+            );
+        }
+        let cramped = resolved(r#"{"thing": "imp", "sectors": [0], "count": 200}"#);
+        let mut tight = two_rooms();
+        let short = place_on(&mut tight, &cramped, &definitions).expect("shortfalls are warnings");
+        assert_eq!(short.requested, 200, "the ask is reported honestly");
+        assert_eq!(
+            short.indices.len(),
+            12,
+            "twelve grid points clear the walls"
+        );
+        assert_eq!(
+            short.warnings,
+            vec!["sector 0 fits only 12 of 200 things".to_owned()],
+            "the documented shortfall note"
+        );
+    }
+
+    #[test]
+    fn placed_things_carry_the_family_flags_and_the_facing() {
+        let mut map = two_rooms();
+        let definitions = place_definitions();
+        let request = resolved(
+            r#"{"thing": 3001, "sectors": [0], "count": 2, "skills": ["easy", "hard"], "multiplayer_only": true, "ambush": true, "angle": 44}"#,
+        );
+        let step = place_on(&mut map, &request, &definitions).expect("two imps land");
+        assert_eq!(step.indices, vec![0_usize, 1], "both landed as new rows");
+        assert_eq!(
+            map.things.first().expect("two things").flags,
+            1_u32
+                .checked_add(4)
+                .expect("easy+hard")
+                .checked_add(16)
+                .expect("+notsingle")
+                .checked_add(8)
+                .expect("+ambush"),
+            "presence, multiplayer and ambush bits"
+        );
+        assert_eq!(
+            map.things.first().expect("two things").kind,
+            3001_i32,
+            "the resolved type"
+        );
+        assert!(
+            map.things
+                .iter()
+                .all(|row| snap_angle(row.angle) == row.angle),
+            "every angle is a compass point"
+        );
+        assert_eq!(thing_bit(FlagFamily::Doom, "ambush"), 8_u32, "the Doom bit");
+        assert_eq!(
+            thing_bit(FlagFamily::Hexen, "ambush"),
+            8_u32,
+            "the Hexen bit"
+        );
+        assert_eq!(
+            presence_bits(&request, FlagFamily::Doom) & 8_u32,
+            8_u32,
+            "ambush rides"
+        );
+    }
+
+    #[test]
+    fn the_hexen_only_fields_refuse_a_doom_map_and_missing_starts_refuse() {
+        let mut map = two_rooms();
+        let definitions = place_definitions();
+        let tidied = resolved(r#"{"thing": 3001, "sectors": [0], "count": 1, "tid": 7}"#);
+        let refused = place_on(&mut map, &tidied, &definitions).expect_err("Doom has no tid");
+        assert_eq!(
+            refused.code(),
+            "invalid_argument",
+            "a Doom-family field refusal"
+        );
+        assert!(refused.to_string().contains("Doom-format"), "{refused}");
+        let facing = resolved(
+            r#"{"thing": 3001, "sectors": [0], "count": 1, "angle": "face_player_start"}"#,
+        );
+        let alone = place_on(&mut map, &facing, &definitions).expect_err("no start on the map");
+        assert!(alone.to_string().contains("player 1 start"), "{alone}");
+        map.things.push(Thing {
+            x: 64_i32,
+            y: 128_i32,
+            kind: 1_i32,
+            flags: 7_u32,
+            ..Default::default()
+        });
+        assert_eq!(
+            player_start(&map),
+            Some((64_i64, 128_i64)),
+            "the start resolves"
+        );
+        place_on(&mut map, &facing, &definitions).expect("with a start the call runs");
+    }
+
+    #[test]
+    fn the_dry_fragment_and_the_report_shape_name_the_inspected_map() {
+        let fragment = dry_edit(LumpName::parse("MAP01").expect("a valid name"));
+        assert_eq!(
+            fragment.get("map").expect("map key").as_str(),
+            Some("MAP01")
+        );
+        assert_eq!(
+            fragment.get("nodes_invalidated").expect("key").as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            fragment.get("copied_to_working").expect("key").as_bool(),
+            Some(false)
         );
     }
 }

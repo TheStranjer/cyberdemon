@@ -7,8 +7,11 @@
 //! caller has already drawn and describes with [`DoorSides`]: the door
 //! sector is closed, every use line is faced at the room with the door
 //! face on its upper, and the jamb lines become one-sided walls wearing
-//! the track. [`next_free_tag`] mints the tag a new door's sector and
-//! use lines share.
+//! the track. [`face_room_line`] is that room-line treatment on its
+//! own — the facing flip and the action write [`apply_door`]'s loop
+//! runs — for callers (the `plan` feature engine) whose doorway is
+//! already textured. [`next_free_tag`] mints the tag a new door's sector
+//! and use lines share.
 //!
 //! Door-sector addressing follows each family's convention: `Doom` use
 //! lines carry the tag and the door sector answers with the same one,
@@ -243,7 +246,8 @@ const fn hexen_door(style: DoorStyle) -> DoorLineSetup {
     }
 }
 
-/// A validated room line: the two sides and whether the line must turn
+/// A validated room line: its two sides, room side first.
+/// [`face_room_line`] decides at write time whether the line must turn
 /// around so the room ends up on its geometric front (right of `v1` to
 /// `v2`).
 #[derive(Clone, Copy, Debug)]
@@ -254,10 +258,6 @@ struct RoomPlan {
     room_side: usize,
     /// Index in [`Map::sidedefs`] of the side facing the door sector.
     door_side: usize,
-    /// Whether the front sidedef is the door's and the line must be
-    /// turned around: `v1`/`v2` swap with `front`/`back` so the room's
-    /// sidedef keeps the Doom convention (front on the line's right).
-    flip: bool,
 }
 
 /// A validated jamb line and the door-facing side that stays as front.
@@ -288,8 +288,9 @@ struct DoorAction<'dress> {
     setup: &'dress DoorLineSetup,
     /// The door face, track and recess floor.
     textures: &'dress DoorTextures,
-    /// The map's flag family: only `Hexen` takes activation bits.
-    family: FlagFamily,
+    /// The sector the door slides in: every room line separates it from
+    /// a room.
+    door_sector: usize,
 }
 
 /// Dress a drawn doorway as one undo-free map edit.
@@ -342,7 +343,7 @@ pub fn apply_door(
     let action = DoorAction {
         setup,
         textures,
-        family: map.flag_family(),
+        door_sector: sides.door_sector,
     };
     for room in &plan.rooms {
         dress_room_line(map, room, &action);
@@ -351,6 +352,60 @@ pub fn apply_door(
         dress_jamb_line(map, *jamb, textures);
     }
     Ok(())
+}
+
+/// Write a door's [`DoorLineSetup`] onto the two-sided room line `line`,
+/// turning the line around first when its front faces the door sector
+/// `door_sector`.
+///
+/// The flip swaps `v1`/`v2` with `front`/`back`, so the room's sidedef
+/// keeps the `Doom` convention of sitting right of `v1` to `v2` (what
+/// the renderer draws and the `Doom` use specials fire from); a line
+/// already facing the room keeps its vertices. The line then takes
+/// [`DoorLineSetup::special`], [`DoorLineSetup::tag`] and
+/// [`DoorLineSetup::args`], comes out two-sided, non-blocking and
+/// top-pegged (the `dontpegtop` bit cleared so a rising door face rides
+/// the ceiling), and — in the `Hexen` family — its old activation field
+/// is replaced by [`DoorLineSetup::flags_activation`], never merged.
+///
+/// This is [`apply_door`]'s room-line treatment in one place, for
+/// callers whose doorway is already dressed: the `plan` feature engine
+/// ([`crate::plan::features`]) wires the door lines a compiled plan
+/// reports without touching their textures. `line` must be a two-sided
+/// linedef separating a room sector from `door_sector`; [`apply_door`]
+/// checks its own references before writing, so a missing row can only
+/// come from a caller that skipped its validation — it is left
+/// untouched.
+#[inline]
+pub fn face_room_line(map: &mut Map, line: usize, door_sector: usize, setup: &DoorLineSetup) {
+    let hexen = map.flag_family() == FlagFamily::Hexen;
+    let door_on_front = front_side_of(map, line).is_some_and(|front| {
+        map.sidedefs
+            .get(front)
+            .is_some_and(|side| side.sector == door_sector)
+    });
+    let Some(linedef) = map.linedefs.get_mut(line) else {
+        return;
+    };
+    if door_on_front {
+        core::mem::swap(&mut linedef.front, &mut linedef.back);
+        core::mem::swap(&mut linedef.v1, &mut linedef.v2);
+    }
+    linedef.special = setup.special;
+    linedef.tag = setup.tag;
+    linedef.args = setup.args;
+    linedef.flags = (linedef.flags | TWO_SIDED_BIT) & !(BLOCKING_BIT | DONTPEG_TOP_BIT);
+    if hexen {
+        linedef.flags = (linedef.flags & !ACTIVATION_MASK) | setup.flags_activation;
+    }
+}
+
+/// The [`Linedef::front`] sidedef index of the `index`th line, `None`
+/// when the line or its front is missing.
+///
+/// [`Linedef::front`]: crate::wad::map::Linedef::front
+fn front_side_of(map: &Map, index: usize) -> Option<usize> {
+    map.linedefs.get(index).and_then(|linedef| linedef.front)
 }
 
 /// The next unused sector tag: one above every tag the map already
@@ -412,7 +467,8 @@ fn plan_door(map: &Map, sides: &DoorSides) -> Result<DoorPlan, CyberError> {
 }
 
 /// Resolve one room line: both sides exist, exactly one faces the door
-/// sector, and the flip needed to face the front at the room is noted.
+/// sector, and the two sides are noted room-first. [`face_room_line`]
+/// turns the line around at write time when the front is the door's.
 fn plan_room_line(map: &Map, line: usize, door_sector: usize) -> Result<RoomPlan, CyberError> {
     let linedef = line_at(map, line, "room")?;
     let (front, back) = both_sides(line, linedef)?;
@@ -420,9 +476,9 @@ fn plan_room_line(map: &Map, line: usize, door_sector: usize) -> Result<RoomPlan
         side_sector(map, line, front)? == door_sector,
         side_sector(map, line, back)? == door_sector,
     );
-    let (room_side, door_side, flip) = match at_door {
-        (false, true) => (front, back, false),
-        (true, false) => (back, front, true),
+    let (room_side, door_side) = match at_door {
+        (false, true) => (front, back),
+        (true, false) => (back, front),
         _ => {
             return Err(CyberError::InvalidArgument(format!(
                 "room linedef {line} does not separate a room sector from door sector \
@@ -434,7 +490,6 @@ fn plan_room_line(map: &Map, line: usize, door_sector: usize) -> Result<RoomPlan
         line,
         room_side,
         door_side,
-        flip,
     })
 }
 
@@ -528,23 +583,12 @@ fn range_error(kind: &str, index: usize, len: usize) -> CyberError {
     ))
 }
 
-/// Write the door action onto one room line and its door face onto the
-/// room side (the indices were checked by [`plan_door`], so a row that
-/// has since vanished would be the only reason to skip it).
+/// Write the door action onto one room line through [`face_room_line`]
+/// and its door face onto the room side (the indices were checked by
+/// [`plan_door`], so a row that has since vanished would be the only
+/// reason to skip it).
 fn dress_room_line(map: &mut Map, room: &RoomPlan, action: &DoorAction<'_>) {
-    if let Some(linedef) = map.linedefs.get_mut(room.line) {
-        if room.flip {
-            core::mem::swap(&mut linedef.front, &mut linedef.back);
-            core::mem::swap(&mut linedef.v1, &mut linedef.v2);
-        }
-        linedef.special = action.setup.special;
-        linedef.tag = action.setup.tag;
-        linedef.args = action.setup.args;
-        linedef.flags = (linedef.flags | TWO_SIDED_BIT) & !(BLOCKING_BIT | DONTPEG_TOP_BIT);
-        if action.family == FlagFamily::Hexen {
-            linedef.flags = (linedef.flags & !ACTIVATION_MASK) | action.setup.flags_activation;
-        }
-    }
+    face_room_line(map, room.line, action.door_sector, action.setup);
     if let Some(side) = map.sidedefs.get_mut(room.room_side) {
         action.textures.door.clone_into(&mut side.upper);
     }
@@ -572,7 +616,8 @@ fn dress_jamb_line(map: &mut Map, jamb: JambPlan, textures: &DoorTextures) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DoorLineSetup, DoorSides, DoorStyle, DoorTextures, apply_door, door_specials, next_free_tag,
+        DoorLineSetup, DoorSides, DoorStyle, DoorTextures, apply_door, door_specials,
+        face_room_line, next_free_tag,
     };
     use crate::error::CyberError;
     use crate::wad::classify::MapFormat;
@@ -902,6 +947,59 @@ mod tests {
             4_u32 | 0x2600_u32,
             "the playerpush field is replaced by use, repeat and monsteractivate"
         );
+    }
+
+    #[test]
+    fn face_room_line_flips_a_door_facing_line_and_writes_the_action() {
+        let mut map = doorway(MapFormat::Doom);
+        face_room_line(&mut map, 1_usize, 1_usize, &doom_setup());
+        let line = map.linedefs.get(1).expect("room line 1");
+        assert_eq!(line.front, Some(3_usize), "the room side becomes the front");
+        assert_eq!(
+            (line.v1, line.v2),
+            (1_usize, 0_usize),
+            "the vertices swap with the sides"
+        );
+        assert_eq!(line.special, 1_i32, "the DR action");
+        assert_eq!(line.tag, SAMPLE_TAG, "the shared tag");
+        assert_eq!(line.args, [0_i32; 5], "no arguments in the Doom family");
+        assert_eq!(line.flags, 4_u32, "two-sided, unblocked and top-pegged");
+        assert_eq!(
+            map.sidedefs.get(2).expect("door side").upper,
+            "-",
+            "the untouched sides keep their faces: face_room_line dresses actions only"
+        );
+        assert_eq!(map.linedefs.first().expect("line 0").special, 0_i32);
+    }
+
+    #[test]
+    fn face_room_line_keeps_a_faced_line_and_replaces_hexen_activation() {
+        let mut map = doorway(MapFormat::Hexen);
+        map.linedefs.first_mut().expect("room line").flags = 4_u32 | 0x1000_u32;
+        let setup = door_specials(FlagFamily::Hexen, DoorStyle::LockedBlue, SAMPLE_TAG);
+        face_room_line(&mut map, 0_usize, 1_usize, &setup);
+        let line = map.linedefs.first().expect("room line 0");
+        assert_eq!(line.front, Some(0_usize), "a correct front stays the front");
+        assert_eq!(
+            (line.v1, line.v2),
+            (0_usize, 1_usize),
+            "and its vertices do"
+        );
+        assert_eq!(line.special, 13_i32, "Door_LockedRaise");
+        assert_eq!(line.tag, 0_i32, "a Hexen line carries no tag");
+        assert_eq!(
+            line.flags,
+            4_u32 | 0x600_u32,
+            "the playerpush field is replaced by use and repeat"
+        );
+    }
+
+    #[test]
+    fn face_room_line_leaves_lines_the_map_does_not_hold_alone() {
+        let mut map = doorway(MapFormat::Doom);
+        let before = map.clone();
+        face_room_line(&mut map, 99_usize, 1_usize, &doom_setup());
+        assert_eq!(map, before, "a missing row is written nowhere");
     }
 
     #[test]

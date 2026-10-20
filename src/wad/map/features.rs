@@ -4,7 +4,9 @@
 //! the modules here turn explicit parameters into the edits that make
 //! those rows do something. [`doors`] is the door core: the per-family
 //! action table of [`door_specials`] and the doorway dressing of
-//! [`apply_door`], shared by the door tools. [`place`] is the door
+//! [`apply_door`], shared by the door tools; [`face_room_line`] is that
+//! room-line treatment on its own, for callers (the `plan` feature
+//! engine) that dress the faces themselves. [`place`] is the door
 //! placement geometry: wall selection, width fit and the outward depth
 //! raycast that turn a room and a desire into a concrete [`DoorWall`]
 //! cut and the [`BoundaryStrip`] and [`door_rect`] polygons to draw.
@@ -48,7 +50,8 @@ pub mod teleport;
 pub mod window;
 
 pub use doors::{
-    DoorLineSetup, DoorSides, DoorStyle, DoorTextures, apply_door, door_specials, next_free_tag,
+    DoorLineSetup, DoorSides, DoorStyle, DoorTextures, apply_door, door_specials, face_room_line,
+    next_free_tag,
 };
 pub use lift::{
     LiftBuild, LiftPlatform, LiftSpec, LiftStyle, MIN_LIFT_DROP, build_lift, lift_specials,

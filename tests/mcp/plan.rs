@@ -1,8 +1,9 @@
 //! The `plan` tool group as seen by a real MCP client:
 //! `build_map_from_plan` compiles a two-room plan with a `door` and an
 //! `opening` into one written block whose sector and geometry counts
-//! match the reported bookkeeping (and whose structural checks stay
-//! clean, though the door lands closed with no special), the things and
+//! match the reported bookkeeping (the door lands closed, tagged and
+//! wired with its style's specials, fronts facing their rooms, and a
+//! `features` row reports the wiring), the things and
 //! `player_start` parameters standing rows into the map by name, room
 //! fill and transformed point with presence flags round-tripping
 //! through the written block, the active map adoption, `already_exists`
@@ -23,6 +24,10 @@
 //! carrying an exit, a switch, a lift and a teleporter builds exactly
 //! like its feature-free twin, and a feature naming an unknown room or
 //! an `opens` id no connection carries refuses naming `features[i]`.
+//! The door wiring: a blue-key plan's `features` row matches the written
+//! block — its lines carry special `26` and the band's tag with fronts
+//! facing their rooms, validation stays error-free and one `undo` takes
+//! it all back.
 
 #[cfg(test)]
 mod tests {
@@ -238,12 +243,18 @@ mod tests {
         assert_eq!(
             door["special"],
             json!(0_i32),
-            "a door connector is closed and un-wired: no sector special yet"
+            "a Doom door acts from its lines: the sector keeps special 0"
+        );
+        assert_eq!(
+            door["tag"],
+            json!(1_i32),
+            "the wired band answers the tag its lines carry"
         );
         assert_eq!(
             door["floor_height"], door["ceiling_height"],
             "the door sector is collapsed"
         );
+        expect_door_feature_row(&result);
         let report = call(
             &client,
             "validate_map",
@@ -256,6 +267,122 @@ mod tests {
             "the compiled geometry is clean: {:?}",
             report["issues"]
         );
+    }
+
+    /// The working linedef and sidedef rows of the assembled graph.
+    async fn working_lines(client: &Client, map: &str) -> Vec<Value> {
+        let graph = call(
+            client,
+            "assemble_map",
+            json!({"map": map, "scope": "working", "include": ["linedefs", "sidedefs"]}),
+        )
+        .await;
+        graph["linedefs"]
+            .as_array()
+            .expect("linedefs is an array")
+            .clone()
+    }
+
+    /// The `MAP05` plan's one door reports a `features` row: the door
+    /// class, no room, band sector 2 and the fresh tag 1.
+    fn expect_door_feature_row(result: &Value) {
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(rows.len(), 1, "the door is the only feature: {result}");
+        let row = rows.first().expect("the door row");
+        assert_eq!(row["kind"], json!("door"), "the wired connector class");
+        assert_eq!(row["room"], json!(null), "a door belongs to the wall");
+        assert_eq!(row["sectors"], json!([2_u64]), "the band sector");
+        assert_eq!(row["tag"], json!(1_u64), "the fresh shared tag");
+    }
+
+    /// Assert every row of `lines` whose index is in `indices` is a
+    /// blue-key use line: special 26, tag 1, the band behind and a room
+    /// in front.
+    fn assert_locked_use_lines(lines: &[Value], indices: &[u64]) {
+        let wired: Vec<&Value> = lines
+            .iter()
+            .filter(|line| indices.contains(&line["index"].as_u64().expect("an index")))
+            .collect();
+        assert_eq!(
+            wired.len(),
+            indices.len(),
+            "every reported door line is in the block"
+        );
+        for line in wired {
+            let index = line["index"].as_u64().expect("an index");
+            assert_eq!(
+                line["special"],
+                json!(26_i64),
+                "DR blue key on line {index}"
+            );
+            assert_eq!(line["tag"], json!(1_i64), "the shared tag on line {index}");
+            assert_eq!(
+                line["back"]["sector"],
+                json!(2_i64),
+                "the band sits behind line {index}"
+            );
+            let front = line["front"]["sector"].as_i64().expect("a front sector");
+            assert!(
+                front == 0_i64 || front == 1_i64,
+                "the front faces its room on line {index}: {line}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_blue_locked_door_lands_wired_and_reports_its_feature_row() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["connections"][0]["style"] = json!("locked_blue");
+        let result = call(&client, "build_map_from_plan", request).await;
+        expect_door_feature_row(&result);
+        let indices: Vec<u64> = result["features"][0]["lines"]
+            .as_array()
+            .expect("two door lines")
+            .iter()
+            .map(|slot| slot.as_u64().expect("a line index"))
+            .collect();
+        let lines = working_lines(&client, "MAP05").await;
+        assert_locked_use_lines(&lines, &indices);
+        let jambs: Vec<&Value> = lines
+            .iter()
+            .filter(|line| line["back"] == json!(null) && line["front"]["sector"] == json!(2_i64))
+            .collect();
+        assert_eq!(
+            jambs.len(),
+            2,
+            "the band's north reveal edges, split where the room's line ran; its south \
+             edge stands on the map border"
+        );
+        assert!(
+            jambs
+                .iter()
+                .all(|line| line["front"]["middle"] == json!("DOORBLU")),
+            "the locked jambs wear the blue track: {jambs:?}"
+        );
+        let band = working_sector(&client, "MAP05", 2).await;
+        assert_eq!(band["tag"], json!(1_i32), "the sector answers the tag");
+        let report = call(
+            &client,
+            "validate_map",
+            json!({"map": "MAP05", "scope": "working", "codes": STRUCTURAL_CODES}),
+        )
+        .await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(0_u64),
+            "the wired map stays error-free: {:?}",
+            report["issues"]
+        );
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["build_map_from_plan MAP05"]),
+            "one labelled step takes the wiring too"
+        );
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "the whole block went back");
     }
 
     #[tokio::test]
@@ -862,6 +989,14 @@ mod tests {
             "the 108x84 pixel plan at scale 4 with mirrored y",
         );
         assert_eq!(result["things_placed"], json!(5_u64), "imps, barrel, start");
+        assert_eq!(
+            result["features"],
+            json!([
+                {"kind": "door", "room": null, "sectors": [3_u64], "lines": [5_u64, 17_u64],
+                 "tag": 1_u64}
+            ]),
+            "the wired gate reports its band, lines and tag",
+        );
         assert_eq!(
             result["nodes"],
             json!({

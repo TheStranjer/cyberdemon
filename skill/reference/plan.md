@@ -9,9 +9,10 @@ it into the working archive as a single undoable edit.
 Things land in the same call: `things` rows and a mandatory
 `player_start` (or a thing of type `1`) populate the block. `finalize`
 builds the node run into the block and validates the result, all inside
-the one undoable edit. Door connectors still come out closed and
-un-wired: the door sector carries special `0` until the follow-up
-behaviour ticket wires it. `features` rows — `exit`, `switch`, `lift`
+the one undoable edit. Door connectors are wired: the band sector takes
+a fresh tag and the room-facing lines the style's door special
+(coloured jambs for locked doors, a bare tagged band for `remote`).
+`features` rows — `exit`, `switch`, `lift`
 and `teleporter` declarations — parse, transform and validate now and
 install nothing until the follow-up CD-95 wiring slices land.
 
@@ -24,7 +25,8 @@ room, count? = 1, angle? = 0, skills?, multiplayer_only?}],
 player_start?: {x, y, angle?} | {room, angle?}, theme?, units?
 {scale_num? = 1, scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y?
 = false}, grid? = 8, finalize? = false}` → `{map, format, rooms:
-{id: [sectors]}, connections: [{id, kind, sectors}], things_placed,
+{id: [sectors]}, connections: [{id, kind, sectors}], features:
+[{kind, room, sectors, lines, tag}], things_placed,
 bounds: {x1, y1, x2, y2} | null, warnings, nodes: {...} | null,
 validation: {errors, counts} | null, next_steps}`
 
@@ -75,16 +77,23 @@ the connection and saying they *do not touch*.
 | kind       | Extra fields | What lands |
 |------------|--------------|------------|
 | `opening`  | —            | A plain gap: the band sector spans `max(floor)` to `min(ceiling)`. |
-| `door`     | `style?`     | A **closed** band: floor equals ceiling. `style` is `normal` (default), `fast`, `stay_open`, `locked_red`, `locked_blue`, `locked_yellow` or `remote` — it picks the door's dressing only. |
+| `door`     | `style?`     | A **closed** band: floor equals ceiling. `style` is `normal` (default), `fast`, `stay_open`, `locked_red`, `locked_blue`, `locked_yellow` or `remote` — it picks the door's action and dressing. |
 | `window`   | `sill?` = 32, `lintel?` = 24 | A glass band: `sill` lifts its floor, `lintel` drops its ceiling; under 16 units of glass left is `invalid_argument`. |
 | `stairs`   | `step_height?` = 16, `step_depth?` = 24 | A stepped run from the lower room's floor to the higher one's, one sector per step (`step_depth` must be positive). |
 
-> **Doors have no action yet.** A `door` connector emits the doorway
-> geometry dressed with the theme's `door`/`door_track`/`door_floor`
-> roles, but the door sector carries **special `0`** and its lines no
-> trigger — until the follow-up door-wiring update (or `add_door` on the
-> finished map) wires it, the door is a solid closed threshold. Read the
-> reported `sectors` and check with `assemble_map` / `render_topdown`.
+> **Doors are wired.** A `door` connector's band sector takes a fresh
+> tag and its two room-facing lines the style's action in the map's
+> flag family, turned so each room's side is the line's front: `normal`
+> → `DR` special `1` (Hexen `Door_Raise`), `fast` → `117`
+> (`Door_Raise`, speed `64`), `stay_open` → `D1` `31` (`Door_Open`),
+> `locked_red`/`locked_blue`/`locked_yellow` → `28`/`26`/`27`
+> (`Door_LockedRaise` with the key in `args[3]`), with the jambs
+> re-dressed in the theme's coloured track. In the `Hexen` family the
+> lines carry no tag — `args[0] = 0` acts on the sector behind each —
+> and take the `playeruse` activation bits. `remote` stamps the sector
+> tag and writes nothing on the lines: the tagged band is the handle a
+> later `switch` row (or your own trigger line) fires on. Every door
+> lands in the result's `features` list with its sector, lines and tag.
 
 **The features**: `features` (default none) declares game structures
 beside the geometry. Each row gives a `kind` (case-insensitive) plus
@@ -182,7 +191,11 @@ a thing of type 1`.
 **The theme**: textures resolve through the session's texture theme
 (`reference/themes.md`) once per call — the plan roles `floor`,
 `ceiling`, `wall`, `door`, `door_floor`, `door_track`, `window_sill`
-and `step`. `theme` names a different theme **for this call only**
+and `step`. The door step additionally consults `door_track_red`,
+`door_track_blue` and `door_track_yellow` (the theme table falls them
+back to `door_track`); a coloured track the theme answers `"-"` leaves
+a locked door's jambs in the plain track and adds its own note. `theme`
+names a different theme **for this call only**
 (case-insensitive; unknown names fail `invalid_argument` listing the
 game's themes); the session's theme and per-role overrides never
 change, and they still apply under the override. A room's own
@@ -212,9 +225,9 @@ reported as `{"errors": [...], "counts": {error, warning, info}}` —
 error rows in the `validate_map` issue shape, at most 20 of them, while
 `counts` is always exact over everything the checks found. **Validation
 errors do not roll the build back**: the map was built to plan, and the
-rows are for you to fix with the element tools. Door sectors still have
-special `0` and no triggers until the follow-up behaviour ticket —
-finalizing builds geometry, not gameplay. With `finalize` unset or
+rows are for you to fix with the element tools. Door connectors are
+already wired when `finalize` runs — the pass judges the finished
+specials and tags. With `finalize` unset or
 `false`, `nodes` and `validation` stay `null` and the block ships
 without node data, as before.
 
@@ -232,7 +245,13 @@ rows fail the same way, naming `things[i]`, `things[i].room`,
 owns (a fully painted-over room holds no entry and warns about it);
 `connections` reports `{id, kind, sectors}` per connection in plan
 order (`id` is the connection's `id`, or its derived `from->to`
-label); `things_placed` counts the `THINGS` rows written, room fills
+label); `features` reports one `{kind, room, sectors, lines, tag}` row
+per installed game feature in pipeline order — doors first, in
+connection order, each with `kind` `door`, `room` `null`, its band
+`sectors`, the room-facing `lines` carrying the action (a `remote`'s
+stay bare) and the shared `tag`; the follow-up slices append the
+switch, lift, teleporter and exit rows. `things_placed` counts the
+`THINGS` rows written, room fills
 and the player start included. `bounds` is the vertex box
 `{x1, y1, x2, y2}`. `warnings` carries the compiler's advisories —
 rooms unreachable from the first, rooms painted over, floor gaps taller
@@ -269,6 +288,8 @@ call build_map_from_plan {
     "connections": [
       {"id": "gate", "kind": "door", "sectors": [3]},
       {"id": "hall->crypt", "kind": "stairs", "sectors": [4, 5, 6, 7]}],
+    "features": [
+      {"kind": "door", "room": null, "sectors": [3], "lines": [5, 17], "tag": 1}],
     "things_placed": 5,
     "bounds": {"x1": 0, "y1": -336, "x2": 432, "y2": 0},
     "warnings": [],
@@ -282,8 +303,10 @@ call build_map_from_plan {
 A sketch measured in pixels: `units: {scale_num: 4, flip_y: true}` turns
 the 108x84 drawing into a 432x336 map with `y` mirrored, on the default
 `grid: 8`. The courtyard and hall share the line `x = 60` (px); the
-red-key door `gate` sits low on it and comes out closed, dressed, and
-still special-`0` until the behaviour ticket wires it. The crypt stands
+red-key door `gate` sits low on it and comes out closed, dressed and
+wired: band sector 3 tagged `1`, its two room-facing lines (5 and 17)
+carrying `DR` special `28` and tag `1` with the fronts facing their
+rooms, and the jambs in the theme's red track. The crypt stands
 behind the hall with its floor 64 units up, reached by the four stair
 steps (sectors 4–7) the stairs connector grew. Three imps fill the
 hall's clearance grid, the barrel pins at plan pixel `(16, 40)`, and

@@ -875,6 +875,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -890,6 +892,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -923,6 +927,7 @@ mod tests {
                 rect_room("b", (128, 0), (128, 128)),
             ],
             connections,
+            features: Vec::new(),
             wall_thickness: thickness,
         }
     }
@@ -948,6 +953,7 @@ mod tests {
                 ),
             ],
             connections,
+            features: Vec::new(),
             wall_thickness: 16,
         }
     }
@@ -1145,6 +1151,7 @@ mod tests {
                 rect_room("b", (200, 0), (64, 64)),
             ],
             connections: vec![opening("a", "b")],
+            features: Vec::new(),
             wall_thickness: 16,
         };
         let error = error_of(&plan);

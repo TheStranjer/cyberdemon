@@ -117,6 +117,15 @@ pub struct TeleportBuild {
     pub return_tag: Option<i32>,
     /// What the two drawings reported.
     pub notes: Vec<String>,
+    /// The pre-build linedef index to the post-build index of its first
+    /// surviving piece (`None` for a line the two square rebuilds
+    /// painted over or split away): the arrangement sorts every piece,
+    /// so the squares renumber the whole map and a caller holding line
+    /// indices from before the build follows them through this map.
+    /// Skipped by `JSON`: it is a handoff for index-tracking callers
+    /// (the plan feature engine), not part of a tool's report.
+    #[serde(skip)]
+    pub line_remap: Vec<Option<usize>>,
 }
 
 /// The [`DoorLineSetup`] a teleporter border carries in flag family
@@ -208,6 +217,10 @@ fn paint_lost() -> CyberError {
     CyberError::Internal("the teleporter square paint reported no sector (server bug)".to_owned())
 }
 
+/// What one [`draw_square`] reports: the new square's sector index,
+/// the paint's notes, and the paint's old-to-new linedef map.
+type SquareDraw = (usize, Vec<String>, Vec<Option<usize>>);
+
 /// The angle normalised into `0..=359` degrees.
 const fn normalize_angle(angle: i32) -> i32 {
     angle.rem_euclid(FULL_CIRCLE)
@@ -262,13 +275,13 @@ const fn destination_tag(family: FlagFamily, tag: i32) -> i32 {
 }
 
 /// Fold one teleporter square over the map as a new sector, reporting
-/// its index and the paint's notes.
+/// its index, the paint's notes and the paint's old-to-new linedef map.
 fn draw_square(
     map: &mut Map,
     spec: &TeleportSpec,
     centre: Point,
     record: &Sector,
-) -> Result<(usize, Vec<String>), CyberError> {
+) -> Result<SquareDraw, CyberError> {
     let request = OverlayRequest {
         polygon: pad_square(centre, spec.pad_size),
         paint: Paint::Sector(record.clone()),
@@ -282,7 +295,18 @@ fn draw_square(
     };
     let drawn = apply_overlay(map, &request)?;
     let sector = drawn.sector.ok_or_else(paint_lost)?;
-    Ok((sector, drawn.notes))
+    Ok((sector, drawn.notes, drawn.linedef_map))
+}
+
+/// Chain two rebuilds' old-to-new linedef maps: what index `i` became
+/// after the first rebuild, then after the second; `None` when either
+/// step lost the line.
+fn chain_remaps(first: &[Option<usize>], second: &[Option<usize>]) -> Vec<Option<usize>> {
+    first
+        .iter()
+        .copied()
+        .map(|slot| slot.and_then(|mid| second.get(mid).copied().flatten()))
+        .collect()
 }
 
 /// The sector the sidedef slot `side` opens into: `None` when the side
@@ -416,6 +440,11 @@ fn build_return_leg(
 /// fresh tag (or TID), and, with [`TeleportSpec::two_way`], run the
 /// return leg that makes the destination lead back.
 ///
+/// Both drawings rebuild the map from a sorted arrangement, so every
+/// linedef index can move: [`TeleportBuild::line_remap`] carries the
+/// composed pre-build-to-final index map for callers that hold line
+/// indices across the call.
+///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for a non-positive `pad_size`, a pad
@@ -435,13 +464,13 @@ pub fn build_teleporter(map: &mut Map, spec: &TeleportSpec) -> Result<TeleportBu
     let destination_base = centre_sector(map, spec.destination, "destination")?;
     let family = map.flag_family();
     let tag = next_free_tag(map);
-    let (pad_sector, mut notes) = draw_square(
+    let (pad_sector, mut notes, pad_remap) = draw_square(
         map,
         spec,
         spec.pad,
         &square_record(map, pad_base, Some(&spec.floor_flat), 0_i32),
     )?;
-    let (destination_sector, drawn) = draw_square(
+    let (destination_sector, drawn, dest_remap) = draw_square(
         map,
         spec,
         spec.destination,
@@ -459,6 +488,7 @@ pub fn build_teleporter(map: &mut Map, spec: &TeleportSpec) -> Result<TeleportBu
         tag,
         return_tag: None,
         notes,
+        line_remap: chain_remaps(&pad_remap, &dest_remap),
     };
     if spec.two_way {
         build_return_leg(map, spec, &mut build)?;
@@ -758,6 +788,53 @@ mod tests {
                 "the return TID in args[0] of line {index}"
             );
             assert_eq!(line.flags, 4_u32 | 0x200_u32, "cross and repeat");
+        }
+    }
+
+    /// One linedef's `(v1, v2)` endpoint coordinates.
+    type Corners = ((i32, i32), (i32, i32));
+
+    /// The `(x, y)` endpoints of `map`'s linedef rows.
+    fn all_ends(map: &Map) -> Vec<Corners> {
+        map.linedefs
+            .iter()
+            .map(|line| {
+                let first = map.vertices.get(line.v1).expect("test vertex");
+                let second = map.vertices.get(line.v2).expect("test vertex");
+                ((first.x, first.y), (second.x, second.y))
+            })
+            .collect()
+    }
+
+    /// The `(x, y)` endpoints of `map`'s linedef `index`.
+    fn ends_of(map: &Map, index: usize) -> Corners {
+        *all_ends(map)
+            .get(index)
+            .expect("a linedef row exists for a reported index")
+    }
+
+    #[test]
+    fn the_line_remap_follows_every_prebuild_line_through_the_rebuilds() {
+        let mut map = two_room_map();
+        let before = all_ends(&map);
+        let build = build_teleporter(&mut map, &spec()).expect("a teleporter");
+        assert_eq!(
+            build.line_remap.len(),
+            before.len(),
+            "one slot per pre-build line"
+        );
+        for (old, ends) in before.iter().enumerate() {
+            let new = build
+                .line_remap
+                .get(old)
+                .copied()
+                .flatten()
+                .expect("these squares cross no wall");
+            let after = ends_of(&map, new);
+            assert!(
+                after == *ends || after == (ends.1, ends.0),
+                "line {old} kept its geometry at new index {new}: {ends:?} vs {after:?}"
+            );
         }
     }
 

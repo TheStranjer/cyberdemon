@@ -20,14 +20,23 @@
 //! [`ThingRequest`] rows; the doomednum, the presence flags and the
 //! placement itself need the session and the compiled map and live in
 //! [`super`] and [`crate::plan::things`].
+//!
+//! The `features` rows are model fields kept flat the way
+//! [`ConnectionParam`] keeps a [`ConnectionKind`]: one `kind` name plus
+//! the kind's extra fields beside it, mapped onto the tagged [`Feature`]
+//! by [`BuildPlanParams::to_model`]. The reference checks a feature
+//! needs (known rooms, a switch's `opens`) stay with [`Plan::validate`].
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::CyberError;
 use crate::plan::Units;
-use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Plan, Room, Shape};
+use crate::plan::model::{
+    Connection, ConnectionKind, DoorStyle, ExitStyle, Feature, KeyColor, Plan, Room, Shape, Side,
+};
 use crate::plan::things::{Skill, ThingSpot};
+use crate::wad::map::features::{LiftStyle, LightEffect};
 
 /// The [`Plan::wall_thickness`] the wire default carries.
 const DEFAULT_WALL_THICKNESS: i64 = 16_i64;
@@ -49,6 +58,16 @@ const DEFAULT_STEP_HEIGHT: i32 = 16_i32;
 const DEFAULT_STEP_DEPTH: i32 = 24_i32;
 /// The [`DoorStyle`] a plain `"door"` connection asks for.
 const DEFAULT_DOOR_STYLE: &str = "normal";
+/// The [`ExitStyle`] a plain `"exit"` feature row asks for.
+const DEFAULT_EXIT_STYLE: &str = "switch";
+/// The [`LiftStyle`] a plain `"lift"` feature row asks for.
+const DEFAULT_LIFT_STYLE: &str = "use_wall";
+/// The [`Feature::Switch`] `repeatable` the wire default carries.
+const DEFAULT_SWITCH_REPEATABLE: bool = false;
+/// The [`Feature::Lift`] `repeatable` the wire default carries.
+const DEFAULT_LIFT_REPEATABLE: bool = true;
+/// The [`Feature::Teleporter`] arrival facing the wire default carries.
+const DEFAULT_ANGLE: i32 = 0_i32;
 /// The [`Units::scale_num`] the wire default carries.
 const DEFAULT_SCALE_NUM: i64 = 1_i64;
 /// The [`Units::scale_den`] the wire default carries.
@@ -101,6 +120,13 @@ pub(super) struct BuildPlanParams {
     pub(super) rooms: Vec<RoomParam>,
     /// Openings, doors, windows and stairs joining the rooms.
     pub(super) connections: Vec<ConnectionParam>,
+    /// Game structures the plan carries: `{"kind": "exit" | "switch" |
+    /// "lift" | "teleporter", …}` rows. They parse, transform and
+    /// validate, and [`crate::plan::features`] installs them on the
+    /// compiled map in fixed pipeline order (doors, switches, lifts,
+    /// teleporters, exits, lights, secrets).
+    #[serde(default)]
+    pub(super) features: Vec<FeatureParam>,
     /// The things to stand in the compiled map. Each row gives exactly
     /// one of `type` (a doomednum) and `name` (resolved against the
     /// session's definitions), and exactly one of an `x`/`y` plan-point
@@ -170,6 +196,18 @@ pub(super) struct RoomParam {
     /// Whether the room is open to the sky (default `false`).
     #[serde(default)]
     pub(super) outdoor: bool,
+    /// Whether the room counts as a secret area (default `false`). The
+    /// feature run's secret step flags the room's sectors with the
+    /// family's secret special, after the lights step.
+    #[serde(default)]
+    pub(super) secret: bool,
+    /// A light effect for the room's sector: `"none"`, `"flicker"`,
+    /// `"strobe_fast"`, `"strobe_slow"`, `"glow"` or `"random_off"`
+    /// (case-insensitive; unset keeps the room's static `light`). The
+    /// feature run's lights step installs it on every sector of the
+    /// room, keeping the light level.
+    #[serde(default)]
+    pub(super) light_effect: Option<String>,
 }
 
 /// One wire `rect`: the axis-aligned rectangle from `(x, y)` to
@@ -244,9 +282,9 @@ pub(super) struct ConnectionParam {
     #[serde(default)]
     pub(super) width: Option<i64>,
     /// Door only: `normal` (default), `fast`, `stay_open`,
-    /// `locked_red`, `locked_blue`, `locked_yellow` or `remote`.
-    /// No action is installed yet — the style only picks the door's
-    /// dressing.
+    /// `locked_red`, `locked_blue`, `locked_yellow` or `remote`. It
+    /// picks the door's action (installed on the band's room-facing
+    /// lines) and its dressing.
     #[serde(default)]
     pub(super) style: Option<String>,
     /// Window only: height of the glass bottom above the lower floor
@@ -265,6 +303,67 @@ pub(super) struct ConnectionParam {
     /// (default `24`).
     #[serde(default)]
     pub(super) step_depth: Option<i32>,
+}
+
+/// One wire feature row: a `kind` name plus that kind's extra fields
+/// beside it. The reference checks (known rooms, an `opens` that names
+/// a connection) belong to [`Plan::validate`], not here.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FeatureParam {
+    /// Which feature: `"exit"`, `"switch"`, `"lift"` or `"teleporter"`
+    /// (case-insensitive).
+    pub(super) kind: String,
+    /// Exit, switch and lift only: the id of the room the feature
+    /// stands in.
+    #[serde(default)]
+    pub(super) room: Option<String>,
+    /// Exit or lift only: the exit's style, `switch` (default) or
+    /// `walk_over`; the lift's style, `use_wall` (default) or
+    /// `walk_trigger`. Case-insensitive.
+    #[serde(default)]
+    pub(super) style: Option<String>,
+    /// Exit only: whether the room is a secret area (default `false`).
+    #[serde(default)]
+    pub(super) secret: bool,
+    /// Exit and switch only: which wall carries it — `"north"`,
+    /// `"south"`, `"east"` or `"west"` (case-insensitive; unset takes
+    /// the room's longest one-sided wall).
+    #[serde(default)]
+    pub(super) wall: Option<String>,
+    /// Switch only: the `id` of the connection this switch operates.
+    #[serde(default)]
+    pub(super) opens: Option<String>,
+    /// Switch and lift only: whether the action keeps working after
+    /// use (default `false` for a switch, `true` for a lift).
+    #[serde(default)]
+    pub(super) repeatable: Option<bool>,
+    /// Lift only: the floor the platform lowers to, map units (the
+    /// lowest neighbouring floor by default).
+    #[serde(default)]
+    pub(super) low_floor: Option<i32>,
+    /// Teleporter only: the id of the room the pad stands in.
+    #[serde(default)]
+    pub(super) from_room: Option<String>,
+    /// Teleporter only: the id of the room the destination stands in.
+    #[serde(default)]
+    pub(super) to_room: Option<String>,
+    /// Teleporter only: the pad's centre as a plan point `[x, y]`
+    /// (transformed and snapped with the rooms; the room centre by
+    /// default).
+    #[serde(default)]
+    pub(super) pad: Option<[i64; 2]>,
+    /// Teleporter only: the destination's centre as a plan point
+    /// `[x, y]` (transformed and snapped with the rooms; the room
+    /// centre by default).
+    #[serde(default)]
+    pub(super) destination: Option<[i64; 2]>,
+    /// Teleporter only: arrival facing in degrees (default `0`).
+    #[serde(default)]
+    pub(super) angle: Option<i32>,
+    /// Teleporter only: whether the destination teleports back
+    /// (default `false`).
+    #[serde(default)]
+    pub(super) two_way: bool,
 }
 
 /// The `wall_thickness` serde default, so the wire documents it.
@@ -383,19 +482,23 @@ fn invalid_at(at: &str, problem: &str) -> CyberError {
 }
 
 impl BuildPlanParams {
-    /// The wire rooms and connections as one model [`Plan`] with the
-    /// requested `wall_thickness`, filling every documented default.
+    /// The wire rooms, connections and features as one model [`Plan`]
+    /// with the requested `wall_thickness`, filling every documented
+    /// default.
     ///
     /// # Errors
     ///
     /// [`CyberError::InvalidArgument`] naming the plan path (`rooms[2]`,
-    /// `connections[0]`) for a room with neither or both of `rect` and
-    /// `points`, an unknown connection `kind` or an unknown door
-    /// `style`.
+    /// `connections[0]`, `features[1]`) for a room with neither or both
+    /// of `rect` and `points` or an unknown `light_effect` name, an
+    /// unknown connection `kind` or door `style`, an unknown feature
+    /// `kind`, `style` or `wall`, or a feature row missing its `room`
+    /// (its `from_room`/`to_room`, or its `opens`).
     pub(super) fn to_model(&self) -> Result<Plan, CyberError> {
         Ok(Plan {
             rooms: self.to_rooms()?,
             connections: self.to_connections()?,
+            features: self.to_features()?,
             wall_thickness: self.wall_thickness,
         })
     }
@@ -432,6 +535,15 @@ impl BuildPlanParams {
             .iter()
             .enumerate()
             .map(|(index, connection)| connection.to_model(index))
+            .collect()
+    }
+
+    /// The features, each converted under its own plan path.
+    fn to_features(&self) -> Result<Vec<Feature>, CyberError> {
+        self.features
+            .iter()
+            .enumerate()
+            .map(|(index, feature)| feature.to_model(index))
             .collect()
     }
 
@@ -603,6 +715,11 @@ impl RoomParam {
             ceiling_flat: self.ceiling_flat.clone(),
             wall_texture: self.wall_texture.clone(),
             outdoor: self.outdoor,
+            secret: self.secret,
+            light_effect: parse_light_effect(
+                self.light_effect.as_deref(),
+                &format!("rooms[{index}]"),
+            )?,
         })
     }
 
@@ -703,14 +820,207 @@ impl ConnectionParam {
     }
 }
 
+/// The room's `light_effect` name resolved case-insensitively against
+/// [`LightEffect::name`]; unset asks for no effect.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming `path` for a name that is not
+/// one.
+fn parse_light_effect(name: Option<&str>, path: &str) -> Result<Option<LightEffect>, CyberError> {
+    let Some(text) = name else {
+        return Ok(None);
+    };
+    let found = LightEffect::all()
+        .into_iter()
+        .find(|effect| effect.name().eq_ignore_ascii_case(text));
+    found.map_or_else(
+        || {
+            Err(invalid_at(
+                path,
+                &format!(
+                    "light effect {text:?} is not one: pass none, flicker, strobe_fast, \
+                     strobe_slow, glow or random_off"
+                ),
+            ))
+        },
+        |effect| Ok(Some(effect)),
+    )
+}
+
+/// The required wire field of a feature row, refused at `path` with the
+/// `what`-worded instruction when the row left it out.
+fn required(value: Option<&str>, path: &str, what: &str) -> Result<String, CyberError> {
+    value
+        .map(str::to_owned)
+        .ok_or_else(|| invalid_at(path, what))
+}
+
+impl FeatureParam {
+    /// The model feature, its variant resolved from the wire kind name.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] naming `features[index]` for an
+    /// unknown kind, a row missing the room fields its kind needs, or
+    /// a bad style or wall name.
+    fn to_model(&self, index: usize) -> Result<Feature, CyberError> {
+        let path = format!("features[{index}]");
+        match self.kind.to_ascii_lowercase().as_str() {
+            "exit" => self.exit_feature(&path),
+            "switch" => self.switch_feature(&path),
+            "lift" => self.lift_feature(&path),
+            "teleporter" => self.teleporter_feature(&path),
+            other => Err(invalid_at(
+                &path,
+                &format!(
+                    "kind {other:?} is not a feature kind: pass one of exit, switch, lift, \
+                     teleporter"
+                ),
+            )),
+        }
+    }
+
+    /// The `exit` row: its room, style, secret flag and wall.
+    fn exit_feature(&self, path: &str) -> Result<Feature, CyberError> {
+        Ok(Feature::Exit {
+            room: required(
+                self.room.as_deref(),
+                path,
+                "an exit feature needs a room: the id of the room it stands in",
+            )?,
+            style: self.exit_style(path)?,
+            secret: self.secret,
+            wall: self.side(path)?,
+        })
+    }
+
+    /// The `switch` row: its room, the connection it opens, its wall
+    /// and whether it repeats.
+    fn switch_feature(&self, path: &str) -> Result<Feature, CyberError> {
+        Ok(Feature::Switch {
+            room: required(
+                self.room.as_deref(),
+                path,
+                "a switch feature needs a room: the id of the room it is mounted in",
+            )?,
+            opens: required(
+                self.opens.as_deref(),
+                path,
+                "a switch feature needs opens: the id of the connection it operates",
+            )?,
+            wall: self.side(path)?,
+            repeatable: self.repeatable.unwrap_or(DEFAULT_SWITCH_REPEATABLE),
+        })
+    }
+
+    /// The `lift` row: its room, low floor, style and whether the ride
+    /// repeats.
+    fn lift_feature(&self, path: &str) -> Result<Feature, CyberError> {
+        Ok(Feature::Lift {
+            room: required(
+                self.room.as_deref(),
+                path,
+                "a lift feature needs a room: the id of the room the platform stands in",
+            )?,
+            low_floor: self.low_floor,
+            style: self.lift_style(path)?,
+            repeatable: self.repeatable.unwrap_or(DEFAULT_LIFT_REPEATABLE),
+        })
+    }
+
+    /// The `teleporter` row: its two rooms, squares, arrival facing and
+    /// return leg.
+    fn teleporter_feature(&self, path: &str) -> Result<Feature, CyberError> {
+        Ok(Feature::Teleporter {
+            from_room: required(
+                self.from_room.as_deref(),
+                path,
+                "a teleporter feature needs a from_room: the id of the room the pad stands in",
+            )?,
+            to_room: required(
+                self.to_room.as_deref(),
+                path,
+                "a teleporter feature needs a to_room: the id of the room the destination \
+                 stands in",
+            )?,
+            pad: self.pad.map(<(i64, i64)>::from),
+            destination: self.destination.map(<(i64, i64)>::from),
+            angle: self.angle.unwrap_or(DEFAULT_ANGLE),
+            two_way: self.two_way,
+        })
+    }
+
+    /// The [`ExitStyle`] the `style` name spells (`switch` by default).
+    fn exit_style(&self, path: &str) -> Result<ExitStyle, CyberError> {
+        let wanted = self
+            .style
+            .as_deref()
+            .unwrap_or(DEFAULT_EXIT_STYLE)
+            .to_ascii_lowercase();
+        match wanted.as_str() {
+            "switch" => Ok(ExitStyle::Switch),
+            "walk_over" => Ok(ExitStyle::WalkOver),
+            other => Err(invalid_at(
+                path,
+                &format!("style {other:?} is not an exit style: pass one of switch, walk_over"),
+            )),
+        }
+    }
+
+    /// The [`LiftStyle`] the `style` name spells (`use_wall` by
+    /// default).
+    fn lift_style(&self, path: &str) -> Result<LiftStyle, CyberError> {
+        let wanted = self
+            .style
+            .as_deref()
+            .unwrap_or(DEFAULT_LIFT_STYLE)
+            .to_ascii_lowercase();
+        match wanted.as_str() {
+            "use_wall" => Ok(LiftStyle::UseWall),
+            "walk_trigger" => Ok(LiftStyle::WalkTrigger),
+            other => Err(invalid_at(
+                path,
+                &format!("style {other:?} is not a lift style: pass one of use_wall, walk_trigger"),
+            )),
+        }
+    }
+
+    /// The optional `wall` [`Side`], case-insensitively.
+    fn side(&self, path: &str) -> Result<Option<Side>, CyberError> {
+        let Some(text) = self.wall.as_deref() else {
+            return Ok(None);
+        };
+        let side = match text.to_ascii_lowercase().as_str() {
+            "north" => Side::North,
+            "south" => Side::South,
+            "east" => Side::East,
+            "west" => Side::West,
+            other => {
+                return Err(invalid_at(
+                    path,
+                    &format!(
+                        "wall {other:?} is not a side: pass one of north, south, east, west, \
+                         or leave wall out"
+                    ),
+                ));
+            }
+        };
+        Ok(Some(side))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::from_str;
 
     use super::{BuildPlanParams, DEFAULT_WIDTH, KindSource};
-    use crate::plan::model::{ConnectionKind, DoorStyle, KeyColor, Plan, Shape};
+    use crate::plan::model::{
+        ConnectionKind, DoorStyle, ExitStyle, Feature, KeyColor, Plan, Shape, Side,
+    };
     use crate::plan::things::{Skill, ThingSpot};
     use crate::plan::{Units, transform_plan};
+    use crate::wad::map::features::{LiftStyle, LightEffect};
 
     /// Wire parameters parsed from the two-room-and-door example.
     const FULL: &str = r#"{
@@ -934,6 +1244,203 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// A request with `body` spliced in as its `features`.
+    fn features_request(body: &str) -> BuildPlanParams {
+        let text = format!(
+            r#"{{"map": "MAP01",
+                "rooms": [{{"id": "a", "rect": {{"x": 0, "y": 0, "w": 64, "h": 64}}}}],
+                "connections": [], "features": {body}}}"#
+        );
+        from_str(&text).expect("the request parses")
+    }
+
+    #[test]
+    fn every_feature_variant_lands_in_the_model_with_its_explicit_fields() {
+        let args = features_request(
+            r#"[
+                {"kind": "exit", "room": "a", "style": "WALK_OVER", "secret": true, "wall": "North"},
+                {"kind": "switch", "room": "a", "opens": "d1", "wall": "west", "repeatable": true},
+                {"kind": "lift", "room": "a", "low_floor": -64, "style": "walk_trigger", "repeatable": false},
+                {"kind": "teleporter", "from_room": "a", "to_room": "a", "pad": [40, 40],
+                 "destination": [120, 8], "angle": 90, "two_way": true}
+            ]"#,
+        );
+        let plan = args.to_model().expect("all four variants convert");
+        assert_eq!(
+            plan.features.first().expect("four features"),
+            &Feature::Exit {
+                room: "a".to_owned(),
+                style: ExitStyle::WalkOver,
+                secret: true,
+                wall: Some(Side::North),
+            },
+            "kind, style and wall names are case-insensitive"
+        );
+        assert_eq!(
+            plan.features.get(1).expect("four features"),
+            &Feature::Switch {
+                room: "a".to_owned(),
+                opens: "d1".to_owned(),
+                wall: Some(Side::West),
+                repeatable: true,
+            },
+            "the switch row"
+        );
+        assert_eq!(
+            plan.features.get(2).expect("four features"),
+            &Feature::Lift {
+                room: "a".to_owned(),
+                low_floor: Some(-64_i32),
+                style: LiftStyle::WalkTrigger,
+                repeatable: false,
+            },
+            "the lift row"
+        );
+        assert_eq!(
+            plan.features.get(3).expect("four features"),
+            &Feature::Teleporter {
+                from_room: "a".to_owned(),
+                to_room: "a".to_owned(),
+                pad: Some((40_i64, 40_i64)),
+                destination: Some((120_i64, 8_i64)),
+                angle: 90_i32,
+                two_way: true,
+            },
+            "the teleporter row"
+        );
+    }
+
+    #[test]
+    fn feature_rows_fill_their_documented_defaults() {
+        let args = features_request(
+            r#"[
+                {"kind": "exit", "room": "a"},
+                {"kind": "switch", "room": "a", "opens": "d1"},
+                {"kind": "lift", "room": "a"},
+                {"kind": "teleporter", "from_room": "a", "to_room": "a"}
+            ]"#,
+        );
+        let plan = args.to_model().expect("the defaults fill in");
+        assert_eq!(
+            plan.features.first().expect("four features"),
+            &Feature::Exit {
+                room: "a".to_owned(),
+                style: ExitStyle::Switch,
+                secret: false,
+                wall: None,
+            },
+            "the exit defaults"
+        );
+        assert_eq!(
+            plan.features.get(1).expect("four features"),
+            &Feature::Switch {
+                room: "a".to_owned(),
+                opens: "d1".to_owned(),
+                wall: None,
+                repeatable: false,
+            },
+            "a switch defaults to one use"
+        );
+        assert_eq!(
+            plan.features.get(2).expect("four features"),
+            &Feature::Lift {
+                room: "a".to_owned(),
+                low_floor: None,
+                style: LiftStyle::UseWall,
+                repeatable: true,
+            },
+            "a lift defaults to use_wall and repeating"
+        );
+        assert_eq!(
+            plan.features.get(3).expect("four features"),
+            &Feature::Teleporter {
+                from_room: "a".to_owned(),
+                to_room: "a".to_owned(),
+                pad: None,
+                destination: None,
+                angle: 0_i32,
+                two_way: false,
+            },
+            "the teleporter defaults"
+        );
+    }
+
+    #[test]
+    fn a_missing_features_list_stays_empty() {
+        let args = request_with("");
+        let plan = args.to_model().expect("the plan converts");
+        assert!(plan.features.is_empty(), "features default to nothing");
+    }
+
+    #[test]
+    fn feature_refusals_name_their_row_and_offer_the_vocabulary() {
+        for (row, needle) in [
+            (
+                r#"{"kind": "trap", "room": "a"}"#,
+                "exit, switch, lift, teleporter",
+            ),
+            (r#"{"kind": "exit"}"#, "needs a room"),
+            (r#"{"kind": "lift"}"#, "needs a room"),
+            (r#"{"kind": "switch", "room": "a"}"#, "needs opens"),
+            (
+                r#"{"kind": "teleporter", "to_room": "a"}"#,
+                "needs a from_room",
+            ),
+            (
+                r#"{"kind": "teleporter", "from_room": "a"}"#,
+                "needs a to_room",
+            ),
+            (
+                r#"{"kind": "exit", "room": "a", "style": "lever"}"#,
+                "switch, walk_over",
+            ),
+            (
+                r#"{"kind": "lift", "room": "a", "style": "jump"}"#,
+                "use_wall, walk_trigger",
+            ),
+            (
+                r#"{"kind": "exit", "room": "a", "wall": "up"}"#,
+                "north, south, east, west",
+            ),
+        ] {
+            let args = features_request(&format!("[{row}]"));
+            let message = refuse(&args.to_model().expect_err("the row is refused"));
+            assert!(message.contains("features[0]"), "{message} names the row");
+            assert!(message.contains(needle), "{message} names {needle}");
+        }
+    }
+
+    #[test]
+    fn a_rooms_secret_and_light_effect_land_in_the_model() {
+        let args = rooms_request(
+            r#"[{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64},
+                "secret": true, "light_effect": "GLOW"}]"#,
+        );
+        let plan = args.to_model().expect("the room converts");
+        let room = plan.rooms.first().expect("one room");
+        assert!(room.secret, "the secret flag arrives");
+        assert_eq!(
+            room.light_effect,
+            Some(LightEffect::Glow),
+            "case-insensitive"
+        );
+        let unset = rooms_request(r#"[{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}]"#);
+        let defaults = unset.to_model().expect("the plain room converts");
+        let bare = defaults.rooms.first().expect("one room");
+        assert!(!bare.secret, "the default room is no secret");
+        assert_eq!(bare.light_effect, None, "no effect asks for nothing");
+        let bad = rooms_request(
+            r#"[{"id": "a", "rect": {"x": 0, "y": 0, "w": 64, "h": 64},
+                "light_effect": "pulse"}]"#,
+        );
+        let message = refuse(&bad.to_model().expect_err("no such effect"));
+        assert!(message.contains("rooms[0]"), "{message} names the room");
+        assert!(
+            message.contains("flicker, strobe_fast, strobe_slow, glow or random_off"),
+            "the refusal lists the effects: {message}"
+        );
     }
 
     /// A request with `extra` spliced in beside the required fields.

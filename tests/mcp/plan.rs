@@ -1,8 +1,9 @@
 //! The `plan` tool group as seen by a real MCP client:
 //! `build_map_from_plan` compiles a two-room plan with a `door` and an
 //! `opening` into one written block whose sector and geometry counts
-//! match the reported bookkeeping (and whose structural checks stay
-//! clean, though the door lands closed with no special), the things and
+//! match the reported bookkeeping (the door lands closed, tagged and
+//! wired with its style's specials, fronts facing their rooms, and a
+//! `features` row reports the wiring), the things and
 //! `player_start` parameters standing rows into the map by name, room
 //! fill and transformed point with presence flags round-tripping
 //! through the written block, the active map adoption, `already_exists`
@@ -19,7 +20,29 @@
 //! step (the classic run plus `REJECT` and `BLOCKMAP` for binary maps,
 //! the extended `ZNODES` lump alone for `UDMF` ones) with the result's
 //! `nodes` summary and errors-only `validation` pass, and the null
-//! pair when `finalize` is not asked for.
+//! pair when `finalize` is not asked for. The `features` rows: a `lift`
+//! row tags its room's sector and dresses the down-facing edges, a
+//! `teleporter` row draws the pad and destination squares and stands
+//! its type-14 things in the written block, a `secret` room with a
+//! `light_effect` ends lit and hidden with the Boom warning passed
+//! through; a `switch` row mounts its panel on the chosen wall and
+//! fires the remote door's own tag, an `exit` row ends the
+//! level on the room's wall (`switch`) or shared boundaries
+//! (`walk_over`), and rows naming an unknown room or an `opens` id no
+//! connection carries refuse naming `features[i]`.
+//! The door wiring: a blue-key plan's `features` row matches the written
+//! block — its lines carry special `26` and the band's tag with fronts
+//! facing their rooms, validation stays error-free and one `undo` takes
+//! it all back. The playable-map suite: one six-room plan (locked door,
+//! lift, teleporter, remote gate with its switch, `walk_over` exit, lit
+//! and secret rooms, a named keycard and the player start) builds with
+//! an empty `warnings` list and every feature reads back from the
+//! written block — specials `26`/`62`/`52`/`97`, the platform tag, the
+//! strobed exit sector `3`, the secret sector `9` and a type-14 thing
+//! standing in the ledge; dropping the keycard, the exit row or the
+//! switch replaces the silence with exactly the matching advisory
+//! warning. And a `UDMF` `zdoom` locked door carries the Hexen-family
+//! `Door_LockedRaise` (`13` with the key in `args[3]`, playeruse).
 
 #[cfg(test)]
 mod tests {
@@ -235,12 +258,18 @@ mod tests {
         assert_eq!(
             door["special"],
             json!(0_i32),
-            "a door connector is closed and un-wired: no sector special yet"
+            "a Doom door acts from its lines: the sector keeps special 0"
+        );
+        assert_eq!(
+            door["tag"],
+            json!(1_i32),
+            "the wired band answers the tag its lines carry"
         );
         assert_eq!(
             door["floor_height"], door["ceiling_height"],
             "the door sector is collapsed"
         );
+        expect_door_feature_row(&result);
         let report = call(
             &client,
             "validate_map",
@@ -253,6 +282,157 @@ mod tests {
             "the compiled geometry is clean: {:?}",
             report["issues"]
         );
+    }
+
+    /// The working linedef and sidedef rows of the assembled graph.
+    async fn working_lines(client: &Client, map: &str) -> Vec<Value> {
+        let graph = call(
+            client,
+            "assemble_map",
+            json!({"map": map, "scope": "working", "include": ["linedefs", "sidedefs"]}),
+        )
+        .await;
+        graph["linedefs"]
+            .as_array()
+            .expect("linedefs is an array")
+            .clone()
+    }
+
+    /// The `MAP05` plan's one door reports a `features` row: the door
+    /// class, no room, band sector 2 and the fresh tag 1.
+    fn expect_door_feature_row(result: &Value) {
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(rows.len(), 1, "the door is the only feature: {result}");
+        let row = rows.first().expect("the door row");
+        assert_eq!(row["kind"], json!("door"), "the wired connector class");
+        assert_eq!(row["room"], json!(null), "a door belongs to the wall");
+        assert_eq!(row["sectors"], json!([2_u64]), "the band sector");
+        assert_eq!(row["tag"], json!(1_u64), "the fresh shared tag");
+    }
+
+    /// The row of linedef `index` in an assembled `lines` list.
+    fn line_row(lines: &[Value], index: u64) -> &Value {
+        lines
+            .iter()
+            .find(|row| row["index"] == json!(index))
+            .unwrap_or_else(|| panic!("line {index} is in the block"))
+    }
+
+    /// The first linedef index a `features` row reports.
+    fn first_line(row: &Value) -> u64 {
+        row["lines"][0].as_u64().expect("one reported line")
+    }
+
+    /// Assert every row of `lines` whose index is in `indices` carries
+    /// the `W1` walk-over level end.
+    fn assert_walk_lines(lines: &[Value], indices: &[u64]) {
+        let crossed: Vec<&Value> = lines
+            .iter()
+            .filter(|line| indices.contains(&line["index"].as_u64().expect("an index")))
+            .collect();
+        assert_eq!(
+            crossed.len(),
+            indices.len(),
+            "every reported line is in the block"
+        );
+        for line in crossed {
+            let index = line["index"].as_u64().expect("an index");
+            assert_eq!(
+                line["special"],
+                json!(52_i64),
+                "the W1 exit on line {index}"
+            );
+        }
+    }
+
+    /// Assert every row of `lines` whose index is in `indices` is a
+    /// blue-key use line: special 26, tag 1, the band behind and a room
+    /// in front.
+    fn assert_locked_use_lines(lines: &[Value], indices: &[u64]) {
+        let wired: Vec<&Value> = lines
+            .iter()
+            .filter(|line| indices.contains(&line["index"].as_u64().expect("an index")))
+            .collect();
+        assert_eq!(
+            wired.len(),
+            indices.len(),
+            "every reported door line is in the block"
+        );
+        for line in wired {
+            let index = line["index"].as_u64().expect("an index");
+            assert_eq!(
+                line["special"],
+                json!(26_i64),
+                "DR blue key on line {index}"
+            );
+            assert_eq!(line["tag"], json!(1_i64), "the shared tag on line {index}");
+            assert_eq!(
+                line["back"]["sector"],
+                json!(2_i64),
+                "the band sits behind line {index}"
+            );
+            let front = line["front"]["sector"].as_i64().expect("a front sector");
+            assert!(
+                front == 0_i64 || front == 1_i64,
+                "the front faces its room on line {index}: {line}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_blue_locked_door_lands_wired_and_reports_its_feature_row() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["connections"][0]["style"] = json!("locked_blue");
+        let result = call(&client, "build_map_from_plan", request).await;
+        expect_door_feature_row(&result);
+        let indices: Vec<u64> = result["features"][0]["lines"]
+            .as_array()
+            .expect("two door lines")
+            .iter()
+            .map(|slot| slot.as_u64().expect("a line index"))
+            .collect();
+        let lines = working_lines(&client, "MAP05").await;
+        assert_locked_use_lines(&lines, &indices);
+        let jambs: Vec<&Value> = lines
+            .iter()
+            .filter(|line| line["back"] == json!(null) && line["front"]["sector"] == json!(2_i64))
+            .collect();
+        assert_eq!(
+            jambs.len(),
+            2,
+            "the band's north reveal edges, split where the room's line ran; its south \
+             edge stands on the map border"
+        );
+        assert!(
+            jambs
+                .iter()
+                .all(|line| line["front"]["middle"] == json!("DOORBLU")),
+            "the locked jambs wear the blue track: {jambs:?}"
+        );
+        let band = working_sector(&client, "MAP05", 2).await;
+        assert_eq!(band["tag"], json!(1_i32), "the sector answers the tag");
+        let report = call(
+            &client,
+            "validate_map",
+            json!({"map": "MAP05", "scope": "working", "codes": STRUCTURAL_CODES}),
+        )
+        .await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(0_u64),
+            "the wired map stays error-free: {:?}",
+            report["issues"]
+        );
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(
+            undone["undone"],
+            json!(["build_map_from_plan MAP05"]),
+            "one labelled step takes the wiring too"
+        );
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "the whole block went back");
     }
 
     #[tokio::test]
@@ -860,6 +1040,40 @@ mod tests {
         );
         assert_eq!(result["things_placed"], json!(5_u64), "imps, barrel, start");
         assert_eq!(
+            result["warnings"],
+            json!([
+                "red door at gate but no red key in the plan",
+                "the map has no exit"
+            ]),
+            "the playability checks answer for the example's gaps"
+        );
+        expect_worked_example_features_and_finalization(&result);
+        let read = call(
+            &client,
+            "get_nodes",
+            json!({"map": "MAP07", "scope": "working"}),
+        )
+        .await;
+        assert_eq!(
+            read["format"],
+            json!("vanilla"),
+            "the block carries the run"
+        );
+    }
+
+    /// The worked example's wired gate row and its finalized `nodes`
+    /// summary and errors-only `validation` pass, exactly as
+    /// `skill/reference/plan.md` documents them.
+    fn expect_worked_example_features_and_finalization(result: &Value) {
+        assert_eq!(
+            result["features"],
+            json!([
+                {"kind": "door", "room": null, "sectors": [3_u64], "lines": [5_u64, 17_u64],
+                 "tag": 1_u64}
+            ]),
+            "the wired gate reports its band, lines and tag",
+        );
+        assert_eq!(
             result["nodes"],
             json!({
                 "variant": "classic",
@@ -876,16 +1090,789 @@ mod tests {
             json!({"errors": [], "counts": {"error": 0_u64, "warning": 4_u64, "info": 6_u64}}),
             "no errors, and the full counts beside the empty list",
         );
-        let read = call(
+    }
+
+    /// The `lines` a reported feature row names, as indices.
+    fn row_line_indices(row: &Value) -> Vec<u64> {
+        row["lines"]
+            .as_array()
+            .expect("a line list")
+            .iter()
+            .map(|slot| slot.as_u64().expect("an index"))
+            .collect()
+    }
+
+    /// Assert every linedef indexed in `indices` carries `special` and
+    /// line tag `tag`.
+    fn assert_line_actions(lines: &[Value], indices: &[u64], special: i64, tag: i64) {
+        for index in indices {
+            let line = line_row(lines, *index);
+            assert_eq!(
+                line["special"],
+                json!(special),
+                "the special of line {index}"
+            );
+            assert_eq!(line["tag"], json!(tag), "the tag of line {index}");
+        }
+    }
+
+    /// Assert every linedef indexed in `indices` is the hall-facing SR
+    /// ride in the theme's step band.
+    fn assert_ride_lines(lines: &[Value], indices: &[u64]) {
+        assert_eq!(indices.len(), 2_usize, "the two shared-wall segments");
+        for index in indices {
+            let line = line_row(lines, *index);
+            assert_eq!(
+                line["special"],
+                json!(62_i64),
+                "the SR ride on line {index}"
+            );
+            assert_eq!(line["tag"], json!(1_i64), "answering with the platform tag");
+            assert_eq!(
+                line["front"]["sector"],
+                json!(0_i64),
+                "the front looks down at the hall"
+            );
+            assert_eq!(
+                line["front"]["lower"],
+                json!("STEP1"),
+                "the theme's step band"
+            );
+        }
+    }
+
+    /// Lift and teleporter rows install on the compiled map and report
+    /// their rows after the connectors; every feature row still
+    /// reference-checks by plan path.
+    #[tokio::test]
+    async fn lift_and_teleporter_rows_install_and_refuse_by_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["features"] =
+            json!([{"kind": "teleporter", "from_room": "a", "to_room": "b", "two_way": true}]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(rows.len(), 2, "the door leads, the teleporter follows");
+        assert_eq!(rows[0]["kind"], json!("door"), "the plain door wires first");
+        assert_eq!(rows[0]["tag"], json!(1_u64), "its own tag");
+        expect_teleporter_block(&client, rows.get(1).expect("the teleporter row")).await;
+        let lines = working_lines(&client, "MAP05").await;
+        assert_line_actions(&lines, &row_line_indices(&rows[0]), 1_i64, 1_i64);
+        let things = working_things(&client, "MAP05").await;
+        assert_eq!(
+            things_of_kind(&things, 14_i64).len(),
+            2_usize,
+            "a type-14 thing on each square"
+        );
+        let mut ghost = plan_for("MAP06");
+        ghost["features"] = json!([{"kind": "exit", "room": "ghost", "style": "walk_over"}]);
+        refuse_with(&client, ghost, "features[0]").await;
+        let mut orphan = plan_for("MAP06");
+        orphan["features"] = json!([{"kind": "switch", "room": "a", "opens": "nope"}]);
+        refuse_with(&client, orphan, "features[0]").await;
+    }
+
+    /// Assert the teleporter row and its written block: the pad room is
+    /// named, the sector list is pad then destination, the Doom
+    /// destination answers with the row's fresh tag and the two-way pad
+    /// with the return tag above it, and the row's lines carry the WR
+    /// teleport. (Door lines re-checked elsewhere prove the reported
+    /// indices survived the squares' rebuild.)
+    async fn expect_teleporter_block(client: &Client, row: &Value) {
+        assert_eq!(row["kind"], json!("teleporter"));
+        assert_eq!(row["room"], json!("a"), "the pad's room");
+        assert_eq!(row["tag"], json!(2_u64), "a fresh tag after the door's");
+        let sectors = row["sectors"].as_array().expect("two sectors");
+        assert_eq!(sectors.len(), 2, "the pad then the destination");
+        let pad = usize::try_from(
+            sectors
+                .first()
+                .expect("the pad")
+                .as_u64()
+                .expect("an index"),
+        )
+        .expect("small");
+        let dest = usize::try_from(
+            sectors
+                .get(1)
+                .expect("the dest")
+                .as_u64()
+                .expect("an index"),
+        )
+        .expect("small");
+        let dest_sector = working_sector(client, "MAP05", dest).await;
+        assert_eq!(
+            dest_sector["tag"],
+            json!(2_i64),
+            "the Doom destination answers with the outward tag"
+        );
+        let pad_sector = working_sector(client, "MAP05", pad).await;
+        assert_eq!(
+            pad_sector["tag"],
+            json!(3_i64),
+            "the two-way pad answers with the return tag"
+        );
+        let lines = working_lines(client, "MAP05").await;
+        assert_line_actions(&lines, &row_line_indices(row), 97_i64, 2_i64);
+    }
+
+    /// The `lift_request` plan: a 64-unit-high ledge room over a hall,
+    /// touching at zero thickness, joined by an opening and lifted.
+    fn lift_request() -> Value {
+        json!({
+            "map": "MAP05",
+            "wall_thickness": 0_i64,
+            "rooms": [
+                {"id": "hall", "rect": {"x": 0_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}},
+                {"id": "ledge", "rect": {"x": 0_i64, "y": 128_i64, "w": 128_i64, "h": 128_i64},
+                 "floor": 64_i64}
+            ],
+            "connections": [
+                {"id": "gap", "from": "ledge", "to": "hall", "kind": "opening"}
+            ],
+            "features": [{"kind": "lift", "room": "ledge", "style": "use_wall"}],
+            "player_start": {"room": "hall"}
+        })
+    }
+
+    /// The plan lift: the raised room's own sector becomes the tagged
+    /// platform, the shared wall turns front-down with the SR ride in
+    /// the theme's step band — and the same join as a door is refused.
+    #[tokio::test]
+    async fn a_plan_lift_rides_the_shared_wall_of_the_raised_room() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(&client, "build_map_from_plan", lift_request()).await;
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(rows.len(), 1, "an opening is no feature row: {rows:?}");
+        let row = rows.first().expect("the lift row");
+        assert_eq!(row["kind"], json!("lift"));
+        assert_eq!(
+            row["room"],
+            json!("ledge"),
+            "the raised room is the platform"
+        );
+        assert_eq!(row["sectors"], json!([1_u64]), "the room's own sector");
+        assert_eq!(row["tag"], json!(1_u64), "a fresh tag");
+        assert_eq!(
+            working_sector(&client, "MAP05", 1_usize).await["tag"],
+            json!(1_i64),
+            "the platform answers with it"
+        );
+        let lines = working_lines(&client, "MAP05").await;
+        assert_ride_lines(&lines, &row_line_indices(row));
+        let mut joined = lift_request();
+        joined["map"] = json!("MAP06");
+        joined["connections"][0]["kind"] = json!("door");
+        refuse_with(&client, joined, "a lift needs openings to the lower rooms").await;
+    }
+
+    /// A `secret` room with a `light_effect` ends up lit and hidden in
+    /// the written block — the strobe type under the Boom secret bit —
+    /// with the vanilla-Doom warning passed through.
+    #[tokio::test]
+    async fn a_lit_secret_room_builds_lit_and_hidden() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(
             &client,
-            "get_nodes",
-            json!({"map": "MAP07", "scope": "working"}),
+            "build_map_from_plan",
+            json!({
+                "map": "MAP05",
+                "rooms": [{
+                    "id": "vault",
+                    "rect": {"x": 0_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64},
+                    "secret": true,
+                    "light_effect": "strobe_slow"
+                }],
+                "connections": [],
+                "player_start": {"room": "vault"}
+            }),
         )
         .await;
+        let rows = result["features"].as_array().expect("a feature list");
+        let kinds: Vec<&str> = rows
+            .iter()
+            .map(|row| row["kind"].as_str().expect("a kind"))
+            .collect();
+        assert_eq!(kinds, vec!["light", "secret"], "lights run before secrets");
+        assert_eq!(rows[0]["sectors"], json!([0_u64]), "the room's sector");
         assert_eq!(
-            read["format"],
-            json!("vanilla"),
-            "the block carries the run"
+            rows[0]["lines"],
+            json!([]),
+            "a painted special owns no line"
         );
+        assert_eq!(rows[0]["tag"], json!(null), "and no tag");
+        let sector = working_sector(&client, "MAP05", 0_usize).await;
+        assert_eq!(
+            sector["special"],
+            json!(131_i64),
+            "strobe 3 with the Boom bit 128"
+        );
+        assert_eq!(sector["light"], json!(160_i64), "the level is kept");
+        let warnings = result["warnings"].as_array().expect("a warning list");
+        assert!(
+            warnings.iter().any(|note| note
+                .as_str()
+                .is_some_and(|text| text.contains("special 131"))),
+            "the vanilla warning passes through: {warnings:?}"
+        );
+    }
+
+    /// A remote door and its switch: the build reports the rows in
+    /// pipeline order and the written block carries the action, the
+    /// door's own tag and the theme's panel.
+    #[tokio::test]
+    async fn a_switch_fires_the_remote_door_it_opens() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["connections"][0]["style"] = json!("remote");
+        request["features"] =
+            json!([{"kind": "switch", "room": "a", "opens": "d1", "wall": "west"}]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(
+            rows.len(),
+            2,
+            "the door leads, the switch follows: {rows:?}"
+        );
+        assert_eq!(rows[0]["kind"], json!("door"), "the door is wired first");
+        assert_eq!(rows[0]["tag"], json!(1_u64), "the band keeps its tag");
+        assert_eq!(rows[1]["kind"], json!("switch"), "the switch mounts after");
+        assert_eq!(rows[1]["room"], json!("a"), "in room a");
+        assert_eq!(rows[1]["sectors"], json!([2_u64]), "firing the door band");
+        assert_eq!(rows[1]["tag"], json!(1_u64), "with the door's own tag");
+        let lines = working_lines(&client, "MAP05").await;
+        let panel = line_row(&lines, first_line(&rows[1]));
+        assert_eq!(panel["special"], json!(103_i64), "S1 opens the remote door");
+        assert_eq!(panel["tag"], json!(1_i64), "on the door's own tag");
+        assert_eq!(
+            panel["front"]["middle"],
+            json!("SW1STRTN"),
+            "the theme's switch panel"
+        );
+        call(&client, "undo", json!({})).await;
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "one undo takes the wiring back");
+    }
+
+    /// Both exit styles land on the written block: the walk-over row
+    /// dresses the room's shared boundaries with `52` and the switch
+    /// row carries the secret level end in the theme's exit panel.
+    #[tokio::test]
+    async fn the_two_exit_styles_end_the_level_where_the_room_stands() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["features"] = json!([
+            {"kind": "exit", "room": "b", "style": "walk_over"},
+            {"kind": "exit", "room": "b", "style": "switch", "secret": true, "wall": "east"}
+        ]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        let rows = result["features"].as_array().expect("a feature list");
+        assert_eq!(rows[0]["kind"], json!("door"), "the plain door wires first");
+        let walked = rows.get(1).expect("the walk-over row");
+        let mounted = rows.get(2).expect("the switch row");
+        assert_eq!(walked["kind"], json!("exit"), "exits come after the door");
+        assert_eq!(walked["room"], json!("b"), "the room it stands in");
+        assert_eq!(walked["sectors"], json!([1_u64]), "its own sector");
+        assert_eq!(walked["tag"], json!(null), "an exit carries no tag");
+        assert_eq!(mounted["kind"], json!("exit"));
+        let walk_lines: Vec<u64> = walked["lines"]
+            .as_array()
+            .expect("a line list")
+            .iter()
+            .map(|slot| slot.as_u64().expect("an index"))
+            .collect();
+        assert!(!walk_lines.is_empty(), "room b shares its band walls");
+        let lines = working_lines(&client, "MAP05").await;
+        assert_walk_lines(&lines, &walk_lines);
+        let secret = line_row(&lines, first_line(mounted));
+        assert_eq!(secret["special"], json!(51_i64), "the S1 secret exit");
+        assert_eq!(secret["tag"], json!(0_i64), "an exit acts on no tag");
+        assert_eq!(
+            secret["front"]["middle"],
+            json!("SW1EXIT"),
+            "the theme's exit panel"
+        );
+    }
+
+    /// A switch pointed at a non-remote door is refused, and nothing is
+    /// written.
+    #[tokio::test]
+    async fn a_switch_on_a_plain_door_is_refused_as_not_remote() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["features"] =
+            json!([{"kind": "switch", "room": "a", "opens": "d1", "wall": "west"}]);
+        let (code, message) = call_err(&client, "build_map_from_plan", request).await;
+        assert_eq!(code, "invalid_argument", "a plain door is no target");
+        assert!(
+            message.contains("switch opens d1 which is not a remote door"),
+            "the refusal words: {message}"
+        );
+        let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+        assert_eq!(maps["maps"], json!([]), "the refusal wrote nothing");
+    }
+
+    /// The six-room playable plan: a `foyer` opens into `start`, the
+    /// id'd `blue_door` locks the `corridor` off, a `use_wall` lift
+    /// raises the corridor to the `ledge`, a teleporter runs corridor to
+    /// ledge, the remote `gate` (its wall `switch` in the ledge) locks
+    /// the strobed `exit` room, and an ordinary `cell_door` hides the
+    /// `secret` room off the corridor. The blue card stands in `start`
+    /// beside the player start: every lock has its key, the map has its
+    /// exit and the remote has its switch, so the playability checks
+    /// have nothing to say.
+    fn six_room_plan(map: &str) -> Value {
+        json!({
+            "map": map,
+            "format": "doom",
+            "wall_thickness": 0_i64,
+            "rooms": [
+                {"id": "start", "rect": {"x": 0_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}},
+                {"id": "corridor", "rect": {"x": 128_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}},
+                {"id": "secret", "rect": {"x": 256_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64},
+                 "secret": true},
+                {"id": "ledge", "rect": {"x": 128_i64, "y": 128_i64, "w": 128_i64, "h": 128_i64},
+                 "floor": 24_i64},
+                {"id": "exit", "rect": {"x": 128_i64, "y": 256_i64, "w": 128_i64, "h": 128_i64},
+                 "floor": 24_i64, "light_effect": "strobe_slow"},
+                {"id": "foyer", "rect": {"x": -128_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}}
+            ],
+            "connections": [
+                {"id": "blue_door", "from": "start", "to": "corridor", "kind": "door",
+                 "style": "locked_blue"},
+                {"id": "cell_door", "from": "corridor", "to": "secret", "kind": "door",
+                 "style": "normal"},
+                {"id": "gap", "from": "corridor", "to": "ledge", "kind": "opening"},
+                {"id": "gate", "from": "ledge", "to": "exit", "kind": "door",
+                 "style": "remote"},
+                {"id": "home", "from": "start", "to": "foyer", "kind": "opening"}
+            ],
+            "features": [
+                {"kind": "lift", "room": "ledge", "style": "use_wall", "low_floor": -40_i64},
+                {"kind": "teleporter", "from_room": "corridor", "to_room": "ledge"},
+                {"kind": "switch", "room": "ledge", "opens": "gate", "wall": "east"},
+                {"kind": "exit", "room": "exit", "style": "walk_over"}
+            ],
+            "things": [{"name": "Blue Keycard", "room": "start"}],
+            "player_start": {"room": "start"}
+        })
+    }
+
+    /// The one sector the result reports for room `room`.
+    fn room_sector(result: &Value, room: &str) -> u64 {
+        result["rooms"][room]
+            .as_array()
+            .expect("a room sector list")
+            .first()
+            .expect("plan rooms own one sector")
+            .as_u64()
+            .expect("an index")
+    }
+
+    /// Assert the remote `gate` writes no action of its own: every
+    /// reported band line is either still bare or carries the exit
+    /// step's `W1` end (the lines facing the exit room are also that
+    /// room's boundary), and none carries a tag or args.
+    fn assert_remote_gate_lines(lines: &[Value], indices: &[u64]) {
+        for index in indices {
+            let line = line_row(lines, *index);
+            assert!(
+                matches!(line["special"].as_i64(), Some(0_i64 | 52_i64)),
+                "a remote line carries no door action of its own: {line}"
+            );
+            assert_eq!(line["tag"], json!(0_i64), "and no tag on line {index}");
+        }
+    }
+
+    /// Assert the row at `index` is a `kind` row naming `room` (when
+    /// `room` is `Some`).
+    fn expect_row<'rows>(
+        rows: &'rows [Value],
+        index: usize,
+        kind: &str,
+        room: Option<&str>,
+    ) -> &'rows Value {
+        let row = rows
+            .get(index)
+            .unwrap_or_else(|| panic!("row {index} must be a {kind}"));
+        assert_eq!(row["kind"], json!(kind), "row {index}'s class");
+        assert_eq!(
+            row["room"],
+            room.map_or(json!(null), |name| json!(name)),
+            "row {index} stands in its room"
+        );
+        row
+    }
+
+    /// Assert the blue-key door row: tag `1`, the band sector answering
+    /// it, and every door line a special-`26` use line with the band
+    /// behind and one of the two rooms' sectors in front.
+    async fn assert_blue_door(client: &Client, map: &str, result: &Value, row: &Value) {
+        assert_eq!(row["tag"], json!(1_u64), "the first door tags first");
+        let band = row["sectors"][0].as_u64().expect("one band");
+        let space = working_sector(client, map, usize::try_from(band).expect("small")).await;
+        assert_eq!(space["tag"], json!(1_i64), "the band answers its tag");
+        let start = room_sector(result, "start");
+        let corridor = room_sector(result, "corridor");
+        let lines = working_lines(client, map).await;
+        let indices = row_line_indices(row);
+        assert!(!indices.is_empty(), "the band meets its rooms");
+        for index in indices {
+            let line = line_row(&lines, index);
+            assert_eq!(
+                line["special"],
+                json!(26_i64),
+                "DR blue lock on line {index}"
+            );
+            assert_eq!(line["tag"], json!(1_i64), "on the band's tag");
+            assert_eq!(line["back"]["sector"], json!(band), "the band sits behind");
+            let front = line["front"]["sector"].as_u64().expect("a front sector");
+            assert!(
+                front == start || front == corridor,
+                "the front faces its room on line {index}: {front}"
+            );
+        }
+    }
+
+    /// Assert the lift row: the ledge's own sector tagged, and its two
+    /// activation lines riding with special `62`, front down onto the
+    /// corridor.
+    async fn assert_lift(client: &Client, map: &str, result: &Value, row: &Value) {
+        let tag = row["tag"].as_u64().expect("a fresh tag");
+        let platform = row["sectors"][0].as_u64().expect("one platform");
+        assert_eq!(
+            platform,
+            room_sector(result, "ledge"),
+            "the room is the platform"
+        );
+        let space = working_sector(client, map, usize::try_from(platform).expect("small")).await;
+        assert_eq!(
+            space["tag"].as_u64().expect("a tag"),
+            tag,
+            "the platform answers with the row's tag"
+        );
+        let lines = working_lines(client, map).await;
+        let indices = row_line_indices(row);
+        assert_eq!(indices.len(), 2, "the two shared-wall segments");
+        for index in indices {
+            let line = line_row(&lines, index);
+            assert_eq!(
+                line["special"],
+                json!(62_i64),
+                "the SR ride on line {index}"
+            );
+            assert_eq!(
+                line["tag"].as_u64().expect("a tag"),
+                tag,
+                "line {index} answers with the platform tag"
+            );
+            assert_eq!(
+                line["front"]["sector"],
+                json!(room_sector(result, "corridor")),
+                "the front looks down at the corridor"
+            );
+        }
+    }
+
+    /// Assert the teleporter row: pad borders with the `WR` teleport on
+    /// the destination's fresh tag, and a type-14 thing standing in the
+    /// ledge.
+    async fn assert_teleporter(client: &Client, map: &str, row: &Value) {
+        assert_eq!(row["room"], json!("corridor"), "the pad's room");
+        let tag = row["tag"].as_u64().expect("a fresh tag");
+        let sectors = row["sectors"].as_array().expect("two sectors");
+        assert_eq!(sectors.len(), 2, "the pad then the destination");
+        let dest = usize::try_from(sectors[1].as_u64().expect("an index")).expect("small");
+        let space = working_sector(client, map, dest).await;
+        assert_eq!(
+            space["tag"].as_u64().expect("a tag"),
+            tag,
+            "the destination answers"
+        );
+        let lines = working_lines(client, map).await;
+        for index in row_line_indices(row) {
+            let line = line_row(&lines, index);
+            assert_eq!(
+                line["special"],
+                json!(97_i64),
+                "the WR teleport on line {index}"
+            );
+            assert_eq!(
+                line["tag"].as_u64().expect("a tag"),
+                tag,
+                "to the tagged square"
+            );
+        }
+        let pads = things_of_kind(&working_things(client, map).await, 14_i64)
+            .into_iter()
+            .filter(|thing| {
+                thing["x"]
+                    .as_i64()
+                    .is_some_and(|x| x > 128_i64 && x < 256_i64)
+                    && thing["y"]
+                        .as_i64()
+                        .is_some_and(|y| y > 128_i64 && y < 256_i64)
+            })
+            .count();
+        assert_eq!(pads, 1_usize, "the destination thing stands in the ledge");
+    }
+
+    /// Assert the `walk_over` exit row: special `52` on every reported
+    /// boundary line, and the exit room's sector strobing under vanilla
+    /// type `3` at its planned light level.
+    async fn assert_exit(client: &Client, map: &str, result: &Value, row: &Value) {
+        assert_eq!(
+            row["room"],
+            json!("exit"),
+            "the level ends in the exit room"
+        );
+        assert_eq!(row["tag"], json!(null), "an exit carries no tag");
+        let indices = row_line_indices(row);
+        assert!(!indices.is_empty(), "the room shares its gate boundary");
+        let lines = working_lines(client, map).await;
+        assert_walk_lines(&lines, &indices);
+        let exit_room = usize::try_from(room_sector(result, "exit")).expect("small");
+        let space = working_sector(client, map, exit_room).await;
+        assert_eq!(
+            space["special"],
+            json!(3_i64),
+            "strobe_slow lights the exit room"
+        );
+        assert_eq!(space["light"], json!(160_i64), "the level is kept");
+    }
+
+    /// Assert the secret row: the secret room's sectors carry vanilla
+    /// type `9`, with no lines and no tag.
+    async fn assert_secret(client: &Client, map: &str, result: &Value, row: &Value) {
+        assert_eq!(row["room"], json!("secret"), "the hidden room");
+        assert_eq!(row["lines"], json!([]), "a painted special owns no line");
+        assert_eq!(row["tag"], json!(null), "and no tag");
+        let secret = usize::try_from(room_sector(result, "secret")).expect("small");
+        assert_eq!(
+            row["sectors"],
+            json!([secret]),
+            "the row names the room's own sector"
+        );
+        let space = working_sector(client, map, secret).await;
+        assert_eq!(space["special"], json!(9_i64), "the vanilla secret type");
+    }
+
+    /// The whole playable map at once: six rooms, locked door, lift,
+    /// teleporter, remote gate and switch, walk-over exit with a strobe,
+    /// a lit-free secret room and the keycard that opens it all. Every
+    /// feature reads back from the written block and the playability
+    /// checks have nothing to complain about.
+    #[tokio::test]
+    async fn the_six_room_plan_builds_a_whole_playable_map() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let result = call(&client, "build_map_from_plan", six_room_plan("MAP05")).await;
+        assert_eq!(
+            result["warnings"],
+            json!([]),
+            "key in hand, exit set, remote switched: {:?}",
+            result["warnings"]
+        );
+        assert_eq!(
+            result["things_placed"],
+            json!(2_u64),
+            "the card and the start"
+        );
+        let rows = result["features"].as_array().expect("a feature list");
+        let kinds: Vec<&str> = rows
+            .iter()
+            .map(|row| row["kind"].as_str().expect("a kind"))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "door",
+                "door",
+                "door",
+                "switch",
+                "lift",
+                "teleporter",
+                "exit",
+                "light",
+                "secret"
+            ],
+            "the pipeline order over the whole plan"
+        );
+        expect_six_room_rows(&client, "MAP05", &result, rows).await;
+        let report = call(&client, "validate_map", json!({"map": "MAP05"})).await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(0_u64),
+            "the playable map validates error-free: {:?}",
+            report["issues"]
+        );
+    }
+
+    /// Assert the nine `features` rows of the playable build against
+    /// the written block, in pipeline order: the three wired doors,
+    /// the switch on the gate's tag, the ride, the teleport, the exit,
+    /// and the painted light and secret.
+    async fn expect_six_room_rows(client: &Client, map: &str, result: &Value, rows: &[Value]) {
+        assert_blue_door(client, map, result, expect_row(rows, 0, "door", None)).await;
+        let lines = working_lines(client, map).await;
+        assert_line_actions(
+            &lines,
+            &row_line_indices(expect_row(rows, 1, "door", None)),
+            1_i64,
+            2_i64,
+        );
+        let gate = expect_row(rows, 2, "door", None);
+        assert_eq!(gate["tag"], json!(3_u64), "the remote takes the third tag");
+        assert_remote_gate_lines(&lines, &row_line_indices(gate));
+        let panel = expect_row(rows, 3, "switch", Some("ledge"));
+        assert_eq!(
+            panel["tag"],
+            json!(3_u64),
+            "the switch fires the gate's tag"
+        );
+        assert_line_actions(&lines, &row_line_indices(panel), 103_i64, 3_i64);
+        assert_lift(
+            client,
+            map,
+            result,
+            expect_row(rows, 4, "lift", Some("ledge")),
+        )
+        .await;
+        assert_teleporter(
+            client,
+            map,
+            expect_row(rows, 5, "teleporter", Some("corridor")),
+        )
+        .await;
+        assert_exit(
+            client,
+            map,
+            result,
+            expect_row(rows, 6, "exit", Some("exit")),
+        )
+        .await;
+        let light = expect_row(rows, 7, "light", Some("exit"));
+        assert_eq!(
+            light["sectors"],
+            json!([room_sector(result, "exit")]),
+            "the strobe row painted the exit room"
+        );
+        assert_secret(
+            client,
+            map,
+            result,
+            expect_row(rows, 8, "secret", Some("secret")),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dropping_the_keycard_warns_only_the_blue_door() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = six_room_plan("MAP05");
+        request["things"] = json!([]);
+        let result = call(&client, "build_map_from_plan", request).await;
+        assert_eq!(
+            result["warnings"],
+            json!(["blue door at blue_door but no blue key in the plan"]),
+            "the one gap the plan leaves"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_the_exit_feature_warns_only_the_missing_exit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = six_room_plan("MAP05");
+        request["features"]
+            .as_array_mut()
+            .expect("a feature list")
+            .remove(3);
+        let result = call(&client, "build_map_from_plan", request).await;
+        assert_eq!(
+            result["warnings"],
+            json!(["the map has no exit"]),
+            "the level would never end"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_the_switch_warns_only_the_unswitched_gate() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = six_room_plan("MAP05");
+        request["features"]
+            .as_array_mut()
+            .expect("a feature list")
+            .remove(2);
+        let result = call(&client, "build_map_from_plan", request).await;
+        assert_eq!(
+            result["warnings"],
+            json!([
+                "remote door at gate is opened by no switch: add a switch feature whose \
+                 opens is gate"
+            ]),
+            "the locked gate names its way out"
+        );
+    }
+
+    /// A `UDMF` map in the `zdoom` namespace is the Hexen flag family:
+    /// the blue-locked door lines carry `Door_LockedRaise` (`13`) with
+    /// speed, wait and the blue key in the args and the `playeruse`
+    /// activation bit, and no line tag.
+    #[tokio::test]
+    async fn a_udmf_zdoom_locked_door_carries_the_hexen_locked_raise() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut request = plan_for("MAP05");
+        request["connections"][0]["style"] = json!("locked_blue");
+        request["format"] = json!("udmf");
+        request["namespace"] = json!("zdoom");
+        let result = call(&client, "build_map_from_plan", request).await;
+        assert_eq!(result["format"], json!("udmf"), "the text layout");
+        let rows = result["features"].as_array().expect("a feature list");
+        let row = rows.first().expect("the door row");
+        assert_eq!(row["kind"], json!("door"), "the locked door wires");
+        let lines = working_lines(&client, "MAP05").await;
+        let indices = row_line_indices(row);
+        assert_eq!(indices.len(), 2, "the band meets each room once");
+        expect_hexen_locked_lines(&lines, &indices);
+    }
+
+    /// Assert every reported door line is the `zdoom` `Door_LockedRaise`.
+    fn expect_hexen_locked_lines(lines: &[Value], indices: &[u64]) {
+        for index in indices {
+            expect_hexen_locked_line(line_row(lines, *index), *index);
+        }
+    }
+
+    /// One `UDMF` `zdoom` locked-door line: `Door_LockedRaise` (`13`)
+    /// with the back-sector speed/wait/blue-key args, no line tag and
+    /// the `playeruse` activation bit.
+    fn expect_hexen_locked_line(line: &Value, index: u64) {
+        assert_eq!(
+            line["special"],
+            json!(13_i64),
+            "Door_LockedRaise on line {index}"
+        );
+        assert_eq!(
+            line["args"],
+            json!([0_i64, 16_i64, 150_i64, 130_i64, 0_i64]),
+            "no sector arg, speed 16, wait 150, the blue key"
+        );
+        assert_eq!(
+            line["tag"],
+            json!(0_i64),
+            "the Hexen action carries no line tag"
+        );
+        let flags = line["flags"].as_u64().expect("numeric flags");
+        assert_eq!(flags & 0x400_u64, 0x400_u64, "playeruse on line {index}");
     }
 }

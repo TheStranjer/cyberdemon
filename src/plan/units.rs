@@ -14,12 +14,15 @@
 //! one. It runs *before* [`compile`](fn@crate::plan::compile): it is the
 //! stage that turns a drawing into map-sized geometry, so walls,
 //! connectors and emission all see final coordinates. [`Units::point`]
-//! exposes the same transform for a single point.
+//! exposes the same transform for a single point. The transformed fields
+//! are the room shapes, each [`Connection::at`] placement and each
+//! [`Feature::Teleporter`]'s `pad` and `destination` squares.
 //!
 //! Sizes are **not** transformed. [`Plan::wall_thickness`],
-//! [`Connection::width`] and the heights and depths inside
+//! [`Connection::width`], the heights and depths inside
 //! [`ConnectionKind`](crate::plan::model::ConnectionKind) (`sill`,
-//! `lintel`, `step_height`, `step_depth`) are already map units: they are
+//! `lintel`, `step_height`, `step_depth`) and the
+//! [`Feature::Lift`] `low_floor` height are already map units: they are
 //! the wall the compiler grows and the openings it cuts, so scaling them
 //! with the coordinates would apply the scale twice. They pass through
 //! [`transform_plan`] untouched.
@@ -27,7 +30,7 @@
 use crate::error::CyberError;
 use crate::fixed::mul_div_round;
 use crate::geom::Pt;
-use crate::plan::model::{Connection, Plan, Room, Shape};
+use crate::plan::model::{Connection, Feature, Plan, Room, Shape};
 
 /// How plan coordinates become map units: an integer scale, an origin, an
 /// optional vertical mirror and a snap grid.
@@ -175,13 +178,15 @@ impl Units {
 /// every transformed coordinate to `grid` (`1` disables snapping).
 ///
 /// Rectangles have both corners transformed and their `w`/`h` re-derived
-/// from the snapped corners, so they stay grid-aligned; polygon rings and
-/// the [`at`](Connection::at) position of each connection are transformed
-/// point by point. Sector properties, [`Plan::wall_thickness`] and every
-/// connection size (`width`, `sill`, `lintel`, `step_height`,
-/// `step_depth`) are map units already and pass through unchanged, as
-/// this module's documentation explains. The plan's structure is not
-/// re-checked here; [`Plan::validate`] still runs on the result.
+/// from the snapped corners, so they stay grid-aligned; polygon rings,
+/// the [`at`](Connection::at) position of each connection and the `pad`
+/// and `destination` squares of each [`Feature::Teleporter`] are
+/// transformed point by point. Sector properties, [`Plan::wall_thickness`]
+/// and every size (`width`, `sill`, `lintel`, `step_height`,
+/// `step_depth`, a lift's `low_floor`) are map units already and pass
+/// through unchanged, as this module's documentation explains. The plan's
+/// structure is not re-checked here; [`Plan::validate`] still runs on the
+/// result.
 ///
 /// # Errors
 ///
@@ -195,9 +200,11 @@ pub fn transform_plan(plan: &Plan, units: &Units, grid: i64) -> Result<Plan, Cyb
     validate_grid(grid)?;
     let rooms = transform_rooms(plan, units, grid)?;
     let connections = transform_connections(plan, units, grid)?;
+    let features = transform_features(plan, units, grid)?;
     Ok(Plan {
         rooms,
         connections,
+        features,
         wall_thickness: plan.wall_thickness,
     })
 }
@@ -285,6 +292,51 @@ fn transform_at(
 ) -> Result<Option<Pt>, CyberError> {
     at.map(|point| units.mapped(grid, &format!("{path}.at"), point))
         .transpose()
+}
+
+/// Every feature with its teleporter squares transformed; the other
+/// kinds carry no coordinates and clone through.
+#[inline]
+fn transform_features(plan: &Plan, units: &Units, grid: i64) -> Result<Vec<Feature>, CyberError> {
+    plan.features
+        .iter()
+        .enumerate()
+        .map(|(index, feature)| transform_feature(units, grid, index, feature))
+        .collect()
+}
+
+/// One feature: a teleporter's `pad` and `destination` travel the same
+/// transform as a connection's `at`, reported under the
+/// `features[index]` path.
+fn transform_feature(
+    units: &Units,
+    grid: i64,
+    index: usize,
+    feature: &Feature,
+) -> Result<Feature, CyberError> {
+    let path = format!("features[{index}]");
+    Ok(match feature.clone() {
+        Feature::Teleporter {
+            from_room,
+            to_room,
+            pad,
+            destination,
+            angle,
+            two_way,
+        } => Feature::Teleporter {
+            from_room,
+            to_room,
+            pad: pad
+                .map(|point| units.mapped(grid, &format!("{path}.pad"), point))
+                .transpose()?,
+            destination: destination
+                .map(|point| units.mapped(grid, &format!("{path}.destination"), point))
+                .transpose()?,
+            angle,
+            two_way,
+        },
+        other @ (Feature::Exit { .. } | Feature::Switch { .. } | Feature::Lift { .. }) => other,
+    })
 }
 
 /// A rectangle from two opposite map-space corners, normalised to the
@@ -375,7 +427,8 @@ mod tests {
     use super::{Units, snap, transform_plan};
     use crate::error::CyberError;
     use crate::geom::Pt;
-    use crate::plan::model::{Connection, ConnectionKind, Plan, Room, Shape};
+    use crate::plan::model::{Connection, ConnectionKind, Feature, Plan, Room, Shape};
+    use crate::wad::map::features::LiftStyle;
 
     /// A rectangular room with default sector properties, based at `at`
     /// and `size` wide.
@@ -395,6 +448,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -410,6 +465,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -430,7 +487,28 @@ mod tests {
         Plan {
             rooms,
             connections,
+            features: Vec::new(),
             wall_thickness: 16_i64,
+        }
+    }
+
+    /// The sample plan's rooms and opening carrying `features`.
+    fn plan_features(features: Vec<Feature>) -> Plan {
+        Plan {
+            features,
+            ..sample_plan()
+        }
+    }
+
+    /// A teleporter from room `a` to room `b` with the given squares.
+    fn teleporter(pad: Option<Pt>, destination: Option<Pt>) -> Feature {
+        Feature::Teleporter {
+            from_room: "a".to_owned(),
+            to_room: "b".to_owned(),
+            pad,
+            destination,
+            angle: 90_i32,
+            two_way: true,
         }
     }
 
@@ -689,6 +767,65 @@ mod tests {
             },
             "step height and depth are sizes"
         );
+    }
+
+    #[test]
+    fn teleporter_squares_scale_with_the_rooms() {
+        let units = Units {
+            scale_num: 4_i64,
+            ..Units::default()
+        };
+        let plan = plan_features(vec![teleporter(Some((10, 12)), None)]);
+        let moved = transform_plan(&plan, &units, 8_i64).expect("scale 4 runs");
+        assert_eq!(
+            moved.features.first().expect("one feature"),
+            &teleporter(Some((40_i64, 48_i64)), None),
+            "the pad travels like a placement, an absent square stays absent"
+        );
+    }
+
+    #[test]
+    fn teleporter_squares_mirror_and_snap_like_placements() {
+        let units = Units {
+            scale_num: 2_i64,
+            origin_y: 100_i64,
+            flip_y: true,
+            ..Units::default()
+        };
+        let plan = plan_features(vec![teleporter(Some((5, 10)), Some((-14, 30)))]);
+        let moved = transform_plan(&plan, &units, 8_i64).expect("the mirror runs");
+        assert_eq!(
+            moved.features.first().expect("one feature"),
+            &teleporter(Some((8_i64, 80_i64)), Some((-32_i64, 40_i64))),
+            "10 goes to 80 below the origin, -28 snaps away from zero to -32"
+        );
+    }
+
+    #[test]
+    fn a_lifts_low_floor_is_a_height_and_stays_put() {
+        let units = Units {
+            scale_num: 4_i64,
+            ..Units::default()
+        };
+        let lift = Feature::Lift {
+            room: "a".to_owned(),
+            low_floor: Some(-64_i32),
+            style: LiftStyle::WalkTrigger,
+            repeatable: false,
+        };
+        let plan = plan_features(vec![lift.clone()]);
+        let moved = transform_plan(&plan, &units, 8_i64).expect("scale 4 runs");
+        assert_eq!(moved.features, vec![lift], "no coordinate, no transform");
+    }
+
+    #[test]
+    fn an_overflowing_teleporter_square_names_its_path() {
+        let units = Units {
+            origin_x: i64::MAX - 1_000_i64,
+            ..Units::default()
+        };
+        let plan = plan_features(vec![teleporter(Some((5_000, 32)), None)]);
+        assert_plan_refused(&plan, &units, 1_i64, "features[0].pad");
     }
 
     #[test]

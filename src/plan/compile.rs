@@ -271,6 +271,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -301,6 +303,7 @@ mod tests {
                 rect_room("b", (128, 0), (128, 128)),
             ],
             connections,
+            features: Vec::new(),
             wall_thickness: thickness,
         }
     }
@@ -767,11 +770,14 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         };
         let lab = rect_room("lab", (96, 0), (96, 96));
         let plan = Plan {
             rooms: vec![court, lab],
             connections: vec![opening("court", "lab")],
+            features: Vec::new(),
             wall_thickness: 16_i64,
         };
         plan.validate().expect("the plan validates");
@@ -812,6 +818,7 @@ mod tests {
                 rect_room("b", (400, 0), (128, 128)),
             ],
             connections: vec![opening("a", "b")],
+            features: Vec::new(),
             wall_thickness: 16_i64,
         };
         let error = compile(
@@ -868,6 +875,7 @@ mod tests {
                 rect_room("over", (0, 0), (128, 128)),
             ],
             connections: Vec::new(),
+            features: Vec::new(),
             wall_thickness: 16_i64,
         };
         let out = compiled(&plan);

@@ -253,6 +253,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -268,6 +270,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -276,6 +280,7 @@ mod tests {
         Plan {
             rooms,
             connections: Vec::new(),
+            features: Vec::new(),
             wall_thickness,
         }
     }

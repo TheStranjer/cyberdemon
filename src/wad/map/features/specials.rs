@@ -5,7 +5,9 @@
 //! [`secret_edit`] answers what marking (or clearing) a sector's secret
 //! flag turns its special into, and [`light_special`] answers what a
 //! [`LightEffect`] turns it into. The `features` tools `mark_secret` and
-//! `set_light_effect` write the answers; nothing here reads a session, an
+//! `set_light_effect` write the answers, and so does the plan feature
+//! engine's light and secret steps; [`boom_note`] is the one vanilla-Doom
+//! warning both secret paths emit. Nothing here reads a session, an
 //! archive or the `MCP` layer.
 //!
 //! The two flag families disagree about where the meaning lives. The `Doom`
@@ -17,6 +19,8 @@
 //! [`SecretEdit::boom_warning`] reports. The `Hexen` family keeps its basic
 //! type in the low eight bits, numbers the `Doom`-equivalent effects `64`
 //! higher, and flags secrecy with bit 10, [`HEXEN_SECRET_BIT`].
+
+use serde::{Deserialize, Serialize};
 
 use crate::wad::map::flags::FlagFamily;
 
@@ -132,7 +136,11 @@ const fn hexen_secret(special: i32, secret: bool) -> SecretEdit {
 }
 
 /// The light effects [`light_special`] installs, as the tool names them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The serde names are the `snake_case` [`LightEffect::name`]s, so a plan
+/// or a tool payload spells an effect exactly as the tools do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LightEffect {
     /// No effect: the basic type clears to `0` and the sector is lit
     /// statically.
@@ -218,11 +226,32 @@ pub const fn light_special(family: FlagFamily, special: i32, effect: LightEffect
     }
 }
 
+/// The Boom-bit warning for sector `index`, whose special now carries
+/// the secret flag on top of a vanilla `Doom` type.
+///
+/// The effect and the secret survive only in ports that read bits, so
+/// a map that has to work in vanilla wants its own sector with the
+/// vanilla type instead.
+///
+/// Shared by the `mark_secret` tool and the plan feature engine's
+/// secret step so both paths emit the identical warning.
+#[must_use]
+#[inline]
+pub fn boom_note(index: usize, flagged: i32) -> String {
+    format!(
+        "sector {index} now carries special {flagged}: vanilla Doom ignores Boom bits, so \
+         that engine reads neither the old effect nor the secret (only a Boom-compatible \
+         or ZDoom port does); mark it with the vanilla type {DOOM_SECRET_SPECIAL} instead \
+         if it has to stay hidden from every engine"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         BOOM_SECRET_BIT, DOOM_SECRET_SPECIAL, DOOM_TYPE_MASK, GENERALIZED_SECTOR_MIN,
-        HEXEN_SECRET_BIT, HEXEN_TYPE_MASK, LightEffect, SecretEdit, light_special, secret_edit,
+        HEXEN_SECRET_BIT, HEXEN_TYPE_MASK, LightEffect, SecretEdit, boom_note, light_special,
+        secret_edit,
     };
     use crate::wad::map::flags::FlagFamily;
 
@@ -333,6 +362,21 @@ mod tests {
     }
 
     #[test]
+    fn the_serde_name_of_an_effect_is_its_canonical_name() {
+        for effect in LightEffect::all() {
+            let written = serde_json::to_value(effect).expect("serialising an effect");
+            assert_eq!(
+                written,
+                serde_json::Value::String(effect.name().to_owned()),
+                "{effect:?} serialises to its own name"
+            );
+            let again: LightEffect =
+                serde_json::from_value(written).expect("re-reading the effect");
+            assert_eq!(again, effect, "the name reads back");
+        }
+    }
+
+    #[test]
     fn the_hexen_effect_number_is_the_doom_one_sixty_four_higher() {
         let table = [
             (LightEffect::None, 0_i32, 0_i32),
@@ -404,5 +448,18 @@ mod tests {
                 "the Hexen family's {effect:?} from a plain sector"
             );
         }
+    }
+
+    #[test]
+    fn the_boom_note_names_the_sector_the_flagged_special_and_the_fix() {
+        let flagged = BOOM_SECRET_BIT | 3_i32;
+        let note = boom_note(3_usize, flagged);
+        assert!(note.contains("sector 3"), "{note}");
+        assert!(note.contains("special 131"), "{note}");
+        assert!(
+            note.contains("vanilla Doom ignores Boom bits")
+                && note.contains(&format!("vanilla type {DOOM_SECRET_SPECIAL}")),
+            "the note explains the engine gap and the fix: {note}"
+        );
     }
 }

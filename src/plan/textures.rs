@@ -736,6 +736,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: wall_texture.map(str::to_owned),
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -761,6 +763,7 @@ mod tests {
         Plan {
             rooms,
             connections: Vec::new(),
+            features: Vec::new(),
             wall_thickness: 16_i64,
         }
     }

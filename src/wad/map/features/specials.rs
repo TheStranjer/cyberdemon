@@ -18,6 +18,8 @@
 //! type in the low eight bits, numbers the `Doom`-equivalent effects `64`
 //! higher, and flags secrecy with bit 10, [`HEXEN_SECRET_BIT`].
 
+use serde::{Deserialize, Serialize};
+
 use crate::wad::map::flags::FlagFamily;
 
 /// The `Doom` family's vanilla secret sector type.
@@ -132,7 +134,11 @@ const fn hexen_secret(special: i32, secret: bool) -> SecretEdit {
 }
 
 /// The light effects [`light_special`] installs, as the tool names them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The serde names are the `snake_case` [`LightEffect::name`]s, so a plan
+/// or a tool payload spells an effect exactly as the tools do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LightEffect {
     /// No effect: the basic type clears to `0` and the sector is lit
     /// statically.
@@ -330,6 +336,21 @@ mod tests {
             ],
             "the wire vocabulary"
         );
+    }
+
+    #[test]
+    fn the_serde_name_of_an_effect_is_its_canonical_name() {
+        for effect in LightEffect::all() {
+            let written = serde_json::to_value(effect).expect("serialising an effect");
+            assert_eq!(
+                written,
+                serde_json::Value::String(effect.name().to_owned()),
+                "{effect:?} serialises to its own name"
+            );
+            let again: LightEffect =
+                serde_json::from_value(written).expect("re-reading the effect");
+            assert_eq!(again, effect, "the name reads back");
+        }
     }
 
     #[test]

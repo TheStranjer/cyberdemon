@@ -11,7 +11,11 @@
 //! in: names resolve against the session's game definitions (the same
 //! overlay the validate tools read), pinned points travel with the
 //! rooms through [`crate::plan::units`], room fills land row-major on
-//! the clearance grid, and every built map keeps a player 1 start.
+//! the clearance grid, and every built map keeps a player 1 start. The
+//! `features` rows — exits, switches, lifts and teleporters — parse,
+//! transform and validate now, and installing them on the compiled map
+//! arrives with the follow-up wiring updates: a plan with features
+//! compiles exactly like the plan without them.
 //! The compiled block is written into the working archive as exactly
 //! one [`Session::edit`] step through
 //! [`crate::tools::maps::write_block`], and the map becomes the
@@ -30,8 +34,8 @@
 //!
 //! Compiler refusals already name the offending id;
 //! [`with_plan_path`] prefixes them with the plan path (`rooms[0]`,
-//! `connections[1]`) so the caller can point at the wire element that
-//! broke.
+//! `connections[1]`, `features[2]`) so the caller can point at the wire
+//! element that broke.
 
 mod params;
 
@@ -59,7 +63,9 @@ use crate::themes::Role;
 use crate::tools::defs::collect;
 use crate::tools::maps::{parse_format, resolve_namespace, write_block};
 use crate::tools::nodes::{AllPlan, apply_all};
-use crate::tools::plan::params::{BuildPlanParams, ConnectionParam, KindSource, ThingRequest};
+use crate::tools::plan::params::{
+    BuildPlanParams, ConnectionParam, FeatureParam, KindSource, ThingRequest,
+};
 use crate::tools::themes::theme_roles;
 use crate::tools::validate::{Counts, resource_index, session_tables};
 use crate::tools::{fail, ok};
@@ -158,17 +164,41 @@ fn connection_label(connection: &ConnectionParam) -> String {
         .unwrap_or_else(|| format!("{}->{}", connection.from, connection.to))
 }
 
+/// The ids a wire feature row names: its room, its teleporter rooms
+/// and the connection it opens.
+fn feature_names(feature: &FeatureParam) -> [Option<&str>; 4] {
+    [
+        feature.room.as_deref(),
+        feature.from_room.as_deref(),
+        feature.to_room.as_deref(),
+        feature.opens.as_deref(),
+    ]
+}
+
 /// The plan path naming the offender of a compiler message: the first
-/// quoted room id wins, then the first quoted connection label.
+/// quoted room id wins, then the first quoted connection label, then
+/// the first quoted id a feature row names.
 fn plan_path(args: &BuildPlanParams, message: &str) -> Option<String> {
     let name = quoted_first(message)?;
     if let Some(index) = args.rooms.iter().position(|room| room.id == name) {
         return Some(format!("rooms[{index}]"));
     }
-    args.connections
+    if let Some(index) = args
+        .connections
         .iter()
         .position(|connection| connection_label(connection) == name)
-        .map(|index| format!("connections[{index}]"))
+    {
+        return Some(format!("connections[{index}]"));
+    }
+    args.features
+        .iter()
+        .position(|feature| {
+            feature_names(feature)
+                .into_iter()
+                .flatten()
+                .any(|id| id == name)
+        })
+        .map(|index| format!("features[{index}]"))
 }
 
 /// The compiler error with its plan path prefixed, keeping the code;
@@ -499,7 +529,7 @@ where
 impl Cyberdemon {
     /// Builds a whole map block from a declarative rooms-and-connections plan in one undoable edit.
     #[tool(
-        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between, things standing in the result - and writes the compiled block into the working archive as one undoable edit. Every built map needs a player start: pass player_start or a thing of type 1; door sector specials come from a later update. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later update wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). things: rows each give exactly one of type (a doomednum) and name (resolved against the session's definitions: a case-insensitive exact name, else a unique case-insensitive substring; no match or an ambiguous one is invalid_argument naming things[i], ambiguities listing the candidate names), and exactly one of an x/y plan point (transformed and snapped with the rooms) and a room id to fill. A room fill is deterministic: row-major from the sector bounding box's minimum corner raised by the thing's clearance (its definition's radius, else 16, plus 8 map units), one grid point per twice the clearance, every point kept at least that clearance inside the sector; up to count (default 1) copies land and a room that holds fewer warns \"room 'x' fits only N of M things\". angle (default 0) must be 0..=359; skills (some of easy/medium/hard) and multiplayer_only (notsingle in the Doom family, coop+dm in the Hexen one) set the presence flag bits, defaulting to present everywhere. player_start: {x, y, angle} or {room, angle} (the room form lands on the sector bounding box's centre) adds a type 1 thing; without it or a resolved thing of type 1 the call fails invalid_argument asking for a player start. theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. finalize: true (default false) builds the node run into the block before the write - the whole build_all_nodes set on the compiled model inside this same undoable edit: the classic SEGS/SSECTORS/NODES run plus a zero REJECT and a fresh BLOCKMAP for a binary map, the compressed extended ZNODES lump (that one lump only) for a UDMF one - and validates the finished map. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], things_placed, bounds {x1, y1, x2, y2}, warnings, nodes, validation, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, things_placed counts the written thing rows (player start included), and with finalize nodes carries the build summary {variant (classic|extended), segs, subsectors, nodes, warnings, the layout's extra counts} while validation carries an errors-only pass {errors: [at most 20 issue rows as validate_map reports them], counts: {error, warning, info} over every issue found}. Validation errors never roll the build back: the map was built to plan; fix the rows with the element tools. Without finalize, nodes and validation are null and the block ships without node data. Run undo to take the whole block back - node run included. Look at the result with render_topdown and render_view from the player start, and check it with validate_map."
+        description = "Builds a complete map from a declarative plan - rooms with footprints and sector properties, connections joining them, thick walls grown between, things standing in the result - and writes the compiled block into the working archive as one undoable edit. Every built map needs a player start: pass player_start or a thing of type 1; door sector specials come from a later update. map is the new block's header name (1 to 8 printable ASCII, case-insensitive); when the working archive already holds that name the call fails already_exists unless replace: true discards the old block first (maps only lower layers hold are always overridable). format: \"doom\" (default), \"hexen\" or \"udmf\"; namespace: is the UDMF TEXTMAP's namespace declaration (letters, digits, underscores, lowercased, default \"zdoom\") and is ignored for binary formats. wall_thickness (default 16) is the map-unit wall grown between and around rooms; 0 lets rooms share their walls directly. units: {scale_num (1), scale_den (1), origin_x (0), origin_y (0), flip_y (false)} carries the plan's coordinates into map units before compiling: map = origin + coordinate * scale_num / scale_den, with y subtracted from origin_y when flip_y: true mirrors an image-space drawing; grid (default 8) then snaps every transformed coordinate to the nearest multiple (1 switches snapping off); a grid below 1 or a scale_den or scale_num of 0 is invalid_argument naming the parameter. Image-space recipe: pass units: {scale_num: 4, flip_y: true} to compile a sketch measured in pixels - one pixel becomes 4 map units with y mirrored. Only coordinates transform: wall_thickness and every connection width, sill, lintel, step_height and step_depth are map units already and never scale. rooms: each room has an id (unique in the plan, connections refer to it) and exactly one of rect: {x, y, w, h} (both edges positive) or points: [[x, y], ...] (a closed ring of at least 3 distinct points; rooms are painted in order, a later one covers an earlier one); with sector properties floor (0), ceiling (128), light (160), floor_flat, ceiling_flat, wall_texture (the theme's roles answer unset ones) and outdoor (false; an outdoor room's ceiling is the sky). Both or neither of rect/points is invalid_argument naming the plan path (rooms[2]). connections: from and to are room ids (distinct, existing), kind is opening (a plain gap), door (a band whose sector comes out closed - floor equals ceiling - and carries no linedef special until a later update wires it: until then it is a solid threshold, style: normal/fast/stay_open/locked_red/locked_blue/locked_yellow/remote picks its dressing only), window (a glass band: sill 32 lifts its floor, lintel 24 drops its ceiling, under 16 units of glass is invalid_argument) or stairs (steps of step_height 16 and step_depth 24 from the lower room's floor to the higher one's); at: [x, y] places it on the shared boundary nearest that point (default: centred), width (64) is its clear width and must fit the boundary. Rooms that share no boundary fail invalid_argument naming the connection and saying they do not touch; every structural refusal names the offending id and is prefixed with its plan path (rooms[0]: ...). features: rows (default none) each give a kind - exit, switch, lift or teleporter (case-insensitive) - plus that kind's fields: exit {room, style: switch (default) or walk_over, secret: false, wall: north/south/east/west}, switch {room, opens: the id of a connection of the plan, wall, repeatable: false}, lift {room, low_floor: the lowest neighbouring floor by default, style: use_wall (default) or walk_trigger, repeatable: true}, teleporter {from_room, to_room, pad: [x, y] and destination: [x, y] plan points (transformed and snapped with the rooms; the room centres by default), angle: 0, two_way: false}. Features parse, transform and validate now - a feature naming an unknown room, or a switch opens no connection of the plan carries as its id, is invalid_argument naming the feature - and installing them on the compiled map arrives with a later update: a plan with features compiles exactly like the plan without them. things: rows each give exactly one of type (a doomednum) and name (resolved against the session's definitions: a case-insensitive exact name, else a unique case-insensitive substring; no match or an ambiguous one is invalid_argument naming things[i], ambiguities listing the candidate names), and exactly one of an x/y plan point (transformed and snapped with the rooms) and a room id to fill. A room fill is deterministic: row-major from the sector bounding box's minimum corner raised by the thing's clearance (its definition's radius, else 16, plus 8 map units), one grid point per twice the clearance, every point kept at least that clearance inside the sector; up to count (default 1) copies land and a room that holds fewer warns \"room 'x' fits only N of M things\". angle (default 0) must be 0..=359; skills (some of easy/medium/hard) and multiplayer_only (notsingle in the Doom family, coop+dm in the Hexen one) set the presence flag bits, defaulting to present everywhere. player_start: {x, y, angle} or {room, angle} (the room form lands on the sector bounding box's centre) adds a type 1 thing; without it or a resolved thing of type 1 the call fails invalid_argument asking for a player start. theme: dresses this one call from a named theme (unknown names are invalid_argument listing the game's themes) without touching the session's theme or overrides; the session theme answers by default, and a room's own flats/wall texture beat it. finalize: true (default false) builds the node run into the block before the write - the whole build_all_nodes set on the compiled model inside this same undoable edit: the classic SEGS/SSECTORS/NODES run plus a zero REJECT and a fresh BLOCKMAP for a binary map, the compressed extended ZNODES lump (that one lump only) for a UDMF one - and validates the finished map. Returns {map, format, rooms: {id: [sector indices]}, connections: [{id, kind, sectors}], things_placed, bounds {x1, y1, x2, y2}, warnings, nodes, validation, next_steps}: room_sectors lists what each room owns (a fully painted-over room holds no entry and warns), connections report each band's sectors in plan order, things_placed counts the written thing rows (player start included), and with finalize nodes carries the build summary {variant (classic|extended), segs, subsectors, nodes, warnings, the layout's extra counts} while validation carries an errors-only pass {errors: [at most 20 issue rows as validate_map reports them], counts: {error, warning, info} over every issue found}. Validation errors never roll the build back: the map was built to plan; fix the rows with the element tools. Without finalize, nodes and validation are null and the block ships without node data. Run undo to take the whole block back - node run included. Look at the result with render_topdown and render_view from the player start, and check it with validate_map."
     )]
     fn build_map_from_plan(
         &self,
@@ -660,6 +690,67 @@ mod tests {
         assert_eq!(connection_label(unnamed), "a->b");
         let named = plan.connections.get(1).expect("the door");
         assert_eq!(connection_label(named), "d1");
+    }
+
+    /// A two-room, one-door request carrying an exit at an unknown room
+    /// and a switch opening an unknown connection id.
+    fn feature_plan() -> BuildPlanParams {
+        args(
+            r#"{"map": "MAP05",
+                "rooms": [
+                    {"id": "a", "rect": {"x": 0, "y": 0, "w": 128, "h": 128}},
+                    {"id": "b", "rect": {"x": 128, "y": 0, "w": 128, "h": 128}}
+                ],
+                "connections": [
+                    {"id": "d1", "from": "a", "to": "b", "kind": "door", "style": "remote"}
+                ],
+                "features": [
+                    {"kind": "exit", "room": "ghost", "style": "walk_over"},
+                    {"kind": "switch", "room": "a", "opens": "nope"}
+                ]}"#,
+        )
+    }
+
+    #[test]
+    fn plan_paths_reach_feature_rows_by_their_named_ids() {
+        let plan = feature_plan();
+        assert_eq!(
+            plan_path(&plan, "exit feature names unknown room 'ghost'").as_deref(),
+            Some("features[0]"),
+            "a feature's room names the row"
+        );
+        assert_eq!(
+            plan_path(&plan, "switch feature opens unknown connection 'nope'").as_deref(),
+            Some("features[1]"),
+            "the opens value names the row"
+        );
+        assert_eq!(
+            plan_path(&plan, "room 'a' is painted over").as_deref(),
+            Some("rooms[0]"),
+            "a live room wins over the switch that references it"
+        );
+        assert_eq!(
+            plan_path(&plan, "connection 'd1' needs a remote door").as_deref(),
+            Some("connections[0]"),
+            "a real connection id wins over a feature naming it"
+        );
+    }
+
+    #[test]
+    fn feature_refusals_carry_their_plan_path() {
+        let plan = feature_plan();
+        let prefixed = with_plan_path(
+            CyberError::InvalidArgument(
+                "switch feature opens unknown connection 'nope'".to_owned(),
+            ),
+            &plan,
+        );
+        assert_eq!(prefixed.code(), "invalid_argument", "the code stands");
+        assert_eq!(
+            prefixed.to_string(),
+            "features[1]: switch feature opens unknown connection 'nope'",
+            "the path leads"
+        );
     }
 
     #[test]

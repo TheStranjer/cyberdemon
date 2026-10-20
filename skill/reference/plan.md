@@ -11,12 +11,15 @@ Things land in the same call: `things` rows and a mandatory
 builds the node run into the block and validates the result, all inside
 the one undoable edit. Door connectors still come out closed and
 un-wired: the door sector carries special `0` until the follow-up
-behaviour ticket wires it.
+behaviour ticket wires it. `features` rows — `exit`, `switch`, `lift`
+and `teleporter` declarations — parse, transform and validate now and
+install nothing until the follow-up CD-95 wiring slices land.
 
 ## `build_map_from_plan`
 
 `{map, format? = "doom", namespace?, replace? = false, wall_thickness?
-= 16, rooms: [...], connections: [...], things?: [{type | name, x + y |
+= 16, rooms: [...], connections: [...], features?: [{kind: exit |
+switch | lift | teleporter, …}], things?: [{type | name, x + y |
 room, count? = 1, angle? = 0, skills?, multiplayer_only?}],
 player_start?: {x, y, angle?} | {room, angle?}, theme?, units?
 {scale_num? = 1, scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y?
@@ -51,8 +54,12 @@ Both or neither fails `invalid_argument` naming the plan path
 (`rooms[2]`). Sector properties, all optional: `floor` (default `0`),
 `ceiling` (default `128`), `light` (default `160`), `floor_flat`,
 `ceiling_flat` and `wall_texture` (the theme's roles answer unset
-ones) and `outdoor` (default `false`; an outdoor room's ceiling is the
-sky unless it names a flat).
+ones), `outdoor` (default `false`; an outdoor room's ceiling is the
+sky unless it names a flat), `secret` (default `false`) and
+`light_effect` (unset by default; one of `none`, `flicker`,
+`strobe_fast`, `strobe_slow`, `glow` or `random_off`,
+case-insensitive). `secret` and `light_effect` describe the room for
+the follow-up CD-95 wiring slices and install nothing yet.
 
 **The walls**: `wall_thickness` (default `16`) is the map-unit wall
 grown between and around rooms; `0` lets rooms share their walls
@@ -79,8 +86,33 @@ the connection and saying they *do not touch*.
 > finished map) wires it, the door is a solid closed threshold. Read the
 > reported `sectors` and check with `assemble_map` / `render_topdown`.
 
-**Units and the grid**: room footprints and connection `at` positions
-are plan coordinates, drawn in whatever units you think in (sketch
+**The features**: `features` (default none) declares game structures
+beside the geometry. Each row gives a `kind` (case-insensitive) plus
+that kind's fields:
+
+| kind         | Fields | Declares |
+|--------------|--------|----------|
+| `exit`       | `room`, `style?` = `switch` or `walk_over` (default `switch`), `secret?` = false, `wall?` | The level end standing in `room`; `wall` is `north`, `south`, `east` or `west` (unset lets the wiring decide). |
+| `switch`     | `room`, `opens`, `wall?`, `repeatable?` = false | A wall switch in `room` operating the connection whose `id` is `opens`. |
+| `lift`       | `room`, `low_floor?`, `style?` = `use_wall` or `walk_trigger` (default `use_wall`), `repeatable?` = true | A platform in `room` lowering to `low_floor` (default: the lowest neighbouring floor). |
+| `teleporter` | `from_room`, `to_room`, `pad?`, `destination?`, `angle?` = 0, `two_way?` = false | A pad in `from_room` and a destination in `to_room`; the squares are plan points `[x, y]` carried through the same transform as the rooms (the room centres by default), `angle` is the arrival facing. |
+
+The rows reference-check like connections: a feature naming a room the
+plan does not hold, a `switch` whose `opens` matches no connection `id`
+(an unnamed connection is refused by its `from->to` label), a row
+missing its `room` (its `from_room`/`to_room`, or the switch's
+`opens`), and a bad `kind`, `style` or `wall` name are all
+`invalid_argument` naming `features[i]` — the vocabulary refusals list
+the accepted names.
+
+> **Features install nothing yet.** They parse, transform and validate
+> now; dressing them onto the compiled map arrives with the follow-up
+> CD-95 wiring slices on this branch. A plan with features compiles
+> exactly like the plan without them.
+
+**Units and the grid**: room footprints, connection `at` positions and
+teleporter `pad`/`destination` squares are plan coordinates, drawn in
+whatever units you think in (sketch
 pixels, half-tiles, centimetres). `units` turns them into map units
 before compiling: `x` maps to `origin_x + x * scale_num / scale_den`,
 `y` to `origin_y + y * scale_num / scale_den` — or `origin_y` minus the
@@ -91,9 +123,10 @@ half away from zero. Omitted, the transform is the identity (scale
 transformed coordinate to its nearest multiple; `1` switches snapping
 off. A `grid` below `1`, a `scale_den` of `0` and a `scale_num` of `0`
 are each `invalid_argument` naming the parameter. **Sizes are not
-transformed**: `wall_thickness`, connection `width` and the
-`sill`/`lintel`/`step_height`/`step_depth` values are map units
-already. Rectangles have both corners snapped and their `w`/`h`
+transformed**: `wall_thickness`, connection `width`, a lift's
+`low_floor` and the `sill`/`lintel`/`step_height`/`step_depth` values
+are map units already. Rectangles have both corners snapped and their
+`w`/`h`
 re-derived, so they stay grid-aligned; an edge the grid collapses to 0
 is refused naming the plan path.
 
@@ -190,8 +223,10 @@ without node data, as before.
 ids, unknown or self-joined rooms, non-positive widths, too-short
 boundaries…) already name the offending id; the tool prefixes them
 with the wire index — `rooms[0]: room 'a' has a 0x64 rectangle; both
-edges must be positive`. Thing rows fail the same way, naming
-`things[i]`, `things[i].room`, `things[i].skills` or `player_start`.
+edges must be positive`. Feature rows name `features[i]`
+(`features[0]: exit feature names unknown room 'ghost'`), and thing
+rows fail the same way, naming `things[i]`, `things[i].room`,
+`things[i].skills` or `player_start`.
 
 **The result**: `rooms` maps each room id to the sector indices it
 owns (a fully painted-over room holds no entry and warns about it);

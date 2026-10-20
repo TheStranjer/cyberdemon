@@ -20,7 +20,7 @@
 //! sessions, no archives, no `MCP` — and every refusal on an existing
 //! platform lands before a single row is written.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::geom::Pt;
@@ -63,7 +63,11 @@ pub const MIN_LIFT_DROP: i32 = 64;
 const MIN_PLATFORM_CORNERS: usize = 3;
 
 /// How the player starts the lift ride from below.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The serde names are the `snake_case` variant names (`use_wall`,
+/// `walk_trigger`), so a plan spells a style the way the tools do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LiftStyle {
     /// The player presses the platform's side wall from the lower area.
     UseWall,
@@ -646,6 +650,23 @@ mod tests {
                 },
                 "the Doom row of {style:?} repeatable={repeatable}"
             );
+        }
+    }
+
+    #[test]
+    fn the_serde_names_of_the_styles_are_snake_case() {
+        for (style, name) in [
+            (LiftStyle::UseWall, "use_wall"),
+            (LiftStyle::WalkTrigger, "walk_trigger"),
+        ] {
+            let written = serde_json::to_value(style).expect("serialising a style");
+            assert_eq!(
+                written,
+                serde_json::Value::String(name.to_owned()),
+                "{style:?}"
+            );
+            let again: LiftStyle = serde_json::from_value(written).expect("re-reading the style");
+            assert_eq!(again, style, "the name reads back");
         }
     }
 

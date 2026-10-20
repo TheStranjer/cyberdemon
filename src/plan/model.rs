@@ -1,11 +1,14 @@
-//! The plan data model: rooms, connections, and structural validation.
+//! The plan data model: rooms, connections, features, and structural
+//! validation.
 //!
 //! A [`Plan`] is pure data: the room footprints and sector properties a
-//! caller draws, the connections between them, and the scalar taste
-//! knobs (wall thickness, opening widths, sill and step sizes). This
-//! module knows nothing about maps or archives: it only checks that a
-//! plan is well-formed ([`Plan::validate`]) and turns a [`Room`] into a
-//! polygon ring ([`Room::polygon`]) for the geometry engine.
+//! caller draws, the connections between them, the game features
+//! ([`Feature`]) the follow-up wiring slices will install, and the
+//! scalar taste knobs (wall thickness, opening widths, sill and step
+//! sizes). This module knows nothing about maps or archives: it only
+//! checks that a plan is well-formed ([`Plan::validate`]) and turns a
+//! [`Room`] into a polygon ring ([`Room::polygon`]) for the geometry
+//! engine.
 
 use std::collections::HashSet;
 
@@ -13,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::geom::Pt;
+use crate::wad::map::features::{LiftStyle, LightEffect};
 
 /// Upper bound on [`Plan::rooms`]: region labels must fit `u32`
 /// ([`Label::Region`](crate::geom::label::Label::Region)) with room to
@@ -21,6 +25,9 @@ const MAX_ROOMS: usize = 4_096;
 
 /// Upper bound on [`Plan::connections`], same `u32` label budget.
 const MAX_CONNECTIONS: usize = 4_096;
+
+/// Upper bound on [`Plan::features`], same `u32` label budget.
+const MAX_FEATURES: usize = 4_096;
 
 /// Default [`Plan::wall_thickness`].
 const fn default_wall_thickness() -> i64 {
@@ -67,6 +74,16 @@ const fn default_step_depth() -> i32 {
     24_i32
 }
 
+/// Default [`Feature::Lift::style`].
+const fn default_lift_style() -> LiftStyle {
+    LiftStyle::UseWall
+}
+
+/// Default [`Feature::Lift::repeatable`].
+const fn default_lift_repeatable() -> bool {
+    true
+}
+
 /// A whole map plan: the rooms, the connections between them, and the
 /// wall material in between.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +93,11 @@ pub struct Plan {
     pub rooms: Vec<Room>,
     /// Openings, doors, windows and stairs joining the rooms.
     pub connections: Vec<Connection>,
+    /// Game structures the follow-up wiring slices install once the map
+    /// is compiled: exits, wall switches, lifts and teleporters. The
+    /// compiler itself acts on none of them yet.
+    #[serde(default)]
+    pub features: Vec<Feature>,
     /// Thickness of the walls grown between rooms, map units; `0` makes
     /// the room polygons touch directly. Default `16`.
     #[serde(default = "default_wall_thickness")]
@@ -109,6 +131,14 @@ pub struct Room {
     /// Whether the room is open to the sky. Default `false`.
     #[serde(default)]
     pub outdoor: bool,
+    /// Whether the room counts as a secret area. Default `false`; the
+    /// follow-up wiring slices are the first to act on it.
+    #[serde(default)]
+    pub secret: bool,
+    /// A light effect for the room's sector, if any; the follow-up
+    /// wiring slices are the first to install it.
+    #[serde(default)]
+    pub light_effect: Option<LightEffect>,
 }
 
 /// The footprint of a room.
@@ -211,6 +241,96 @@ pub enum KeyColor {
     Red,
 }
 
+/// A game structure the plan carries and the follow-up wiring slices
+/// install once the map is compiled. Nothing acts on a feature yet:
+/// [`compile`](fn@crate::plan::compile) validates them and passes them
+/// to no engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Feature {
+    /// The level's end trigger, standing in a room.
+    Exit {
+        /// Id of the room the exit stands in.
+        room: String,
+        /// How crossing or using it ends the level.
+        style: ExitStyle,
+        /// Whether the room is a secret area. Default `false`.
+        #[serde(default)]
+        secret: bool,
+        /// Which wall of the room carries it, if any.
+        wall: Option<Side>,
+    },
+    /// A wall switch in a room that operates a remote connection.
+    Switch {
+        /// Id of the room the switch is mounted in.
+        room: String,
+        /// Id of the connection (a remote door) this switch operates.
+        opens: String,
+        /// Which wall of the room carries it, if any.
+        wall: Option<Side>,
+        /// Whether the switch keeps working after use. Default `false`.
+        #[serde(default)]
+        repeatable: bool,
+    },
+    /// A lift platform lowering to the ground of a room.
+    Lift {
+        /// Id of the room the platform stands in.
+        room: String,
+        /// The floor the platform lowers to, map units; the lowest
+        /// neighbouring floor by default.
+        low_floor: Option<i32>,
+        /// How the ride is triggered from below. Default
+        /// [`LiftStyle::UseWall`].
+        #[serde(default = "default_lift_style")]
+        style: LiftStyle,
+        /// Whether the ride keeps working after use. Default `true`.
+        #[serde(default = "default_lift_repeatable")]
+        repeatable: bool,
+    },
+    /// A teleporter pad in one room, its destination in another.
+    Teleporter {
+        /// Id of the room the pad stands in.
+        from_room: String,
+        /// Id of the room the destination stands in.
+        to_room: String,
+        /// Plan point for the pad's centre; the room centre by default.
+        pad: Option<(i64, i64)>,
+        /// Plan point for the destination's centre; the room centre by
+        /// default.
+        destination: Option<(i64, i64)>,
+        /// Facing of the arrival, degrees. Default `0`.
+        #[serde(default)]
+        angle: i32,
+        /// Whether the return leg teleports back. Default `false`.
+        #[serde(default)]
+        two_way: bool,
+    },
+}
+
+/// A compass side of a room, naming the wall a feature is mounted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    /// The wall facing `+y`.
+    North,
+    /// The wall facing `-y`.
+    South,
+    /// The wall facing `+x`.
+    East,
+    /// The wall facing `-x`.
+    West,
+}
+
+/// How a [`Feature::Exit`] ends the level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitStyle {
+    /// A use switch: pressing the exit wall ends the level.
+    Switch,
+    /// Walking over the exit line ends the level.
+    WalkOver,
+}
+
 impl Shape {
     /// The corner ring of a `width` x `height` rectangle based at
     /// `(left, bottom)`, counter-clockwise starting at that corner. Sums
@@ -249,23 +369,26 @@ impl Plan {
     /// Checks the plan's structure, one thing at a time, and returns the
     /// first failure naming the offending id: at least one room, counts
     /// within the `u32` region-label budget, unique room ids, usable
-    /// shapes, a non-negative `wall_thickness`, and connections joining
-    /// two distinct rooms with a positive width and, for stairs, a
-    /// positive step depth. Room `ceiling > floor` is *not* checked
-    /// here; rooms are drawn in painter's order and may stack.
+    /// shapes, a non-negative `wall_thickness`, connections joining two
+    /// distinct rooms with a positive width and, for stairs, a positive
+    /// step depth, and features naming rooms that exist and, for
+    /// switches, opening a connection that carries an `id`. Room
+    /// `ceiling > floor` is *not* checked here; rooms are drawn in
+    /// painter's order and may stack.
     ///
     /// # Errors
     ///
     /// [`CyberError::InvalidArgument`] naming the offending id for the
     /// first structural problem found, or
-    /// [`CyberError::LimitExceeded`] past the room and connection
-    /// budgets.
+    /// [`CyberError::LimitExceeded`] past the room, connection and
+    /// feature budgets.
     #[inline]
     pub fn validate(&self) -> Result<(), CyberError> {
         self.validate_size()?;
         self.validate_thickness()?;
         let ids = self.validate_rooms()?;
-        self.validate_connections(&ids)
+        self.validate_connections(&ids)?;
+        self.validate_features(&ids)
     }
 
     /// Refuses an empty plan and plans whose counts would push the
@@ -286,6 +409,12 @@ impl Plan {
         if connections > MAX_CONNECTIONS {
             return Err(CyberError::LimitExceeded(format!(
                 "plan has {connections} connections; at most {MAX_CONNECTIONS} are supported"
+            )));
+        }
+        let features = self.features.len();
+        if features > MAX_FEATURES {
+            return Err(CyberError::LimitExceeded(format!(
+                "plan has {features} features; at most {MAX_FEATURES} are supported"
             )));
         }
         Ok(())
@@ -316,6 +445,15 @@ impl Plan {
     fn validate_connections(&self, ids: &HashSet<&str>) -> Result<(), CyberError> {
         for connection in &self.connections {
             validate_connection(connection, ids)?;
+        }
+        Ok(())
+    }
+
+    /// Checks every feature: the rooms it names exist and, for a
+    /// switch, its `opens` names a connection that carries an `id`.
+    fn validate_features(&self, ids: &HashSet<&str>) -> Result<(), CyberError> {
+        for feature in &self.features {
+            validate_feature(feature, ids, &self.connections)?;
         }
         Ok(())
     }
@@ -376,7 +514,7 @@ fn validate_connection(connection: &Connection, ids: &HashSet<&str>) -> Result<(
     let label = connection
         .id
         .clone()
-        .unwrap_or_else(|| format!("{from}->{to}"));
+        .unwrap_or_else(|| derived_label(connection));
     if !ids.contains(from) {
         return Err(CyberError::InvalidArgument(format!(
             "connection '{label}' starts from unknown room '{from}'"
@@ -419,6 +557,73 @@ fn validate_kind(kind: ConnectionKind, label: &str) -> Result<(), CyberError> {
     }
 }
 
+/// The label a connection answers to when it carries no `id`:
+/// `from->to`.
+fn derived_label(connection: &Connection) -> String {
+    format!("{}->{}", connection.from, connection.to)
+}
+
+/// Checks one feature: every room it names exists and, for a switch,
+/// its `opens` names a connection that carries an `id`. Whether that
+/// connection is a *remote* door needs compilation and is a later
+/// slice's check.
+fn validate_feature(
+    feature: &Feature,
+    ids: &HashSet<&str>,
+    connections: &[Connection],
+) -> Result<(), CyberError> {
+    match feature.clone() {
+        Feature::Exit { room, .. } => validate_feature_room("exit", &room, ids),
+        Feature::Switch { room, opens, .. } => {
+            validate_feature_room("switch", &room, ids)?;
+            validate_opens(&opens, connections)
+        }
+        Feature::Lift { room, .. } => validate_feature_room("lift", &room, ids),
+        Feature::Teleporter {
+            from_room, to_room, ..
+        } => {
+            validate_feature_room("teleporter", &from_room, ids)?;
+            validate_feature_room("teleporter", &to_room, ids)
+        }
+    }
+}
+
+/// One feature's room reference must name a room of the plan.
+fn validate_feature_room(kind: &str, room: &str, ids: &HashSet<&str>) -> Result<(), CyberError> {
+    if ids.contains(room) {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "{kind} feature names unknown room '{room}'; point it at a room of the plan"
+    )))
+}
+
+/// A switch's `opens` must name a connection by its `id`; an unnamed
+/// connection cannot be referred to, and is refused by its `from->to`
+/// label.
+fn validate_opens(opens: &str, connections: &[Connection]) -> Result<(), CyberError> {
+    let named = connections
+        .iter()
+        .any(|connection| connection.id.as_deref() == Some(opens));
+    if named {
+        return Ok(());
+    }
+    if let Some(connection) = connections
+        .iter()
+        .find(|connection| connection.id.is_none() && derived_label(connection) == opens)
+    {
+        return Err(CyberError::InvalidArgument(format!(
+            "switch feature opens connection '{label}', which carries no id; give the \
+             connection an id and name it in opens",
+            label = derived_label(connection)
+        )));
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "switch feature opens unknown connection '{opens}'; pass the id of a connection \
+         of the plan"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +640,8 @@ mod tests {
             ceiling_flat: None,
             wall_texture: None,
             outdoor: false,
+            secret: false,
+            light_effect: None,
         }
     }
 
@@ -468,7 +675,64 @@ mod tests {
         Plan {
             rooms,
             connections,
+            features: Vec::new(),
             wall_thickness: default_wall_thickness(),
+        }
+    }
+
+    /// A plan over the given rooms, connections and features.
+    fn plan_with_features(
+        rooms: Vec<Room>,
+        connections: Vec<Connection>,
+        features: Vec<Feature>,
+    ) -> Plan {
+        Plan {
+            rooms,
+            connections,
+            features,
+            wall_thickness: default_wall_thickness(),
+        }
+    }
+
+    /// A plain exit in the named room.
+    fn exit_in(room: &str) -> Feature {
+        Feature::Exit {
+            room: room.to_owned(),
+            style: ExitStyle::Switch,
+            secret: false,
+            wall: None,
+        }
+    }
+
+    /// A switch in the named room opening the named connection.
+    fn switch_in(room: &str, opens: &str) -> Feature {
+        Feature::Switch {
+            room: room.to_owned(),
+            opens: opens.to_owned(),
+            wall: None,
+            repeatable: false,
+        }
+    }
+
+    /// A plain lift in the named room.
+    fn lift_in(room: &str) -> Feature {
+        Feature::Lift {
+            room: room.to_owned(),
+            low_floor: None,
+            style: LiftStyle::UseWall,
+            repeatable: true,
+        }
+    }
+
+    /// A plain teleporter from `from` to `to`.
+    fn teleporter(from: &str, to: &str) -> Feature {
+        Feature::Teleporter {
+            from_room: from.to_owned(),
+            to_room: to.to_owned(),
+            pad: None,
+            destination: None,
+            angle: 0_i32,
+            two_way: false,
         }
     }
 
@@ -518,6 +782,12 @@ mod tests {
                 {"id": "s1", "from": "lab", "to": "courtyard", "kind": {"stairs": {"step_height": 8, "step_depth": 16}}, "at": [0, 0]},
                 {"id": "s2", "from": "lab", "to": "courtyard", "kind": {"stairs": {}}}
             ],
+            "features": [
+                {"kind": "exit", "room": "courtyard", "style": "walk_over", "secret": true, "wall": "north"},
+                {"kind": "switch", "room": "lab", "opens": "d7", "wall": "west", "repeatable": true},
+                {"kind": "lift", "room": "lab", "low_floor": -64, "style": "walk_trigger", "repeatable": false},
+                {"kind": "teleporter", "from_room": "courtyard", "to_room": "lab", "pad": [64, 64], "destination": [200, 64], "angle": 90, "two_way": true}
+            ],
             "wall_thickness": 24
         }"#;
         let parsed: Plan = serde_json::from_str(text).expect("the documented JSON layout");
@@ -530,6 +800,123 @@ mod tests {
         let written = serde_json::to_string(&parsed).expect("serialising a plan");
         let again: Plan = serde_json::from_str(&written).expect("re-reading the plan");
         assert_eq!(parsed, again, "round trip must preserve the plan");
+    }
+
+    #[test]
+    fn feature_rows_keep_their_tagged_wire_names() {
+        let text = r#"{
+            "rooms": [{"id": "a", "shape": {"rect": {"x": 0, "y": 0, "w": 64, "h": 64}}}],
+            "connections": [],
+            "features": [
+                {"kind": "exit", "room": "a", "style": "walk_over", "secret": true, "wall": "north"},
+                {"kind": "switch", "room": "a", "opens": "d1", "wall": "west", "repeatable": true},
+                {"kind": "lift", "room": "a", "low_floor": -64, "style": "walk_trigger", "repeatable": false},
+                {"kind": "teleporter", "from_room": "a", "to_room": "a", "pad": [64, 64], "destination": [200, 64], "angle": 90, "two_way": true}
+            ]
+        }"#;
+        let parsed: Plan = serde_json::from_str(text).expect("the tagged feature rows");
+        assert_eq!(
+            parsed.features.first().expect("four features"),
+            &Feature::Exit {
+                room: "a".to_owned(),
+                style: ExitStyle::WalkOver,
+                secret: true,
+                wall: Some(Side::North),
+            },
+            "the exit row is tagged by kind"
+        );
+        assert_eq!(
+            parsed.features.get(1).expect("four features"),
+            &Feature::Switch {
+                room: "a".to_owned(),
+                opens: "d1".to_owned(),
+                wall: Some(Side::West),
+                repeatable: true,
+            },
+            "the switch row"
+        );
+        assert_eq!(
+            parsed.features.get(2).expect("four features"),
+            &Feature::Lift {
+                room: "a".to_owned(),
+                low_floor: Some(-64_i32),
+                style: LiftStyle::WalkTrigger,
+                repeatable: false,
+            },
+            "the lift row"
+        );
+        assert_eq!(
+            parsed.features.get(3).expect("four features"),
+            &Feature::Teleporter {
+                from_room: "a".to_owned(),
+                to_room: "a".to_owned(),
+                pad: Some((64_i64, 64_i64)),
+                destination: Some((200_i64, 64_i64)),
+                angle: 90_i32,
+                two_way: true,
+            },
+            "the teleporter row keeps its squares"
+        );
+        let written = serde_json::to_string(&parsed).expect("serialising features");
+        let again: Plan = serde_json::from_str(&written).expect("re-reading the features");
+        assert_eq!(parsed, again, "the tagged rows round trip");
+    }
+
+    #[test]
+    fn omitted_feature_fields_materialise_their_defaults() {
+        let text = r#"{
+            "rooms": [{"id": "a", "shape": {"rect": {"x": 0, "y": 0, "w": 64, "h": 64}}}],
+            "connections": [],
+            "features": [
+                {"kind": "exit", "room": "a", "style": "switch"},
+                {"kind": "switch", "room": "a", "opens": "d1"},
+                {"kind": "lift", "room": "a"},
+                {"kind": "teleporter", "from_room": "a", "to_room": "a"}
+            ]
+        }"#;
+        let parsed: Plan = serde_json::from_str(text).expect("a plan with minimal features");
+        assert_eq!(
+            parsed.features.first().expect("four features"),
+            &Feature::Exit {
+                room: "a".to_owned(),
+                style: ExitStyle::Switch,
+                secret: false,
+                wall: None,
+            },
+            "default exit secret and wall"
+        );
+        assert_eq!(
+            parsed.features.get(1).expect("four features"),
+            &Feature::Switch {
+                room: "a".to_owned(),
+                opens: "d1".to_owned(),
+                wall: None,
+                repeatable: false,
+            },
+            "default switch repeatable and wall"
+        );
+        assert_eq!(
+            parsed.features.get(2).expect("four features"),
+            &Feature::Lift {
+                room: "a".to_owned(),
+                low_floor: None,
+                style: LiftStyle::UseWall,
+                repeatable: true,
+            },
+            "default lift style and repeatable"
+        );
+        assert_eq!(
+            parsed.features.get(3).expect("four features"),
+            &Feature::Teleporter {
+                from_room: "a".to_owned(),
+                to_room: "a".to_owned(),
+                pad: None,
+                destination: None,
+                angle: 0_i32,
+                two_way: false,
+            },
+            "default teleporter squares, angle and return leg"
+        );
     }
 
     #[test]
@@ -548,9 +935,12 @@ mod tests {
         assert_eq!(room.ceiling, 128_i32, "default ceiling");
         assert_eq!(room.light, 160_i32, "default light");
         assert!(!room.outdoor, "default outdoor");
+        assert!(!room.secret, "default secret");
+        assert_eq!(room.light_effect, None, "default light effect");
         assert_eq!(room.floor_flat, None, "default floor flat");
         assert_eq!(room.ceiling_flat, None, "default ceiling flat");
         assert_eq!(room.wall_texture, None, "default wall texture");
+        assert!(parsed.features.is_empty(), "default feature list");
         let window = parsed.connections.first().expect("first connection");
         assert_eq!(window.width, 64_i64, "default connection width");
         assert_eq!(window.id, None, "default connection id");
@@ -572,6 +962,25 @@ mod tests {
             },
             "default step height and depth"
         );
+    }
+
+    #[test]
+    fn a_rooms_light_effect_names_its_snake_case_word() {
+        let text = r#"{
+            "rooms": [{
+                "id": "a",
+                "shape": {"rect": {"x": 0, "y": 0, "w": 64, "h": 64}},
+                "secret": true,
+                "light_effect": "strobe_slow"
+            }],
+            "connections": []
+        }"#;
+        let parsed: Plan = serde_json::from_str(text).expect("a lit room");
+        let room = parsed.rooms.first().expect("one room");
+        assert!(room.secret, "explicit secret");
+        assert_eq!(room.light_effect, Some(LightEffect::StrobeSlow));
+        let written = serde_json::to_string(room).expect("serialising a room");
+        assert!(written.contains("\"strobe_slow\""), "{written}");
     }
 
     #[test]
@@ -686,6 +1095,65 @@ mod tests {
     }
 
     #[test]
+    fn every_feature_kind_refuses_an_unknown_room_by_name() {
+        let rooms = vec![square_room("a"), square_room("b")];
+        for (feature, kind) in [
+            (exit_in("ghost"), "exit"),
+            (switch_in("ghost", "d1"), "switch"),
+            (lift_in("ghost"), "lift"),
+            (teleporter("ghost", "a"), "teleporter"),
+            (teleporter("a", "ghost"), "teleporter"),
+        ] {
+            let plan = plan_with_features(rooms.clone(), vec![], vec![feature]);
+            assert_invalid(&plan, &format!("{kind} feature names unknown room 'ghost'"));
+        }
+    }
+
+    #[test]
+    fn a_switch_must_open_a_connection_by_id() {
+        let mut named = opening("a", "b");
+        named.id = Some("d1".to_owned());
+        let rooms = vec![square_room("a"), square_room("b")];
+        let good = plan_with_features(
+            rooms.clone(),
+            vec![named.clone()],
+            vec![switch_in("a", "d1")],
+        );
+        good.validate().expect("the switch names the connection");
+        let unknown = plan_with_features(rooms, vec![named], vec![switch_in("a", "nope")]);
+        assert_invalid(&unknown, "opens unknown connection 'nope'");
+    }
+
+    #[test]
+    fn a_switch_opening_an_unnamed_connection_is_refused_by_its_label() {
+        let plan = plan_with_features(
+            vec![square_room("a"), square_room("b")],
+            vec![opening("a", "b")],
+            vec![switch_in("a", "a->b")],
+        );
+        assert_invalid(&plan, "opens connection 'a->b', which carries no id");
+    }
+
+    #[test]
+    fn a_feature_bearing_plan_validates() {
+        let rooms = vec![square_room("a"), square_room("b")];
+        let mut named = opening("a", "b");
+        named.id = Some("d1".to_owned());
+        let plan = plan_with_features(
+            rooms,
+            vec![named],
+            vec![
+                exit_in("b"),
+                switch_in("a", "d1"),
+                lift_in("b"),
+                teleporter("a", "b"),
+            ],
+        );
+        plan.validate()
+            .expect("features are reference-checked only");
+    }
+
+    #[test]
     fn plans_past_the_room_budget_are_refused() {
         let rooms = (0_i64..4_097)
             .map(|index| square_room(&format!("room-{index}")))
@@ -714,6 +1182,18 @@ mod tests {
     }
 
     #[test]
+    fn plans_past_the_feature_budget_are_refused() {
+        let features = (0_i64..4_097).map(|_| exit_in("a")).collect();
+        let plan = plan_with_features(vec![square_room("a")], vec![], features);
+        let error = plan.validate().expect_err("4097 features must be refused");
+        assert_eq!(error.code(), "limit_exceeded", "feature budget code");
+        assert!(
+            error.to_string().contains("4097"),
+            "message names the count: {error}"
+        );
+    }
+
+    #[test]
     fn a_happy_plan_validates() {
         let courtyard = room_with(
             "courtyard",
@@ -734,6 +1214,12 @@ mod tests {
         };
         let mut plan = plan(vec![courtyard, lab], vec![door, stairs]);
         plan.wall_thickness = 0_i64;
+        plan.features = vec![
+            exit_in("courtyard"),
+            switch_in("lab", "d1"),
+            lift_in("lab"),
+            teleporter("courtyard", "lab"),
+        ];
         plan.validate().expect("the plan is well-formed");
     }
 }

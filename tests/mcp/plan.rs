@@ -19,7 +19,10 @@
 //! step (the classic run plus `REJECT` and `BLOCKMAP` for binary maps,
 //! the extended `ZNODES` lump alone for `UDMF` ones) with the result's
 //! `nodes` summary and errors-only `validation` pass, and the null
-//! pair when `finalize` is not asked for.
+//! pair when `finalize` is not asked for. The `features` rows: a plan
+//! carrying an exit, a switch, a lift and a teleporter builds exactly
+//! like its feature-free twin, and a feature naming an unknown room or
+//! an `opens` id no connection carries refuses naming `features[i]`.
 
 #[cfg(test)]
 mod tests {
@@ -887,5 +890,40 @@ mod tests {
             json!("vanilla"),
             "the block carries the run"
         );
+    }
+
+    #[tokio::test]
+    async fn feature_rows_build_like_their_feature_free_twin_and_refuse_by_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let mut dressed = plan_for("MAP05");
+        dressed["features"] = json!([
+            {"kind": "exit", "room": "b", "style": "walk_over",
+             "secret": true, "wall": "north"},
+            {"kind": "switch", "room": "a", "opens": "d1", "wall": "east"},
+            {"kind": "lift", "room": "b", "low_floor": 0_i64, "style": "use_wall"},
+            {"kind": "teleporter", "from_room": "a", "to_room": "b",
+             "pad": [64_i64, 32_i64], "destination": [192_i64, 96_i64],
+             "angle": 90_i64, "two_way": true}
+        ]);
+        let with_features = call(&client, "build_map_from_plan", dressed.clone()).await;
+        let assembled_dressed = call(&client, "assemble_map", json!({"map": "MAP05"})).await;
+        call(&client, "undo", json!({})).await;
+        let plain = call(&client, "build_map_from_plan", plan_for("MAP05")).await;
+        let assembled_plain = call(&client, "assemble_map", json!({"map": "MAP05"})).await;
+        assert_eq!(
+            with_features, plain,
+            "features install nothing yet: the results agree row for row"
+        );
+        assert_eq!(
+            assembled_dressed, assembled_plain,
+            "and the written block is the block the feature-free plan builds"
+        );
+        let mut ghost = dressed.clone();
+        ghost["features"][0]["room"] = json!("ghost");
+        refuse_with(&client, ghost, "features[0]").await;
+        let mut orphan = dressed;
+        orphan["features"][1]["opens"] = json!("nope");
+        refuse_with(&client, orphan, "features[1]").await;
     }
 }

@@ -5,10 +5,11 @@ elements — "every room with a nukage floor", "all STARTAN walls", "the
 monsters in the hall" — and `find_elements` turns such a request into a
 query: a kind, a list of filters and an optional bound, answered with the
 matching indices and compact rows. It never changes anything; act on the
-indices with the edit tools — or, when the request is a whole name swap
-("use BRICK7 instead of STARTAN everywhere"), with this group's bulk
-replacements `replace_texture` and `replace_flat`, which fold the same
-question across maps into one undoable step.
+indices with the edit tools — or, when the request is a whole swap ("use
+BRICK7 instead of STARTAN everywhere", "turn every imp into a demon"),
+with this group's bulk replacements `replace_texture`, `replace_flat` and
+`replace_thing_type`, which fold the same question across maps into one
+undoable step.
 
 ## `find_elements`
 
@@ -173,6 +174,44 @@ Find the wearers first with `find_elements {kind: "sectors", where:
 [{field: "floor_flat", op: "glob", value: "FLOOR*"}]}` and read the
 result back through `describe_map`'s per-sector flat fields.
 
+## `replace_thing_type`
+
+`{from, to, maps?, dry_run? = false, allow_unknown? = false}` →
+`{maps: {<block>: n}, total, copied_maps, from, to, dry_run,
+next_steps}`
+
+Rewrites every thing whose type number equals the resolved `from` to
+the resolved `to`, across maps, in **one** undoable step labelled
+`replace_thing_type <FROM> -> <TO>` (the resolved numbers). Only the
+type moves: every touched thing's position, facing, presence flags and
+the `Hexen`-family `tid`, `special` and args come out byte-identical,
+and things that already hold `to` stay out of the counts.
+
+- **Both sides take a number or a name.** A JSON number is the doomednum
+  as stored; a string resolves through the session's definitions
+  (`get_thing_types` shows them, custom `DEHACKED`/`DECORATE` included):
+  an exact case-insensitive name wins, else a unique case-insensitive
+  substring — `from: "imp"` means `3001`, and `to: "demon"` means `3002`
+  *even though* `Demon` is also a substring of `CyberDemon` (16) and
+  `Cacodemon` (3005). A name nothing holds, or one several distinct
+  types share, is `invalid_argument` listing the candidates and naming
+  which parameter (`from` or `to`) failed.
+- **`to` must exist** in the session's definitions; an undefined number
+  is `invalid_argument` naming `get_thing_types` and the escape hatch:
+  `allow_unknown: true` skips the check and the report carries the
+  written number as-is. An undefined `from` needs no escape — it simply
+  matches nothing. An `allow_unknown` number must still fit each
+  targeted map's format (binary `Doom` stores thing types as `u16`; a
+  larger one is `limit_exceeded` and nothing is written).
+- The `maps` selector, copy-on-write `copied_maps`, `dry_run` and the
+  one-undo guarantee are exactly as in `replace_texture`; every selected
+  map holds a `maps` entry even at `0`, counting the *things* moved.
+
+"Turn all imps into demons" → `replace_thing_type {from: "imp",
+to: "demon"}`; run it with `dry_run: true` first to count the imps, and
+read the result back with `find_elements {kind: "things", where:
+[{field: "type", op: "eq", value: 3002}]}`.
+
 ## Typical requests
 
 - "Make every dark room dimmer" — `find_elements {kind: "sectors", where:
@@ -198,6 +237,10 @@ result back through `describe_map`'s per-sector flat fields.
   `replace_flat {from: "NUKAGE*", to: "FLOOR4_6", maps: "all"}`;
   `surfaces: ["floor"]` keeps any sector's sky or liquid ceiling as it
   is.
+- "Turn all imps into demons" — skip the per-thing walk:
+  `replace_thing_type {from: "imp", to: "demon"}` (names or doomednums
+  both sides; `maps: "all"`, or a `dry_run: true` pass first when the
+  swap runs across the episode).
 
 The `rows` are deliberately compact summaries (sector look, line ends and
 sides, side textures, thing names and positions); for full detail on a hit,

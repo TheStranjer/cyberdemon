@@ -1,9 +1,10 @@
 //! Query tools: `find_elements`, the set-valued read behind every
-//! plain-English "all the X" request, and CD-108's glob name swaps,
-//! `replace_texture` and `replace_flat`.
+//! plain-English "all the X" request, and CD-108's bulk `replace_*` swaps.
 //!
-//! The swaps fold their per-map counts across whole maps in one undoable
-//! step. The filtering is the pure [`crate::wad::map::query`] engine's; this file
+//! The name globs of `replace_texture` and `replace_flat` and the
+//! doomednum-or-name sides of `replace_thing_type` fold their per-map
+//! counts across whole maps in one undoable step. The filtering is the pure
+//! [`crate::wad::map::query`] engine's; this file
 //! resolves the flattened query parameters, reads the map and the session's
 //! definitions (custom `DECORATE`/`DEHACKED` things included) under one
 //! lock exactly like the playability group does, runs the query and pages
@@ -38,11 +39,12 @@ use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::tools::query::replace::{
-    MapsSelector, ReplaceReport, Replacement, Stock, parse_terms, require_target, run_replacement,
+    MapsSelector, ReplaceReport, Replacement, Stock, ThingRef, parse_terms, require_defined_thing,
+    require_target, resolve_thing_ref, run_replacement, thing_definitions,
 };
 use crate::tools::{fail, ok};
 use crate::wad::map::Map;
-use crate::wad::map::bulk::{Face, Surface, replace_flats, replace_textures};
+use crate::wad::map::bulk::{Face, Surface, replace_flats, replace_textures, replace_thing_types};
 use crate::wad::map::query::{
     ElementKind, Filter, Query, QueryContext, Within, run_query, side_sector,
 };
@@ -460,6 +462,89 @@ fn flat_run(session: &mut Session, args: &ReplaceFlatParams) -> Result<ReplaceRe
     })
 }
 
+/// Arguments for [`Cyberdemon::replace_thing_type`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ReplaceThingTypeParams {
+    /// The things to rewrite: the doomednum as stored, or a definition
+    /// name (`get_thing_types` shows them; an exact case-insensitive
+    /// name wins, else a unique case-insensitive substring). A name
+    /// nothing holds or several types share fails with `invalid_argument`
+    /// naming `from`.
+    from: ThingRef,
+    /// What every matched thing gets: a doomednum or a definition name,
+    /// resolved exactly as [`Self::from`]. The resolved number must
+    /// exist in the session's definitions unless `allow_unknown` is set.
+    to: ThingRef,
+    /// The map blocks to edit, exactly as in [`ReplaceTextureParams::maps`].
+    #[serde(default)]
+    maps: Option<MapsSelector>,
+    /// Report the per-map counts without writing anything or touching
+    /// the undo stack (default `false`).
+    #[serde(default)]
+    dry_run: Option<bool>,
+    /// Write a `to` number the session does not define without the
+    /// existence check, and report it as-is (default `false`). The
+    /// number must still fit each targeted map's format.
+    #[serde(default)]
+    allow_unknown: Option<bool>,
+}
+
+/// Structured result of [`Cyberdemon::replace_thing_type`]: the shared
+/// [`ReplaceReport`] fold beside the two resolved numbers.
+#[derive(Debug, Serialize)]
+struct ThingSwapReport {
+    /// The resolved thing type the call rewrote.
+    from: i32,
+    /// The resolved thing type the call wrote.
+    to: i32,
+    /// The glob swaps' shared fields: `maps`, `total`, `copied_maps`,
+    /// `dry_run` and `next_steps`.
+    #[serde(flatten)]
+    swap: ReplaceReport,
+}
+
+/// [`resolve_thing_ref`]'s answer with an `invalid_argument` refusal
+/// attributed to the `parameter` that carried the bad reference.
+fn resolve_side(session: &Session, value: &ThingRef, parameter: &str) -> Result<i32, CyberError> {
+    match resolve_thing_ref(session, value) {
+        Err(CyberError::InvalidArgument(problem)) => Err(CyberError::InvalidArgument(format!(
+            "{parameter}: {problem}"
+        ))),
+        answered => answered,
+    }
+}
+
+/// `replace_thing_type`'s work: resolve both sides (each failure naming
+/// its parameter), refuse an undefined `to` unless `allow_unknown` lets
+/// it through, and run [`replace_thing_types`] over the selected maps
+/// as one step.
+///
+/// # Errors
+///
+/// [`resolve_side`]'s and [`require_defined_thing`]'s
+/// [`CyberError::InvalidArgument`] refusals and [`run_replacement`]'s
+/// for a map no scope holds.
+fn thing_type_run(
+    session: &mut Session,
+    args: &ReplaceThingTypeParams,
+) -> Result<ThingSwapReport, CyberError> {
+    let from = resolve_side(session, &args.from, "from")?;
+    let to = resolve_side(session, &args.to, "to")?;
+    if !args.allow_unknown.unwrap_or(false) {
+        require_defined_thing(&thing_definitions(session)?, to)?;
+    }
+    let label = format!("replace_thing_type {from} -> {to}");
+    let replacement = Replacement {
+        label: &label,
+        maps: args.maps.as_ref(),
+        dry_run: args.dry_run.unwrap_or(false),
+    };
+    let swap = run_replacement(session, &replacement, |map| {
+        replace_thing_types(map, from, to)
+    })?;
+    Ok(ThingSwapReport { from, to, swap })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -513,6 +598,23 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Rewrites thing type numbers across whole maps in one undoable step.
+    #[tool(
+        description = "Changes thing types across maps in ONE undoable step: rewrites every thing whose type number equals the resolved from to the resolved to; things that already hold to stay out of the counts. Both sides take a number (the doomednum as stored in THINGS) or a definition name (e.g. \"imp\"): names resolve through the session's definitions (custom DEHACKED/DECORATE/ZScript included) - an exact case-insensitive name wins, else a unique case-insensitive substring; a name nothing holds or several distinct types share is invalid_argument listing the candidates and naming which parameter (from or to) failed. The resolved to must exist in the session's definitions (get_thing_types lists the numbers and names) or the call refuses with invalid_argument, naming get_thing_types and the escape hatch: allow_unknown: true skips the check and reports the written number as-is. An undefined from needs no escape - it simply matches nothing, and an allow_unknown to must still fit the target map's format (binary Doom stores thing types as u16; a larger number refuses with limit_exceeded, nothing written). Positions, facings, presence flags and the Hexen-family tid, special and args come out byte-identical: only the type number moves. maps defaults to the active map (set_active_map, else the merged view's only map), \"all\" takes every distinct map block of the merged view, and a list of names takes exactly those (an unknown name is not_found naming list_maps). A map a read-only layer (IWAD or resource) holds is copied into the working archive before it is rewritten (copy-on-write): the copies, the rewrites and the label replace_thing_type <FROM> -> <TO> sit in ONE undo entry, and any refusal leaves the session exactly as it was. dry_run: true (default false) reports the same counts while writing nothing and recording nothing - run it first for a wide swap. Returns {maps: {block name: changed things}, total (the sum over the maps), copied_maps (the maps that had to be copied in; empty for a dry run), from (the resolved doomednum), to (the resolved doomednum), dry_run, next_steps}; one undo restores every type in one step. Count the targets first with find_elements (kind \"things\", field type or a name glob) and read positions back through assemble_map; see skill/reference/query.md."
+    )]
+    fn replace_thing_type(
+        &self,
+        Parameters(args): Parameters<ReplaceThingTypeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .state()
+            .with_session(|session| thing_type_run(session, &args))
+        {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -522,8 +624,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DEFAULT_LIMIT, FindElementsParams, MAX_LIMIT, ReplaceFlatParams, ReplaceTextureParams, Row,
-        find_run, flat_run, page_hits, parse_limit, rows, texture_run,
+        DEFAULT_LIMIT, FindElementsParams, MAX_LIMIT, ReplaceFlatParams, ReplaceTextureParams,
+        ReplaceThingTypeParams, Row, ThingRef, find_run, flat_run, page_hits, parse_limit, rows,
+        texture_run, thing_type_run,
     };
     use crate::defs::definitions_for;
     use crate::session::{Layer, LayerRole, Session};
@@ -752,21 +855,30 @@ mod tests {
         Lump::new(parsed(text), vec![0xA5_u8; 8])
     }
 
+    /// A fully visible spawn of `kind` at `x`/`y` facing `angle`.
+    fn loaded(kind: i32, x: i32, y: i32, angle: i32) -> Thing {
+        Thing {
+            kind,
+            x,
+            y,
+            angle,
+            flags: 7_u32,
+            ..Default::default()
+        }
+    }
+
     /// The bulk-edit fixture map: three sidedef faces named `WALL1`
-    /// (two middles, one upper) and three sector surfaces named `FLOOR1`
-    /// (both of sector 0, sector 1's floor).
+    /// (two middles, one upper), three sector surfaces named `FLOOR1`
+    /// (both of sector 0, sector 1's floor), a type-1 player start and
+    /// one imp (3001) for the thing-type swap.
     fn bulk_map() -> Map {
         Map {
             name: parsed("MAP01"),
             format: MapFormat::Doom,
-            things: vec![Thing {
-                kind: 1_i32,
-                x: 64_i32,
-                y: 128_i32,
-                angle: 0_i32,
-                flags: 7_u32,
-                ..Default::default()
-            }],
+            things: vec![
+                loaded(1_i32, 64_i32, 128_i32, 0_i32),
+                loaded(3001_i32, -64_i32, 64_i32, 90_i32),
+            ],
             vertices: vec![
                 Vertex {
                     x: 0_i32,
@@ -988,5 +1100,123 @@ mod tests {
         assert_eq!(shown["copied_maps"], json!([]), "nothing copied");
         assert!(session.working().is_empty(), "the working archive stands");
         assert!(session.undo_labels().is_empty(), "no history entry");
+    }
+
+    /// `replace_thing_type` arguments over the fixture's default map.
+    fn thing_params(from: ThingRef, to: ThingRef) -> ReplaceThingTypeParams {
+        ReplaceThingTypeParams {
+            from,
+            to,
+            maps: None,
+            dry_run: None,
+            allow_unknown: None,
+        }
+    }
+
+    /// The doomednum variant of the test [`ThingRef`].
+    fn number(kind: u32) -> ThingRef {
+        ThingRef::Number(kind)
+    }
+
+    /// The name variant of the test [`ThingRef`].
+    fn name(text: &str) -> ThingRef {
+        ThingRef::Name(text.to_owned())
+    }
+
+    #[test]
+    fn thing_type_run_labels_the_step_with_the_resolved_numbers() {
+        let mut session = bulk_session();
+        let mut preview = thing_params(name("imp"), name("demon"));
+        preview.dry_run = Some(true);
+        let previewed = thing_type_run(&mut session, &preview).expect("the preview runs");
+        let shown = serde_json::to_value(&previewed).expect("the report serializes");
+        assert_eq!(shown["maps"], json!({"MAP01": 1_u64}), "counts reported");
+        assert_eq!(shown["dry_run"], json!(true), "flagged as a preview");
+        assert_eq!(shown["copied_maps"], json!([]), "a preview copies nothing");
+        assert_eq!(shown["from"], json!(3001_u64), "the resolved doomednum");
+        assert_eq!(shown["to"], json!(3002_u64), "and the resolved target");
+        assert!(
+            session.undo_labels().is_empty(),
+            "the preview records nothing"
+        );
+        let report = thing_type_run(&mut session, &thing_params(name("Imp"), number(3002_u32)))
+            .expect("the swap runs");
+        let written = serde_json::to_value(&report).expect("the report serializes");
+        assert_eq!(written["total"], json!(1_u64), "the fixture imp moved");
+        assert_eq!(
+            report.swap.copied_maps,
+            vec!["MAP01".to_owned()],
+            "copied in"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["replace_thing_type 3001 -> 3002"],
+            "one labeled step with the resolved numbers"
+        );
+    }
+
+    #[test]
+    fn thing_type_run_names_the_failing_parameter_on_both_sides() {
+        let mut session = bulk_session();
+        let bad_from = thing_type_run(&mut session, &thing_params(name("platypus"), name("imp")))
+            .expect_err("no thing named platypus");
+        assert_eq!(bad_from.code(), "invalid_argument", "unknown from code");
+        assert!(
+            bad_from.to_string().starts_with("from:"),
+            "the refusal names from: {bad_from}"
+        );
+        let bad_to = thing_type_run(&mut session, &thing_params(name("imp"), name("emon")))
+            .expect_err("several types share that substring");
+        assert_eq!(bad_to.code(), "invalid_argument", "ambiguous to code");
+        assert!(
+            bad_to.to_string().starts_with("to:"),
+            "the refusal names to: {bad_to}"
+        );
+        assert!(
+            session.undo_labels().is_empty(),
+            "refusals write nothing and record nothing"
+        );
+    }
+
+    /// An undefined doomednum the binary `Doom` records can still store.
+    const UNDEFINED_KIND: u32 = 9999_u32;
+
+    #[test]
+    fn thing_type_run_checks_the_target_and_allow_unknown_escapes_it() {
+        let mut session = bulk_session();
+        let refused = thing_type_run(
+            &mut session,
+            &thing_params(number(3001_u32), number(UNDEFINED_KIND)),
+        )
+        .expect_err("9999 is undefined");
+        assert_eq!(refused.code(), "invalid_argument", "undefined target code");
+        let message = refused.to_string();
+        assert!(
+            message.contains("get_thing_types") && message.contains("allow_unknown"),
+            "the reference and the escape hatch are named: {message}"
+        );
+        assert!(
+            session.undo_labels().is_empty(),
+            "the refusal records nothing"
+        );
+        let mut allowed = thing_params(number(3001_u32), number(UNDEFINED_KIND));
+        allowed.allow_unknown = Some(true);
+        let report = thing_type_run(&mut session, &allowed).expect("the escape admits it");
+        let shown = serde_json::to_value(&report).expect("the report serializes");
+        assert_eq!(
+            shown["to"],
+            json!(i64::from(UNDEFINED_KIND)),
+            "the written number is reported as-is"
+        );
+        assert_eq!(
+            shown["total"],
+            json!(1_u64),
+            "the imp took the undefined type"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["replace_thing_type 3001 -> 9999"],
+            "the escape hatch writes like any other run"
+        );
     }
 }

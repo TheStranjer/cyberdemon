@@ -22,13 +22,22 @@
 //! against: the composite `TEXTURE1`/`TEXTURE2` names, the `TX_` lump
 //! names, and the flats namespace plus `F_SKY1`.
 //!
+//! [`ThingRef`] is `replace_thing_type`'s number-or-name side:
+//! `resolve_thing_ref` turns a doomednum straight into the stored
+//! type number and a definition name through
+//! [`crate::plan::things::resolve_thing_kind`] over the session's
+//! definitions (exact case-insensitive name first, then a unique
+//! case-insensitive substring), and `require_defined_thing` checks a
+//! resolved target against the same tables unless the caller passes
+//! the tool's `allow_unknown` escape.
+//!
 //! The module sits under the query tools because CD-108's bulk edits
 //! act on exactly the element indices `find_elements` reports. The
-//! `replace_texture` and `replace_flat` `#[tool]` methods live on the
-//! parent and keep their heavy lifting here: [`parse_terms`] and
-//! [`require_target`] shape the wire parameters, [`run_replacement`]
-//! folds a pure per-map pass over the [`resolve`]d selection into one
-//! [`ReplaceReport`].
+//! `replace_texture`, `replace_flat` and `replace_thing_type` `#[tool]`
+//! methods live on the parent and keep their heavy lifting here:
+//! [`parse_terms`] and [`require_target`] shape the wire parameters,
+//! [`run_replacement`] folds a pure per-map pass over the [`resolve`]d
+//! selection into one [`ReplaceReport`].
 
 use alloc::borrow::Cow;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -44,9 +53,13 @@ use serde::de::{self, Deserializer, Unexpected, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
+use crate::plan::things::resolve_thing_kind;
 use crate::session::map_edit;
 use crate::session::{MergedLump, Scope, Session};
+use crate::tools::defs::collect::custom_sources;
+use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::tools::maps::params::validate_texture_name;
 use crate::tools::themes::inventory;
@@ -452,7 +465,9 @@ pub struct Replacement<'lbl> {
     pub dry_run: bool,
 }
 
-/// The structured result both `replace_*` tools report.
+/// The structured result the `replace_*` tools report: the glob swaps
+/// return it directly, and `replace_thing_type` folds it into its own
+/// report beside the resolved numbers.
 #[derive(Debug, Serialize)]
 pub struct ReplaceReport {
     /// The fields the replacement changed, keyed by map block name as
@@ -584,6 +599,94 @@ where
     Ok(name)
 }
 
+/// A `from` or `to` thing reference on the `replace_thing_type` wire:
+/// the doomednum as stored, or a definition name.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ThingRef {
+    /// The thing type number, exactly as `THINGS` stores it.
+    Number(u32),
+    /// A definition name, resolved through the session's definitions
+    /// by `resolve_thing_ref`.
+    Name(String),
+}
+
+/// The session's thing definitions: the tables of [`session_game`]'s
+/// game overlaid with the merged view's `DEHACKED`/`DECORATE`/`ZScript`
+/// custom sources — the same one-lock read as `tools/query.rs::load`.
+///
+/// # Errors
+///
+/// [`custom_sources`]' merged-scope read errors and
+/// [`session_definitions`]' refusal for malformed embedded tables.
+#[inline]
+pub(in crate::tools) fn thing_definitions(session: &Session) -> Result<Definitions, CyberError> {
+    let (sources, _notes) = custom_sources(session)?;
+    session_definitions(session_game(session), &sources)
+}
+
+/// The doomednum as a stored thing-type number, or the refusal for one
+/// above the signed 32-bit range the map models carry.
+fn stored_kind(number: u32) -> Result<i32, CyberError> {
+    let Ok(kind) = i32::try_from(number) else {
+        return Err(CyberError::InvalidArgument(format!(
+            "thing type {number} is above the signed 32-bit range a map can store: pass a \
+             doomednum as the game saves it, or a definition name"
+        )));
+    };
+    Ok(kind)
+}
+
+/// Resolve one [`ThingRef`] to the stored type number: a doomednum
+/// passes through after a range check, a name resolves through the
+/// session's definitions — an exact case-insensitive name first, then
+/// a unique case-insensitive substring.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for a doomednum above [`i32::MAX`],
+/// for a name no definition carries, and for a substring several
+/// distinct types share; the two name refusals list the candidate
+/// names, and the caller prefixes them with the failing parameter.
+#[inline]
+pub(in crate::tools) fn resolve_thing_ref(
+    session: &Session,
+    value: &ThingRef,
+) -> Result<i32, CyberError> {
+    match value.clone() {
+        ThingRef::Number(number) => stored_kind(number),
+        ThingRef::Name(text) => {
+            let definitions = thing_definitions(session)?;
+            let resolved =
+                resolve_thing_kind(&definitions, &text).map_err(CyberError::InvalidArgument)?;
+            stored_kind(resolved)
+        }
+    }
+}
+
+/// Refuse a resolved `to` doomednum no session definition carries.
+/// `replace_thing_type` skips the check when the caller passes
+/// `allow_unknown: true`, and then writes and reports the number as-is.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming `get_thing_types` and the
+/// `allow_unknown` escape hatch.
+#[inline]
+pub(in crate::tools) fn require_defined_thing(
+    definitions: &Definitions,
+    to: i32,
+) -> Result<(), CyberError> {
+    let known = u32::try_from(to).is_ok_and(|kind| definitions.thing(kind).is_some());
+    if known {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "thing type {to} is not defined in the session's tables: get_thing_types lists the \
+         known numbers and names, or pass allow_unknown: true to write it anyway"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -591,8 +694,9 @@ mod tests {
     use serde_json::{from_value, json};
 
     use super::{
-        AllMaps, ApplyOptions, MapsSelector, Replacement, Stock, apply_to_maps, parse_terms,
-        require_target, resolve, run_replacement,
+        AllMaps, ApplyOptions, MapsSelector, Replacement, Stock, ThingRef, apply_to_maps,
+        parse_terms, require_defined_thing, require_target, resolve, resolve_thing_ref,
+        run_replacement, thing_definitions,
     };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
@@ -1064,6 +1168,87 @@ mod tests {
         let spaced = require_target(&session, "bad name", true, Stock::require_wall)
             .expect_err("not a name at all");
         assert_eq!(spaced.code(), "invalid_argument", "unvalidatable code");
+    }
+
+    #[test]
+    fn thing_ref_reads_a_doomednum_or_a_name_from_the_wire() {
+        let numbered: ThingRef = from_value(json!(3001_i64)).expect("a doomednum");
+        assert!(
+            matches!(numbered, ThingRef::Number(3001_u32)),
+            "a number binds Number: {numbered:?}"
+        );
+        let named: ThingRef = from_value(json!("imp")).expect("a name");
+        assert!(
+            matches!(&named, ThingRef::Name(text) if text == "imp"),
+            "a string binds Name: {named:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_thing_ref_passes_numbers_and_resolves_names() {
+        let session = Session::default();
+        assert_eq!(
+            resolve_thing_ref(&session, &ThingRef::Number(3001_u32)).expect("a doomednum"),
+            3001_i32,
+            "numbers pass through without touching the definitions"
+        );
+        assert_eq!(
+            resolve_thing_ref(&session, &ThingRef::Name("imp".to_owned())).expect("the exact name"),
+            3001_i32,
+            "the exact name Imp wins over the Dead Imp substring"
+        );
+        assert_eq!(
+            resolve_thing_ref(&session, &ThingRef::Name("demon".to_owned()))
+                .expect("the exact name beats its substrings"),
+            3002_i32,
+            "Demon names 3002, not the CyberDemon (16) or Cacodemon it is a substring of"
+        );
+        let huge = resolve_thing_ref(&session, &ThingRef::Number(u32::MAX))
+            .expect_err("above the signed range");
+        assert_eq!(huge.code(), "invalid_argument", "range refusal code");
+        assert!(
+            huge.to_string().contains("32-bit"),
+            "the message names the range: {huge}"
+        );
+    }
+
+    #[test]
+    fn resolve_thing_ref_refuses_unknown_and_ambiguous_names() {
+        let session = Session::default();
+        let unknown = resolve_thing_ref(&session, &ThingRef::Name("not-a-thing".to_owned()))
+            .expect_err("nothing carries that name");
+        assert_eq!(unknown.code(), "invalid_argument", "unknown name code");
+        assert!(
+            unknown.to_string().contains("get_thing_types"),
+            "the fix is named: {unknown}"
+        );
+        let ambiguous = resolve_thing_ref(&session, &ThingRef::Name("emon".to_owned()))
+            .expect_err("several types share that substring");
+        assert_eq!(ambiguous.code(), "invalid_argument", "ambiguous name code");
+        let message = ambiguous.to_string();
+        assert!(
+            message.contains("Demon")
+                && message.contains("Cacodemon")
+                && message.contains("CyberDemon"),
+            "the candidate names are listed: {message}"
+        );
+    }
+
+    #[test]
+    fn require_defined_thing_checks_the_session_tables_and_names_the_escape() {
+        let definitions = thing_definitions(&Session::default()).expect("the default tables read");
+        require_defined_thing(&definitions, 3002_i32).expect("the Demon is defined");
+        require_defined_thing(&definitions, 1_i32).expect("the player start is defined");
+        let missing = require_defined_thing(&definitions, 99999_i32).expect_err("nothing here");
+        assert_eq!(missing.code(), "invalid_argument", "undefined target code");
+        let message = missing.to_string();
+        assert!(
+            message.contains("get_thing_types") && message.contains("allow_unknown"),
+            "the reference and the escape hatch are both named: {message}"
+        );
+        let negative =
+            require_defined_thing(&definitions, -1_i32).expect_err("no type is negative");
+        assert_eq!(negative.code(), "invalid_argument", "negative target code");
     }
 
     /// The one-map-list [`Replacement`] for the tool machinery tests.

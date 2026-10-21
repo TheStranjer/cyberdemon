@@ -285,12 +285,14 @@ src/
                   `wad::map::query::run_query`, and pages its hits into
                   `{kind, count, indices, rows, next_offset}` with one
                   compact summary row per kind; the `replace_texture`/
-                  `replace_flat` tools are one `Session::edit` step over
-                  the `wad::map::bulk` replacements, and `tools/query/
+                  `replace_flat`/`replace_thing_type` tools are one
+                  `Session::edit` step over the `wad::map::bulk`
+                  replacements, and `tools/query/
                   replace.rs` holds their shared machinery (the
                   `MapsSelector` resolution, the multi-map runner, the
-                  `Stock` existence checks and the folded
-                  `{maps, total, copied_maps, dry_run, next_steps}`
+                  `Stock` existence checks, the `ThingRef` doomednum-or-
+                  name resolution behind `replace_thing_type` and the
+                  folded `{maps, total, copied_maps, dry_run, next_steps}`
                   report);
                   `tools/sketch.rs` is the `sketch` group: `trace_sketch`
                   needs no session at all — it parses `crop`/`max_size`/

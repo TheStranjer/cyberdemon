@@ -1,5 +1,7 @@
 # Verification
 
+Tools: add_exit, add_stairs, add_thing, build_map_from_plan, check_playability, edit_linedef, edit_sector, redo, render_topdown, render_view, run_batch, undo, validate_map
+
 Never trust a change you have not looked at. After every meaningful edit,
 run the loop:
 
@@ -26,7 +28,8 @@ run the loop:
    gap.
 
 When a change went wrong and repairing it looks fiddlier than repeating it,
-call `undo` and redo the step deliberately rather than patching blind.
+call `undo`, then lay the step back down with `redo` or with a better
+input — a deliberate repeat beats a blind patch.
 
 A failed `run_batch` (default `atomic: true`) leaves the map untouched: the
 whole batch rolls back with it, so there is nothing half-applied to repair —

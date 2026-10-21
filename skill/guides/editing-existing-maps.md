@@ -1,5 +1,7 @@
 # Editing existing maps
 
+Tools: describe_map
+
 To be written. Start with the first step, which is settled:
 
 - **Before touching anything, call `describe_map`** on the map (its

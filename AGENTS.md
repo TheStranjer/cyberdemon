@@ -394,7 +394,10 @@ src/
                   `map/bulk.rs` + `map/bulk/replace.rs` the pure single-map
                   replacement passes (`replace_textures`, `replace_flats`,
                   `replace_thing_types`, the `Face` and `Surface` knobs)
-                  the CD-108 bulk `replace_*` tools fold over maps,
+                  the CD-108 bulk `replace_*` tools fold over maps, and
+                  `map/bulk/edits.rs` the pure field-edit engine
+                  (`FieldEdits`, `EditScope`, `apply`, `Applied`) behind
+                  the CD-108 `bulk_edit` tool,
                   `map/placement.rs` the pure thing-placement core: the
                   clearance primitives (`fits`, `keeps_distance`,
                   `boundary_clear`, `axis_points`, `thing_clearance`) the

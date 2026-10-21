@@ -63,7 +63,10 @@
 //! [`bulk`] is the bulk-editing core: [`bulk::replace`] globs texture
 //! and flat names over a map's sidedef faces and sector surfaces and
 //! rewrites thing types, counting changed fields for the multi-map
-//! `replace_*` tools.
+//! `replace_*` tools, and [`bulk::edits`] applies whole
+//! [`bulk::edits::FieldEdits`] set/`add` requests to a selection of
+//! sector, sidedef or vertex rows, validated before any write, for the
+//! `bulk_edit` tool.
 //! [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
 //! translation table (rows, flags and lookups) and the cross-family thing,
 //! sector and linedef stages [`convert`] runs.

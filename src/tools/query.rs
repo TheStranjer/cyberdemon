@@ -1,17 +1,21 @@
 //! Query tools: `find_elements`, the set-valued read behind every
-//! plain-English "all the X" request.
+//! plain-English "all the X" request, and CD-108's glob name swaps,
+//! `replace_texture` and `replace_flat`.
 //!
-//! The filtering is the pure [`crate::wad::map::query`] engine's; this file
+//! The swaps fold their per-map counts across whole maps in one undoable
+//! step. The filtering is the pure [`crate::wad::map::query`] engine's; this file
 //! resolves the flattened query parameters, reads the map and the session's
 //! definitions (custom `DECORATE`/`DEHACKED` things included) under one
 //! lock exactly like the playability group does, runs the query and pages
 //! the result: `count` totals every hit, `indices` and `rows` carry one
 //! ascending page of the hits with a compact summary per kind, and
-//! `next_offset` names the `offset` where the rest continues. CD-108's bulk
-//! edits take the same `Query` and act on exactly these indices; the
+//! `next_offset` names the `offset` where the rest continues. The bulk
+//! edits act on exactly the elements `find_elements` reports; the
 //! session-facing machinery they share (the `maps` selector, the
-//! one-undo-step-over-many-maps runner and the texture stock check)
-//! lives in the public `replace` submodule.
+//! one-undo-step-over-many-maps runner, the texture stock check and the
+//! folded [`replace::ReplaceReport`]) lives in the public `replace`
+//! submodule; the pure per-map passes are
+//! [`crate::wad::map::bulk::replace_textures`] and its siblings.
 
 pub mod replace;
 
@@ -28,13 +32,17 @@ use serde::{Deserialize, Serialize};
 use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::Scope;
+use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
+use crate::tools::query::replace::{
+    MapsSelector, ReplaceReport, Replacement, Stock, parse_terms, require_target, run_replacement,
+};
 use crate::tools::{fail, ok};
 use crate::wad::map::Map;
+use crate::wad::map::bulk::{Face, Surface, replace_flats, replace_textures};
 use crate::wad::map::query::{
     ElementKind, Filter, Query, QueryContext, Within, run_query, side_sector,
 };
@@ -348,6 +356,110 @@ fn find_run(state: &AppState, args: &FindElementsParams) -> Result<FindReport, C
     })
 }
 
+/// Arguments for [`Cyberdemon::replace_texture`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ReplaceTextureParams {
+    /// The case-insensitive glob (`*` any run, `?` one character) of
+    /// texture names to replace; `"WALL1"` names one texture, `"WALL*"`
+    /// sweeps its family and `"*"` takes every face, `"-"` and the empty
+    /// ones included.
+    from: String,
+    /// The texture every matched face gets: a wall texture the merged
+    /// view holds (`list_textures` shows them; uppercased) or `"-"`,
+    /// which clears the face. An unknown name fails `not_found`.
+    to: String,
+    /// The sidedef faces to rewrite: any of `"upper"`, `"middle"`,
+    /// `"lower"` (case-insensitive). Absent or empty means all three.
+    #[serde(default)]
+    parts: Option<Vec<String>>,
+    /// The map blocks to edit: absent takes the session's default map
+    /// (the active map, else the merged view's only map), `"all"` every
+    /// distinct block of the merged view, a list exactly those names.
+    /// A map a read-only layer holds is copied into the working archive
+    /// first, inside the same undo step.
+    #[serde(default)]
+    maps: Option<MapsSelector>,
+    /// Report the per-map counts without writing anything or touching
+    /// the undo stack (default `false`).
+    #[serde(default)]
+    dry_run: Option<bool>,
+}
+
+/// Arguments for [`Cyberdemon::replace_flat`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ReplaceFlatParams {
+    /// The case-insensitive glob of flat names to replace, matched
+    /// against every targeted sector surface.
+    from: String,
+    /// The flat every matched surface gets: a flat the merged view holds
+    /// (`list_flats` shows them, `F_SKY1` included; uppercased). An
+    /// unknown name fails `not_found`; unlike a wall swap there is no
+    /// clearing `"-"` for a surface.
+    to: String,
+    /// The sector surfaces to rewrite: any of `"floor"`, `"ceiling"`
+    /// (case-insensitive). Absent or empty means both.
+    #[serde(default)]
+    surfaces: Option<Vec<String>>,
+    /// The map blocks to edit, exactly as in [`ReplaceTextureParams::maps`].
+    #[serde(default)]
+    maps: Option<MapsSelector>,
+    /// Report the per-map counts without writing anything or touching
+    /// the undo stack (default `false`).
+    #[serde(default)]
+    dry_run: Option<bool>,
+}
+
+/// `replace_texture`'s work: parse the face list, check the target
+/// against the merged view's wall stock (the clearing `"-"` excepted)
+/// and run [`replace_textures`] over the selected maps as one step.
+///
+/// # Errors
+///
+/// [`parse_terms`]'s and [`require_target`]'s refusals for a stray face
+/// or target name, [`Stock`]'s `not_found` for a texture that does not
+/// exist and [`run_replacement`]'s for a map no scope holds.
+fn texture_run(
+    session: &mut Session,
+    args: &ReplaceTextureParams,
+) -> Result<ReplaceReport, CyberError> {
+    let faces = parse_terms(args.parts.as_deref(), Face::parse)?;
+    let to = require_target(session, &args.to, true, Stock::require_wall)?;
+    let label = format!("replace_texture {} -> {to}", args.from.to_ascii_uppercase());
+    let replacement = Replacement {
+        label: &label,
+        maps: args.maps.as_ref(),
+        dry_run: args.dry_run.unwrap_or(false),
+    };
+    let from = args.from.as_str();
+    run_replacement(session, &replacement, |map| {
+        replace_textures(map, from, &to, &faces)
+    })
+}
+
+/// `replace_flat`'s work: parse the surface list, check the target
+/// against the merged view's flats and run [`replace_flats`] over the
+/// selected maps as one step.
+///
+/// # Errors
+///
+/// [`parse_terms`]'s and [`require_target`]'s refusals for a stray
+/// surface or flat name and [`run_replacement`]'s for a map no scope
+/// holds.
+fn flat_run(session: &mut Session, args: &ReplaceFlatParams) -> Result<ReplaceReport, CyberError> {
+    let surfaces = parse_terms(args.surfaces.as_deref(), Surface::parse)?;
+    let to = require_target(session, &args.to, false, Stock::require_flat)?;
+    let label = format!("replace_flat {} -> {to}", args.from.to_ascii_uppercase());
+    let replacement = Replacement {
+        label: &label,
+        maps: args.maps.as_ref(),
+        dry_run: args.dry_run.unwrap_or(false),
+    };
+    let from = args.from.as_str();
+    run_replacement(session, &replacement, |map| {
+        replace_flats(map, from, &to, &surfaces)
+    })
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -367,20 +479,59 @@ impl Cyberdemon {
             Err(error) => fail(&error),
         }
     }
+
+    /// Swaps wall texture names across whole maps in one undoable step.
+    #[tool(
+        description = "Renames wall textures across maps in ONE undoable step: rewrites every sidedef face whose texture the case-insensitive glob from matches to to; faces that already hold to are left alone and stay out of the counts. parts selects the faces to touch, any of \"upper\", \"middle\", \"lower\" (case-insensitive; default all three; a stray name is invalid_argument listing the three). to is validated as a texture name (uppercased) and must exist in the merged view - list_textures shows the composites, build_texture and the import tools add more - or be \"-\", which clears the matched faces; an unknown to is not_found. maps defaults to the active map (set_active_map, else the merged view's only map), \"all\" takes every distinct map block of the merged view, and a list of names takes exactly those (an unknown name is not_found). A map a read-only layer (IWAD or resource) holds is copied into the working archive before it is rewritten (copy-on-write): the copies, the rewrites and the label sit in ONE undo entry, and any refusal leaves the session exactly as it was. dry_run: true (default false) reports the same counts while writing nothing and recording nothing - run it first for a big or wildcard swap. Returns {maps: {block name: changed face fields}, total (the sum over the maps), copied_maps (the maps that had to be copied in; empty for a dry run), dry_run, next_steps}; one undo takes the whole swap across every map back. Find the faces first with find_elements (kind \"sidedefs\", fields upper, middle, lower); see skill/reference/query.md."
+    )]
+    fn replace_texture(
+        &self,
+        Parameters(args): Parameters<ReplaceTextureParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .state()
+            .with_session(|session| texture_run(session, &args))
+        {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Swaps flat names across whole maps in one undoable step.
+    #[tool(
+        description = "Renames floor and ceiling flats across maps in ONE undoable step: rewrites every sector surface whose flat the case-insensitive glob from matches to to; surfaces that already hold to are left alone and stay out of the counts. surfaces selects the faces to touch, any of \"floor\", \"ceiling\" (case-insensitive; default both; a stray name is invalid_argument listing the two). to is validated as a flat name (uppercased) and must exist in the merged view's flats namespace - list_flats shows the flats, import_image_as_flat adds one, F_SKY1 is always available; an unknown to is not_found, and there is no clearing \"-\" for a surface. maps defaults to the active map (set_active_map, else the merged view's only map), \"all\" takes every distinct map block of the merged view, and a list of names takes exactly those (an unknown name is not_found). A map a read-only layer (IWAD or resource) holds is copied into the working archive before it is rewritten (copy-on-write): the copies, the rewrites and the label sit in ONE undo entry, and any refusal leaves the session exactly as it was. dry_run: true (default false) reports the same counts while writing nothing and recording nothing - run it first for a big or wildcard swap. Returns {maps: {block name: changed flat fields}, total (the sum over the maps), copied_maps (the maps that had to be copied in; empty for a dry run), dry_run, next_steps}; heights, lights, specials and tags stay exactly as they were, and one undo takes the whole swap back. Find the sectors first with find_elements (kind \"sectors\", fields floor_flat, ceiling_flat) and read the result back with describe_map; see skill/reference/query.md."
+    )]
+    fn replace_flat(
+        &self,
+        Parameters(args): Parameters<ReplaceFlatParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .state()
+            .with_session(|session| flat_run(session, &args))
+        {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::json;
 
     use super::{
-        DEFAULT_LIMIT, FindElementsParams, MAX_LIMIT, Row, find_run, page_hits, parse_limit, rows,
+        DEFAULT_LIMIT, FindElementsParams, MAX_LIMIT, ReplaceFlatParams, ReplaceTextureParams, Row,
+        find_run, flat_run, page_hits, parse_limit, rows, texture_run,
     };
     use crate::defs::definitions_for;
+    use crate::session::{Layer, LayerRole, Session};
     use crate::state::AppState;
+    use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::game::Game;
     use crate::wad::map::query::{ElementKind, Filter, QueryContext};
-    use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Thing, Vertex};
+    use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Thing, Vertex, write_map};
     use crate::wad::name::LumpName;
     /// A parsed test map name.
     fn parsed(text: &str) -> LumpName {
@@ -594,5 +745,248 @@ mod tests {
             "invalid_argument",
             "the shared resolver names the no-map problem"
         );
+    }
+
+    /// An eight-byte dummy lump named `text`.
+    fn dummy(text: &str) -> Lump {
+        Lump::new(parsed(text), vec![0xA5_u8; 8])
+    }
+
+    /// The bulk-edit fixture map: three sidedef faces named `WALL1`
+    /// (two middles, one upper) and three sector surfaces named `FLOOR1`
+    /// (both of sector 0, sector 1's floor).
+    fn bulk_map() -> Map {
+        Map {
+            name: parsed("MAP01"),
+            format: MapFormat::Doom,
+            things: vec![Thing {
+                kind: 1_i32,
+                x: 64_i32,
+                y: 128_i32,
+                angle: 0_i32,
+                flags: 7_u32,
+                ..Default::default()
+            }],
+            vertices: vec![
+                Vertex {
+                    x: 0_i32,
+                    y: 0_i32,
+                    ..Default::default()
+                },
+                Vertex {
+                    x: 128_i32,
+                    y: 0_i32,
+                    ..Default::default()
+                },
+            ],
+            linedefs: vec![Linedef {
+                v1: 0_usize,
+                v2: 1_usize,
+                flags: 1_u32,
+                ..Default::default()
+            }],
+            sidedefs: vec![
+                Sidedef {
+                    upper: "-".to_owned(),
+                    middle: "WALL1".to_owned(),
+                    lower: "-".to_owned(),
+                    sector: 0_usize,
+                    ..Default::default()
+                },
+                Sidedef {
+                    upper: "WALL1".to_owned(),
+                    middle: "WALL1".to_owned(),
+                    lower: "-".to_owned(),
+                    sector: 1_usize,
+                    ..Default::default()
+                },
+            ],
+            sectors: vec![
+                Sector {
+                    floor_flat: "FLOOR1".to_owned(),
+                    ceiling_flat: "FLOOR1".to_owned(),
+                    ..Default::default()
+                },
+                Sector {
+                    floor_flat: "FLOOR1".to_owned(),
+                    ceiling_flat: "F_SKY1".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Map::default()
+        }
+    }
+
+    /// A session whose only layer holds [`bulk_map`] plus the stock the
+    /// bulk tools check: flats `FLOOR1` and `NUKAGE1`, wall `STEP1`
+    /// (named by its `TX_` lump).
+    fn bulk_session() -> Session {
+        let mut lumps = write_map(&bulk_map()).expect("the fixture map encodes");
+        lumps.extend(vec![
+            Lump::marker(parsed("F_START")),
+            dummy("FLOOR1"),
+            dummy("NUKAGE1"),
+            Lump::marker(parsed("F_END")),
+            Lump::marker(parsed("TX_START")),
+            dummy("TX_STEP1"),
+            Lump::marker(parsed("TX_END")),
+        ]);
+        let mut session = Session::default();
+        session.set_iwad(Layer::new(
+            PathBuf::from("bulk.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        ));
+        session
+    }
+
+    /// `replace_texture` arguments over the fixture's default map.
+    fn texture_params(from: &str, to: &str) -> ReplaceTextureParams {
+        ReplaceTextureParams {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            parts: None,
+            maps: None,
+            dry_run: None,
+        }
+    }
+
+    /// `replace_flat` arguments over the fixture's default map.
+    fn flat_params(from: &str, to: &str) -> ReplaceFlatParams {
+        ReplaceFlatParams {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            surfaces: None,
+            maps: None,
+            dry_run: None,
+        }
+    }
+
+    #[test]
+    fn texture_run_swaps_faces_as_one_labeled_step() {
+        let mut session = bulk_session();
+        let mut args = texture_params("wall1", "step1");
+        args.dry_run = Some(true);
+        let preview = texture_run(&mut session, &args).expect("the preview runs");
+        assert_eq!(preview.total, 3_usize, "two middles and one upper");
+        assert!(
+            session.undo_labels().is_empty(),
+            "a preview records nothing"
+        );
+        args.dry_run = None;
+        let report = texture_run(&mut session, &args).expect("the swap runs");
+        let shown = serde_json::to_value(&report).expect("the report serializes");
+        assert_eq!(
+            shown["maps"],
+            json!({"MAP01": 3_u64}),
+            "the three faces folded onto the block name"
+        );
+        assert_eq!(shown["total"], json!(3_u64), "the sum");
+        assert_eq!(
+            shown["copied_maps"],
+            json!(["MAP01"]),
+            "the map came from the IWAD layer"
+        );
+        assert_eq!(shown["dry_run"], json!(false), "the swap wrote");
+        assert!(
+            !report.next_steps.is_empty(),
+            "the report names a next step"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["replace_texture WALL1 -> STEP1"],
+            "one step, uppercase label from the folded names"
+        );
+    }
+
+    #[test]
+    fn texture_run_narrows_to_the_listed_faces_and_clears_with_the_dash() {
+        let mut middles = texture_params("WALL1", "STEP1");
+        middles.parts = Some(vec!["middle".to_owned()]);
+        let mut session = bulk_session();
+        let report = texture_run(&mut session, &middles).expect("one face listed");
+        assert_eq!(report.total, 2_usize, "only the two middles");
+        let mut clear = texture_params("WALL1", "-");
+        clear.parts = Some(vec!["UPPER".to_owned()]);
+        let mut blank = bulk_session();
+        let cleared = texture_run(&mut blank, &clear).expect("\"-\" clears without a stock check");
+        assert_eq!(cleared.total, 1_usize, "only the upper, emptied");
+    }
+
+    #[test]
+    fn texture_run_refuses_stray_faces_and_unknown_targets() {
+        let mut session = bulk_session();
+        let mut stray = texture_params("WALL1", "STEP1");
+        stray.parts = Some(vec!["roof".to_owned()]);
+        let bad_face = texture_run(&mut session, &stray).expect_err("roof is no face");
+        assert_eq!(bad_face.code(), "invalid_argument", "stray face code");
+        let empty = texture_run(&mut session, &texture_params("WALL1", ""))
+            .expect_err("an empty target is refused");
+        assert_eq!(empty.code(), "invalid_argument", "empty target code");
+        let missing = texture_run(&mut session, &texture_params("WALL1", "NOSUCH"))
+            .expect_err("no such wall");
+        assert_eq!(missing.code(), "not_found", "missing target code");
+        assert!(
+            missing.to_string().contains("list_textures"),
+            "the fix is named: {missing}"
+        );
+        assert!(
+            session.undo_labels().is_empty(),
+            "refusals write nothing and record nothing"
+        );
+    }
+
+    #[test]
+    fn flat_run_swaps_surfaces_and_refuses_the_documented_strays() {
+        let mut session = bulk_session();
+        let mut floors = flat_params("floor1", "nukage1");
+        floors.surfaces = Some(vec!["floor".to_owned()]);
+        let report = flat_run(&mut session, &floors).expect("the swap runs");
+        assert_eq!(report.total, 2_usize, "the two floors, ceilings untouched");
+        assert_eq!(
+            session.undo_labels(),
+            vec!["replace_flat FLOOR1 -> NUKAGE1"],
+            "one labeled step"
+        );
+        let mut blank = bulk_session();
+        let all = flat_run(&mut blank, &flat_params("FLOOR1", "NUKAGE1")).expect("both surfaces");
+        assert_eq!(all.total, 3_usize, "F_SKY1 is not FLOOR1 and stays");
+        let stray = flat_run(&mut blank, &flat_params("FLOOR1", "NUKAGE1"))
+            .expect("the swap runs again, changing nothing");
+        assert_eq!(stray.total, 0_usize, "already swapped");
+        let mut bad_surface = flat_params("FLOOR1", "NUKAGE1");
+        bad_surface.surfaces = Some(vec!["roof".to_owned()]);
+        let error = flat_run(&mut blank, &bad_surface).expect_err("roof is no surface");
+        assert_eq!(error.code(), "invalid_argument", "stray surface code");
+        assert!(
+            error.to_string().contains("ceiling"),
+            "the message names the two: {error}"
+        );
+        let dash = flat_run(&mut blank, &flat_params("FLOOR1", "-")).expect_err("no dash flat");
+        assert_eq!(
+            dash.code(),
+            "not_found",
+            "a flat \"-\" must exist and none does"
+        );
+        let missing =
+            flat_run(&mut blank, &flat_params("FLOOR1", "NOSUCH")).expect_err("no such flat");
+        assert_eq!(missing.code(), "not_found", "missing flat code");
+    }
+
+    #[test]
+    fn flat_run_previews_without_writing_or_recording() {
+        let mut session = bulk_session();
+        let mut preview = flat_params("FLOOR1", "NUKAGE1");
+        preview.dry_run = Some(true);
+        let report = flat_run(&mut session, &preview).expect("the preview runs");
+        let shown = serde_json::to_value(&report).expect("the report serializes");
+        assert_eq!(shown["maps"], json!({"MAP01": 3_u64}), "counts reported");
+        assert_eq!(shown["dry_run"], json!(true), "flagged as a preview");
+        assert_eq!(shown["copied_maps"], json!([]), "nothing copied");
+        assert!(session.working().is_empty(), "the working archive stands");
+        assert!(session.undo_labels().is_empty(), "no history entry");
     }
 }

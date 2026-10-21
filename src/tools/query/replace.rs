@@ -23,11 +23,15 @@
 //! names, and the flats namespace plus `F_SKY1`.
 //!
 //! The module sits under the query tools because CD-108's bulk edits
-//! act on exactly the element indices `find_elements` reports; nothing
-//! here is a `#[tool]` yet.
+//! act on exactly the element indices `find_elements` reports. The
+//! `replace_texture` and `replace_flat` `#[tool]` methods live on the
+//! parent and keep their heavy lifting here: [`parse_terms`] and
+//! [`require_target`] shape the wire parameters, [`run_replacement`]
+//! folds a pure per-map pass over the [`resolve`]d selection into one
+//! [`ReplaceReport`].
 
 use alloc::borrow::Cow;
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -36,16 +40,18 @@ use core::fmt::{self, Formatter};
 
 use schemars::json_schema;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
-use serde::Deserialize;
 use serde::de::{self, Deserializer, Unexpected, Visitor};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::CyberError;
 use crate::session::map_edit;
 use crate::session::{MergedLump, Scope, Session};
 use crate::tools::maps::common;
+use crate::tools::maps::params::validate_texture_name;
 use crate::tools::themes::inventory;
 use crate::wad::archive::Wad;
+use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::name::LumpName;
 
@@ -418,18 +424,183 @@ impl Stock {
     }
 }
 
+/// The `next_steps` every written [`ReplaceReport`] carries.
+const APPLIED_NEXT_STEPS: [&str; 3] = [
+    "undo takes the whole swap back as one step",
+    "find_elements over the old name finds any field the glob missed",
+    "render_topdown looks at the rewritten maps",
+];
+
+/// The `next_steps` a previewed [`ReplaceReport`] carries.
+const DRY_NEXT_STEPS: [&str; 2] = [
+    "nothing was written: run again with dry_run false to apply the swap",
+    "find_elements lists the matching elements one by one",
+];
+
+/// The per-tool knobs one [`run_replacement`] step needs beside the pass:
+/// the label of the single undo entry (already interpolated by the tool)
+/// and the run's shape.
+#[derive(Clone, Copy, Debug)]
+pub struct Replacement<'lbl> {
+    /// The label recorded as the one undo entry (never recorded on a
+    /// [`Self::dry_run`] preview).
+    pub label: &'lbl str,
+    /// The `maps` selector; `None` takes the session's default map,
+    /// exactly as [`resolve`] documents it.
+    pub maps: Option<&'lbl MapsSelector>,
+    /// Report the counts without writing anything or touching history.
+    pub dry_run: bool,
+}
+
+/// The structured result both `replace_*` tools report.
+#[derive(Debug, Serialize)]
+pub struct ReplaceReport {
+    /// The fields the replacement changed, keyed by map block name as
+    /// text and summed per block; every selected map holds an entry.
+    pub maps: BTreeMap<String, usize>,
+    /// The sum of [`Self::maps`]' values.
+    pub total: usize,
+    /// The maps the call had to copy from the read-only layers into
+    /// the working archive; empty for a [`Self::dry_run`] report.
+    pub copied_maps: Vec<String>,
+    /// Whether the run only previewed.
+    pub dry_run: bool,
+    /// What to do or look at next, per [`Self::dry_run`].
+    pub next_steps: Vec<&'static str>,
+}
+
+impl ReplaceReport {
+    /// Fold one finished [`MapReplaceRun`] into the tools' report: the
+    /// per-map counts become the `maps` object, `total` sums them, and
+    /// the `next_steps` follow the run's mode.
+    fn folded(run: MapReplaceRun<usize>, dry_run: bool) -> Self {
+        let maps: BTreeMap<String, usize> = run
+            .per_map
+            .into_iter()
+            .map(|(name, count)| (name.to_string(), count))
+            .collect();
+        let total = maps.values().sum();
+        let steps: &[&'static str] = if dry_run {
+            &DRY_NEXT_STEPS
+        } else {
+            &APPLIED_NEXT_STEPS
+        };
+        Self {
+            maps,
+            total,
+            copied_maps: run.copied_maps,
+            dry_run,
+            next_steps: steps.to_vec(),
+        }
+    }
+}
+
+/// Run one pure per-map count (`bulk::replace_textures`,
+/// `bulk::replace_flats` or any other `Fn(&mut Map) -> usize`) over the
+/// [`Replacement::maps`] selection.
+///
+/// As [`apply_to_maps`] documents: one undoable step copying every
+/// layer-only map into the working archive first, or — with
+/// [`Replacement::dry_run`] — a preview over merged-view clones that
+/// writes and records nothing.
+///
+/// # Errors
+///
+/// [`resolve`]'s refusals for a bad selection and [`apply_to_maps`]'
+/// (through the single-map edit step: [`CyberError::NotFound`] for a map
+/// no scope holds, the map writer's encoder errors).
+#[inline]
+pub fn run_replacement<F>(
+    session: &mut Session,
+    replacement: &Replacement<'_>,
+    pass: F,
+) -> Result<ReplaceReport, CyberError>
+where
+    F: Fn(&mut Map) -> usize + Copy,
+{
+    let names = resolve(session, replacement.maps)?;
+    let options = ApplyOptions {
+        label: replacement.label,
+        dry_run: replacement.dry_run,
+    };
+    let run = apply_to_maps(session, &names, &options, pass)?;
+    Ok(ReplaceReport::folded(run, replacement.dry_run))
+}
+
+/// One `replace_*` name list (`parts` or `surfaces`) run through `parse`.
+///
+/// Absent or empty means the tool's documented default of every entry,
+/// which the pure passes read from an empty list.
+///
+/// # Errors
+///
+/// The first [`Face::parse`]/[`Surface::parse`]-style refusal `parse`
+/// reports, naming the accepted values.
+///
+/// [`Face::parse`]: crate::wad::map::bulk::Face::parse
+/// [`Surface::parse`]: crate::wad::map::bulk::Surface::parse
+#[inline]
+pub fn parse_terms<T, F>(values: Option<&[String]>, parse: F) -> Result<Vec<T>, CyberError>
+where
+    F: Fn(&str) -> Result<T, CyberError>,
+{
+    let Some(list) = values else {
+        return Ok(Vec::new());
+    };
+    list.iter().map(|text| parse(text)).collect()
+}
+
+/// Validate one `replace_*` target name (uppercased, printable, within
+/// the formats' longest cap) and require it to exist in the merged view
+/// through `require`.
+///
+/// When `clearing` is `true`, `"-"` is the accepted no-texture name and
+/// skips the existence check: clearing faces is what a wall replacement
+/// means by `-`, while no sector may hold `-` as a flat.
+///
+/// # Errors
+///
+/// [`validate_texture_name`]'s [`CyberError::InvalidArgument`] for a bad
+/// name and `require`'s [`CyberError::NotFound`] for a name the merged
+/// view lacks.
+#[inline]
+pub fn require_target<F>(
+    session: &Session,
+    to: &str,
+    clearing: bool,
+    require: F,
+) -> Result<String, CyberError>
+where
+    F: Fn(&Stock, &str) -> Result<(), CyberError>,
+{
+    // `UDMF` is the loosest cap the shared validator offers; the stock
+    // check that follows admits exactly the names the merged view holds,
+    // so no over-long name can reach a binary block.
+    let name = validate_texture_name(to, MapFormat::Udmf)?;
+    if clearing && name == "-" {
+        return Ok(name);
+    }
+    require(&Stock::load(session)?, &name)?;
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use serde_json::{from_value, json};
 
-    use super::{AllMaps, ApplyOptions, MapsSelector, Stock, apply_to_maps, resolve};
+    use super::{
+        AllMaps, ApplyOptions, MapsSelector, Replacement, Stock, apply_to_maps, parse_terms,
+        require_target, resolve, run_replacement,
+    };
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::tools::maps::common;
     use crate::wad::archive::{Lump, Wad, WadKind};
-    use crate::wad::map::bulk::{replace_flats, replace_textures, replace_thing_types};
+    use crate::wad::map::bulk::{
+        Face, Surface, replace_flats, replace_textures, replace_thing_types,
+    };
     use crate::wad::map::{Map, Sector, Sidedef, Thing, Vertex, write_map};
     use crate::wad::name::LumpName;
 
@@ -788,8 +959,9 @@ mod tests {
         assert!(!session.is_dirty(), "and the session stayed clean");
     }
 
-    #[test]
-    fn stock_answers_from_the_merged_namespaces_and_refuses_the_rest() {
+    /// The session for the stock checks: `WALL1` (named by its `TX_`
+    /// lump) and `FLOOR4` exist, nothing else does.
+    fn stocked_session() -> Session {
         let mut lumps = blocks(&["MAP01"]);
         lumps.extend(vec![
             Lump::marker(name("F_START")),
@@ -799,7 +971,12 @@ mod tests {
             dummy("TX_WALL1"),
             Lump::marker(name("TX_END")),
         ]);
-        let session = base_session(lumps);
+        base_session(lumps)
+    }
+
+    #[test]
+    fn stock_answers_from_the_merged_namespaces_and_refuses_the_rest() {
+        let session = stocked_session();
         let stock = Stock::load(&session).expect("the merged view reads");
         assert!(stock.has_flat("FLOOR4"), "the flats namespace");
         assert!(stock.has_flat("F_SKY1"), "F_SKY1 is always available");
@@ -829,5 +1006,144 @@ mod tests {
         let stock = Stock::load(&session).expect("an empty view reads");
         assert!(stock.walls.is_empty(), "no textures exist yet");
         assert!(stock.has_flat("F_SKY1"), "F_SKY1 is always available");
+    }
+
+    #[test]
+    fn parse_terms_folds_the_list_and_refuses_a_stray_name() {
+        let faces_given = vec!["upper".to_owned(), "MIDDLE".to_owned()];
+        let faces = parse_terms(Some(&faces_given), Face::parse).expect("two face names");
+        assert_eq!(faces, vec![Face::Upper, Face::Middle], "parsed in order");
+        let surfaces_given = vec!["ceiling".to_owned()];
+        let surfaces = parse_terms(Some(&surfaces_given), Surface::parse).expect("one surface");
+        assert_eq!(surfaces, vec![Surface::Ceiling], "case folds");
+        assert!(
+            parse_terms(None, Face::parse)
+                .expect("absent is the tools' default")
+                .is_empty(),
+            "an absent list stays empty for the pure pass to widen"
+        );
+        let bad =
+            parse_terms(Some(&faces_given), Surface::parse).expect_err("faces are not surfaces");
+        assert_eq!(bad.code(), "invalid_argument", "stray name code");
+        let message = bad.to_string();
+        assert!(
+            message.contains("floor") && message.contains("ceiling"),
+            "the refusal names the accepted values: {message}"
+        );
+    }
+
+    #[test]
+    fn require_target_uppercases_and_checks_the_stock_around_the_clearing_dash() {
+        let session = stocked_session();
+        assert_eq!(
+            require_target(&session, "wall1", true, Stock::require_wall).expect("the TX_ wall"),
+            "WALL1",
+            "a name the stock holds comes back uppercased"
+        );
+        assert_eq!(
+            require_target(&session, "-", true, Stock::require_wall)
+                .expect("clearing skips the stock"),
+            "-",
+            "\"-\" is the clearing target a wall replacement accepts"
+        );
+        assert_eq!(
+            require_target(&session, "floor4", false, Stock::require_flat).expect("a flat"),
+            "FLOOR4",
+            "flats check the flats namespace"
+        );
+        let flat_dash = require_target(&session, "-", false, Stock::require_flat)
+            .expect_err("no sector may wear a dash");
+        assert_eq!(flat_dash.code(), "not_found", "a flat \"-\" must exist");
+        let missing = require_target(&session, "NOSUCH", true, Stock::require_wall)
+            .expect_err("no such wall");
+        assert_eq!(missing.code(), "not_found", "missing target code");
+        assert!(
+            missing.to_string().contains("list_textures"),
+            "the fix is named: {missing}"
+        );
+        let spaced = require_target(&session, "bad name", true, Stock::require_wall)
+            .expect_err("not a name at all");
+        assert_eq!(spaced.code(), "invalid_argument", "unvalidatable code");
+    }
+
+    /// The one-map-list [`Replacement`] for the tool machinery tests.
+    fn replacement(selector: &MapsSelector, dry_run: bool) -> Replacement<'_> {
+        Replacement {
+            label: "replace_texture WALL* -> STEP1",
+            maps: Some(selector),
+            dry_run,
+        }
+    }
+
+    #[test]
+    fn run_replacement_previews_the_folded_counts_without_writing() {
+        let mut session = base_session(blocks(&["MAP01", "MAP02"]));
+        let selector = all_maps();
+        let preview = run_replacement(&mut session, &replacement(&selector, true), |map| {
+            replace_textures(map, "WALL*", "STEP1", &[])
+        })
+        .expect("the preview runs");
+        let shown = serde_json::to_value(&preview).expect("the report serializes");
+        assert_eq!(
+            shown["maps"],
+            json!({"MAP01": 1_u64, "MAP02": 1_u64}),
+            "one WALL64 middle per map"
+        );
+        assert_eq!(
+            shown["total"],
+            json!(2_u64),
+            "the sum of the per-map counts"
+        );
+        assert_eq!(shown["dry_run"], json!(true), "the flag travels");
+        assert!(
+            shown["copied_maps"].as_array().expect("a list").is_empty(),
+            "a preview copies nothing"
+        );
+        assert!(
+            session.undo_labels().is_empty(),
+            "and records no history entry"
+        );
+    }
+
+    #[test]
+    fn run_replacement_writes_one_labeled_step_and_reports_the_copies() {
+        let mut session = base_session(blocks(&["MAP01", "MAP02"]));
+        let selector = all_maps();
+        let done = run_replacement(&mut session, &replacement(&selector, false), |map| {
+            replace_textures(map, "WALL*", "STEP1", &[])
+        })
+        .expect("the step runs");
+        assert_eq!(done.total, 2_usize, "both middles moved");
+        assert_eq!(
+            done.copied_maps,
+            vec!["MAP01".to_owned(), "MAP02".to_owned()],
+            "both maps came from the layer alone"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["replace_texture WALL* -> STEP1"],
+            "one step for two maps"
+        );
+    }
+
+    #[test]
+    fn run_replacement_reports_a_glob_that_matches_nothing() {
+        let mut session = base_session(blocks(&["MAP01", "MAP02"]));
+        let selector = all_maps();
+        let zero = run_replacement(&mut session, &replacement(&selector, false), |map| {
+            replace_textures(map, "NOPE*", "STEP1", &[])
+        })
+        .expect("a miss is a normal run");
+        assert_eq!(zero.total, 0_usize, "nothing matched");
+        assert_eq!(
+            serde_json::to_value(&zero).expect("serializable")["maps"],
+            json!({"MAP01": 0_u64, "MAP02": 0_u64}),
+            "every selected map still holds an entry"
+        );
+        assert_eq!(
+            session.undo_labels().len(),
+            1_usize,
+            "the no-change step is recorded like any other"
+        );
     }
 }

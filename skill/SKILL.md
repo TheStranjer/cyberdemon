@@ -169,6 +169,8 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `check_playability`      | `reference/playability.md` |
 | `describe_map`           | `reference/playability.md` |
 | `find_elements`          | `reference/query.md`    |
+| `replace_texture`        | `reference/query.md`    |
+| `replace_flat`           | `reference/query.md`    |
 | `list_flats`             | `reference/graphics.md` |
 | `list_patches`           | `reference/graphics.md` |
 | `list_sprites`           | `reference/graphics.md` |
@@ -253,8 +255,10 @@ with the rule that blocks them and the tool that fixes it, stuck and
 unreachable things, locks without their keys (`reference/playability.md`).
 When a request is about a *set* ("every dark room", "all STARTAN walls"),
 `find_elements` answers it as a query — kind, filters, optional bound — and
-returns the matching indices instead of making you scan whole maps
-(`reference/query.md`).
+returns the matching indices instead of making you scan whole maps; when
+the request is a *swap* ("use BRICK7 instead of STARTAN everywhere"),
+`replace_texture` and `replace_flat` glob the old name across the maps in
+one undoable copy-on-write step, `dry_run` first (`reference/query.md`).
 `get_session_info`
 shows what is loaded and where undo stands; `get_wad_info` summarizes the
 merged view an engine would see. Building a level starts with `create_map`

@@ -5,8 +5,10 @@ elements — "every room with a nukage floor", "all STARTAN walls", "the
 monsters in the hall" — and `find_elements` turns such a request into a
 query: a kind, a list of filters and an optional bound, answered with the
 matching indices and compact rows. It never changes anything; act on the
-indices with the edit tools (and, from CD-108 on, with bulk-edit tools that
-take the same query).
+indices with the edit tools — or, when the request is a whole name swap
+("use BRICK7 instead of STARTAN everywhere"), with this group's bulk
+replacements `replace_texture` and `replace_flat`, which fold the same
+question across maps into one undoable step.
 
 ## `find_elements`
 
@@ -111,6 +113,66 @@ and `linedef*` — the first line wearing this side.
   and sidedefs opening into one of them. An index past the sector block
   matches nothing.
 
+## `replace_texture`
+
+`{from, to, parts?, maps?, dry_run? = false}` → `{maps: {<block>: n},
+total, copied_maps, dry_run, next_steps}`
+
+Rewrites every sidedef face whose texture the case-insensitive `*`/`?`
+glob `from` matches to `to`, across maps, in **one** undoable step
+labelled `replace_texture <FROM> -> <TO>`. A face that already holds
+`to` stays out of the counts, so the numbers report what changed.
+
+- `parts` names the faces to touch — any of `"upper"`, `"middle"`,
+  `"lower"` (case-insensitive); absent means all three. A stray name
+  is `invalid_argument` listing the three.
+- `to` is uppercased, validated as a texture name, and must exist in
+  the merged view: `list_textures` shows the composites and the import
+  tools add more. An unknown `to` is `not_found`. `"-"` is accepted
+  without an existence check and *clears* the matched faces.
+- `maps` selects the blocks: absent takes the session's default map
+  (the active map, else the merged view's only map), `"all"` every
+  distinct block of the merged view, and a list of names exactly those
+  (an unknown name is `not_found`).
+- **Copy-on-write**: a map a read-only layer (the `IWAD` or a merged
+  resource) holds is copied into the working archive before it is
+  rewritten; `copied_maps` names those copies. The copies, every
+  rewrite and the label sit in one undo entry — a single `undo` takes
+  the whole swap back across every map — and any refusal leaves the
+  session exactly as it was.
+- `dry_run: true` reports the same `{maps, total}` numbers while
+  writing nothing and recording nothing. Run it first for big or
+  wildcard swaps (`from: "*"`) to measure the blast radius.
+- Every selected map holds a `maps` entry even at `0`, and `total`
+  sums the values.
+
+"use BRICK7 instead of STARTAN everywhere" → `list_textures` to confirm
+BRICK7 exists, a `dry_run` pass of
+`replace_texture {from: "STARTAN", to: "BRICK7", maps: "all"}` to see
+how many faces it moves, then the same call with `dry_run` dropped.
+`find_elements {kind: "sidedefs", where: [{field: "middle", op: "eq",
+value: "STARTAN"}]}` shows the faces one by one, before and after.
+
+## `replace_flat`
+
+`{from, to, surfaces?, maps?, dry_run? = false}` → the same report
+shape, one undoable step labelled `replace_flat <FROM> -> <TO>`.
+
+- Rewrites the sector *surfaces* the glob `from` matches; `surfaces`
+  names any of `"floor"` and `"ceiling"` (case-insensitive; absent
+  means both). A stray name is `invalid_argument` listing the two.
+- `to` must exist as a flat in the merged view — `list_flats` shows
+  them and `F_SKY1` is always available. There is no clearing `"-"`
+  here: a flat field always names a flat, so `"-"` takes the ordinary
+  unknown-name `not_found`.
+- Heights, light levels, specials and tags come out byte-identical.
+  The `maps` selector, copy-on-write `copied_maps`, `dry_run` and the
+  one-undo guarantee are exactly as in `replace_texture`.
+
+Find the wearers first with `find_elements {kind: "sectors", where:
+[{field: "floor_flat", op: "glob", value: "FLOOR*"}]}` and read the
+result back through `describe_map`'s per-sector flat fields.
+
 ## Typical requests
 
 - "Make every dark room dimmer" — `find_elements {kind: "sectors", where:
@@ -129,6 +191,13 @@ and `linedef*` — the first line wearing this side.
   `rows` of a `{kind: "things", where: [{field: "name", op: "glob",
   value: "imp*"}]}` query; skip the second round trip entirely with
   `within: {sectors: [...]}` when the rooms are already known.
+- "Use BRICK7 instead of STARTAN everywhere" — skip the per-element
+  walk: `replace_texture {from: "STARTAN", to: "BRICK7", maps: "all"}`
+  (with a `dry_run: true` pass first for a swap this wide).
+- "Every nukage floor in the episode goes back to concrete" —
+  `replace_flat {from: "NUKAGE*", to: "FLOOR4_6", maps: "all"}`;
+  `surfaces: ["floor"]` keeps any sector's sky or liquid ceiling as it
+  is.
 
 The `rows` are deliberately compact summaries (sector look, line ends and
 sides, side textures, thing names and positions); for full detail on a hit,

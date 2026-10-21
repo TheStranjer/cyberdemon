@@ -37,6 +37,7 @@ pub(crate) mod plan;
 pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;
+pub(crate) mod sketch;
 pub mod textures;
 pub mod themes;
 pub(crate) mod validate;

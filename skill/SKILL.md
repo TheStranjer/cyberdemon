@@ -158,6 +158,7 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 | `mark_secret`            | `reference/features.md` |
 | `set_light_effect`       | `reference/features.md` |
 | `build_map_from_plan`    | `reference/plan.md`     |
+| `trace_sketch`           | `reference/sketch.md`   |
 | `add_vertex`             | `reference/vertices.md` |
 | `move_vertex`            | `reference/vertices.md` |
 | `remove_vertex`          | `reference/vertices.md` |
@@ -254,7 +255,12 @@ lifts, teleporters, exits, light effects, secrets) into a finished,
 thing-inhabited block in one undoable edit, warns about the judgment
 gaps it cannot fix (a lock without its key, an unswitched remote, no
 exit) and with `finalize: true` builds its node data and reports an
-errors-only validation in the same call (`reference/plan.md`). Draw whole
+errors-only validation in the same call (`reference/plan.md`). A hand-drawn
+floor plan comes in through `trace_sketch`, which needs no open WAD: it
+measures the drawing's regions, gaps, marks and adjacency in original-image
+pixels and publishes a debug image labelled `R1`, `G1`, `M1` — you decide
+what those are, rename `plan_rooms` into rooms, add connections at the gap
+centers and build with the same `units` (`reference/sketch.md`). Draw whole
 rooms in one call with `create_sector_from_loop`, and carve solid rock out
 of the map with `carve_void` (`reference/sectors.md`). Put working doors in
 with `add_door`, glaze the rooms' shared walls with `add_window`, climb

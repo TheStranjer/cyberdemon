@@ -80,7 +80,7 @@ mod tests {
     }
 
     /// Every tool the server lists, sorted by name.
-    const EXPECTED_TOOLS: [&str; 126] = [
+    const EXPECTED_TOOLS: [&str; 127] = [
         "add_door",
         "add_exit",
         "add_lift",
@@ -203,6 +203,7 @@ mod tests {
         "set_render_resolution",
         "set_texture_theme",
         "split_linedef",
+        "trace_sketch",
         "transform_selection",
         "undo",
         "validate_map",

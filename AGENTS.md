@@ -256,6 +256,18 @@ src/
                   the session's definitions under one lock and runs the
                   pure `wad::map::validate` checks, paging and counting the
                   issues outside them;
+                  `tools/sketch.rs` is the `sketch` group: `trace_sketch`
+                  needs no session at all — it parses `crop`/`max_size`/
+                  `ink`/the analysis and vectorize knobs and the plan
+                  `units` outside any lock, fetches, decodes, crops,
+                  area-downscales to `max_size`, runs the `sketch::analyze`
+                  and `sketch::vectorize` engines, scales every coordinate
+                  back onto original-image pixels (and through `Units` into
+                  grid-snapped `map_points`), reports the `R`/`G`/`M` ids,
+                  adjacency and the `plan_rooms` fragments, and publishes
+                  the overlay of `tools/sketch/debug.rs` (washed sketch,
+                  filled region polygons, gap circles, mark boxes,
+                  bitmap-font ids) as a `PNG` asset;
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,

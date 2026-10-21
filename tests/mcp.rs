@@ -23,7 +23,8 @@
 //! palette-group tests in `palette`, the
 //! patches-group tests in `patches`, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
-//! the plan-group tests in `plan`, the textures-group tests in
+//! the plan-group tests in `plan`, the sketch-group tests in `sketch`, the
+//! textures-group tests in
 //! `textures`, the themes-group tests in
 //! `themes`, the validate-group tests in `validate`, and the
 //! documentation-layout
@@ -137,6 +138,9 @@ mod server;
 #[cfg(test)]
 #[path = "mcp/session.rs"]
 mod session;
+#[cfg(test)]
+#[path = "mcp/sketch.rs"]
+mod sketch;
 #[cfg(test)]
 #[path = "mcp/support.rs"]
 pub mod support;

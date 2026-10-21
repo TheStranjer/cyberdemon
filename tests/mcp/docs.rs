@@ -1,5 +1,9 @@
 //! Documentation-layout checks: the `skill/` tree and `README.md` keep the
-//! cross-references and size limits the contributor rules promise, every
+//! cross-references and size limits the contributor rules promise,
+//! `SKILL.md`'s tool index names exactly the server's tools and routes each
+//! to a reference page that mentions it, every tool and input-schema
+//! property carries a description, every indexed guide is linked from
+//! `SKILL.md`, every
 //! guide's `Tools:` line names real tools the guide also uses, every
 //! `json plan-example` block in the guides compiles into a playable map,
 //! and every `json recipe` block is a well-formed `run_batch` payload whose
@@ -224,6 +228,141 @@ mod tests {
     fn root_readme_stays_within_100_lines() {
         let lines = read("README.md").lines().count();
         assert!(lines <= 100, "README.md is {lines} lines, the limit is 100");
+    }
+
+    /// The `(tool, reference)` rows of `SKILL.md`'s tool index table: the
+    /// lines between the `## Tools` heading and the next `## ` heading
+    /// whose first cell is a back-quoted name.
+    fn skill_tool_index() -> Vec<(String, String)> {
+        let skill = read("skill/SKILL.md");
+        let table = skill
+            .split("\n## ")
+            .find(|section| section.starts_with("Tools"))
+            .expect("skill/SKILL.md has a `## Tools` section");
+        table.lines().filter_map(index_row).collect()
+    }
+
+    /// One tool-index table line as a `(tool, reference)` pair: the first
+    /// cell back-quoted and some cell naming a `reference/` page; `None`
+    /// for headers, separators and prose.
+    fn index_row(line: &str) -> Option<(String, String)> {
+        let cells: Vec<&str> = line.split('|').skip(1).collect();
+        let tool = cells.first()?.trim().trim_matches('`');
+        let usable =
+            !tool.is_empty() && tool != "Tool" && !tool.chars().all(|candidate| candidate == '-');
+        if !usable {
+            return None;
+        }
+        let reference = cells
+            .iter()
+            .rev()
+            .find(|cell| cell.trim().contains("reference/"))?
+            .trim()
+            .trim_matches('`');
+        Some((tool.to_owned(), reference.to_owned()))
+    }
+
+    /// The names that are in `a` but not in `b`, for assert messages.
+    fn only_in<'names>(a: &[&'names str], b: &[&'names str]) -> Vec<&'names str> {
+        a.iter().copied().filter(|name| !b.contains(name)).collect()
+    }
+
+    #[tokio::test]
+    async fn the_skill_tool_index_matches_the_server_tools_exactly() {
+        let client = connect().await;
+        let listed = client.list_all_tools().await.expect("list tools");
+        let server: Vec<&str> = listed.iter().map(|tool| tool.name.as_ref()).collect();
+        let index = skill_tool_index();
+        let indexed: Vec<&str> = index.iter().map(|row| row.0.as_str()).collect();
+        let missing = only_in(&server, &indexed);
+        assert!(
+            missing.is_empty(),
+            "SKILL.md's tool index is missing the tools {missing:?}"
+        );
+        let stale = only_in(&indexed, &server);
+        assert!(
+            stale.is_empty(),
+            "SKILL.md's tool index lists tools the server does not have: {stale:?}"
+        );
+        check_index_references(&index);
+    }
+
+    /// Requires every index row's reference file to exist under `skill/`
+    /// and to mention its tool by name.
+    fn check_index_references(index: &[(String, String)]) {
+        for row in index {
+            let tool = row.0.as_str();
+            let reference = row.1.as_str();
+            let text = read(&format!("skill/{reference}"));
+            assert!(
+                mentions_name(&text, tool),
+                "{reference} does not mention the tool {tool} it indexes",
+            );
+        }
+    }
+
+    /// The description of one listed tool, refusing an empty one.
+    fn description_of(tool: &rmcp::model::Tool) -> &str {
+        let text = tool
+            .description
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} carries no description", tool.name));
+        assert!(
+            !text.trim().is_empty(),
+            "{}'s description is empty",
+            tool.name
+        );
+        text
+    }
+
+    /// Requires every property of one tool's input schema to carry a
+    /// non-empty `description`.
+    fn assert_arguments_described(tool: &rmcp::model::Tool) {
+        let schema = serde_json::to_value(&tool.input_schema).expect("a serializable schema");
+        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+            return;
+        };
+        for (field, shape) in properties {
+            let description = shape.get("description").and_then(Value::as_str);
+            assert!(
+                description.is_some_and(|text| !text.trim().is_empty()),
+                "{}.{field} has no argument description: {shape}",
+                tool.name,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_tool_describes_itself_and_its_arguments() {
+        let client = connect().await;
+        let listed = client.list_all_tools().await.expect("list tools");
+        check_tool_descriptions(&listed);
+    }
+
+    /// Requires every listed tool to have a non-empty description and
+    /// every input-schema property to carry one.
+    fn check_tool_descriptions(listed: &[rmcp::model::Tool]) {
+        for tool in listed {
+            description_of(tool);
+            assert_arguments_described(tool);
+        }
+    }
+
+    #[test]
+    fn every_indexed_guide_is_linked_from_the_skill_entry_point() {
+        let index_links = md_link_targets(&read("skill/guides/README.md"));
+        let skill_links = md_link_targets(&read("skill/SKILL.md"));
+        assert!(
+            !index_links.is_empty(),
+            "the guides index links no files to check against SKILL.md"
+        );
+        for name in index_links {
+            let target = format!("guides/{name}");
+            assert!(
+                skill_links.contains(&target),
+                "SKILL.md must link the indexed guide at {target}",
+            );
+        }
     }
 
     #[test]

@@ -72,6 +72,19 @@ meaningful change.
 
 - **Unknown tools fail at the protocol layer** with the JSON-RPC error
   `INVALID_PARAMS`, not as a tool error. Do not retry; list the tools.
+- **Every edit is one undoable step.** `undo`/`redo` walk the labelled
+  history (newest 100 edits; `get_session_info` reports where it stands);
+  results echo `copied_to_working` and `nodes_invalidated` so you know what
+  the step touched (`reference/session.md`). `run_batch` executes several
+  tool calls as ONE atomic step that rolls back whole on the first failing
+  one, and chains results with `$ref` — use it for any multi-call change you
+  want to be able to take back at once (`reference/batch.md`).
+- **Edits only touch the working archive.** The `IWAD` and any resource
+  layers (`merge_wad mode: layer`) are read-only; editing a layer-owned map
+  copies its block into the working archive first (copy-on-write, reported
+  as `copied_to_working: true`), and reads answer from the merged view —
+  what an engine would see — unless you pass a `scope` (`reference/session.md`,
+  `reference/maps.md`).
 
 ## Files and URLs
 
@@ -123,143 +136,172 @@ texture, flat, patch, sprite, embedded picture, sound, song, `PLAYPAL` or
 
 ## Tools
 
-| Tool                     | Reference               |
-|--------------------------|-------------------------|
-| `version`                | `reference/meta.md`     |
-| `get_asset_server_info`  | `reference/assets.md`   |
-| `get_asset_url`          | `reference/assets.md`   |
-| `set_asset_capacity`     | `reference/assets.md`   |
-| `get_thing_types`        | `reference/defs.md`     |
-| `get_linedef_specials`   | `reference/defs.md`     |
-| `get_sector_specials`    | `reference/defs.md`     |
-| `list_lumps`             | `reference/lumps.md`    |
-| `search_lumps`           | `reference/lumps.md`    |
-| `get_lump`               | `reference/lumps.md`    |
-| `extract_lump`           | `reference/lumps.md`    |
-| `add_lump`               | `reference/lumps.md`    |
-| `import_asset`           | `reference/lumps.md`    |
-| `import_file_as_lump`    | `reference/lumps.md`    |
-| `replace_lump`           | `reference/lumps.md`    |
-| `remove_lump`            | `reference/lumps.md`    |
-| `rename_lump`            | `reference/lumps.md`    |
-| `reorder_lumps`          | `reference/lumps.md`    |
-| `list_maps`              | `reference/maps.md`     |
-| `get_map_lumps`          | `reference/maps.md`     |
-| `get_map_summary`        | `reference/maps.md`     |
-| `assemble_map`           | `reference/maps.md`     |
-| `set_active_map`         | `reference/maps.md`     |
-| `create_map`             | `reference/maps.md`     |
-| `copy_map`               | `reference/maps.md`     |
-| `rename_map`             | `reference/maps.md`     |
-| `remove_map`             | `reference/maps.md`     |
-| `convert_map_format`     | `reference/convert.md`  |
-| `add_thing`              | `reference/things.md`   |
-| `edit_thing`             | `reference/things.md`   |
-| `remove_thing`           | `reference/things.md`   |
-| `add_linedef`            | `reference/linedefs.md` |
-| `edit_linedef`           | `reference/linedefs.md` |
-| `remove_linedef`         | `reference/linedefs.md` |
-| `split_linedef`          | `reference/linedefs.md` |
-| `join_linedefs`          | `reference/linedefs.md` |
-| `add_sidedef`            | `reference/sidedefs.md` |
-| `edit_sidedef`           | `reference/sidedefs.md` |
-| `remove_sidedef`         | `reference/sidedefs.md` |
-| `add_sector`             | `reference/sectors.md`  |
-| `edit_sector`            | `reference/sectors.md`  |
-| `remove_sector`          | `reference/sectors.md`  |
-| `create_sector_from_loop` | `reference/sectors.md` |
-| `carve_void`             | `reference/sectors.md`  |
-| `add_door`               | `reference/features.md` |
-| `add_window`             | `reference/features.md` |
-| `add_stairs`             | `reference/features.md` |
-| `add_lift`               | `reference/features.md` |
-| `add_teleporter`         | `reference/features.md` |
-| `add_switch`             | `reference/features.md` |
-| `add_exit`               | `reference/features.md` |
-| `place_things`           | `reference/features.md` |
-| `mark_secret`            | `reference/features.md` |
-| `set_light_effect`       | `reference/features.md` |
-| `build_map_from_plan`    | `reference/plan.md`     |
-| `trace_sketch`           | `reference/sketch.md`   |
-| `add_vertex`             | `reference/vertices.md` |
-| `move_vertex`            | `reference/vertices.md` |
-| `remove_vertex`          | `reference/vertices.md` |
-| `delete_geometry`        | `reference/geometry.md` |
-| `transform_selection`    | `reference/geometry.md` |
-| `validate_map`           | `reference/validate.md` |
-| `check_playability`      | `reference/playability.md` |
-| `describe_map`           | `reference/playability.md` |
-| `find_elements`          | `reference/query.md`    |
-| `replace_texture`        | `reference/query.md`    |
-| `replace_flat`           | `reference/query.md`    |
-| `replace_thing_type`     | `reference/query.md`    |
-| `bulk_edit`              | `reference/query.md`    |
-| `list_flats`             | `reference/graphics.md` |
-| `list_patches`           | `reference/graphics.md` |
-| `list_sprites`           | `reference/graphics.md` |
-| `get_flat`               | `reference/graphics.md` |
-| `get_patch`              | `reference/graphics.md` |
-| `get_sprite`             | `reference/graphics.md` |
-| `get_thing_sprite`       | `reference/graphics.md` |
-| `decode_patch`           | `reference/graphics.md` |
-| `import_image_as_patch`  | `reference/imports.md`  |
-| `import_png_as_patch`    | `reference/imports.md`  |
-| `import_image_as_flat`   | `reference/imports.md`  |
-| `import_png_as_flat`     | `reference/imports.md`  |
-| `import_image_as_sprite` | `reference/imports.md`  |
-| `import_png_as_sprite`   | `reference/imports.md`  |
-| `import_image_as_raw`    | `reference/imports.md`  |
-| `process_image`          | `reference/imports.md`  |
-| `create_texture_from_image` | `reference/imports.md` |
-| `create_flat_from_image` | `reference/imports.md`  |
-| `create_sprite_from_image` | `reference/imports.md` |
-| `add_patch`              | `reference/patches.md`  |
-| `replace_patch`          | `reference/patches.md`  |
-| `remove_patch`           | `reference/patches.md`  |
-| `diff_wads`              | `reference/inspect.md`  |
-| `optimize_wad`           | `reference/inspect.md`  |
-| `import_sound`           | `reference/audio.md`    |
-| `preview_sound`          | `reference/audio.md`    |
-| `import_music`           | `reference/music.md`    |
-| `preview_music`          | `reference/music.md`    |
-| `get_nodes`              | `reference/nodes.md`    |
-| `get_reject`             | `reference/nodes.md`    |
-| `get_blockmap`           | `reference/nodes.md`    |
-| `build_nodes`            | `reference/nodes.md`    |
-| `build_all_nodes`        | `reference/nodes.md`    |
-| `build_blockmap`         | `reference/nodes.md`    |
-| `build_reject`           | `reference/nodes.md`    |
-| `get_palette`            | `reference/palette.md`  |
-| `set_palette`            | `reference/palette.md`  |
-| `open_iwad`              | `reference/session.md`  |
-| `open_wad`               | `reference/session.md`  |
-| `new_wad`                | `reference/session.md`  |
-| `merge_wad`              | `reference/session.md`  |
-| `save_wad`               | `reference/session.md`  |
-| `undo`                   | `reference/session.md`  |
-| `redo`                   | `reference/session.md`  |
-| `get_session_info`       | `reference/session.md`  |
-| `get_wad_info`           | `reference/session.md`  |
-| `run_batch`              | `reference/batch.md`    |
-| `render_topdown`         | `reference/render.md`   |
-| `render_minimap`         | `reference/render.md`   |
-| `render_view`            | `reference/render.md`   |
-| `set_render_resolution`  | `reference/render.md`   |
-| `set_render_options`     | `reference/render.md`   |
-| `get_render_settings`    | `reference/render.md`   |
-| `get_dehacked`           | `reference/scripts.md`  |
-| `edit_dehacked`          | `reference/scripts.md`  |
-| `edit_decorate`          | `reference/scripts.md`  |
-| `edit_zscript`           | `reference/scripts.md`  |
-| `list_textures`          | `reference/textures.md` |
-| `list_pnames`            | `reference/textures.md` |
-| `edit_pnames`            | `reference/textures.md` |
-| `build_texture`          | `reference/textures.md` |
-| `remove_texture`         | `reference/textures.md` |
-| `get_texture_theme`      | `reference/themes.md`   |
-| `set_texture_theme`      | `reference/themes.md`   |
-| `auto_texture`           | `reference/themes.md`   |
-| `align_textures`         | `reference/themes.md`   |
+Every tool, grouped by its tool group (`assets`, `session`, `query`, ...).
+Each group's full parameter and result contract lives in its `reference/`
+page; read that page before using a tool whose result shape you do not
+know yet.
+
+| Tool                      | Group         | Reference                |
+|---------------------------|---------------|--------------------------|
+| `get_asset_server_info`     | assets        | `reference/assets.md`      |
+| `get_asset_url`             | assets        | `reference/assets.md`      |
+| `set_asset_capacity`        | assets        | `reference/assets.md`      |
+| `import_sound`              | audio         | `reference/audio.md`       |
+| `preview_sound`             | audio         | `reference/audio.md`       |
+| `run_batch`                 | batch         | `reference/batch.md`       |
+| `convert_map_format`        | convert       | `reference/convert.md`     |
+| `get_linedef_specials`      | defs          | `reference/defs.md`        |
+| `get_sector_specials`       | defs          | `reference/defs.md`        |
+| `get_thing_types`           | defs          | `reference/defs.md`        |
+| `delete_geometry`           | edit_geometry | `reference/geometry.md`    |
+| `transform_selection`       | edit_geometry | `reference/geometry.md`    |
+| `add_linedef`               | edit_linedefs | `reference/linedefs.md`    |
+| `edit_linedef`              | edit_linedefs | `reference/linedefs.md`    |
+| `join_linedefs`             | edit_linedefs | `reference/linedefs.md`    |
+| `remove_linedef`            | edit_linedefs | `reference/linedefs.md`    |
+| `split_linedef`             | edit_linedefs | `reference/linedefs.md`    |
+| `add_sector`                | edit_sectors  | `reference/sectors.md`     |
+| `carve_void`                | edit_sectors  | `reference/sectors.md`     |
+| `create_sector_from_loop`   | edit_sectors  | `reference/sectors.md`     |
+| `edit_sector`               | edit_sectors  | `reference/sectors.md`     |
+| `remove_sector`             | edit_sectors  | `reference/sectors.md`     |
+| `add_sidedef`               | edit_sidedefs | `reference/sidedefs.md`    |
+| `edit_sidedef`              | edit_sidedefs | `reference/sidedefs.md`    |
+| `remove_sidedef`            | edit_sidedefs | `reference/sidedefs.md`    |
+| `add_thing`                 | edit_things   | `reference/things.md`      |
+| `edit_thing`                | edit_things   | `reference/things.md`      |
+| `remove_thing`              | edit_things   | `reference/things.md`      |
+| `add_vertex`                | edit_vertices | `reference/vertices.md`    |
+| `move_vertex`               | edit_vertices | `reference/vertices.md`    |
+| `remove_vertex`             | edit_vertices | `reference/vertices.md`    |
+| `add_door`                  | features      | `reference/features.md`    |
+| `add_exit`                  | features      | `reference/features.md`    |
+| `add_lift`                  | features      | `reference/features.md`    |
+| `add_stairs`                | features      | `reference/features.md`    |
+| `add_switch`                | features      | `reference/features.md`    |
+| `add_teleporter`            | features      | `reference/features.md`    |
+| `add_window`                | features      | `reference/features.md`    |
+| `mark_secret`               | features      | `reference/features.md`    |
+| `place_things`              | features      | `reference/features.md`    |
+| `set_light_effect`          | features      | `reference/features.md`    |
+| `decode_patch`              | graphics      | `reference/graphics.md`    |
+| `get_flat`                  | graphics      | `reference/graphics.md`    |
+| `get_patch`                 | graphics      | `reference/graphics.md`    |
+| `get_sprite`                | graphics      | `reference/graphics.md`    |
+| `get_thing_sprite`          | graphics      | `reference/graphics.md`    |
+| `list_flats`                | graphics      | `reference/graphics.md`    |
+| `list_patches`              | graphics      | `reference/graphics.md`    |
+| `list_sprites`              | graphics      | `reference/graphics.md`    |
+| `create_flat_from_image`    | imports       | `reference/imports.md`     |
+| `create_sprite_from_image`  | imports       | `reference/imports.md`     |
+| `create_texture_from_image` | imports       | `reference/imports.md`     |
+| `import_image_as_flat`      | imports       | `reference/imports.md`     |
+| `import_image_as_patch`     | imports       | `reference/imports.md`     |
+| `import_image_as_raw`       | imports       | `reference/imports.md`     |
+| `import_image_as_sprite`    | imports       | `reference/imports.md`     |
+| `import_png_as_flat`        | imports       | `reference/imports.md`     |
+| `import_png_as_patch`       | imports       | `reference/imports.md`     |
+| `import_png_as_sprite`      | imports       | `reference/imports.md`     |
+| `process_image`             | imports       | `reference/imports.md`     |
+| `diff_wads`                 | inspect       | `reference/inspect.md`     |
+| `optimize_wad`              | inspect       | `reference/inspect.md`     |
+| `add_lump`                  | lumps         | `reference/lumps.md`       |
+| `extract_lump`              | lumps         | `reference/lumps.md`       |
+| `get_lump`                  | lumps         | `reference/lumps.md`       |
+| `import_asset`              | lumps         | `reference/lumps.md`       |
+| `import_file_as_lump`       | lumps         | `reference/lumps.md`       |
+| `list_lumps`                | lumps         | `reference/lumps.md`       |
+| `remove_lump`               | lumps         | `reference/lumps.md`       |
+| `rename_lump`               | lumps         | `reference/lumps.md`       |
+| `reorder_lumps`             | lumps         | `reference/lumps.md`       |
+| `replace_lump`              | lumps         | `reference/lumps.md`       |
+| `search_lumps`              | lumps         | `reference/lumps.md`       |
+| `assemble_map`              | maps          | `reference/maps.md`        |
+| `copy_map`                  | maps          | `reference/maps.md`        |
+| `create_map`                | maps          | `reference/maps.md`        |
+| `get_map_lumps`             | maps          | `reference/maps.md`        |
+| `get_map_summary`           | maps          | `reference/maps.md`        |
+| `list_maps`                 | maps          | `reference/maps.md`        |
+| `remove_map`                | maps          | `reference/maps.md`        |
+| `rename_map`                | maps          | `reference/maps.md`        |
+| `set_active_map`            | maps          | `reference/maps.md`        |
+| `version`                   | meta          | `reference/meta.md`        |
+| `import_music`              | music         | `reference/music.md`       |
+| `preview_music`             | music         | `reference/music.md`       |
+| `build_all_nodes`           | nodes         | `reference/nodes.md`       |
+| `build_blockmap`            | nodes         | `reference/nodes.md`       |
+| `build_nodes`               | nodes         | `reference/nodes.md`       |
+| `build_reject`              | nodes         | `reference/nodes.md`       |
+| `get_blockmap`              | nodes         | `reference/nodes.md`       |
+| `get_nodes`                 | nodes         | `reference/nodes.md`       |
+| `get_reject`                | nodes         | `reference/nodes.md`       |
+| `get_palette`               | palette       | `reference/palette.md`     |
+| `set_palette`               | palette       | `reference/palette.md`     |
+| `add_patch`                 | patches       | `reference/patches.md`     |
+| `remove_patch`              | patches       | `reference/patches.md`     |
+| `replace_patch`             | patches       | `reference/patches.md`     |
+| `build_map_from_plan`       | plan          | `reference/plan.md`        |
+| `check_playability`         | playability   | `reference/playability.md` |
+| `describe_map`              | playability   | `reference/playability.md` |
+| `bulk_edit`                 | query         | `reference/query.md`       |
+| `find_elements`             | query         | `reference/query.md`       |
+| `replace_flat`              | query         | `reference/query.md`       |
+| `replace_texture`           | query         | `reference/query.md`       |
+| `replace_thing_type`        | query         | `reference/query.md`       |
+| `get_render_settings`       | render        | `reference/render.md`      |
+| `render_minimap`            | render        | `reference/render.md`      |
+| `render_topdown`            | render        | `reference/render.md`      |
+| `render_view`               | render        | `reference/render.md`      |
+| `set_render_options`        | render        | `reference/render.md`      |
+| `set_render_resolution`     | render        | `reference/render.md`      |
+| `edit_decorate`             | scripts       | `reference/scripts.md`     |
+| `edit_dehacked`             | scripts       | `reference/scripts.md`     |
+| `edit_zscript`              | scripts       | `reference/scripts.md`     |
+| `get_dehacked`              | scripts       | `reference/scripts.md`     |
+| `get_session_info`          | session       | `reference/session.md`     |
+| `get_wad_info`              | session       | `reference/session.md`     |
+| `merge_wad`                 | session       | `reference/session.md`     |
+| `new_wad`                   | session       | `reference/session.md`     |
+| `open_iwad`                 | session       | `reference/session.md`     |
+| `open_wad`                  | session       | `reference/session.md`     |
+| `redo`                      | session       | `reference/session.md`     |
+| `save_wad`                  | session       | `reference/session.md`     |
+| `undo`                      | session       | `reference/session.md`     |
+| `trace_sketch`              | sketch        | `reference/sketch.md`      |
+| `build_texture`             | textures      | `reference/textures.md`    |
+| `edit_pnames`               | textures      | `reference/textures.md`    |
+| `list_pnames`               | textures      | `reference/textures.md`    |
+| `list_textures`             | textures      | `reference/textures.md`    |
+| `remove_texture`            | textures      | `reference/textures.md`    |
+| `align_textures`            | themes        | `reference/themes.md`      |
+| `auto_texture`              | themes        | `reference/themes.md`      |
+| `get_texture_theme`         | themes        | `reference/themes.md`      |
+| `set_texture_theme`         | themes        | `reference/themes.md`      |
+| `validate_map`              | validate      | `reference/validate.md`    |
+
+## Workflows
+
+The [guides index](guides/README.md) is the judgment half of the skill: short
+pages on what to decide, not how the tools work. Each flagship chain has its
+own page:
+
+- [Sketch to map](guides/sketch-to-map.md) — reading a hand-drawn floor plan
+  through `trace_sketch` into regions, gaps and marks, turning them into a
+  `build_map_from_plan` plan and verifying the result against the drawing.
+- [Images to assets](guides/images-to-assets.md) — choosing the right image
+  importer, the `process_image` ops to run first, sizes and palette limits
+  for textures, flats and sprites.
+- [Editing existing maps](guides/editing-existing-maps.md) — orienting on a
+  map you did not build, describing it by query rather than by index, and
+  landing changes safely.
+- [Recipes](guides/recipes.md) — worked end-to-end answers to common
+  requests, each runnable as a `run_batch` payload.
+- [Design rules](guides/design-rules.md) — the Doom dimensions and gameplay
+  facts (player size, door widths, stair heights, light levels) every
+  parameter choice measures against.
+- [Verification](guides/verification.md) — the change → `validate_map` →
+  `check_playability` → render → fix loop to run after every meaningful
+  change.
 
 ## Typical workflow
 
@@ -326,6 +368,5 @@ so you can see what you built (`reference/render.md`);
 part of a WAD and survive every archive change); `get_render_settings` reads
 them back.
 
-More WAD reading and editing tools are not implemented yet. When they are,
-add one reference file per tool group under `reference/` and index each
-tool here.
+The table above and the `reference/` pages cover every tool the server
+lists; `list_tools` is the live answer if in doubt.

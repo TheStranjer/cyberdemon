@@ -1,78 +1,6 @@
 # Cyberdemon
 
-An [MCP](https://modelcontextprotocol.io) server that lets an LLM read, understand and edit Doom WADs.
-
-WADs are binary archives of lumps (maps, textures, sprites, sounds, palettes, demos). Cyberdemon exposes them to an LLM as structured tools, so a model can inspect a WAD, reason about its contents, and make precise edits without hand-parsing bytes.
-
-The work splits in two: the server is the **reflex** — deterministic tools performing formulaic operations on explicit inputs — and the calling model is the **judgment**, guided by the [skill guides](skill/guides/README.md): interpreting requests and images, choosing shapes, scale and theme.
-
-It speaks MCP over **stdio** (not HTTP), so any MCP client can launch it as a subprocess.
-
-> Status: foundation plus the first WAD and audio tools. The server starts per-connection with shared session
-> state, exposes a `version` tool, an `assets` group
-> (`get_asset_server_info`, `get_asset_url`, `set_asset_capacity`), a `batch` group (`run_batch`), a `defs` group
-> (`get_thing_types`, `get_linedef_specials`, `get_sector_specials`), a
-> `graphics` group (`list_flats`, `list_patches`, `list_sprites`, `get_flat`,
-> `get_patch`, `get_sprite`, `get_thing_sprite`, `decode_patch`), an
-> `imports` group (`import_image_as_patch`/`import_png_as_patch`,
-> `import_image_as_flat`/`import_png_as_flat`, `import_image_as_sprite`/`import_png_as_sprite`, `import_image_as_raw`, `process_image`, `create_texture_from_image`, `create_flat_from_image`, `create_sprite_from_image`), a `patches` group (`add_patch`, `replace_patch`, `remove_patch`), an `inspect` group (`diff_wads`, `optimize_wad`), a
-> `lumps` group (`list_lumps`, `search_lumps`, `get_lump`, `extract_lump`,
-> `add_lump`, `import_asset`, `import_file_as_lump`, `replace_lump`,
-> `remove_lump`, `rename_lump`, `reorder_lumps`), a `maps` group (`list_maps`, `get_map_lumps`, `get_map_summary`, `assemble_map`, `set_active_map`, `create_map`, `copy_map`, `rename_map`, `remove_map`), an `edit_linedefs` group (`add_linedef`, `edit_linedef`, `remove_linedef`, `split_linedef`, `join_linedefs`), an `edit_things` group (`add_thing`, `edit_thing`, `remove_thing`), an `edit_sidedefs` group (`add_sidedef`, `edit_sidedef`, `remove_sidedef`), an `edit_sectors` group (`add_sector`, `edit_sector`, `remove_sector`, `create_sector_from_loop`, `carve_void`), an `edit_vertices` group (`add_vertex`, `move_vertex`, `remove_vertex`), an `edit_geometry` group (`delete_geometry`, `transform_selection`), a `convert` group (`convert_map_format`), a `features` group (`add_door`, `add_window`, `add_stairs`, `add_lift`, `add_teleporter`, `add_switch`, `add_exit`, `place_things`, `mark_secret`, `set_light_effect`), a `plan` group (`build_map_from_plan`: rooms, connections, walls, theme, things and behaviour features — wired doors, switches, lifts, teleporters, exits, light effects, secrets — compiled into one written, playable map block, its playability gaps reported as warnings and its `finalize` flag building the node run plus an errors-only validation pass into that same edit), an
-> `audio` group (`import_sound`, `preview_sound`), a `music` group
-> (`import_music`, `preview_music`), a `nodes` group (`get_nodes`, `get_reject`,
-> `get_blockmap`, `build_nodes`, `build_all_nodes`, `build_blockmap`, `build_reject`), a `scripts` group (`get_dehacked`, `edit_dehacked`,
-> `edit_decorate`, `edit_zscript`), a `session` group
-> (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`, `save_wad`, `undo`,
-> `redo`, `get_session_info`, `get_wad_info`), a `render` group
-> (`render_topdown`, `render_minimap`, `render_view`, `set_render_resolution`,
-> `set_render_options`, `get_render_settings`), a `query` group (`find_elements`: filter sectors, linedefs, sidedefs, things and vertices by stored fields, derived values (heights, areas, lengths, roles, thing names and sectors) and a bbox/sector bound, answered with paged indices and compact rows; `bulk_edit`: query-selected field set/`add`/flag edits over one map as one undoable, `dry_run`-previewable, range-refusing step; `replace_texture`/`replace_flat`: glob texture and flat name swaps, `replace_thing_type`: doomednum-or-name thing swaps, each across maps as one undoable copy-on-write step, `dry_run`-previewable), a `textures` group (`list_textures`,
-> `list_pnames`, `edit_pnames`, `build_texture`, `remove_texture`), a `validate` group (`validate_map`), a `playability` group (`check_playability`: a player's-eye sector walk reporting reachability, per-blocker reasons and fix hints, stuck and unreachable things; `describe_map`: whole-map summary, paged per-sector fact rows with roles, neighbours, thing and texture tallies, and a labelled top-down overview image), a `sketch` group (`trace_sketch`: a hand-drawn plan measured into welded region polygons, gaps, marks, adjacency, map-unit points under `build_map_from_plan`'s `units`, and a labelled debug PNG), a `themes` group
-> (`get_texture_theme`, `set_texture_theme`, `auto_texture`, `align_textures`) and a `palette` group (`get_palette`, `set_palette`),
-> and defines the structured JSON result/error contract every WAD tool uses. Generated files are
-> served to clients as `http://localhost:<port>` URLs by a lazily started
-> asset server (LRU store + uploads via `/upload/<name>`), so big binaries
-> never cross the stdio channel. An internal graphics core (`src/gfx*`:
-> images, PNG/JPEG/GIF/BMP codecs, `grAb`, palettes, `COLORMAP` tables, texture compositing,
-> quantization, pure integer image ops, Doom patch (incl. tall) and flat codecs), an internal
-> audio core (`src/audio*`: interleaved
-> `i16` `Pcm`, `DMX` `DS*` sound lumps, `WAV` codecs, `DP*` PC speaker
-> tone-list synthesis, `symphonia`-backed
-> `WAV`/`OGG`/`MP3`/`FLAC` import decoding, integer mono downmix
-> and resampling), an internal music core (`src/music*`: Doom `MUS` to
-> type-0 `MIDI` conversion and back, an `SMF` writer, a track-merging
-> `SMF` parser and magic-based container sniffing), a float-free
-> math core (`src/fixed*`: 16.16 fixed point, BAM angles, CORDIC trig,
-> `isqrt`) and a pure WAD format core (`src/wad*`: eight-byte lump names,
-> bounds-checked little-endian reader/writer, an in-memory `Wad` archive
-> with parsing, serialization, name lookup and atomic file I/O, a lump
-> classifier reporting namespaces, map blocks and type hints, a pure two-directory diff over lump namespaces, map units and element counts, a pure redundant-lump cleanup planner and a deduplicating `Wad` writer, a
-> `PNAMES`/`TEXTURE1`/`TEXTURE2` codec pair with `Doom`/`Strife` layout
-> detection and patch-reference renumbering, and a `UDMF` `TEXTMAP`
-> tokenizer, parser and writer over documents of blocks and key/value
-> pairs, typed `SEGS`/`SSECTORS`/`NODES` (vanilla plus `ZDoom`), `REJECT`/`BLOCKMAP` parsers, serializers and pure builders, pure integer map geometry, and a pure sector-graph playability analysis (reachability fixpoint, blocker explanations and stuck-thing body tests) behind `check_playability`), and a session
-> model (`src/session*`: an IWAD plus resource layers under one editable
-> working archive, a merged view with vanilla last-archive-wins override
-> rules, a labelled undo/redo history with dirty-state tracking, and the copy-on-write `edit_map` step every map edit wraps) and a definitions registry (`src/defs*`: TSV game tables embedded in the binary,
-> parsed once, selected per game, and overlaid with the session's custom
-> DEHACKED/DECORATE/ZScript/MAPINFO thing definitions), a texture theme core (`src/themes*`: the embedded per-game role/candidate tables and the exact→glob→fallback→default resolver, plus the pure auto-texture and texture-chain alignment engines behind the themes tools) and render defaults (`src/render*`: the validated session-level settings, the integer gamma curve, the 3D-view lighting maths
-> (COLORMAP tables, fake contrast, shading), the scene preparation (textures, flats, sky,
-> fallbacks, `problems`), the integer column caster `render_view` walks (exact `i128` ray
-> fractions, per-column portal walks, textured walls, world-aligned planes, the sky texture and a per-pixel depth buffer), finished by a transparent pass (masked middles and distance-scaled sprites painted far to near through that buffer), the shared
-> automap line map and minimap window, and the clipped integer raster canvas (Bresenham lines, even-odd polygon fills) both paint on) and a
-> pure planar geometry engine (`src/geom*`: layered polygons and external
-> segments arranged into non-crossing, side-labelled integer pieces; all
-> drawing goes through `geom::arrange`) and a pure float-free BSP node
-> builder (`src/bsp*`: segs from linedef sides, 16.16/i128 side tests,
-> splitting and cost-chosen partition lines, a tree of convex subsectors
-> with integer boxes, and the vanilla, ZDoom extended and glBSP v2 node writers behind `build_nodes`) and a pure raster sketch measurer
-> (`src/sketch*`: ink mask, stroke width, morphological closing,
-> deterministic components, enclosed regions, marks and wall gaps, and
-> regions grown to wall centrelines then traced, simplified, straightened
-> and welded integer polygons; it measures and never interprets) back the
-> first WAD tools.
-> `AppState::fetch_source` turns client `source` strings (absolute paths, `file://`, `http(s)://`
-> and own-asset URLs, capped at 256 MiB) into bytes for import tools.
+An [MCP](https://modelcontextprotocol.io) server that lets an LLM read, understand and edit Doom WADs over stdio. A session loads an `IWAD` plus read-only `PWAD` layers under one editable working archive, and ~135 tools inspect and change maps, graphics, audio and game definitions — every edit undoable, every result structured JSON, every large file (renders, sounds, uploads) delivered as a localhost `HTTP` URL so nothing big crosses the stdio channel. Two flagship workflows: a hand-drawn floor plan goes through `trace_sketch` (regions, gaps, marks and adjacency measured to map units) into `build_map_from_plan` and comes out a playable, node-built map; and any picture — a file path or a URL — lands as a finished asset (`import_image_as_patch`/`flat`/`sprite`, or the one-shot `create_texture_from_image`/`create_flat_from_image`/`create_sprite_from_image`, which quantize to the `PLAYPAL` and write `PNAMES`/`TEXTURE1` for you).
 
 ## Build and run
 
@@ -89,7 +17,46 @@ claude mcp add cyberdemon -- /path/to/cyberdemon/target/release/cyberdemon
 
 ## Configuration
 
-- `CYBERDEMON_ASSET_CAPACITY` — entries kept in the in-memory LRU asset store before the oldest are discarded (default 50, max 10000); missing or invalid values use the default.
+- `CYBERDEMON_ASSET_CAPACITY` — entries kept in the in-memory LRU asset store before the oldest are discarded (default 50, max 10000); missing or invalid values use the default. Runtime equivalent: `set_asset_capacity`.
+
+## Who decides what
+
+The server is the reflex — deterministic tools carrying out formulaic operations on explicit inputs — and the calling model is the judgment, deciding shapes, scale, theme and balance as explained in the [skill guides](skill/guides/README.md) (entry point: [skill/SKILL.md](skill/SKILL.md)).
+
+## Tool groups
+
+- `meta` — server identity (`version`).
+- `assets` — asset origin info, capacity, and one URL for any session resource (`get_asset_url`).
+- `session` — load archives (`open_iwad`, `open_wad`, `new_wad`, `merge_wad`), `save_wad`, `undo`, `redo`, session state.
+- `batch` — `run_batch`: several tool calls as one atomic, single-undo step with `$ref`-chained results.
+- `lumps` — the lump directory: list, search, read, extract, add, import, replace, remove, rename, reorder.
+- `maps` — map blocks: list, summary, assemble, create, copy, rename, remove, active map.
+- `convert` — `convert_map_format` between binary `Doom`/`Hexen` and `UDMF`, `dry_run`-previewable.
+- `edit_things` — add, edit and remove things (typed or raw fields, angles normalized).
+- `edit_vertices` — add, move and remove vertices with reference-aware cleanup.
+- `edit_linedefs` — add, edit, remove, split and join linedefs.
+- `edit_sidedefs` — add, edit and remove sidedefs: faces, textures, offsets, sector re-pointing.
+- `edit_sectors` — add, edit and remove sectors, draw whole rooms with `create_sector_from_loop`, carve solid rock with `carve_void`.
+- `edit_geometry` — `delete_geometry` and `transform_selection` over index selections.
+- `features` — working structures in one call: `add_door`, `add_window`, `add_stairs`, `add_lift`, `add_teleporter`, `add_switch`, `add_exit`, `place_things`, `mark_secret`, `set_light_effect`.
+- `plan` — `build_map_from_plan`: a whole playable map (rooms, walls, dressing, features, things) from one JSON plan.
+- `sketch` — `trace_sketch`: measure a hand-drawn floor plan into region polygons, gaps, marks and map-unit points.
+- `query` — `find_elements`, `bulk_edit` and the `replace_*` swaps over query-selected sets.
+- `validate` — `validate_map`: map health as severity-ranked, code-tagged issues.
+- `playability` — `check_playability` (can a player finish, and what blocks them) and `describe_map` fact rows.
+- `nodes` — inspect and build `SEGS`/`SSECTORS`/`NODES` (`classic`, `extended`, `gl`), `REJECT` and `BLOCKMAP` (`build_all_nodes` before vanilla play).
+- `graphics` — read pictures the engine sees: flats, patches, sprites and thing sprites as `PNG` URLs.
+- `patches` — patch lump lifecycle: add, replace, remove whole patch lumps.
+- `textures` — `PNAMES`/`TEXTURE1`/`TEXTURE2` definitions: list, build composite textures, remove.
+- `themes` — per-game texture roles: get/set the theme, `auto_texture` repaint, `align_textures` chains.
+- `palette` — `PLAYPAL` get/set with `COLORMAP`-derived tables.
+- `imports` — any picture (PNG/JPEG/GIF/BMP) in: `import_image_as_*`, `process_image` ops, and the one-shot `create_*` asset tools.
+- `audio` — `DS*`/`DP*` sound import and `WAV` preview.
+- `music` — `D_*` music import (`MUS`/MIDI) and `MIDI` preview.
+- `render` — `render_topdown`, `render_minimap`, the `render_view` column-caster view, and the session's render settings.
+- `defs` — the game thing/special/sector tables, overlaid with DEHACKED/DECORATE/ZScript/MAPINFO definitions.
+- `scripts` — read and patch `DEHACKED`/`DECORATE`/`ZSCRIPT` lumps.
+- `inspect` — `diff_wads` between session views or files; `optimize_wad` strips redundant lumps.
 
 ## Development
 
@@ -97,4 +64,12 @@ claude mcp add cyberdemon -- /path/to/cyberdemon/target/release/cyberdemon
 scripts/ci.sh   # rustfmt, clippy (strict), tests, docs; exit 0 only if all pass
 ```
 
-See [AGENTS.md](AGENTS.md) for contributor rules and [skill/](skill/) for how to use the server as an LLM.
+[AGENTS.md](AGENTS.md) holds the contributor rules and the directory map.
+
+## Limitations
+
+- No floats anywhere: the renderer and geometry are integer (16.16 fixed point), so perspective and scaling are approximations of Doom's, and lighting runs through generated `COLORMAP` tables when a WAD has none.
+- `UDMF` is a practical subset: the modelled fields, `TEXTMAP` grammar and common namespaces; unmodelled text properties ride along only where the model stores them.
+- `DEHACKED`/`DECORATE`/`ZScript` support is a deliberate subset parser (thing/mobj tables, `actor`/`class` blocks, `DoomEdNums`), not a full language implementation.
+- Sketch tracing measures ink: it needs reasonably clean, straight scans (walls near axis lines, closed rings) and never interprets what it finds.
+- Image and sound tools read files or URLs only — a picture that exists only inside the chat must first be saved to a file by the user or uploaded to the asset origin.

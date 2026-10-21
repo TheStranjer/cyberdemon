@@ -47,7 +47,14 @@ src/
                   reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
                   bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
-                  adjust, `gfx/ops/alpha.rs` colour key and trim.
+                  adjust, `gfx/ops/alpha.rs` colour key and trim,
+                  `gfx/ops/background.rs` the border-driven background
+                  removal, `gfx/ops/threshold.rs` binarization plus the
+                  `otsu_level`/`luminance_histogram`/`binary_mask` helpers
+                  the sketch tools reuse, `gfx/ops/dither.rs` the
+                  `Dither`-knopped quantization (Floyd–Steinberg serpentine),
+                  and `gfx/ops/tile.rs` the seam-blend behind
+                  `make_tileable`.
   audio.rs        Audio core module root: sample-rate limits and the shared
                   unsigned-8-bit conversions.
   audio/          Audio building blocks (no MCP concerns): `audio/pcm.rs`
@@ -89,7 +96,12 @@ src/
   music/          Music building blocks (no MCP concerns): `music/midi_write.rs`
                   the type-0 SMF writer (`MidiWriter`, big-endian chunks,
                   variable-length quantities in both directions),
-                  `music/mus2mid.rs` Doom MUS music lump ("D_*") to MIDI bytes.
+                  `music/midi_read.rs` the type-0/type-1 SMF reader
+                  (`parse_midi`: running status, track merge to absolute
+                  ticks), `music/mus2mid.rs` Doom MUS music lump ("D_*") to
+                  MIDI bytes, `music/mid2mus.rs` the reverse
+                  (`midi_to_mus`), and `music/sniff.rs` the magic-based
+                  `sniff_music` container identification.
   defs.rs         Definitions core module root: the game definitions registry
                   entry point, the Boom generalized/sector bit decoders, the
                   session-aware overlay entry (`session_definitions`) and
@@ -136,7 +148,9 @@ src/
                   `render/sprites.rs` the transparent pass: thing sprites
                   projected through the eight-rotation bucketing and the
                   masked middles painted far to near, depth-tested
-                  against the caster's buffer.
+                  against the caster's buffer, and `render/font.rs` the
+                  5x7 bitmap font the `draw_text` overlay labels and
+                  annotations of the top-down renders draw through.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions
@@ -159,6 +173,25 @@ src/
                   wall coordinates across shapes so shared walls meet
                   exactly, `sketch/vectorize.rs` the `Analysis` to
                   `Vectorized` pipeline.
+  plan.rs         Plan compiler core root: re-exports the model, the
+                  compiler and its stages (pure; no archive I/O, no tools).
+  plan/           Compiler building blocks (no MCP concerns):
+                  `plan/model.rs` the `Plan`/`Room`/`Connection` data model
+                  and structural validation, `plan/units.rs` the integer
+                  `Units` scaling, mirroring and grid snapping from plan
+                  coordinates to map units, `plan/walls.rs` the thick-wall
+                  build (`room_layers`, `build_walls`, `shared_boundaries`)
+                  on `geom::arrange`, `plan/connectors.rs` the connection
+                  door cut placement on those walls, `plan/emit.rs` the
+                  arrangement-to-`Map` emission (regions to sectors, sides
+                  to sidedefs), `plan/textures.rs` the eight `TextureRole`
+                  dressings of the emitted map, `plan/features.rs` the
+                  fixed-order feature pipeline (doors, switches, lifts,
+                  teleporters, exits, then room lights and secrets, ending
+                  in a door/lift line re-face), `plan/things.rs` the name
+                  resolution, in-room grid placement and presence flags,
+                  and `plan/compile.rs` the `compile` pipeline folding it
+                  all into a `CompiledPlan`.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools
@@ -202,7 +235,34 @@ src/
                   ceiling).
   tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
   tools/          One module per tool group, each with its own #[tool_router];
-                  Cyberdemon::router() in server.rs merges them.
+                  Cyberdemon::router() in server.rs merges them. The group
+                  modules are `tools/meta.rs`, `tools/assets.rs`,
+                  `tools/batch.rs`, `tools/session.rs`, `tools/lumps.rs`,
+                  `tools/maps.rs`, the five element groups
+                  `tools/edit_things.rs`, `tools/edit_linedefs.rs`,
+                  `tools/edit_sidedefs.rs`, `tools/edit_sectors.rs`,
+                  `tools/edit_vertices.rs`, `tools/edit_geometry.rs`,
+                  `tools/convert.rs`, `tools/features.rs`, `tools/plan.rs`,
+                  `tools/sketch.rs`, `tools/graphics.rs`, `tools/imports.rs`,
+                  `tools/patches.rs`, `tools/textures.rs`, `tools/themes.rs`,
+                  `tools/palette.rs`, `tools/nodes.rs`, `tools/audio.rs`,
+                  `tools/music.rs`, `tools/render.rs`, `tools/scripts.rs`,
+                  `tools/defs.rs`, `tools/query.rs`, `tools/inspect.rs`,
+                  `tools/validate.rs` and `tools/playability.rs`; the ones
+                  with shared machinery split it into submodules described
+                  below, e.g. `tools/lumps.rs` with `lumps/rows.rs` (shared
+                  directory rows), `lumps/select.rs` (the lump selector),
+                  `lumps/place.rs` (placement), `lumps/edit.rs`
+                  (replace/remove/rename) and `lumps/reorder.rs` (the run
+                  move), `tools/imports.rs` with `imports/image_pipeline.rs`
+                  (the shared patch-import run), `imports/sprite.rs`,
+                  `imports/texture.rs`, `imports/create_flat.rs`,
+                  `imports/create_sprite.rs` and `imports/processed.rs`
+                  (the preview pipeline), `tools/scripts.rs` with
+                  `scripts/text_edit.rs` (the shared text-lump editor behind
+                  `edit_decorate`/`edit_zscript`) and `tools/defs.rs` with
+                  `defs/collect.rs` (gathering the session's custom
+                  definition texts).
                   `tools/graphics/resolve.rs` holds the shared picture
                   resolvers (flat, patch, composite texture, sprite
                   rotation) that every tool and the renderers decode
@@ -371,6 +431,12 @@ src/
                   `Linedef`, `Sidedef`, `Sector`, `extra` side-bags),
                   `map/doom.rs` the binary Doom map reader/writer
                   (`read_doom_map`/`write_doom_map`),
+                  `map/hexen.rs` the binary `Hexen` map reader/writer
+                  (the vanilla block plus its `BEHAVIOR`),
+                  `map/common.rs` the record codecs the two binary formats
+                  share (`SIDEDEFS`/`VERTEXES`/`SECTORS` are byte-identical),
+                  `map/udmf_map.rs` the `UDMF` `TEXTMAP`/`ENDMAP` reader and
+                  writer over the model,
                   `map/nodes.rs` typed SEGS/SSECTORS/NODES parsing in the
                   vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
                   `Seg`, `Subsector`, `Node`, `Child`, magic detection),
@@ -395,6 +461,16 @@ src/
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and
                   shifts, and the removal-engine join),
+                  `map/remove.rs` the pure element-removal engine shared by
+                  the edit tools (index shifts, dangling-reference repair
+                  and cascade bookkeeping),
+                  `map/transform.rs` the pure selection transform: the
+                  integer scale/rotate/translate math and the whole-map
+                  step behind `transform_selection`,
+                  `map/stats.rs` the pure fold of a decoded map into the
+                  `MapSummary` the `get_map_summary` tool reports (counts,
+                  bounds, line and height stats, thing tallies, used names
+                  and node-lump facts),
                   `map/bulk.rs` + `map/bulk/replace.rs` the pure single-map
                   replacement passes (`replace_textures`, `replace_flats`,
                   `replace_thing_types`, the `Face` and `Surface` knobs)
@@ -463,9 +539,11 @@ src/
                   `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`
-                  model and the `CHECKS` pipeline (`references`,
-                  `structure`, `things`, `specials` submodules, one per
-                  check group, each returning `Vec<Issue>`), and
+                  model and the `CHECKS` pipeline (`validate/references.rs`,
+                  `validate/structure.rs`, `validate/things.rs`,
+                  `validate/specials.rs`, `validate/geometry.rs`,
+                  `validate/resources.rs` and `validate/node_lumps.rs`, one
+                  per check group, each returning `Vec<Issue>`), and
                   `map/playability.rs` + `map/playability/` the pure
                   can-the-player-finish-this-map analysis:
                   `playability/specials.rs` the hand-written door/lift/
@@ -517,11 +595,22 @@ data/
                   args column naming the line-tag slot with `tag`.
 tests/
   mcp.rs          Single integration test crate root.
-  mcp/            support.rs: rmcp client harness plus a probe server speaking
-                    the structured-result contract; fixtures.rs: WAD builders
-                    writing archives with the library; server.rs: end-to-end
-                    tests; assets.rs and session.rs: tool-group tests;
-                    docs.rs: skill/ and README.md layout checks.
+  mcp/            support.rs: rmcp client harness (connect, call, call_err,
+                    raw-HTTP PUT/GET to the asset origin) plus a probe server
+                    speaking the structured-result contract and the picture
+                    helpers (PNG/MIDI/WAV builders, paper sheets);
+                    fixtures.rs: WAD builders writing archives with the
+                    library; one test module per tool group (server, assets,
+                    session, save, batch, convert, defs, lumps, map_edit,
+                    maps, edit_*, features, graphics, imports, inspect,
+                    nodes, palette, patches, plan, playability, query,
+                    render, scripts, sketch, textures, themes, validate);
+                    the flagship chains in e2e_sketch.rs, e2e_assets.rs,
+                    e2e_edit.rs and the capstone low-level workflow plus the
+                    spawned-binary asset-server proof in e2e.rs; a
+                    usability pass over hints and descriptions in
+                    usability.rs; docs.rs: skill/ and README.md layout and
+                    tool/doc consistency checks.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).
 skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.

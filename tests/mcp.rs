@@ -7,7 +7,9 @@
 //! the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
-//! `map_edit`, the maps-group tests in `maps`, the `images-to-assets`
+//! `map_edit`, the maps-group tests in `maps`, the capstone low-level
+//! element-tool workflow and the spawned-binary asset-server proof in
+//! `e2e`, the `images-to-assets`
 //! guide-chain checks in `e2e_assets`, the plain-English edit-flow chain
 //! checks in `e2e_edit`, the `sketch-to-map` guide-chain
 //! checks in `e2e_sketch`, the
@@ -33,7 +35,9 @@
 //! `themes`, the validate-group tests in `validate`, the usability-pass
 //! checks in `usability`, and the
 //! documentation-layout and guide-content
-//! checks in `docs` (cross-references, `Tools:` lines, line budgets,
+//! checks in `docs` (cross-references, `Tools:` lines, line budgets, the
+//! `SKILL.md` tool-index, guide-link and tool/schema description
+//! consistency checks,
 //! the `json plan-example` builds and the `json recipe` `run_batch`
 //! checks); every helper is exercised by a test in
 //! `server`, and
@@ -74,6 +78,9 @@ mod defs;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;
+#[cfg(test)]
+#[path = "mcp/e2e.rs"]
+mod e2e;
 #[cfg(test)]
 #[path = "mcp/e2e_assets.rs"]
 mod e2e_assets;

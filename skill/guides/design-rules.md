@@ -1,5 +1,7 @@
 # Design rules
 
+Tools: check_playability, place_things, render_topdown
+
 Facts about Doom's engine and play conventions you need when choosing values
 for tool parameters: dimensions, scale, lighting, gameplay. These are the
 defaults of good play — break them on purpose, not by accident.

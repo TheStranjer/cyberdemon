@@ -10,8 +10,8 @@ a layout, the answer comes from these pages, not from the server.
 |-------|----------------|
 | [design-rules.md](design-rules.md) | Doom dimensions and gameplay facts to design against |
 | [verification.md](verification.md) | The change → validate → render → compare → fix loop |
-| [sketch-to-map.md](sketch-to-map.md) | Turning a hand-drawn map into a playable layout |
-| [images-to-assets.md](images-to-assets.md) | Turning drawn images into textures, flats and sprites |
+| [sketch-to-map.md](sketch-to-map.md) | Hand-drawn floor plan → measured regions → plan → playable map, with a worked example |
+| [images-to-assets.md](images-to-assets.md) | Choosing the right image importer, the ops to run, sizes, palette limits and sprite definitions |
 | [editing-existing-maps.md](editing-existing-maps.md) | Changing maps that already exist in a WAD |
 | [recipes.md](recipes.md) | Worked end-to-end examples of common requests |
 

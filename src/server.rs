@@ -66,6 +66,7 @@ impl Cyberdemon {
         router.merge(Self::render_router());
         router.merge(Self::scripts_router());
         router.merge(Self::session_router());
+        router.merge(Self::sketch_router());
         router.merge(Self::textures_router());
         router.merge(Self::themes_router());
         router.merge(Self::validate_router());

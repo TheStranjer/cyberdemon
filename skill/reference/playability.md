@@ -59,7 +59,10 @@ Movement is modelled with the vanilla player's shape, in integers:
 Doors are evaluated in their **open** state once the walk reaches a
 trigger for them (and holds the key a locked one asks for); a lift
 platform is available both at its stored floor and at the floor it drops
-to; an opened teleporter jumps from either reached side of its line.
+to; an opened teleporter jumps from either reached side of its line. One
+built door has a room-facing line on each side and opens from either, so
+each locked line reports `opened` once the walk holds the key and has
+worked any trigger raising that door's sectors.
 `narrow_lines` lists the two-sided lines too short to walk through whose
 **both** sides the walk otherwise reached - ways through you can see and
 not take. `doors_never_opened` lists the door sectors no opened feature

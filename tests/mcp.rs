@@ -8,7 +8,8 @@
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
 //! `map_edit`, the maps-group tests in `maps`, the `images-to-assets`
-//! guide-chain checks in `e2e_assets`, the `sketch-to-map` guide-chain
+//! guide-chain checks in `e2e_assets`, the plain-English edit-flow chain
+//! checks in `e2e_edit`, the `sketch-to-map` guide-chain
 //! checks in `e2e_sketch`, the
 //! `edit_geometry`-group tests in `edit_geometry`, the
 //! `edit_linedefs`-group tests in `edit_linedefs`, the
@@ -76,6 +77,9 @@ mod docs;
 #[cfg(test)]
 #[path = "mcp/e2e_assets.rs"]
 mod e2e_assets;
+#[cfg(test)]
+#[path = "mcp/e2e_edit.rs"]
+mod e2e_edit;
 #[cfg(test)]
 #[path = "mcp/e2e_sketch.rs"]
 mod e2e_sketch;

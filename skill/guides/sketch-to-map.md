@@ -109,6 +109,7 @@ Fix what does not match, then trace again:
 | Many tiny regions from writing or shading | Raise `min_region_area`, or raise `mark_max_size` so scribbles count as marks, not regions |
 | Wall strokes missed (pencil too light) | Set `ink.level` (a luminance `0..=255`; raise it until light graphite counts as ink; `threshold` echoes what was used) |
 | Colour-coded drawing (red walls only, say) | `ink: {"mode": "color", "color": "#FF0000"}` — trace each colour separately |
+| A `G` circle hugging the sheet's frame, `between` `null` | Lower `close_gaps` — the radius is bridging walls to the image edge; keep every wall at least `close_gaps` px clear of the frame |
 | Rooms split by a stray light pencil line | Lower `ink.level` until only the real walls count as ink; if the split stays, merge the two regions by hand in the plan |
 
 Zero regions is not an error: read `warnings`, adjust, trace again. The

@@ -267,7 +267,7 @@ mod tests {
     async fn an_unknown_code_is_refused_with_the_valid_list() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "validate_map",
             json!({ "map": "MAP01", "codes": ["not_a_check"] }),
@@ -513,20 +513,23 @@ mod tests {
             json!("MAP01"),
             "the only map is the default"
         );
-        let (missing_code, _) = call_err(&client, "validate_map", json!({ "map": "MAP99" })).await;
+        let (missing_code, _, _) =
+            call_err(&client, "validate_map", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "no such block");
-        let (scope_code, _) = call_err(&client, "validate_map", json!({ "scope": "nope" })).await;
+        let (scope_code, _, _) =
+            call_err(&client, "validate_map", json!({ "scope": "nope" })).await;
         assert_eq!(scope_code, "invalid_argument", "not a scope");
-        let (severity_code, severity_message) =
+        let (severity_code, severity_message, _) =
             call_err(&client, "validate_map", json!({ "min_severity": "fatal" })).await;
         assert_eq!(severity_code, "invalid_argument", "not a severity");
         assert!(
             severity_message.contains("\"warning\""),
             "the message names the values: {severity_message}"
         );
-        let (limit_code, _) = call_err(&client, "validate_map", json!({ "limit": 5001_u64 })).await;
+        let (limit_code, _, _) =
+            call_err(&client, "validate_map", json!({ "limit": 5001_u64 })).await;
         assert_eq!(limit_code, "invalid_argument", "past the largest page");
-        let (layer_code, _) = call_err(
+        let (layer_code, _, _) = call_err(
             &client,
             "validate_map",
             json!({ "map": "MAP01", "scope": "layer:5" }),

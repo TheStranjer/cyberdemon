@@ -212,7 +212,8 @@ mod tests {
     async fn list_lumps_reports_an_out_of_range_layer_as_not_found() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (code, message) = call_err(&client, "list_lumps", json!({ "scope": "layer:9" })).await;
+        let (code, message, _) =
+            call_err(&client, "list_lumps", json!({ "scope": "layer:9" })).await;
         assert_eq!(code, "not_found", "no layer 9");
         assert!(
             message.contains("layer 9"),
@@ -223,20 +224,20 @@ mod tests {
     #[tokio::test]
     async fn list_lumps_rejects_a_bogus_scope_and_filters() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "list_lumps", json!({ "scope": "bogus" })).await;
+        let (code, message, _) = call_err(&client, "list_lumps", json!({ "scope": "bogus" })).await;
         assert_eq!(code, "invalid_argument", "unknown scope");
         assert!(
             message.contains("merged"),
             "the hint lists the forms: {message}"
         );
-        let (ns_code, ns_message) =
+        let (ns_code, ns_message, _) =
             call_err(&client, "list_lumps", json!({ "namespace": "nope" })).await;
         assert_eq!(ns_code, "invalid_argument", "unknown namespace");
         assert!(
             ns_message.contains("flats"),
             "the hint lists the namespaces: {ns_message}"
         );
-        let (kind_code, kind_message) =
+        let (kind_code, kind_message, _) =
             call_err(&client, "list_lumps", json!({ "kind": "nope" })).await;
         assert_eq!(kind_code, "invalid_argument", "unknown kind");
         assert!(
@@ -323,14 +324,14 @@ mod tests {
     #[tokio::test]
     async fn list_lumps_rejects_limits_outside_one_to_two_thousand() {
         let client = connect().await;
-        let (zero_code, zero_message) =
+        let (zero_code, zero_message, _) =
             call_err(&client, "list_lumps", json!({ "limit": 0_u64 })).await;
         assert_eq!(zero_code, "invalid_argument", "limit 0 code");
         assert!(
             zero_message.contains("between 1 and 2000"),
             "the message states the range: {zero_message}"
         );
-        let (big_code, big_message) =
+        let (big_code, big_message, _) =
             call_err(&client, "list_lumps", json!({ "limit": 2001_u64 })).await;
         assert_eq!(big_code, "invalid_argument", "limit 2001 code");
         assert!(
@@ -453,7 +454,7 @@ mod tests {
     #[tokio::test]
     async fn search_lumps_needs_at_least_one_criterion() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "search_lumps", json!({})).await;
+        let (code, message, _) = call_err(&client, "search_lumps", json!({})).await;
         assert_eq!(code, "invalid_argument", "no criteria code");
         assert!(
             message.contains("pattern") && message.contains("contains_hex"),
@@ -464,14 +465,14 @@ mod tests {
     #[tokio::test]
     async fn search_lumps_rejects_bad_hex() {
         let client = connect().await;
-        let (odd_code, odd_message) =
+        let (odd_code, odd_message, _) =
             call_err(&client, "search_lumps", json!({ "contains_hex": "4D5" })).await;
         assert_eq!(odd_code, "invalid_argument", "odd digit count");
         assert!(
             odd_message.contains("odd"),
             "the message says odd: {odd_message}"
         );
-        let (digit_code, digit_message) =
+        let (digit_code, digit_message, _) =
             call_err(&client, "search_lumps", json!({ "contains_hex": "0G" })).await;
         assert_eq!(digit_code, "invalid_argument", "non-hex digit");
         assert!(
@@ -546,7 +547,7 @@ mod tests {
             Some(0),
             "the working archive is empty"
         );
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "search_lumps",
             json!({ "pattern": "FLOOR1", "scope": "layer:9" }),
@@ -698,7 +699,7 @@ mod tests {
             "clipped to the payload"
         );
         assert_eq!(clipped["length"], json!(5_u64), "the real window length");
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "DEHACKED", "format": "hex", "start": 100_u64 }),
@@ -709,7 +710,7 @@ mod tests {
             message.contains("past the end") && message.contains("16 bytes"),
             "the message shows the bounds: {message}"
         );
-        let (cap_code, _) = call_err(
+        let (cap_code, _, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "DEHACKED", "format": "hex", "length": 4_097_u64 }),
@@ -826,7 +827,7 @@ mod tests {
         .await;
         assert_eq!(flats["hex"], json!("03 03"), "the flats filter keeps both");
         assert_eq!(flats["namespace"], json!("flats"), "the row region");
-        let (sparse_code, sparse_message) = call_err(
+        let (sparse_code, sparse_message, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "FLOOR1", "namespace": "sprites" }),
@@ -837,7 +838,7 @@ mod tests {
             sparse_message.contains("not found in merged"),
             "the message names the scope: {sparse_message}"
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "FLOOR1", "occurrence": 2_u64 }),
@@ -874,7 +875,7 @@ mod tests {
             "the PWAD's override won the merge"
         );
         assert_eq!(merged["source"], json!({ "layer": 1_u64 }), "merged source");
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "FLOOR1", "scope": "layer:9" }),
@@ -886,13 +887,13 @@ mod tests {
     #[tokio::test]
     async fn get_lump_reports_missing_lumps_names_and_formats() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "get_lump", json!({ "name": "NOPE" })).await;
+        let (code, message, _) = call_err(&client, "get_lump", json!({ "name": "NOPE" })).await;
         assert_eq!(code, "not_found", "no such lump");
         assert_eq!(message, "lump NOPE not found in merged", "the message");
-        let (name_code, _) =
+        let (name_code, _, _) =
             call_err(&client, "get_lump", json!({ "name": "TOO LONG NAME" })).await;
         assert_eq!(name_code, "invalid_argument", "not a lump name");
-        let (format_code, format_message) = call_err(
+        let (format_code, format_message, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "NOPE", "format": "binary" }),
@@ -927,7 +928,7 @@ mod tests {
             b"Thing 1 (Troop)\n",
             "the raw bytes are on disk",
         );
-        let (code, message) = call_err(&client, "extract_lump", extract_args(&target)).await;
+        let (code, message, _) = call_err(&client, "extract_lump", extract_args(&target)).await;
         assert_eq!(code, "already_exists", "the target stands there");
         assert!(
             message.contains("overwrite true"),
@@ -961,7 +962,7 @@ mod tests {
             relative.1
         );
         let nowhere = dir.path().join("missing-dir").join("x.bin");
-        let (parent_code, parent_message) =
+        let (parent_code, parent_message, _) =
             call_err(&client, "extract_lump", extract_args(&nowhere)).await;
         assert_eq!(parent_code, "not_found", "the parent directory is missing");
         assert!(
@@ -970,7 +971,7 @@ mod tests {
         );
         let missing_lump = dir.path().join("y.bin");
         let lump_args = json!({ "name": "NOPE", "path": missing_lump.display().to_string() });
-        let (lump_code, _) = call_err(&client, "extract_lump", lump_args).await;
+        let (lump_code, _, _) = call_err(&client, "extract_lump", lump_args).await;
         assert_eq!(lump_code, "not_found", "the lump does not exist");
         assert!(!missing_lump.exists(), "a refused extract writes nothing");
     }
@@ -1177,7 +1178,7 @@ mod tests {
             json!({ "name": "TWIN", "text": "one" }),
         )
         .await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "TWIN", "text": "two" }),
@@ -1216,7 +1217,7 @@ mod tests {
             json!("sprites"),
             "a region twin is no global clash"
         );
-        let (again_code, again_message) = call_err(
+        let (again_code, again_message, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "TWIN", "text": "four", "namespace": "sprites" }),
@@ -1235,7 +1236,7 @@ mod tests {
     #[tokio::test]
     async fn add_lump_rejects_conflicting_fields_without_editing() {
         let client = connect().await;
-        let (payload_code, payload_message) = call_err(
+        let (payload_code, payload_message, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "A", "text": "t", "hex": "4D55" }),
@@ -1246,14 +1247,14 @@ mod tests {
             payload_message.contains("at most one"),
             "the message states the rule: {payload_message}"
         );
-        let (text_source_code, _) = call_err(
+        let (text_source_code, _, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "A", "text": "t", "source": "/x/y.bin" }),
         )
         .await;
         assert_eq!(text_source_code, "invalid_argument", "text plus source");
-        let (place_code, place_message) = call_err(
+        let (place_code, place_message, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "A", "index": 1_u64, "before": "B" }),
@@ -1270,17 +1271,17 @@ mod tests {
     #[tokio::test]
     async fn add_lump_rejects_malformed_arguments_without_editing() {
         let client = connect().await;
-        let (hex_code, hex_message) =
+        let (hex_code, hex_message, _) =
             call_err(&client, "add_lump", json!({ "name": "A", "hex": "4Z" })).await;
         assert_eq!(hex_code, "invalid_argument", "not a hex pair");
         assert!(
             hex_message.starts_with("hex "),
             "the error names the hex field: {hex_message}"
         );
-        let (odd_code, _) =
+        let (odd_code, _, _) =
             call_err(&client, "add_lump", json!({ "name": "A", "hex": "4D5" })).await;
         assert_eq!(odd_code, "invalid_argument", "an odd digit count");
-        let (index_code, index_message) =
+        let (index_code, index_message, _) =
             call_err(&client, "add_lump", json!({ "name": "A", "index": 99_u64 })).await;
         assert_eq!(
             index_code, "invalid_argument",
@@ -1290,14 +1291,14 @@ mod tests {
             index_message.contains("past the end"),
             "the message says where the index may go: {index_message}"
         );
-        let (anchor_code, _) = call_err(
+        let (anchor_code, _, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "A", "before": "GHOST" }),
         )
         .await;
         assert_eq!(anchor_code, "not_found", "no anchor lump to place by");
-        let (name_code, _) = call_err(
+        let (name_code, _, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "TOO LONG FOR WAD", "text": "t" }),
@@ -1307,7 +1308,7 @@ mod tests {
             name_code, "invalid_argument",
             "the name is over eight bytes"
         );
-        let (region_code, _) = call_err(
+        let (region_code, _, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "A", "text": "t", "namespace": "nope" }),
@@ -1320,7 +1321,7 @@ mod tests {
     #[tokio::test]
     async fn add_lump_passes_a_missing_source_file_through_as_not_found() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "GONE", "source": "/definitely-not-here/cyberdemon.bin" }),
@@ -1365,7 +1366,7 @@ mod tests {
             ],
             "the flat joined the existing region without creating a new one"
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_lump",
             json!({ "name": "FLOOR1", "hex": "01", "namespace": "flats" }),
@@ -1406,7 +1407,7 @@ mod tests {
         );
         let hidden = dir.path().join(".png");
         fs::write(&hidden, b"x").expect("write the underivable file");
-        let (code, message) = call_err(&client, "import_asset", source_arg(&hidden)).await;
+        let (code, message, _) = call_err(&client, "import_asset", source_arg(&hidden)).await;
         assert_eq!(code, "invalid_argument", "nothing usable in the file name");
         assert!(
             message.contains("pass name"),
@@ -1423,7 +1424,7 @@ mod tests {
             vec!["TITLEPIC", "MYICON", "P_START", "STILL_OK", "P_END"],
             "one region created, nothing else moved"
         );
-        let (twin_code, _) = call_err(&client, "import_asset", source_arg(&png)).await;
+        let (twin_code, _, _) = call_err(&client, "import_asset", source_arg(&png)).await;
         assert_eq!(twin_code, "already_exists", "the derived twin is refused");
         assert_eq!(
             undo_labels(&client).await,
@@ -1642,7 +1643,7 @@ mod tests {
     async fn replace_lump_refuses_an_occurrence_past_the_working_copies() {
         let client = connect().await;
         add_twins(&client).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "TWIN", "text": "t", "occurrence": 9_u64 }),
@@ -1664,7 +1665,7 @@ mod tests {
     async fn replace_lump_needs_the_namespace_to_match_the_copy() {
         let client = connect().await;
         add_twins(&client).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "TWIN", "text": "t", "namespace": "flats" }),
@@ -1789,13 +1790,13 @@ mod tests {
     async fn replace_lump_reports_a_lump_no_loaded_archive_holds() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_only(dir.path()).await;
-        let (code, message) = call_err(&client, "replace_lump", replace_hex("NOPE", "00")).await;
+        let (code, message, _) = call_err(&client, "replace_lump", replace_hex("NOPE", "00")).await;
         assert_eq!(code, "not_found", "no archive holds NOPE");
         assert!(
             message.contains("add_lump"),
             "the message names the tool that creates one: {message}"
         );
-        let (region_code, region_message) = call_err(
+        let (region_code, region_message, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "FLOOR1", "hex": "00", "namespace": "sprites" }),
@@ -1813,14 +1814,14 @@ mod tests {
     async fn replace_lump_needs_exactly_one_payload_field() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_only(dir.path()).await;
-        let (none_code, none_message) =
+        let (none_code, none_message, _) =
             call_err(&client, "replace_lump", json!({ "name": "PLAYPAL" })).await;
         assert_eq!(none_code, "invalid_argument", "a replace needs a payload");
         assert!(
             none_message.contains("exactly one"),
             "the message states the rule: {none_message}"
         );
-        let (two_code, two_message) = call_err(
+        let (two_code, two_message, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "PLAYPAL", "text": "t", "hex": "00" }),
@@ -1838,14 +1839,14 @@ mod tests {
     async fn replace_lump_rejects_malformed_arguments_without_editing() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_only(dir.path()).await;
-        let (hex_code, hex_message) =
+        let (hex_code, hex_message, _) =
             call_err(&client, "replace_lump", replace_hex("PLAYPAL", "4Z")).await;
         assert_eq!(hex_code, "invalid_argument", "not a hex pair");
         assert!(
             hex_message.starts_with("hex "),
             "the error names the hex field: {hex_message}"
         );
-        let (name_code, _) = call_err(
+        let (name_code, _, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "TOO LONG FOR WAD", "text": "t" }),
@@ -1855,7 +1856,7 @@ mod tests {
             name_code, "invalid_argument",
             "the name is over eight bytes"
         );
-        let (region_code, _) = call_err(
+        let (region_code, _, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "PLAYPAL", "namespace": "nope", "text": "t" }),
@@ -1869,7 +1870,7 @@ mod tests {
     async fn replace_lump_passes_a_missing_source_file_through_as_not_found() {
         let client = connect().await;
         add(&client, "NOTE", "keep").await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "replace_lump",
             json!({ "name": "NOTE", "source": "/definitely-not-here/cyberdemon.bin" }),
@@ -2019,7 +2020,7 @@ mod tests {
     async fn remove_lump_aborts_the_whole_edit_when_any_name_is_missing() {
         let client = connect().await;
         add(&client, "MINE", "m").await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "remove_lump",
             json!({ "names": ["MINE", "GHOST"] }),
@@ -2050,7 +2051,7 @@ mod tests {
     async fn remove_lump_cannot_touch_an_iwad_lump() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_only(dir.path()).await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "remove_lump", json!({ "names": ["PLAYPAL"] })).await;
         assert_eq!(code, "not_found", "an IWAD lump cannot be removed");
         assert!(
@@ -2064,14 +2065,14 @@ mod tests {
     async fn remove_lump_rejects_an_empty_list_and_a_shared_occurrence() {
         let client = connect().await;
         seed_three(&client).await;
-        let (empty_code, empty_message) =
+        let (empty_code, empty_message, _) =
             call_err(&client, "remove_lump", json!({ "names": [] })).await;
         assert_eq!(empty_code, "invalid_argument", "at least one name");
         assert!(
             empty_message.contains("at least one"),
             "the message states the rule: {empty_message}"
         );
-        let (shared_code, shared_message) = call_err(
+        let (shared_code, shared_message, _) = call_err(
             &client,
             "remove_lump",
             json!({ "names": ["ONE", "TWO"], "occurrence": 0_u64 }),
@@ -2093,17 +2094,17 @@ mod tests {
     async fn remove_lump_rejects_bad_names_regions_and_occurrences() {
         let client = connect().await;
         seed_three(&client).await;
-        let (name_code, _) =
+        let (name_code, _, _) =
             call_err(&client, "remove_lump", json!({ "names": ["TOO LONG"] })).await;
         assert_eq!(name_code, "invalid_argument", "an unparsable name");
-        let (region_code, _) = call_err(
+        let (region_code, _, _) = call_err(
             &client,
             "remove_lump",
             json!({ "names": ["ONE"], "namespace": "nope" }),
         )
         .await;
         assert_eq!(region_code, "invalid_argument", "not a namespace");
-        let (past_code, past_message) = call_err(
+        let (past_code, past_message, _) = call_err(
             &client,
             "remove_lump",
             json!({ "names": ["ONE"], "occurrence": 5_u64 }),
@@ -2187,7 +2188,7 @@ mod tests {
         let client = connect().await;
         add(&client, "A", "1").await;
         add(&client, "B", "2").await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "rename_lump",
             json!({ "name": "A", "new_name": "B" }),
@@ -2234,7 +2235,7 @@ mod tests {
     async fn rename_lump_rejects_a_bad_new_name_and_a_missing_lump() {
         let client = connect().await;
         add(&client, "MINE", "m").await;
-        let (long_code, long_message) = call_err(
+        let (long_code, long_message, _) = call_err(
             &client,
             "rename_lump",
             json!({ "name": "MINE", "new_name": "TOO LONG FOR WAD" }),
@@ -2248,7 +2249,7 @@ mod tests {
             long_message.contains("limit is 8"),
             "the message states the limit: {long_message}"
         );
-        let (bad_code, _) = call_err(
+        let (bad_code, _, _) = call_err(
             &client,
             "rename_lump",
             json!({ "name": "GHOST", "new_name": "OK" }),
@@ -2258,7 +2259,7 @@ mod tests {
             bad_code, "not_found",
             "the working archive has no such lump"
         );
-        let (region_code, _) = call_err(
+        let (region_code, _, _) = call_err(
             &client,
             "rename_lump",
             json!({ "name": "MINE", "new_name": "OK", "namespace": "nope" }),
@@ -2276,7 +2277,7 @@ mod tests {
     async fn rename_lump_cannot_touch_an_iwad_lump() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_only(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "rename_lump",
             json!({ "name": "FLOOR1", "new_name": "FLOORX" }),
@@ -2569,7 +2570,7 @@ mod tests {
     async fn reorder_lumps_refuses_a_run_without_a_destination() {
         let client = connect().await;
         letters(&client).await;
-        let (both_code, both_message) = call_err(
+        let (both_code, both_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "C", "from_index": 2_u64, "index": 0_u64 }),
@@ -2580,7 +2581,7 @@ mod tests {
             both_message.contains("exactly one"),
             "the message states the rule: {both_message}"
         );
-        let (refined_code, refined_message) = call_err(
+        let (refined_code, refined_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "from_index": 2_u64, "occurrence": 0_u64, "index": 0_u64 }),
@@ -2591,7 +2592,7 @@ mod tests {
             refined_message.contains("from_index"),
             "the message names the field: {refined_message}"
         );
-        let (zero_code, zero_message) = call_err(
+        let (zero_code, zero_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "C", "count": 0_u64, "index": 0_u64 }),
@@ -2602,7 +2603,7 @@ mod tests {
             zero_message.contains("at least 1"),
             "the message states the floor: {zero_message}"
         );
-        let (none_code, none_message) = call_err(
+        let (none_code, none_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "C", "occurrence": 1_u64 }),
@@ -2625,7 +2626,7 @@ mod tests {
     async fn reorder_lumps_refuses_a_run_past_the_end_a_self_anchor_and_missing_names() {
         let client = connect().await;
         letters(&client).await;
-        let (overflow_code, overflow_message) = call_err(
+        let (overflow_code, overflow_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "D", "count": 4_u64, "index": 0_u64 }),
@@ -2639,7 +2640,7 @@ mod tests {
             overflow_message.contains("can hold at most 2"),
             "the message names the room: {overflow_message}"
         );
-        let (index_code, index_message) = call_err(
+        let (index_code, index_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "A", "count": 2_u64, "index": 4_u64 }),
@@ -2653,7 +2654,7 @@ mod tests {
             index_message.contains("between 0 and 3"),
             "the range excludes the moved run: {index_message}"
         );
-        let (inside_code, inside_message) = call_err(
+        let (inside_code, inside_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "B", "count": 3_u64, "after": "D" }),
@@ -2680,7 +2681,7 @@ mod tests {
     async fn reorder_lumps_reports_a_missing_run_or_anchor_as_not_found() {
         let client = connect().await;
         letters(&client).await;
-        let (missing_code, missing_message) = call_err(
+        let (missing_code, missing_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "GHOST", "index": 0_u64 }),
@@ -2691,7 +2692,7 @@ mod tests {
             missing_message.contains("cannot be moved"),
             "the message explains the layers: {missing_message}"
         );
-        let (past_code, past_message) = call_err(
+        let (past_code, past_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "C", "occurrence": 1_u64, "index": 0_u64 }),
@@ -2705,7 +2706,7 @@ mod tests {
             past_message.contains("0 to 0"),
             "the message names the range: {past_message}"
         );
-        let (anchor_code, anchor_message) = call_err(
+        let (anchor_code, anchor_message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "A", "after": "GHOST" }),
@@ -2732,7 +2733,7 @@ mod tests {
     async fn reorder_lumps_cannot_move_an_iwad_lump() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_only(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "PLAYPAL", "index": 0_u64 }),
@@ -2771,7 +2772,7 @@ mod tests {
             vec!["FLATA", "F_START", "FLATA", "F_END"],
             "a loose copy and a region copy"
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "reorder_lumps",
             json!({ "name": "FLATA", "from_namespace": "sprites", "index": 0_u64 }),

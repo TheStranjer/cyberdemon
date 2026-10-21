@@ -5,6 +5,19 @@ description: Use the Cyberdemon MCP server to inspect and edit Doom WAD files. U
 
 # Using Cyberdemon
 
+## Start here
+
+Cyberdemon reads and edits Doom WAD files over MCP: maps, graphics, audio and game definitions, with every edit undoable.
+Start a session with open_iwad (the game data), then new_wad for a fresh project archive or open_wad for an existing file.
+Prefer high-level tools over element edits: build_map_from_plan compiles a whole playable map from one plan; add_door, add_window, add_stairs, add_lift, add_teleporter, add_switch and add_exit place working features; create_texture_from_image, create_flat_from_image and create_sprite_from_image turn pictures into finished assets; bulk_edit changes many elements at once; place_things populates rooms.
+The element tools (add_linedef, add_sector, add_vertex, edit_thing, ...) are fine control, not first choices.
+For a hand-drawn sketch: trace_sketch measures it (no WAD needed), turn the reported regions and gaps into a plan, build_map_from_plan compiles it, then render_topdown with an underlay draws the picture behind the lines.
+Verify after every meaningful change: validate_map for map health, check_playability for whether a player can finish, render_topdown and render_view to look.
+Use run_batch to make a multi-step change atomic and reversible as one step; undo (and redo) take changes back.
+Failed calls return an error object with a hint field: do what the hint says before retrying.
+Image and sound results are URLs on the server's localhost asset origin - open them to look or listen.
+The skill's guides/ directory holds the judgment guides: guides/design-rules.md, guides/verification.md, guides/recipes.md, guides/sketch-to-map.md, guides/editing-existing-maps.md and guides/images-to-assets.md.
+
 Cyberdemon is an MCP server over stdio for working with Doom WADs. Tools appear in your client prefixed with the server name (e.g. `mcp__cyberdemon__version`).
 
 ## Who decides what
@@ -30,24 +43,32 @@ meaningful change.
   exactly:
 
   ```json
-  {"error": "<code>", "message": "<human-readable text>"}
+  {"error": "<code>", "message": "<human-readable text>", "hint": "<what to do next>"}
   ```
 
   `error` is a stable machine-readable code; `message` is for humans and may
-  change. Codes:
+  change; `hint` is one sentence telling you the next call or parameter that
+  fixes the situation. Read `hint` first. Codes, each with the default hint
+  used when a tool site gives no more specific one:
 
-  | Code               | Meaning                                                        |
-  |--------------------|----------------------------------------------------------------|
-  | `invalid_argument` | An argument was missing, malformed or out of range.            |
-  | `not_found`        | The requested lump, map or other resource does not exist.      |
-  | `already_exists`   | A resource with that name is already taken.                    |
-  | `conflict`         | The operation conflicts with current state (e.g. unsaved edits). |
-  | `format_error`     | A WAD or other input is malformed or unreadable as data.       |
-  | `io_error`         | Reading or writing the filesystem failed.                      |
-  | `fetch_error`      | Fetching a remote resource failed.                             |
-  | `unsupported`      | The requested feature or format is not supported.              |
-  | `limit_exceeded`   | A configured limit (size, count, depth) was exceeded.          |
-  | `internal`         | Server-side fault (e.g. a poisoned session lock). Report it; do not retry blindly. |
+  | Code               | Meaning and default hint                                             |
+  |--------------------|----------------------------------------------------------------------|
+  | `not_found`        | A lump, map or other resource does not exist: use a list_* / find_elements / describe_map tool to see what exists. |
+  | `invalid_argument` | An argument is missing, malformed or out of range: check the parameter against the tool's input schema. |
+  | `already_exists`   | A resource name is taken: pass replace: true or choose another name. |
+  | `conflict`         | The operation conflicts with current state (e.g. unsaved edits): reload the state (get_session_info) and retry. |
+  | `format_error`     | An input is malformed: the input is not a valid file of the expected kind. |
+  | `io_error`         | Filesystem failure: use an absolute path or an http(s) URL; an image that only exists in the conversation must first be saved to a file by the user. |
+  | `fetch_error`      | A remote fetch failed: same guidance as `io_error`.                   |
+  | `unsupported`      | A feature or format is not supported: see skill/reference for supported formats. |
+  | `limit_exceeded`   | A configured limit was exceeded: narrow the selection or raise the limit parameter. |
+  | `internal`         | Server-side fault (e.g. a poisoned session lock): this is a bug; undo the last change if the map looks wrong. Do not retry blindly. |
+
+  Where a tool site can say more precisely what to do (an unknown map, an
+  out-of-range element index, an ambiguous thing name, a plan whose rooms do
+  not touch), it attaches that specific hint instead of the code default.
+  `run_batch` reports `hint: null` only for a step that failed at the
+  protocol layer, before any tool's own error ran.
 
 - **Unknown tools fail at the protocol layer** with the JSON-RPC error
   `INVALID_PARAMS`, not as a tool error. Do not retry; list the tools.

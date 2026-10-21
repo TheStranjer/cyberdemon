@@ -143,7 +143,7 @@ mod tests {
     /// `invalid_argument` naming `needle`.
     async fn refuse_with(client: &Client, request: Value, needle: &str) {
         let note = request.to_string();
-        let (code, message) = call_err(client, "build_map_from_plan", request).await;
+        let (code, message, _) = call_err(client, "build_map_from_plan", request).await;
         assert_eq!(code, "invalid_argument", "refusal for {note}");
         assert!(
             message.contains(needle),
@@ -440,7 +440,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let client = features_loaded(dir.path()).await;
         call(&client, "create_map", json!({"name": "MAP01"})).await;
-        let (code, message) = call_err(&client, "build_map_from_plan", plan_for("MAP01")).await;
+        let (code, message, _) = call_err(&client, "build_map_from_plan", plan_for("MAP01")).await;
         assert_eq!(code, "already_exists", "the working block stands");
         assert!(
             message.contains("replace"),
@@ -527,7 +527,7 @@ mod tests {
             ],
             "connections": [{"id": "d1", "from": "a", "to": "b", "kind": "opening"}]
         });
-        let (code, message) = call_err(&client, "build_map_from_plan", far).await;
+        let (code, message, _) = call_err(&client, "build_map_from_plan", far).await;
         assert_eq!(code, "invalid_argument", "rooms that miss");
         assert!(
             message.contains("connections[0]") && message.contains("do not touch"),
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(maps["maps"].as_array().expect("a list").len(), 1);
         let mut bad_theme = plan_for("MAP06");
         bad_theme["theme"] = json!("nope");
-        let (code, message) = call_err(&client, "build_map_from_plan", bad_theme).await;
+        let (code, message, _) = call_err(&client, "build_map_from_plan", bad_theme).await;
         assert_eq!(code, "invalid_argument", "an unknown theme is refused");
         assert!(
             message.contains("tech") && message.contains("hell"),
@@ -799,7 +799,7 @@ mod tests {
         let client = features_loaded(dir.path()).await;
         let mut request = plan_for("MAP05");
         request["things"] = json!([{"name": "skul", "room": "a"}]);
-        let (code, message) = call_err(&client, "build_map_from_plan", request).await;
+        let (code, message, _) = call_err(&client, "build_map_from_plan", request).await;
         assert_eq!(code, "invalid_argument", "several things match 'skul'");
         assert!(message.contains("things[0]"), "the row is named: {message}");
         assert!(
@@ -823,7 +823,7 @@ mod tests {
             .as_object_mut()
             .expect("the plan object")
             .remove("player_start");
-        let (code, message) = call_err(&client, "build_map_from_plan", request.clone()).await;
+        let (code, message, _) = call_err(&client, "build_map_from_plan", request.clone()).await;
         assert_eq!(code, "invalid_argument", "type 1 is mandatory");
         assert!(
             message.contains("a map needs a player 1 start"),
@@ -1408,7 +1408,7 @@ mod tests {
         let mut request = plan_for("MAP05");
         request["features"] =
             json!([{"kind": "switch", "room": "a", "opens": "d1", "wall": "west"}]);
-        let (code, message) = call_err(&client, "build_map_from_plan", request).await;
+        let (code, message, _) = call_err(&client, "build_map_from_plan", request).await;
         assert_eq!(code, "invalid_argument", "a plain door is no target");
         assert!(
             message.contains("switch opens d1 which is not a remote door"),

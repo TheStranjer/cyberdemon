@@ -151,14 +151,14 @@ mod tests {
         assert_eq!(page["total"], json!(2_u64), "total counts all matches");
         assert_eq!(listed(&page, "textures"), vec!["STEP1"], "the second row");
         let zero_args = json!({ "limit": 0_u64 });
-        let (zero_code, zero_message) = call_err(&client, "list_textures", zero_args).await;
+        let (zero_code, zero_message, _) = call_err(&client, "list_textures", zero_args).await;
         assert_eq!(zero_code, "invalid_argument", "limit 0 code");
         assert!(
             zero_message.contains("between 1 and 2000"),
             "the message states the range: {zero_message}"
         );
         let big_args = json!({ "limit": 2001_u64 });
-        let (big_code, _) = call_err(&client, "list_textures", big_args).await;
+        let (big_code, _, _) = call_err(&client, "list_textures", big_args).await;
         assert_eq!(big_code, "invalid_argument", "limit 2001 code");
     }
 
@@ -261,7 +261,7 @@ mod tests {
         .await;
         assert_eq!(one["total"], json!(1_u64), "the glob applied");
         assert_eq!(listed(&one, "pnames"), vec!["STEPP1"], "the matched entry");
-        let (code, _) = call_err(&client, "list_pnames", json!({ "limit": 0_u64 })).await;
+        let (code, _, _) = call_err(&client, "list_pnames", json!({ "limit": 0_u64 })).await;
         assert_eq!(code, "invalid_argument", "limit 0 code");
     }
 
@@ -274,7 +274,7 @@ mod tests {
             json!({ "name": "PNAMES", "hex": "02 00 00 00 41" }),
         )
         .await;
-        let (code, message) = call_err(&client, "list_pnames", json!({})).await;
+        let (code, message, _) = call_err(&client, "list_pnames", json!({})).await;
         assert_eq!(code, "format_error", "truncated name list code");
         assert!(
             message.contains("end of data"),
@@ -345,7 +345,7 @@ mod tests {
     async fn edit_pnames_remove_conflicts_then_forces_through() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "edit_pnames", json!({ "remove": ["WALLP1"] })).await;
         assert_eq!(code, "conflict", "referenced name code");
         assert!(
@@ -478,7 +478,7 @@ mod tests {
     async fn edit_pnames_replace_all_reindexes_and_revalidates() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "edit_pnames", json!({ "replace_all": ["WALLP1"] })).await;
         assert_eq!(code, "conflict", "STEPP1 vanishes while STEP1 refers to it");
         assert!(
@@ -516,20 +516,20 @@ mod tests {
     async fn edit_pnames_validates_its_arguments() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) = call_err(&client, "edit_pnames", json!({})).await;
+        let (code, message, _) = call_err(&client, "edit_pnames", json!({})).await;
         assert_eq!(code, "invalid_argument", "no operation code");
         assert!(
             message.contains("exactly one"),
             "the message states the rule: {message}"
         );
-        let (both_code, _) = call_err(
+        let (both_code, _, _) = call_err(
             &client,
             "edit_pnames",
             json!({ "add": ["X"], "remove": ["WALLP1"] }),
         )
         .await;
         assert_eq!(both_code, "invalid_argument", "two operations code");
-        let (name_code, name_message) = call_err(
+        let (name_code, name_message, _) = call_err(
             &client,
             "edit_pnames",
             json!({ "add": ["TOO LONG A NAME"] }),
@@ -540,17 +540,17 @@ mod tests {
             name_message.contains("TOO LONG A NAME"),
             "the message echoes the name: {name_message}"
         );
-        let (empty_code, empty_message) =
+        let (empty_code, empty_message, _) =
             call_err(&client, "edit_pnames", json!({ "add": [] })).await;
         assert_eq!(empty_code, "invalid_argument", "empty add code");
         assert!(
             empty_message.contains("at least one"),
             "the message states the rule: {empty_message}"
         );
-        let (dupe_code, _) =
+        let (dupe_code, _, _) =
             call_err(&client, "edit_pnames", json!({ "replace_all": ["A", "a"] })).await;
         assert_eq!(dupe_code, "invalid_argument", "case-folded duplicate code");
-        let (missing_code, _) = call_err(
+        let (missing_code, _, _) = call_err(
             &client,
             "edit_pnames",
             json!({ "rename": [{ "from": "NOPE", "to": "XYZ" }] }),
@@ -577,7 +577,7 @@ mod tests {
             vec!["FIRST"],
             "the merged view shows it"
         );
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "edit_pnames",
             json!({ "rename": [{ "from": "SECOND", "to": "THIRD" }] }),
@@ -588,7 +588,8 @@ mod tests {
 
     /// The `(code, message)` of a refused `build_texture` call.
     async fn build_err(client: &Client, args: Value) -> (String, String) {
-        call_err(client, "build_texture", args).await
+        let (code, message, _) = call_err(client, "build_texture", args).await;
+        (code, message)
     }
 
     /// Asserts every given `build_texture` call fails with
@@ -923,7 +924,7 @@ mod tests {
                     "patches": [{ "patch": "bad name", "x": 0_i64, "y": 0_i64 }] }),
         ]);
         assert_builds_refused(&client, cases).await;
-        let (empty_code, empty_message) = call_err(
+        let (empty_code, empty_message, _) = call_err(
             &client,
             "build_texture",
             json!({ "name": "X", "width": 8_u64, "height": 8_u64, "patches": [] }),
@@ -986,13 +987,14 @@ mod tests {
     async fn remove_texture_reports_unknown_names_and_bad_arguments() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) = call_err(&client, "remove_texture", json!({ "name": "NOPE" })).await;
+        let (code, message, _) =
+            call_err(&client, "remove_texture", json!({ "name": "NOPE" })).await;
         assert_eq!(code, "not_found", "unknown texture code");
         assert!(
             message.contains("list_textures"),
             "the message points at the listing: {message}"
         );
-        let (bad_code, _) = call_err(
+        let (bad_code, _, _) = call_err(
             &client,
             "remove_texture",
             json!({ "name": "TOO LONG NAME" }),

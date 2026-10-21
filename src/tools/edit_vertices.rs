@@ -194,7 +194,7 @@ fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
 fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
     match common::load_map(session, name, Scope::Working) {
         Ok(map) => Ok(map),
-        Err(CyberError::NotFound(_)) => common::load_map(session, name, Scope::Merged),
+        Err(error) if error.code() == "not_found" => common::load_map(session, name, Scope::Merged),
         Err(error) => Err(error),
     }
 }
@@ -337,7 +337,8 @@ fn new_positions(
 ///
 /// [`check_index`] spells its plural with a plain `s`, which "vertex" does
 /// not take, so the wording lives here and matches the shared shape:
-/// `"vertex 9 does not exist (map has 6 vertices)"`.
+/// `"vertex 9 does not exist (the map has 6 vertices, valid indices are
+/// 0..=5)"`.
 ///
 /// # Errors
 ///
@@ -347,9 +348,14 @@ fn new_positions(
 fn check_vertices(indices: &[usize], count: usize) -> Result<(), CyberError> {
     for index in indices {
         if *index >= count {
-            return Err(CyberError::NotFound(format!(
-                "vertex {index} does not exist (map has {count} vertices)"
-            )));
+            let range = count.checked_sub(1).map_or_else(
+                || "the map has no vertices".to_owned(),
+                |last| format!("the map has {count} vertices, valid indices are 0..={last}"),
+            );
+            return Err(
+                CyberError::NotFound(format!("vertex {index} does not exist ({range})"))
+                    .with_hint("describe_map or find_elements returns indices"),
+            );
         }
     }
     Ok(())
@@ -558,7 +564,7 @@ where
 impl Cyberdemon {
     /// Appends one vertex to a map, or returns the point already there.
     #[tool(
-        description = "Adds one vertex (a point of the map's geometry) to a map in a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). Required: x and y in map units. Optional: reuse_existing (default true) - when a vertex already sits at exactly these coordinates its index comes back with reused true, nothing is written and no undo entry is made; pass false to store a second vertex on the same point anyway. Binary maps (Doom, Hexen) store coordinates as i16, so x or y outside -32768..=32767 fails invalid_argument; UDMF maps store full integers and take any value. A vertex nothing references is invisible in the game: a linedef has to end at it (add_linedef, or move_vertex to bring one endpoint of an existing line onto it). A vertex is geometry to the node builder only while a linedef ends at it: an append past the last referenced index keeps the node lumps trusted (nodes_invalidated false) - note that a later edit that does invalidate the nodes also strips trailing vertices no linedef references, this one included. Returns {index, x, y, reused, map, nodes_invalidated, copied_to_working}. Unknown map is not_found, an undecodable map is format_error. See skill/reference/vertices.md."
+        description = "Adds one vertex (a point of the map's geometry) to a map in a single undoable edit: x and y in map units, and reuse_existing (default true) answers the index of a vertex already sitting exactly there without writing. Prefer create_sector_from_loop to draw a room and its wall vertices in one call, or build_map_from_plan for a whole map; a lone vertex does nothing until a linedef ends at it."
     )]
     fn add_vertex(
         &self,
@@ -569,7 +575,7 @@ impl Cyberdemon {
 
     /// Moves one vertex, or a whole group of them, in one undoable edit.
     #[tool(
-        description = "Moves one vertex, or several at once, of a map in a single undoable edit. index is one vertex index or a list of them (duplicates collapse, sorted first). Two ways to say where, and only one of them per call: absolute x and/or y - allowed with a single index only - or relative dx and/or dy, which shift a single vertex or a whole list by the same amount. An axis you leave out stays where it is. Mixing an absolute parameter with a delta, giving none of the four, or giving absolute x/y with a list of indices all fail invalid_argument. On binary maps the resulting x/y must still fit i16 -32768..=32767 (invalid_argument), and a dx/dy that leaves the range of map coordinates is refused; UDMF maps are unbounded. A move that would put both endpoints of one linedef on the same coordinates (a zero-length line no node builder can use) fails conflict naming that linedef and nothing changes; two vertices may share a point as long as no single line spans them. Moving a vertex a linedef ends at is geometry: the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom, which also strips trailing vertices no linedef references, split points a previous build left). Moving only vertices nothing references keeps the nodes. Returns {moved: [{index, x, y}], map, nodes_invalidated, copied_to_working}. An index the map does not hold is not_found and nothing changes. See skill/reference/vertices.md."
+        description = "Moves one vertex, or several at once by the same delta, of a map in a single undoable edit: absolute x/y for a single index or dx/dy for any list; every linedef ending there follows, and a move collapsing a line to zero length fails conflict. Geometry change: run build_all_nodes before vanilla play. Prefer transform_selection to scale, rotate or move a whole group coherently."
     )]
     fn move_vertex(
         &self,
@@ -583,7 +589,7 @@ impl Cyberdemon {
 
     /// Removes one or several vertices in a single undoable edit.
     #[tool(
-        description = "Removes one vertex or a list of them (index: one integer or an array) from a map in a single undoable edit; the remaining vertices renumber down and every surviving linedef's endpoints follow. Without cascade, a vertex any linedef still uses is refused with conflict naming those linedefs and nothing changes; a vertex nothing references (e.g. one just added, or an orphan left by an earlier removal) removes fine. With cascade: true the removal takes the geometry with it: every linedef using a removed vertex goes, a linedef that loses its front side is flipped (its back becomes the front), one that loses its back becomes one-sided (two-sided bit cleared, blocking bit set, an otherwise invisible lower or upper texture of the surviving side moved to the middle), and a linedef that loses both sides goes with them; prune_sidedefs (default true) also drops sidedefs no surviving linedef references and prune_vertices (default true) also drops vertices no surviving linedef references, so a cascade leaves no orphans behind unless you switch a pruning off. Removing vertices is geometry: the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {removed: {vertices, linedefs, sidedefs, sectors, things (removed original indices, sorted), flipped_linedefs, one_sided_linedefs (new indices of the normalised linedefs)}, map, nodes_invalidated, copied_to_working}. An index the map does not hold is not_found; an empty index list is invalid_argument. See skill/reference/vertices.md."
+        description = "Removes one vertex or a list of them from a map in a single undoable edit; the remaining vertices renumber down. Without cascade a vertex a linedef still uses is refused with conflict naming the lines; cascade: true removes those lines too, with the flip and one-sided normalisation of the removal engine. Geometry change - rebuild nodes before vanilla play; for mixed selections prefer delete_geometry."
     )]
     fn remove_vertex(
         &self,
@@ -941,9 +947,9 @@ mod tests {
             .expect_err("the map holds six vertices");
         assert_eq!(code(&error), "not_found", "out of range code");
         assert!(
-            error
-                .to_string()
-                .contains("vertex 9 does not exist (map has 6 vertices)"),
+            error.to_string().contains(
+                "vertex 9 does not exist (the map has 6 vertices, valid indices are 0..=5)"
+            ),
             "the message counts the vertices: {error}"
         );
         assert_eq!(map, before, "and the map stands");

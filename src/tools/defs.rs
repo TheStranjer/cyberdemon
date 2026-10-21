@@ -581,7 +581,7 @@ fn sector_specials_report(
 impl Cyberdemon {
     /// Lists the thing types known for a game.
     #[tool(
-        description = "Lists the game's thing types (editor numbers, names, sprites, frames, radii, categories, hanging flags, and a source of \"builtin\"|\"dehacked\"|\"decorate\"|\"zscript\") sorted by type. Answers from the definition tables embedded in the server, overlaid by default with the session's custom definitions read from the merged view: DEHACKED Thing blocks (ID #, Width), DECORATE actors, `ZScript` classes and MAPINFO/ZMAPINFO DoomEdNums entries (precedence builtin < dehacked < decorate/zscript, custom rows carry \"Custom (DeHackEd/DECORATE/MAPINFO)\" categories). include_custom=false lists the built-in tables alone. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). Optional filters: category (case-insensitive prefix, e.g. \"Monsters\"), search (case-insensitive name substring) and type (exact number; unknown types return an empty list, not an error). Returns {game, count, things, warnings}; warnings explain a fallback game and quote every custom-definition line the tolerant parsers refused to read (unknown DoomEdNums classes, bad DEHACKED values, unparseable DECORATE fragments). Custom sources are session state: load the archives first (open_iwad/merge_wad) for them to count."
+        description = "Lists the game's thing types - editor numbers, names, sprites, frames, radii, categories - from the tables embedded in the server, by default overlaid with the session's custom definitions (DEHACKED, DECORATE, ZScript, MAPINFO). Filters: search (name substring), category prefix, exact type. Use it whenever a tool wants a thing type or name: add_thing, place_things, replace_thing_type."
     )]
     fn get_thing_types(
         &self,
@@ -595,7 +595,7 @@ impl Cyberdemon {
 
     /// Lists the linedef specials known for a game, decoding Boom generalized values.
     #[tool(
-        description = "Lists the game's special-table linedef actions sorted by special, from the definition tables embedded in the server: number, name, category, target (a free-form hint what the action acts on: \"sector\", \"sector_back\", \"sector_or_back\", \"thing\", \"line\", \"ex_5thing\", \"no\", \"-\") and args (argument names in order, index 0 = arg1; empty for the Doom-family tables, the Hexen table names up to five script arguments). game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). family is \"doom\"|\"hexen\": pass family=\"hexen\" to list the Hexen specials for a map in the Hexen action format (binary Hexen maps, UDMF zdoom maps) while the session stays DOOM-family; family=\"doom\" insists on the DOOM-family table and is refused for games that are not DOOM-family. Default: by game. Optional filters: category (case-insensitive prefix, e.g. \"Doors\"), search (case-insensitive name substring) and special (exact number). A special of 0x2F80..=0x7FFF on a DOOM-family table answers through the \"generalized\" field with Boom's decoded bit-packed action {kind, trigger, speed, fields, summary} and no table rows; the trigger prefixes are W=walk over, S=switch/use, G=gun shot, D=use on the line, 1=once, R=repeatable. Heretic and Hexen ship their own plain-numbered specials and are not Boom-compatible: those tables never answer through \"generalized\". Returns {game, count, specials, generalized, warnings} plus a warning when family overrides the game's table; unknown numbers return an empty list, not an error."
+        description = "Lists the game's special-table linedef actions sorted by special number: number, name, category, what the action targets and (Hexen family) its argument names, from the tables embedded in the server. game and family select the table and search filters names. Read it before writing a special with edit_linedef so the number means what you think."
     )]
     fn get_linedef_specials(
         &self,
@@ -609,7 +609,7 @@ impl Cyberdemon {
 
     /// Lists the sector types known for a game, decoding Boom sector values.
     #[tool(
-        description = "Lists the game's sector types (values, names) sorted by type, from the definition tables embedded in the server. game is \"doom\"|\"doom2\"|\"heretic\"|\"hexen\", defaulting to the session's detected game (DOOM II when none is identified). With special set on a DOOM-family game, also returns the Boom decoding of that sector value: decoded = {base, base_name, damage (\"none\"|\"5%\"|\"10%\"|\"20%\"), flags (some of \"secret\", \"friction\", \"push\")}; bits above 9 are ignored, unassigned bases name \"Unknown\". Heretic's and Hexen's sector types are plain table values from their own tables and are not Boom-decoded, so decoded stays null there. Returns {game, count, special, decoded, sector_types, warnings}."
+        description = "Lists the game's sector types (values and names) from the embedded tables, sorted by type; game defaults to the session's detected game. On a Doom-family game, passing special also answers the Boom generalized decoding {base, damage, secret/friction/push flags}. Read it before edit_sector or set_light_effect sets a special."
     )]
     fn get_sector_specials(
         &self,

@@ -629,7 +629,7 @@ where
 impl Cyberdemon {
     /// Reads the session's texture theme and every role's current texture.
     #[tool(
-        description = "Reads the session's texture theme: the effective theme name, the themes the detected game offers (tech/hell/brick/rock for the DOOM games, castle for Heretic, forest for Hexen, urban for Strife; unknown games use the DOOM table), and every role (wall, wall_alt, floor, ceiling, light_ceiling, outdoor_ceiling, door, door_track, door_track_red/blue/yellow, door_floor, switch, exit_switch, step, lift_side, lift_floor, window_sill, teleport_floor, liquid_floor) with the texture standing for it now. Each role reports {\"texture\", \"matched\"}: exact (a candidate name exists), glob (a * / ? candidate matched, alphabetically first), fallback (the row of the role's fallback_role or of the game's default theme), or default (the game's last-resort texture, the alphabetically first existing one of its kind, or \"-\" when the merged view has nothing). Resolution checks TEXTURE1/TEXTURE2 definitions and TX_ lumps for wall roles, the flats namespace for flat roles, with F_SKY1 always allowed. Returns {\"theme\", \"available_themes\", \"roles\": {role: {texture, matched}}}. No arguments."
+        description = "Reads the session's texture theme: the effective theme name, the themes the detected game offers, and every role (wall, floor, ceiling, door, door_track, switch, exit_switch, step, lift, window, teleport, liquid and the rest) with the texture standing for it now and how it matched. Use it before set_texture_theme; build_map_from_plan and auto_texture resolve roles against this table."
     )]
     fn get_texture_theme(&self) -> Result<CallToolResult, ErrorData> {
         reported(
@@ -640,7 +640,7 @@ impl Cyberdemon {
 
     /// Switches the theme and/or edits the per-role overrides.
     #[tool(
-        description = "Sets the session's texture theme, its per-role overrides, or both; theme names are validated against get_texture_theme's available_themes (case-insensitive; unknown names fail with invalid_argument listing them). overrides maps role names to texture/flat names that must exist in the merged view (not_found otherwise; list_textures and list_flats show what exists, the import and texture tools add more) - an override wins over the theme's candidates for its role, and passing \"-\" as a role's value clears that override. An unknown role key fails with invalid_argument listing all roles. The theme is session state like the render settings: never part of the undo history, unaffected by archive changes. Returns the same document as get_texture_theme."
+        description = "Sets the session's texture theme, its per-role overrides, or both: theme names validate against get_texture_theme's available list (case-insensitive) and overrides {role: texture} answer a single role from now on (an empty value clears it). Theme state is session state - undo does not roll it back. Use it to steer what auto_texture, the feature tools and build_map_from_plan dress with."
     )]
     fn set_texture_theme(
         &self,
@@ -651,7 +651,7 @@ impl Cyberdemon {
 
     /// Fills missing textures or repaints a map with the theme.
     #[tool(
-        description = "Dresses a map (or the listed sectors) with the session's texture theme, as one undoable edit. mode \"fill_missing\" (the default) changes only what would render wrong: a one-sided line whose middle is \"-\" gets the wall texture; a visible upper gap (back ceiling below front, both ceilings not F_SKY1) whose upper is \"-\" gets the wall texture, or the door texture when the back sector is a closed door (ceiling equals floor); a visible lower gap (back floor below front) whose lower is \"-\" gets the step texture for a step of at most 24 units, else the wall texture; and sector flats that do not exist get the theme floor/ceiling flats. mode \"retexture\" repaints: every one-sided middle of the selected sectors becomes wall, existing upper/lower bands follow the theme (low bands get step, others wall), a line whose special is a door action keeps its role with the door texture on its middle and its adjacent plain two-sided middle-textured lines (the jambs) get door_track, other special-carrying lines keep their textures, floors become the theme floor and ceilings the theme ceiling while F_SKY1 is kept. include_flats (default true) switches the flat rules off for either mode. sectors defaults to every sector. Returns {\"mode\", \"changed_sidedefs\", \"changed_sectors\", \"map\", \"nodes_invalidated\", \"copied_to_working\"} - texture-only edits never invalidate nodes. Look at the result with render_topdown."
+        description = "Dresses a map (or the listed sectors) with the session's texture theme, as one undoable edit: mode fill_missing (default) gives untextured middles, visible upper gaps and lower steps the theme's wall, door or step texture; mode repaint redresses every face, keeping door and switch specials. Returns per-role change counts. Use it after building or swapping a theme; align_textures then removes the seams."
     )]
     fn auto_texture(
         &self,
@@ -665,7 +665,7 @@ impl Cyberdemon {
 
     /// Runs wall textures continuously across corners.
     #[tool(
-        description = "Aligns wall textures along chains of connected linedefs, as one undoable edit. A chain is consecutive lines sharing a vertex in drawing order (previous.v2 == next.v1) whose front side carries the same wall texture: the middle of a one-sided line, the upper of a two-sided one; empty slots never chain. x (default true) rewrites each front sidedef's x_offset to the accumulated chain length before the line modulo the texture's width, so the picture runs unbroken around corners; y (default false) rewrites y_offset so every member's texture top pegs to the highest front ceiling in the chain (vanilla pegs an unset top to the line's own ceiling and shifts it down by y_offset). Considered lines: linedefs (one index or a list) or sector (every line with a side on that sector) - not both - or the whole map when neither is given. Pass x and y false to refuse a no-op. Offsets a binary map cannot store (outside -32768..=32767) are left in place with a warning; UDMF has no cap; a chain whose texture has no TEXTURE1/TEXTURE2 definition keeps its x offsets and warns. Returns {\"aligned\", \"warnings\", \"map\", \"nodes_invalidated\", \"copied_to_working\"}."
+        description = "Aligns wall textures along chains of connected linedefs that carry the same texture on their front side, as one undoable edit: x (default true) rewrites each x_offset so the picture runs unbroken around corners, and y pegs every member's texture top to the chain's highest ceiling. Use it after auto_texture or a repaint leaves seams running along a wall."
     )]
     fn align_textures(
         &self,

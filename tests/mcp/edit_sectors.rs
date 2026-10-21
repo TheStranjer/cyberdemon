@@ -103,7 +103,7 @@ mod tests {
     /// Requires `tool` to reject `args` with `invalid_argument`.
     async fn refuse(client: &Client, tool: &str, args: Value) {
         let note = args.to_string();
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {tool} {note}");
     }
 
@@ -326,7 +326,7 @@ mod tests {
         refuse(&client, "add_sector", json!({"light": -1_i32})).await;
         refuse(&client, "add_sector", json!({"floor_height": 200_i32})).await;
         refuse(&client, "add_sector", json!({"tag": 70_000_i32})).await;
-        let (map_code, _) = call_err(
+        let (map_code, _, _) = call_err(
             &client,
             "add_sector",
             json!({"map": "MAP09", "floor_flat": "FLOOR4_8"}),
@@ -479,16 +479,19 @@ mod tests {
             json!({"index": 0_i32, "tag": 70_000_i32}),
         )
         .await;
-        let (index_code, message) = call_err(
+        let (index_code, message, index_hint) = call_err(
             &client,
             "edit_sector",
             json!({"index": 9_i32, "light": 200_i32}),
         )
         .await;
         assert_eq!(index_code, "not_found", "an index past the end is missing");
+        let phrasing = format!("{message} and hint {index_hint}");
         assert!(
-            message.contains("sector 9 does not exist (map has 2 sectors)"),
-            "the message counts the sectors: {message}"
+            phrasing.contains("sector 9 does not exist")
+                && phrasing.contains("valid indices are 0..=1")
+                && phrasing.contains("describe_map or find_elements"),
+            "the refusal states the range and names the readers: {phrasing}"
         );
         let stored = merged_sectors(&client, "MAP01").await;
         assert_eq!(stored.len(), 2, "the refusals appended nothing");
@@ -558,7 +561,7 @@ mod tests {
     async fn remove_sector_refuses_used_sectors_and_drops_orphans() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(&client, "remove_sector", json!({"index": 0_i32})).await;
+        let (code, message, _) = call_err(&client, "remove_sector", json!({"index": 0_i32})).await;
         assert_eq!(code, "conflict", "sidedefs frame sector 0");
         assert!(
             message.contains("sector 0 is used by sidedef(s) 0, 1, 2, 4")
@@ -1207,14 +1210,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
         refuse_all(&client, "carve_void", invalid_carves()).await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "carve_void",
             json!({"vertices": [0_i32, 1_i32, 99_i32]}),
         )
         .await;
         assert_eq!(code, "not_found", "unknown vertex");
-        let (map_code, _) = call_err(
+        let (map_code, _, _) = call_err(
             &client,
             "carve_void",
             json!({"map": "MAP09", "points": [pt(0, 0), pt(64, 0), pt(0, 64)]}),
@@ -1261,21 +1264,21 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
         refuse_loops(&client, &invalid_loop_requests()).await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "create_sector_from_loop",
             json!({"map": "MAP09", "points": [pt(0, 0), pt(128, 0), pt(0, 128)]}),
         )
         .await;
         assert_eq!(code, "not_found", "unknown map");
-        let (vertex_code, _) = call_err(
+        let (vertex_code, _, _) = call_err(
             &client,
             "create_sector_from_loop",
             json!({"vertices": [0_i32, 1_i32, 99_i32]}),
         )
         .await;
         assert_eq!(vertex_code, "not_found", "unknown vertex");
-        let (outer_code, message) = call_err(
+        let (outer_code, message, _) = call_err(
             &client,
             "create_sector_from_loop",
             square(", \"outer_sector\": 9"),

@@ -287,7 +287,7 @@ mod tests {
         let ogg = write_stuffed(dir.path(), "song", "ogg", b"OggS\x01\x02");
         let mut args = source_arg(&ogg);
         args["format"] = json!("mus");
-        let (code, message) = call_err(&client, "import_music", args).await;
+        let (code, message, _) = call_err(&client, "import_music", args).await;
         assert_eq!(code, "invalid_argument", "OGG is not MUS-able");
         assert!(
             message.contains("passthrough"),
@@ -302,7 +302,7 @@ mod tests {
         let client = connect().await;
         let junk = dir.path().join("mystery.dat");
         fs::write(&junk, b"total nonsense, no music here").expect("write the junk");
-        let (code, message) = call_err(&client, "import_music", source_arg(&junk)).await;
+        let (code, message, _) = call_err(&client, "import_music", source_arg(&junk)).await;
         assert_eq!(code, "format_error", "unrecognized container");
         assert!(
             message.contains("MUS, MIDI, OGG"),
@@ -314,7 +314,8 @@ mod tests {
         broken.resize(20, 0_u8);
         let corrupt = dir.path().join("doomed.mid");
         fs::write(&corrupt, broken).expect("write the corrupt file");
-        let (mus_code, mus_message) = call_err(&client, "import_music", source_arg(&corrupt)).await;
+        let (mus_code, mus_message, _) =
+            call_err(&client, "import_music", source_arg(&corrupt)).await;
         assert_eq!(mus_code, "format_error", "a score past the lump end");
         assert!(
             mus_message.contains("MUS score"),
@@ -329,7 +330,7 @@ mod tests {
         let client = connect().await;
         let midi = write_midi(dir.path(), "runnin", &ONE_NOTE);
         call(&client, "import_music", source_arg(&midi)).await;
-        let (code, message) = call_err(&client, "import_music", source_arg(&midi)).await;
+        let (code, message, _) = call_err(&client, "import_music", source_arg(&midi)).await;
         assert_eq!(code, "already_exists", "the derived twin is refused");
         assert!(
             message.contains("replace true"),
@@ -358,15 +359,15 @@ mod tests {
         let midi = write_midi(dir.path(), "runnin", &ONE_NOTE);
         let mut format = source_arg(&midi);
         format["format"] = json!("zdoom");
-        let (format_code, _) = call_err(&client, "import_music", format).await;
+        let (format_code, _, _) = call_err(&client, "import_music", format).await;
         assert_eq!(format_code, "invalid_argument", "not a storage format");
         let mut long_name = source_arg(&midi);
         long_name["name"] = json!("NINECHARS");
-        let (name_code, _) = call_err(&client, "import_music", long_name).await;
+        let (name_code, _, _) = call_err(&client, "import_music", long_name).await;
         assert_eq!(name_code, "invalid_argument", "over eight characters");
         let hidden = dir.path().join(".mid");
         fs::copy(&midi, &hidden).expect("copy the fixture under a bare extension");
-        let (stem_code, stem_message) =
+        let (stem_code, stem_message, _) =
             call_err(&client, "import_music", source_arg(&hidden)).await;
         assert_eq!(
             stem_code, "invalid_argument",
@@ -377,7 +378,7 @@ mod tests {
             "the message asks for the name: {stem_message}"
         );
         let missing = dir.path().join("nowhere.mid");
-        let (missing_code, _) = call_err(&client, "import_music", source_arg(&missing)).await;
+        let (missing_code, _, _) = call_err(&client, "import_music", source_arg(&missing)).await;
         assert_eq!(missing_code, "not_found", "fetch errors surface unchanged");
         assert_untouched(&client).await;
     }
@@ -470,7 +471,7 @@ mod tests {
     async fn preview_music_refuses_non_music_and_reports_missing_lumps() {
         let client = connect().await;
         add_working_lump(&client, "PLAYPAL", b"palettes-not-music").await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "preview_music", json!({ "name": "PLAYPAL" })).await;
         assert_eq!(code, "unsupported", "a palette is not music");
         assert!(
@@ -482,14 +483,14 @@ mod tests {
         broken.extend_from_slice(&16_u16.to_le_bytes());
         broken.resize(20, 0_u8);
         add_working_lump(&client, "DBROKEN", &broken).await;
-        let (mus_code, mus_message) =
+        let (mus_code, mus_message, _) =
             call_err(&client, "preview_music", json!({ "name": "DBROKEN" })).await;
         assert_eq!(mus_code, "format_error", "the validator's refusal survives");
         assert!(
             mus_message.contains("MUS score"),
             "the converter names the fault: {mus_message}"
         );
-        let (missing_code, missing_message) =
+        let (missing_code, missing_message, _) =
             call_err(&client, "preview_music", json!({ "name": "D_NOPE" })).await;
         assert_eq!(missing_code, "not_found", "no such lump");
         assert!(

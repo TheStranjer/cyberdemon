@@ -107,6 +107,15 @@ impl Default for Cyberdemon {
 #[tool_handler(
     router = self.tool_router,
     name = "cyberdemon",
-    instructions = "Cyberdemon reads and edits Doom WAD files."
+    instructions = "Cyberdemon reads and edits Doom WAD files over MCP: maps, graphics, audio and game definitions, with every edit undoable.
+Start a session with open_iwad (the game data), then new_wad for a fresh project archive or open_wad for an existing file.
+Prefer high-level tools over element edits: build_map_from_plan compiles a whole playable map from one plan; add_door, add_window, add_stairs, add_lift, add_teleporter, add_switch and add_exit place working features; create_texture_from_image, create_flat_from_image and create_sprite_from_image turn pictures into finished assets; bulk_edit changes many elements at once; place_things populates rooms.
+The element tools (add_linedef, add_sector, add_vertex, edit_thing, ...) are fine control, not first choices.
+For a hand-drawn sketch: trace_sketch measures it (no WAD needed), turn the reported regions and gaps into a plan, build_map_from_plan compiles it, then render_topdown with an underlay draws the picture behind the lines.
+Verify after every meaningful change: validate_map for map health, check_playability for whether a player can finish, render_topdown and render_view to look.
+Use run_batch to make a multi-step change atomic and reversible as one step; undo (and redo) take changes back.
+Failed calls return an error object with a hint field: do what the hint says before retrying.
+Image and sound results are URLs on the server's localhost asset origin - open them to look or listen.
+The skill's guides/ directory holds the judgment guides: guides/design-rules.md, guides/verification.md, guides/recipes.md, guides/sketch-to-map.md, guides/editing-existing-maps.md and guides/images-to-assets.md."
 )]
 impl ServerHandler for Cyberdemon {}

@@ -1213,11 +1213,18 @@ fn external_segments(source: &Source) -> (Vec<ExternalSegment>, Vec<usize>) {
 /// [`CyberError::NotFound`] naming the index and the sector count.
 fn check_outside(request: &OverlayRequest, map: &Map) -> Result<(), CyberError> {
     match request.outside {
-        Outside::Face(index) if index >= map.sectors.len() => Err(CyberError::NotFound(format!(
-            "sector {index} does not exist (map has {} sectors): pass an existing \
-             sector index, \"auto\", or \"none\"",
-            map.sectors.len()
-        ))),
+        Outside::Face(index) if index >= map.sectors.len() => {
+            let count = map.sectors.len();
+            let range = count.checked_sub(1).map_or_else(
+                || "the map has no sectors".to_owned(),
+                |last| format!("the map has {count} sectors, valid indices are 0..={last}"),
+            );
+            Err(CyberError::NotFound(format!(
+                "sector {index} does not exist ({range}): pass an existing \
+                 sector index, \"auto\", or \"none\""
+            ))
+            .with_hint("describe_map or find_elements returns indices"))
+        }
         Outside::Original | Outside::Solid | Outside::Face(_) => Ok(()),
     }
 }

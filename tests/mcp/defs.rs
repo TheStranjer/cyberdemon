@@ -141,7 +141,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_game_string_is_an_invalid_argument() {
         let client = connect().await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "get_thing_types", json!({ "game": "strife" })).await;
         assert_eq!(code, "invalid_argument", "unsupported game code");
         assert!(
@@ -902,7 +902,7 @@ mod tests {
     #[tokio::test]
     async fn the_family_parameter_refuses_bad_names_and_contradictions() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "get_linedef_specials",
             json!({ "family": "zdoom" }),
@@ -913,7 +913,7 @@ mod tests {
             message.contains("\"hexen\"") && message.contains("leave family out"),
             "the message names the values and the default: {message}"
         );
-        let (second_code, second_message) = call_err(
+        let (second_code, second_message, _) = call_err(
             &client,
             "get_linedef_specials",
             json!({ "game": "heretic", "family": "doom" }),
@@ -972,7 +972,7 @@ mod tests {
     #[tokio::test]
     async fn specials_refuse_an_unknown_game() {
         let client = connect().await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "get_linedef_specials", json!({ "game": "strife" })).await;
         assert_eq!(code, "invalid_argument", "unknown game code");
         assert!(
@@ -1117,7 +1117,7 @@ mod tests {
     #[tokio::test]
     async fn sectors_refuse_an_unknown_game() {
         let client = connect().await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "get_sector_specials", json!({ "game": "zdaemon" })).await;
         assert_eq!(code, "invalid_argument", "unknown game code");
         assert!(

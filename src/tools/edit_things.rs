@@ -658,7 +658,7 @@ where
 impl Cyberdemon {
     /// Appends one thing to a map in a single undoable edit.
     #[tool(
-        description = "Adds one thing to a map in a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). Required: type (the thing number; get_thing_types lists the game's), x, y. Optional: angle in degrees (default 0, normalised into 0..=359, so 450 is 90), z spawn height (default 0), flags as a raw bitset or a list of names from the map's thing flag table (default: present in all skills and modes - Doom family 7 = easy+medium+hard, Hexen family 2023 = easy+medium+hard+class1+class2+class3+single+coop+dm), tid (default 0), special (default 0) and args, five integers (default zeros). Doom-family maps (binary Doom, UDMF in the doom/heretic/strife namespace) have no tid/z/special/args columns: any nonzero one fails invalid_argument. Binary formats range-check: type must fit u16, x/y/z/tid i16, and Hexen special/args u8; out-of-range values fail invalid_argument. Nothing else changes and the node lumps stay trusted. Returns {index, thing: {type, x, y, z, angle, flags, flag_names, tid, special, args}, map, nodes_invalidated: false, copied_to_working}. Unknown map is not_found; unparsable map, an out-of-range field, a nonzero Hexen-only field on a Doom-family map or an unknown flag name are invalid_argument (the flag error lists the valid names). See skill/reference/things.md for the flag names."
+        description = "Adds one thing to a map in a single undoable edit: type (a doomednum - get_thing_types lists the game's numbers and names), x, y and optional angle, flags, and the Hexen-family tid, special and args. Prefer place_things to distribute monsters and items across sectors or areas in one call, or build_map_from_plan whose thing rows stand a whole population in with the map."
     )]
     fn add_thing(
         &self,
@@ -669,7 +669,7 @@ impl Cyberdemon {
 
     /// Changes one or several things in a single undoable edit.
     #[tool(
-        description = "Changes one or several things of a map in a single undoable edit. index is one thing index or a list of them (duplicates collapse, sorted first). Change parameters, all optional: type, x, y, dx, dy, angle, angle_delta, z, flags (bitset or names; replaces the whole bitset), set_flags and clear_flags (names; adjust the current bits, set wins over clear), tid, special, args. Absolute and delta conflict (invalid_argument): x with dx, y with dy, angle with angle_delta; so does flags with set_flags/clear_flags. Absolute x/y need a single index - move a list with dx/dy. Angles normalise into 0..=359. A call with no change parameter is invalid_argument. The Doom-family and binary range rules are add_thing's and apply to the resulting things. Thing edits never invalidate the node lumps. Returns {things: [{index, type, x, y, z, angle, flags, flag_names, tid, special, args}], map, nodes_invalidated: false, copied_to_working}. An index the map does not hold is not_found and nothing changes."
+        description = "Changes one or several things of a map in a single undoable edit: type, x/y (absolute, single index) or dx/dy, angle or angle_delta, flags by bitset or names, tid, special and args; the Doom-family and binary range rules apply to the results. Prefer place_things to add many things, replace_thing_type to change one type into another across maps, and bulk_edit for a query-wide sweep. Thing edits never invalidate nodes."
     )]
     fn edit_thing(
         &self,
@@ -683,7 +683,7 @@ impl Cyberdemon {
 
     /// Removes one or several things in a single undoable edit.
     #[tool(
-        description = "Removes one thing or a list of them (index: one integer or an array) from a map in a single undoable edit; the remaining things renumber down. Removing things never cascades into other element kinds and never invalidates the node lumps. Returns {removed: [indices removed, original numbering, sorted], map, nodes_invalidated: false, copied_to_working}. An index the map does not hold is not_found and nothing changes; an empty index list is invalid_argument."
+        description = "Removes one thing or a list of them from a map in a single undoable edit; the remaining things renumber down. Removing things never cascades into other element kinds and never invalidates the node lumps. An index the map lacks is not_found. To clear a whole set, take the indices from find_elements or use delete_geometry for a mixed selection."
     )]
     fn remove_thing(
         &self,

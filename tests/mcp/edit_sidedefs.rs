@@ -97,7 +97,7 @@ mod tests {
     /// Requires `tool` to reject `args` with `invalid_argument`.
     async fn refuse(client: &Client, tool: &str, args: Value) {
         let note = args.to_string();
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {tool} {note}");
     }
 
@@ -168,11 +168,12 @@ mod tests {
     async fn add_sidedef_refuses_missing_sectors_bad_names_and_wide_offsets() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(&client, "add_sidedef", json!({"sector": 9_i32})).await;
+        let (code, message, _) = call_err(&client, "add_sidedef", json!({"sector": 9_i32})).await;
         assert_eq!(code, "not_found", "missing sector");
         assert!(
-            message.contains("sector 9 does not exist (map has 2 sectors)"),
-            "the message counts the sectors: {message}"
+            message.contains("sector 9 does not exist")
+                && message.contains("valid indices are 0..=1"),
+            "the message states the valid range: {message}"
         );
         refuse(
             &client,
@@ -198,7 +199,7 @@ mod tests {
             json!({"sector": 0_i32, "y_offset": -0x8001_i32}),
         )
         .await;
-        let (map_code, _) = call_err(
+        let (map_code, _, _) = call_err(
             &client,
             "add_sidedef",
             json!({"map": "MAP09", "sector": 0_i32}),
@@ -358,14 +359,14 @@ mod tests {
             json!({"index": 0_i32, "x_offset": 40_000_i32}),
         )
         .await;
-        let (index_code, _) = call_err(
+        let (index_code, _, _) = call_err(
             &client,
             "edit_sidedef",
             json!({"index": 99_i32, "middle": "X"}),
         )
         .await;
         assert_eq!(index_code, "not_found", "an index past the end is missing");
-        let (sector_code, message) = call_err(
+        let (sector_code, message, _) = call_err(
             &client,
             "edit_sidedef",
             json!({"index": 0_i32, "sector": 9_i32}),
@@ -423,7 +424,7 @@ mod tests {
             json!(true),
             "the sidedef block is geometry"
         );
-        let (code, message) = call_err(&client, "remove_sidedef", json!({"index": 0_i32})).await;
+        let (code, message, _) = call_err(&client, "remove_sidedef", json!({"index": 0_i32})).await;
         assert_eq!(code, "conflict", "sidedef 0 fronts a linedef");
         assert!(
             message.contains("sidedef 0 is used by linedef(s) 0") && message.contains("cascade"),

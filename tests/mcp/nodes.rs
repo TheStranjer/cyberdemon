@@ -309,14 +309,14 @@ mod tests {
     async fn malformed_node_lumps_fail_with_format_error() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = nodes_loaded(dir.path()).await;
-        let (nodes_code, nodes_message) =
+        let (nodes_code, nodes_message, _) =
             call_err(&client, "get_nodes", json!({ "map": "MAP06" })).await;
         assert_eq!(nodes_code, "format_error", "a broken record size");
         assert!(
             nodes_message.contains("NODES"),
             "the lump is named: {nodes_message}"
         );
-        let (map_code, map_message) =
+        let (map_code, map_message, _) =
             call_err(&client, "get_blockmap", json!({ "map": "MAP06" })).await;
         assert_eq!(map_code, "format_error", "an offset leaves the lump");
         assert!(
@@ -334,11 +334,11 @@ mod tests {
     async fn the_nodes_tools_validate_their_shared_parameters() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = nodes_loaded(dir.path()).await;
-        let (missing_code, _) = call_err(&client, "get_nodes", json!({ "map": "MAP99" })).await;
+        let (missing_code, _, _) = call_err(&client, "get_nodes", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "no such block");
-        let (scope_code, _) = call_err(&client, "get_reject", json!({ "scope": "nope" })).await;
+        let (scope_code, _, _) = call_err(&client, "get_reject", json!({ "scope": "nope" })).await;
         assert_eq!(scope_code, "invalid_argument", "not a scope");
-        let (detail_code, detail_message) = call_err(
+        let (detail_code, detail_message, _) = call_err(
             &client,
             "get_blockmap",
             json!({ "map": "MAP05", "detail": "everything" }),
@@ -349,7 +349,7 @@ mod tests {
             detail_message.contains("summary") && detail_message.contains("full"),
             "the message names both values: {detail_message}"
         );
-        let (layer_code, _) = call_err(
+        let (layer_code, _, _) = call_err(
             &client,
             "get_nodes",
             json!({ "map": "MAP05", "scope": "layer:9" }),
@@ -417,7 +417,7 @@ mod tests {
             json!(2_u64),
             "the two interior corners"
         );
-        let (code, _) = call_err(&client, "build_blockmap", json!({ "map": "MAP99" })).await;
+        let (code, _, _) = call_err(&client, "build_blockmap", json!({ "map": "MAP99" })).await;
         assert_eq!(code, "not_found", "no such block to build");
     }
 
@@ -508,10 +508,11 @@ mod tests {
             json!({ "path": empty.display().to_string() }),
         )
         .await;
-        let (code, message) = call_err(&client, "build_blockmap", json!({ "map": "MAP01" })).await;
+        let (code, message, _) =
+            call_err(&client, "build_blockmap", json!({ "map": "MAP01" })).await;
         assert_eq!(code, "invalid_argument", "no vertices to grid");
         assert!(message.contains("vertices"), "the hint: {message}");
-        let (mode_code, mode_message) = call_err(
+        let (mode_code, mode_message, _) = call_err(
             &client,
             "build_reject",
             json!({ "map": "MAP01", "mode": "visibility" }),
@@ -643,7 +644,7 @@ mod tests {
     async fn build_nodes_refuses_unknown_variants_unknown_maps_and_empty_geometry() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "build_nodes",
             json!({ "map": "MAP01", "variant": "znodes" }),
@@ -654,7 +655,8 @@ mod tests {
             message.contains("classic") && message.contains("extended") && message.contains("gl"),
             "the message names all three: {message}"
         );
-        let (missing_code, _) = call_err(&client, "build_nodes", json!({ "map": "MAP99" })).await;
+        let (missing_code, _, _) =
+            call_err(&client, "build_nodes", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "no such block");
         let empty_dir = tempfile::tempdir().expect("a scratch directory");
         let empty_client = connect().await;
@@ -665,14 +667,14 @@ mod tests {
             json!({ "path": empty.display().to_string() }),
         )
         .await;
-        let (no_code, no_message) =
+        let (no_code, no_message, _) =
             call_err(&empty_client, "build_nodes", json!({ "map": "MAP01" })).await;
         assert_eq!(no_code, "invalid_argument", "nothing to tree");
         assert!(
             no_message.contains("sidedefs"),
             "the hint names sides: {no_message}"
         );
-        let (gl_code, gl_message) = call_err(
+        let (gl_code, gl_message, _) = call_err(
             &empty_client,
             "build_nodes",
             json!({ "map": "MAP01", "variant": "gl" }),
@@ -683,7 +685,7 @@ mod tests {
             gl_message.contains("sidedefs"),
             "the hint names sides: {gl_message}"
         );
-        let (scope_code, _) = call_err(
+        let (scope_code, _, _) = call_err(
             &empty_client,
             "get_map_summary",
             json!({ "map": "MAP01", "scope": "working" }),
@@ -838,13 +840,13 @@ mod tests {
             json!("znod"),
             "the merged view shows the build"
         );
-        let (code, message) = call_err(&client, "build_nodes", json!({ "map": "MAP07" })).await;
+        let (code, message, _) = call_err(&client, "build_nodes", json!({ "map": "MAP07" })).await;
         assert_eq!(code, "invalid_argument", "classic has no place in UDMF");
         assert!(
             message.contains("UDMF maps use extended nodes"),
             "the message names the rule: {message}"
         );
-        let (gl_code, gl_message) = call_err(
+        let (gl_code, gl_message, _) = call_err(
             &client,
             "build_nodes",
             json!({ "map": "MAP07", "variant": "gl" }),
@@ -1314,7 +1316,7 @@ mod tests {
         assert_eq!(reject["bytes"], json!(1_u64), "the written matrix");
         assert_eq!(reject["size_ok"], json!(true), "at its expected size");
         assert_eq!(reject["sectors"], json!(2_u64), "the two fixture sectors");
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "build_all_nodes",
             json!({ "map": "MAP07", "variant": "gl" }),
@@ -1337,7 +1339,7 @@ mod tests {
     async fn build_all_nodes_refuses_bad_arguments_and_barren_maps_without_writing() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (variant_code, variant_message) = call_err(
+        let (variant_code, variant_message, _) = call_err(
             &client,
             "build_all_nodes",
             json!({ "map": "MAP01", "variant": "znodes" }),
@@ -1350,7 +1352,7 @@ mod tests {
                 && variant_message.contains("gl"),
             "the message names all three: {variant_message}"
         );
-        let (mode_code, mode_message) = call_err(
+        let (mode_code, mode_message, _) = call_err(
             &client,
             "build_all_nodes",
             json!({ "map": "MAP01", "reject_mode": "visibility" }),
@@ -1361,7 +1363,7 @@ mod tests {
             mode_message.contains("zero") && mode_message.contains("components"),
             "the message names both values: {mode_message}"
         );
-        let (missing_code, _) =
+        let (missing_code, _, _) =
             call_err(&client, "build_all_nodes", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "no such block");
         let info = call(&client, "get_session_info", json!({})).await;
@@ -1375,14 +1377,14 @@ mod tests {
             json!({ "path": empty.display().to_string() }),
         )
         .await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&empty_client, "build_all_nodes", json!({ "map": "MAP01" })).await;
         assert_eq!(code, "invalid_argument", "the builder's refusal");
         assert!(
             message.contains("sidedefs") || message.contains("vertices"),
             "the hint names the barren geometry: {message}"
         );
-        let (working_code, _) = call_err(
+        let (working_code, _, _) = call_err(
             &empty_client,
             "get_map_summary",
             json!({ "map": "MAP01", "scope": "working" }),

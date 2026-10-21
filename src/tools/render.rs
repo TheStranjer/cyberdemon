@@ -2394,7 +2394,7 @@ impl<'defs> SpriteWiring<'defs> {
         match load_sprite_cached(session, def, rotation, &mut self.cache) {
             Ok(sprite) => Some(sprite.patch),
             Err(error) => {
-                let missing = matches!(error, CyberError::NotFound(_));
+                let missing = error.code() == "not_found";
                 self.report(&def.sprite, missing);
                 None
             }
@@ -2736,7 +2736,7 @@ const VERTEX_LABEL_OFFSET: i64 = 4;
 impl Cyberdemon {
     /// Sets the resolution the render tools default to.
     #[tool(
-        description = "Sets the pixel size render tools default to: width and height, each 16..=4096, with width*height at most 16777216 (exactly a 4096x4096 square). Returns the full render settings after the change; a refused size reports invalid_argument and nothing changes."
+        description = "Sets the pixel size the render tools default to: width and height, each 16..=4096, with the product at most 16777216. Returns both values. Connection-level like every render setting: it belongs to no WAD and survives archive changes and undo."
     )]
     fn set_render_resolution(
         &self,
@@ -2750,7 +2750,7 @@ impl Cyberdemon {
 
     /// Changes the session's render options, field by field.
     #[tool(
-        description = "Changes the session's render options, applying only the fields you pass and keeping the rest; at least one field is required. lighting \"doom\" (sector light plus the COLORMAP distance fade) | \"flat\" (sector light only) | \"fullbright\"; show_things (thing markers in top-down renders); show_sprites (sprites in the 3D view); sky (draw the sky texture, off means the background colour); fov (horizontal field of view, 10..=170 degrees); gamma (Doom gamma level, 0..=4); topdown_style \"editor\" | \"automap\"; background (\"#RRGGBB\"). All or nothing: a refused value reports invalid_argument listing the valid values and leaves every setting unchanged. Returns the full render settings."
+        description = "Changes the session's render options, applying only the fields you pass (at least one is required): lighting (doom or flat), show_things, show_sprites, sky, fov, gamma, topdown_style and background, each validated against its range. These are the defaults render_view, render_topdown and render_minimap use when a call leaves them out."
     )]
     fn set_render_options(
         &self,
@@ -2764,7 +2764,7 @@ impl Cyberdemon {
 
     /// Reports the session's render settings.
     #[tool(
-        description = "Returns the session's render settings as one object: width, height, lighting, show_things, show_sprites, sky, fov, gamma, topdown_style, background. These are the defaults render_view, render_topdown and render_minimap use where their own arguments leave a value out. They belong to the connection: new_wad, open_wad, merge_wad and undo never change them, and they are not saved into any WAD."
+        description = "Returns the session's render settings as one object: width, height, lighting, show_things, show_sprites, sky, fov, gamma, topdown_style and background. They belong to the connection: new_wad, open_wad, merge_wad and undo never change them and no archive holds them."
     )]
     fn get_render_settings(&self) -> Result<CallToolResult, ErrorData> {
         match self
@@ -2778,7 +2778,7 @@ impl Cyberdemon {
 
     /// Renders a map overview as a `PNG` asset.
     #[tool(
-        description = "Renders a map overview and publishes it as a PNG asset; returns {map, projection, width, height, transform, underlay, notes, asset}. projection \"topdown\" (default) draws the flat north-up line map; projection \"isometric\" draws a 2:1 wireframe (screen = (x - y, (x + y) / 2 - z), floor edges per side, ceiling and verticals on one-sided lines, no hidden-line removal) and reports transform null. width/height default to the render settings. bounds {min_x, min_y, max_x, max_y} frames a world rectangle (default: the map bounds unioned with the underlay's map rectangle, padded by 32 units; an empty map without bounds and without an underlay fails invalid_argument, as do min >= max). style \"editor\" colours one-sided #C0C0C0, two-sided #707070, special-bearing #6A8CFF; style \"automap\" draws the in-game map: one-sided (and secret) #FC0000, floor-height change #BC7848, ceiling-height change #FCFC00, flat two-sided #808080, dontdraw lines skipped. fill_sectors first fills each sector with a grey of half its light. show_vertices adds a 3x3 #FFD000 mark per vertex; show_things (default from the settings) marks each thing with a circle of its definition radius (unknown types: 16) in its category colour and a facing tick. highlight {linedefs, sectors, things, vertices} draws those elements as highlights (red 3px lines, a red sector tint, white thing outlines); an index past the end of its table fails not_found. For topdown, transform carries {scale_num, scale_den, offset_x, offset_y} with px = offset_x + x*scale_num/scale_den and py = offset_y - y*scale_num/scale_den (both floor-rounded): convert a pixel back with x = (px - offset_x)*scale_den/scale_num and y = (offset_y - py)*scale_den/scale_num. Overlays are topdown-only: underlay {source, units, opacity} draws a reference picture (PNG/JPEG/GIF/BMP by path, file:// or http(s):// URL, or an asset URL) under the map; units {scale_num, scale_den, origin_x, origin_y, flip_y} means exactly what build_map_from_plan's units means, so image pixel (px, py) sits at x = origin_x + px*scale_num/scale_den and y = origin_y - py*scale_num/scale_den (plus when flip_y is false) and the sketch lines up with the map built from it; opacity (default 50, 0..=100 percent) blends the picture over the background scaled by each texel's alpha. grid (8..=1024 map units) draws a coordinate grid under the map, minor lines #2A2A2A and every 8th #3C3C3C; a spacing under 4 pixels on screen is skipped and reported in notes. labels {sectors, linedefs, things, vertices} draws element indices in #FFFF80 with a black outline: sectors at a point guaranteed inside them, linedefs at their midpoint, things and vertices beside their marks. annotations [{x, y, text, color}] draws free text (uppercased, characters outside the 5x7 font as ?, at most 64 rows of 32 characters, default colour #FFFFFF) centred on world coordinates. label_scale (1..=4) magnifies all overlay text (default 2 when the output is at least 1024 pixels wide, else 1). Any overlay parameter with projection \"isometric\" fails invalid_argument; an underlay source that is no readable picture fails format_error. Results report underlay {width, height, map_bounds} (null without one) and notes []. The gamma render setting is applied to the output."
+        description = "Renders a map overview and publishes it as a PNG asset URL: projection doom draws automap-coloured linedefs and thing markers, isometric a tilted take; centre on at/radius or the whole map, highlights draw problem elements, show_things toggles markers, and underlay: {url, units, opacity} puts a sketch picture behind the lines for calibration. Use it to look after every meaningful change."
     )]
     async fn render_topdown(
         &self,
@@ -2792,7 +2792,7 @@ impl Cyberdemon {
 
     /// Renders a compact automap-style view as a `PNG` asset.
     #[tool(
-        description = "Renders a compact automap-style view for quick orientation and publishes it as a PNG asset; returns {map, size, center, radius, asset}. Always the automap look on a black background: one-sided (and secret) lines red, floor-height changes brown, ceiling-height changes yellow, other two-sided lines grey, dontdraw lines hidden. size is the square output edge, 32..=1024 (default 256). center {x, y} is the world point to frame (default: the map centre) and radius the map units from the centre to a window edge, 1..=65536 (default: fit the whole map, padded by one unit); lines are clipped to the square, and an empty map without center and radius fails invalid_argument. palette_colors (default true) takes the line colours from PLAYPAL palette 0 at the vanilla automap indices 176/64/231/96 and the player marker at 209 when the session has a PLAYPAL, else the RGB defaults #FC0000/#BC7848/#FCFC00/#808080/#FFFFFF. player {x, y, angle} draws the white automap arrow, 16 pixels long, facing angle degrees counter-clockwise from east. show_things (default false) marks each thing with a 2x2 pixel dot in its category colour. The gamma render setting is applied to the output; map defaults like every other map tool."
+        description = "Renders a compact automap-style square around a centre point (default the player 1 start) with a radius, and publishes it as a PNG asset: {map, size, center, asset}. Use it for quick orientation between edits; render_topdown is the full overview worth judging in detail."
     )]
     fn render_minimap(
         &self,
@@ -2806,7 +2806,7 @@ impl Cyberdemon {
 
     /// Renders a first-person 3D view as a `PNG` asset.
     #[tool(
-        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG asset; returns {map, camera, width, height, sprites_drawn, masked_columns, problems, asset}. The camera stands at x/y map units with eye height z (default: the camera sector's floor + Doom's 41), faces angle degrees counter-clockwise from east (0 east, 90 north), looks pitch degrees up from level (positive looks up, -60..=60), through fov degrees of horizontal field of view (10..=170) onto width x height pixels. fov, width and height default to the render settings; lighting (\"doom\" | \"flat\" | \"fullbright\") overrides the settings' lighting for this call only. Walls draw the linedef's upper/middle/lower textures with their offsets and Doom's pegging flags, floors and ceilings draw their flats textured, aligned to the world grid like Doom (an F_SKY1 plane draws the sky texture instead, scrolled by the view angle and always full bright; with the sky render option off, sky surfaces show the background colour), all shaded through the COLORMAP by sector light, fake contrast and view depth. Two-sided lines whose faced side carries a middle texture show it as a see-through masked middle (transparent texels let the geometry behind show); masked_columns counts the screen columns that pass painted. While the show_sprites render setting is on, every thing whose definition carries a sprite draws its patch as a distance-scaled billboard in the same transparent pass: Doom's eight-rotation bucketing picks the frame from the viewing angle and the thing's facing (mirror-pair lumps flip automatically), it stands on its sector's floor plus its spawn z (hanging things under the ceiling instead), and it shows only where nearer than the opaque geometry; things outside every sector or closer than 4 units to the camera draw nothing, and a sprite name whose lumps the session lacks or cannot decode adds one `missing sprite NAME` or `unreadable sprite NAME` line to problems without failing the call; sprites_drawn counts the sprites the pass painted at least one pixel of. The result's camera object echoes the effective camera and names the sector holding it; problems lists pictures the scene could not load. Errors: invalid_argument when x/y lies in no sector (the refusal says so), for pitch/fov outside their range, an edge outside 16..=4096 or over the pixel cap, and an unknown lighting name; not_found when no map resolves or the session has no PLAYPAL."
+        description = "Renders a first-person 3D view from a camera inside the map and publishes it as a PNG: an integer column caster with walls, textured planes, pegged faces, sky and depth-tested sprites. The camera defaults to the player 1 start; pass x, y, angle, height and a fov when you need another. Use it to see what you built the way a player will."
     )]
     fn render_view(
         &self,

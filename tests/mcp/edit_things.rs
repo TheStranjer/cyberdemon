@@ -71,14 +71,14 @@ mod tests {
 
     /// Requires `tool` to reject `args` with `invalid_argument`.
     async fn refuse(client: &Client, tool: &str, args: Value) {
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {tool}");
     }
 
     /// Requires `add_thing` to reject `args` with the documented
     /// `Doom`-family field message.
     async fn refuse_doom_field(client: &Client, args: Value) {
-        let (code, message) = call_err(client, "add_thing", args).await;
+        let (code, message, _) = call_err(client, "add_thing", args).await;
         assert_eq!(code, "invalid_argument", "family refusal code");
         assert!(
             message
@@ -293,7 +293,7 @@ mod tests {
     async fn add_thing_names_unknown_flags_and_reports_unknown_maps() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_thing",
             json!({"type": 1_i32, "x": 0_i32, "y": 0_i32, "flags": ["flier"]}),
@@ -304,7 +304,7 @@ mod tests {
             message.contains("'flier'") && message.contains("valid names are"),
             "the error lists the table: {message}"
         );
-        let (missing_code, _) = call_err(
+        let (missing_code, _, _) = call_err(
             &client,
             "add_thing",
             json!({"map": "MAP09", "type": 1_i32, "x": 0_i32, "y": 0_i32}),
@@ -420,14 +420,14 @@ mod tests {
         )
         .await;
         refuse(&client, "edit_thing", json!({"index": 0_i32})).await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "edit_thing", json!({"index": 0_i32, "z": 8_i32})).await;
         assert_eq!(code, "invalid_argument", "a height refuses on a Doom map");
         assert!(
             message.contains("Doom-format things have no tid/z/special/args"),
             "the same family rule as add: {message}"
         );
-        let (missing_code, _) =
+        let (missing_code, _, _) =
             call_err(&client, "edit_thing", json!({"index": 99_i32, "dx": 1_i32})).await;
         assert_eq!(
             missing_code, "not_found",
@@ -460,12 +460,12 @@ mod tests {
         let rows = working_things(&client, "MAP01").await;
         assert_eq!(types_of(&rows), vec![3_001_i64], "only the imp survives");
         assert_eq!(rows[0]["index"], json!(0_i32), "renumbered down to zero");
-        let (missing_code, _) = call_err(&client, "remove_thing", json!({"index": 5_i32})).await;
+        let (missing_code, _, _) = call_err(&client, "remove_thing", json!({"index": 5_i32})).await;
         assert_eq!(
             missing_code, "not_found",
             "an index past the end is missing"
         );
-        let (empty_code, _) = call_err(&client, "remove_thing", json!({"index": []})).await;
+        let (empty_code, _, _) = call_err(&client, "remove_thing", json!({"index": []})).await;
         assert_eq!(empty_code, "invalid_argument", "an empty list refuses");
     }
 }

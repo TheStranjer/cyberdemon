@@ -204,7 +204,7 @@ mod tests {
     async fn get_palette_refuses_an_index_past_the_playpal() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) = call_err(&client, "get_palette", json!({ "index": 14_u64 })).await;
+        let (code, message, _) = call_err(&client, "get_palette", json!({ "index": 14_u64 })).await;
         assert_eq!(code, "not_found", "there is no palette 14");
         assert!(
             message.contains("holds 14 palettes"),
@@ -215,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn get_palette_without_an_iwad_points_at_open_iwad() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "get_palette", json!({})).await;
+        let (code, message, _) = call_err(&client, "get_palette", json!({})).await;
         assert_eq!(code, "not_found", "an empty session has no PLAYPAL");
         assert!(
             message.contains("open_iwad"),
@@ -320,7 +320,7 @@ mod tests {
         );
         let after = call(&client, "get_palette", json!({ "index": 2_u64 })).await;
         assert_eq!(colors_of(&after)[254], "#01FE01", "the inverted ramp");
-        let (code, _) = call_err(&client, "get_palette", json!({ "index": 3_u64 })).await;
+        let (code, _, _) = call_err(&client, "get_palette", json!({ "index": 3_u64 })).await;
         assert_eq!(code, "not_found", "the shortened lump has no entry 3");
     }
 
@@ -408,7 +408,7 @@ mod tests {
     async fn refusing_calls_changes_nothing_and_records_no_history() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (none_code, none_message) = call_err(&client, "set_palette", json!({})).await;
+        let (none_code, none_message, _) = call_err(&client, "set_palette", json!({})).await;
         assert_eq!(none_code, "invalid_argument", "no source given");
         assert!(
             none_message.contains("exactly one"),
@@ -428,7 +428,7 @@ mod tests {
         call_err(&client, "set_palette", json!({ "colors": broken })).await;
         let short = red_hex().into_iter().take(8).collect::<Vec<String>>();
         call_err(&client, "set_palette", json!({ "colors": short })).await;
-        let (range_code, range_message) = call_err(
+        let (range_code, range_message, _) = call_err(
             &client,
             "set_palette",
             json!({ "colors": red_hex(), "index": 20_u64 }),
@@ -443,12 +443,12 @@ mod tests {
         fs::write(&junk, vec![7_u8; 10]).expect("the test file writes");
         let junk_arg = json!({ "source": junk.display().to_string() });
         let missing_arg = json!({ "source": "/definitely-not-here/palette.png" });
-        let (junk_code, _) = call_err(&client, "set_palette", junk_arg).await;
+        let (junk_code, _, _) = call_err(&client, "set_palette", junk_arg).await;
         assert_eq!(
             junk_code, "invalid_argument",
             "neither image nor whole palettes"
         );
-        let (missing_code, _) = call_err(&client, "set_palette", missing_arg).await;
+        let (missing_code, _, _) = call_err(&client, "set_palette", missing_arg).await;
         assert_eq!(missing_code, "not_found", "a missing source file");
         assert!(
             undo_labels(&client).await.is_empty(),

@@ -27,7 +27,8 @@
 //! `playability`, the query-group tests in `query`, the sketch-group tests in
 //! `sketch`, the textures-group tests in
 //! `textures`, the themes-group tests in
-//! `themes`, the validate-group tests in `validate`, and the
+//! `themes`, the validate-group tests in `validate`, the usability-pass
+//! checks in `usability`, and the
 //! documentation-layout
 //! checks in `docs`; every helper is exercised by a test in `server`, and
 //! the real result/error contract is checked end to end through a small
@@ -157,6 +158,9 @@ mod textures;
 #[cfg(test)]
 #[path = "mcp/themes.rs"]
 mod themes;
+#[cfg(test)]
+#[path = "mcp/usability.rs"]
+mod usability;
 #[cfg(test)]
 #[path = "mcp/validate.rs"]
 mod validate;

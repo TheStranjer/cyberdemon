@@ -125,7 +125,7 @@ mod tests {
     async fn save_wad_without_any_known_path_is_invalid_argument() {
         let client = connect().await;
         call(&client, "new_wad", json!({})).await;
-        let (code, message) = call_err(&client, "save_wad", json!({})).await;
+        let (code, message, _) = call_err(&client, "save_wad", json!({})).await;
         assert_eq!(code, "invalid_argument", "no path anywhere code");
         assert!(
             message.contains("pass path"),
@@ -228,7 +228,7 @@ mod tests {
         let base = iwad(dir.path());
         let client = connect().await;
         call(&client, "open_iwad", path_arg(&base)).await;
-        let (code, message) = call_err(&client, "save_wad", path_arg(&base)).await;
+        let (code, message, _) = call_err(&client, "save_wad", path_arg(&base)).await;
         assert_eq!(code, "conflict", "the IWAD layer is protected");
         assert!(
             message.contains("IWAD") && message.contains("pass a different path"),
@@ -242,7 +242,7 @@ mod tests {
         let extra = pwad(dir.path());
         let client = connect().await;
         call(&client, "merge_wad", path_arg(&extra)).await;
-        let (code, message) = call_err(&client, "save_wad", path_arg(&extra)).await;
+        let (code, message, _) = call_err(&client, "save_wad", path_arg(&extra)).await;
         assert_eq!(code, "conflict", "resource layers are protected too");
         assert!(
             message.contains("resource"),
@@ -255,7 +255,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;
         call(&client, "new_wad", json!({})).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "save_wad",
             path_arg(&dir.path().join("gone").join("out.wad")),
@@ -274,7 +274,7 @@ mod tests {
         let extra = pwad(dir.path());
         let client = connect().await;
         call(&client, "open_wad", path_arg(&extra)).await;
-        let (code, message) = call_err(&client, "save_wad", json!({ "path": "out.wad" })).await;
+        let (code, message, _) = call_err(&client, "save_wad", json!({ "path": "out.wad" })).await;
         assert_eq!(code, "invalid_argument", "relative path code");
         assert!(
             message.contains("absolute"),
@@ -287,7 +287,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let out = dir.path().join("out.wad");
         let client = connect().await;
-        let (code, message) = call_err(&client, "save_wad", mode_arg(&out, "sideways")).await;
+        let (code, message, _) = call_err(&client, "save_wad", mode_arg(&out, "sideways")).await;
         assert_eq!(code, "invalid_argument", "unknown mode code");
         assert!(
             message.contains("\"pwad\"") && message.contains("\"full\""),
@@ -303,7 +303,7 @@ mod tests {
         let client = connect().await;
         let mut args = path_arg(&out);
         args["kind"] = json!("EXE");
-        let (code, message) = call_err(&client, "save_wad", args).await;
+        let (code, message, _) = call_err(&client, "save_wad", args).await;
         assert_eq!(code, "invalid_argument", "unknown kind code");
         assert!(
             message.contains("\"PWAD\"") && message.contains("\"IWAD\""),

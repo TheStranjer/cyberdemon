@@ -118,14 +118,14 @@ mod tests {
     /// Requires `tool` to reject `args` with `invalid_argument`.
     async fn refuse(client: &Client, tool: &str, args: Value) {
         let note = args.to_string();
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {tool} {note}");
     }
 
     /// Requires `tool` to reject `args` with `not_found`.
     async fn miss(client: &Client, tool: &str, args: Value) {
         let note = args.to_string();
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, "not_found", "not_found code for {tool} {note}");
     }
 
@@ -267,7 +267,7 @@ mod tests {
     async fn add_linedef_refuses_the_duplicate_by_either_direction() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_linedef",
             json!({"v1": 5_i32, "v2": 0_i32, "front": 0_i32}),
@@ -393,7 +393,7 @@ mod tests {
     async fn hexen_family_maps_take_args_and_refuse_a_tag() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = formats_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_linedef",
             json!({"map": "MAP03", "v1": 0_i32, "v2": 2_i32, "front": 0_i32, "tag": 5_i32}),
@@ -579,7 +579,7 @@ mod tests {
             json!({"index": 0_i32, "back": 99_i32}),
         )
         .await;
-        let (zero_code, zero_message) = call_err(
+        let (zero_code, zero_message, _) = call_err(
             &client,
             "edit_linedef",
             json!({"index": 0_i32, "v2": 0_i32}),
@@ -834,7 +834,8 @@ mod tests {
     async fn remove_linedef_reports_missing_indices_and_empty_lists() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(&client, "remove_linedef", json!({"index": 40_i32})).await;
+        let (code, message, _) =
+            call_err(&client, "remove_linedef", json!({"index": 40_i32})).await;
         assert_eq!(code, "not_found", "past the end of the block");
         assert!(
             message.contains("linedef 40"),
@@ -1031,7 +1032,7 @@ mod tests {
     async fn join_linedefs_refuses_incompatible_pairs() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "join_linedefs",
             json!({"first": 3_i32, "second": 0_i32}),
@@ -1042,7 +1043,7 @@ mod tests {
             message.contains("collinear"),
             "the message names the rule: {message}"
         );
-        let (sector_code, sector_message) = call_err(
+        let (sector_code, sector_message, _) = call_err(
             &client,
             "join_linedefs",
             json!({"first": 6_i32, "second": 3_i32}),
@@ -1066,7 +1067,7 @@ mod tests {
             json!({"v1": 6_i32, "v2": 2_i32, "front": 0_i32}),
         )
         .await;
-        let (block_code, block_message) = call_err(
+        let (block_code, block_message, _) = call_err(
             &client,
             "join_linedefs",
             json!({"first": 0_i32, "second": 7_i32}),
@@ -1092,7 +1093,7 @@ mod tests {
             json!({"index": 7_i32, "set_flags": ["mapped"]}),
         )
         .await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "join_linedefs",
             json!({"first": 0_i32, "second": 7_i32}),

@@ -59,6 +59,22 @@ struct ErrorPayload<'err> {
     error: &'err str,
     /// The human-readable message.
     message: String,
+    /// What to do next: the hint attached with
+    /// [`CyberError::with_hint`], or [`crate::error::default_hint`] for the
+    /// code.
+    hint: String,
+}
+
+/// The `{"error", "message", "hint"}` object [`fail`] reports, shared with
+/// the batch tool's step outcomes so one failure looks the same everywhere.
+#[must_use]
+#[inline]
+pub(crate) fn error_json(error: &CyberError) -> serde_json::Value {
+    serde_json::json!({
+        "error": error.code(),
+        "message": error.message(),
+        "hint": error.hint(),
+    })
 }
 
 /// Turn a serialization failure into the protocol's internal error.
@@ -85,10 +101,13 @@ where
 
 /// Report a domain failure as an errored structured tool result.
 ///
-/// The client sees `{"error": "<code>", "message": "<text>"}` with `is_error`
-/// set; the JSON-RPC layer itself stays healthy. This is the rule for every
-/// tool: missing lumps, bad data or I/O problems return through `fail`, and
-/// `Err(ErrorData)` is reserved for a broken server.
+/// The client sees `{"error": "<code>", "message": "<text>", "hint": "<text>"}`
+/// with `is_error` set; the JSON-RPC layer itself stays healthy. `hint` is the
+/// error's attached [`CyberError::with_hint`] text when a tool site provided
+/// one, else [`crate::error::default_hint`] for the code, so every failure
+/// says what to do next. This is the rule for every tool: missing lumps, bad
+/// data or I/O problems return through `fail`, and `Err(ErrorData)` is
+/// reserved for a broken server.
 ///
 /// # Errors
 ///
@@ -98,7 +117,8 @@ where
 pub fn fail(error: &CyberError) -> Result<CallToolResult, ErrorData> {
     let payload = ErrorPayload {
         error: error.code(),
-        message: error.to_string(),
+        message: error.message(),
+        hint: error.hint(),
     };
     serde_json::to_value(payload)
         .map(CallToolResult::structured_error)
@@ -178,8 +198,26 @@ mod tests {
             Some(json!({
                 "error": "not_found",
                 "message": "lump FLOOR_4 does not exist",
+                "hint": "use a list_* / find_elements / describe_map tool to see what exists",
             })),
             "error object shape"
+        );
+    }
+
+    #[test]
+    fn fail_reports_an_attached_hint_instead_of_the_default() {
+        let error = CyberError::NotFound("lump FLOOR_4 does not exist".to_owned())
+            .with_hint("search_lumps finds lumps by pattern");
+        let result = fail(&error).expect("fail itself does not fail");
+        let content = result.structured_content.expect("structured content");
+        assert_eq!(content["error"], "not_found", "code delegates to inner");
+        assert_eq!(
+            content["message"], "lump FLOOR_4 does not exist",
+            "message delegates to inner: {content}"
+        );
+        assert_eq!(
+            content["hint"], "search_lumps finds lumps by pattern",
+            "hint"
         );
     }
 }

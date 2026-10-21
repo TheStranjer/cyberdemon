@@ -30,8 +30,9 @@
 //! `themes`, the validate-group tests in `validate`, the usability-pass
 //! checks in `usability`, and the
 //! documentation-layout and guide-content
-//! checks in `docs` (cross-references, `Tools:` lines, line budgets and
-//! the `json plan-example` builds); every helper is exercised by a test in
+//! checks in `docs` (cross-references, `Tools:` lines, line budgets,
+//! the `json plan-example` builds and the `json recipe` `run_batch`
+//! checks); every helper is exercised by a test in
 //! `server`, and
 //! the real result/error contract is checked end to end through a small
 //! probe server.

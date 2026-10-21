@@ -7,9 +7,12 @@
 //! [`textures::TextureSet`] loader is public API texture editing will grow
 //! around, `maps`, whose [`maps::params`] wire types and validators the
 //! element-editing tools are built from, `graphics` and `palette`, whose
-//! resolvers the renderers share, and `themes`, whose [`themes::theme_texture`]
+//! resolvers the renderers share, `themes`, whose [`themes::theme_texture`]
 //! is how every role-asking tool (drawing, doors, stairs, the plan builder)
-//! resolves its textures.
+//! resolves its textures, and `query`, whose [`query::replace`] bulk-edit
+//! machinery is public for the same reason as [`textures::TextureSet`]:
+//! not-yet-wired crate-private items would not survive the `dead_code`
+//! check until the `replace_*` tool slices build on them.
 
 pub(crate) mod assets;
 pub(crate) mod audio;
@@ -35,7 +38,7 @@ pub mod palette;
 pub(crate) mod patches;
 pub(crate) mod plan;
 pub(crate) mod playability;
-pub(crate) mod query;
+pub mod query;
 pub(crate) mod render;
 pub(crate) mod scripts;
 pub(crate) mod session;

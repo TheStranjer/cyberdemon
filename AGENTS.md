@@ -277,14 +277,27 @@ src/
                   path, pages the pure `wad::map::describe` rows beside
                   its always-whole map summary, and publishes the same
                   overview, unhighlighted, by default;
-                  `tools/query.rs` is the thin `find_elements` group: it
+                  `tools/query.rs` is the `query` group: `find_elements`
                   flattens the `Query` fields beside `map`/`offset`/
                   `limit` (check the limit first), reads the map and the
                   session's definitions under the same one-lock path the
                   playability tools use, runs the pure
                   `wad::map::query::run_query`, and pages its hits into
                   `{kind, count, indices, rows, next_offset}` with one
-                  compact summary row per kind;
+                  compact summary row per kind; the `bulk_edit` tool is
+                  one `Session::edit_map` step of the pure
+                  `wad::map::bulk::edits` engine over a `find_elements`
+                  selection, with thing-type name resolution, a `max`
+                  guard and a `dry_run` preview; the `replace_texture`/
+                  `replace_flat`/`replace_thing_type` tools are one
+                  `Session::edit` step over the `wad::map::bulk`
+                  replacements, and `tools/query/
+                  replace.rs` holds their shared machinery (the
+                  `MapsSelector` resolution, the multi-map runner, the
+                  `Stock` existence checks, the `ThingRef` doomednum-or-
+                  name resolution behind `replace_thing_type` and the
+                  folded `{maps, total, copied_maps, dry_run, next_steps}`
+                  report);
                   `tools/sketch.rs` is the `sketch` group: `trace_sketch`
                   needs no session at all — it parses `crop`/`max_size`/
                   `ink`/the analysis and vectorize knobs and the plan
@@ -382,6 +395,15 @@ src/
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and
                   shifts, and the removal-engine join),
+                  `map/bulk.rs` + `map/bulk/replace.rs` the pure single-map
+                  replacement passes (`replace_textures`, `replace_flats`,
+                  `replace_thing_types`, the `Face` and `Surface` knobs)
+                  the CD-108 bulk `replace_*` tools fold over maps, and
+                  `map/bulk/edits.rs` the pure field-edit engine
+                  (`FieldEdits`, `EditScope`, `apply`, `Applied`) behind
+                  the CD-108 `bulk_edit` tool: per-kind `set`/`add`
+                  tables over all five element kinds, the family-gated
+                  linedef fields and the named flag edits,
                   `map/placement.rs` the pure thing-placement core: the
                   clearance primitives (`fits`, `keeps_distance`,
                   `boundary_clear`, `axis_points`, `thing_clearance`) the

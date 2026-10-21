@@ -60,6 +60,13 @@
 //! decoded map into the ascending indices of the matching elements, reading
 //! the derived fields through [`geometry`] and [`describe`] and the flag and
 //! definition names through the [`query::QueryContext`] the caller passes.
+//! [`bulk`] is the bulk-editing core: [`bulk::replace`] globs texture
+//! and flat names over a map's sidedef faces and sector surfaces and
+//! rewrites thing types, counting changed fields for the multi-map
+//! `replace_*` tools, and [`bulk::edits`] applies whole
+//! [`bulk::edits::FieldEdits`] set/`add` requests to a selection of
+//! sector, sidedef or vertex rows, validated before any write, for the
+//! `bulk_edit` tool.
 //! [`xlat`] holds the embedded Doom ↔ ZDoom linedef-special
 //! translation table (rows, flags and lookups) and the cross-family thing,
 //! sector and linedef stages [`convert`] runs.
@@ -67,6 +74,7 @@
 pub mod blockmap;
 pub mod build_blockmap;
 pub mod build_reject;
+pub mod bulk;
 pub mod convert;
 pub mod describe;
 pub mod doom;

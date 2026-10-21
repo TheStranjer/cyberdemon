@@ -1,11 +1,13 @@
 //! Server behavior as seen by a real MCP client: identity, tool listing,
-//! the `version` tool, protocol errors, and the real binary over stdio.
+//! the `version` tool, protocol errors, the real binary over stdio, and
+//! the round trip of every `support` picture helper.
 
 #[cfg(test)]
 mod tests {
     use core::time::Duration;
     use std::process::Stdio;
 
+    use cyberdemon::gfx::codec::decode_image;
     use rmcp::ServiceExt as _;
     use rmcp::model::{CallToolRequestParams, ErrorCode, Tool};
     use rmcp::service::ServiceError;
@@ -13,7 +15,10 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::process::Command;
 
-    use crate::support::{call, call_err, connect, connect_probe};
+    use crate::fixtures::iwad;
+    use crate::support::{
+        asset_png, call, call_err, connect, connect_probe, fill_rect, paper_sheet, write_png,
+    };
 
     const EXPECTED_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
@@ -650,5 +655,56 @@ mod tests {
         let (code, message, _) = call_err(&client, "missing", Value::Null).await;
         assert_eq!(code, "not_found", "error code field");
         assert_eq!(message, "probe lump does not exist", "message field");
+    }
+
+    /// Exercises every `support` picture helper in one round trip: build
+    /// a paper sheet, paint a rectangle, write it as a `PNG`, decode the
+    /// bytes back, and fetch a real published asset with `asset_png`.
+    #[tokio::test]
+    async fn the_picture_support_helpers_round_trip() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let mut sheet = paper_sheet(8_u32, 4_u32);
+        fill_rect(&mut sheet, (2_u32, 1_u32, 6_u32, 3_u32), [9_u8, 8, 7, 255]);
+        let source = write_png(dir.path(), "HELPER.png", &sheet);
+        let bytes = std::fs::read(&source).expect("the helper PNG is on disk");
+        let image = decode_image(&bytes).expect("the written PNG decodes");
+        assert_eq!(
+            (image.width, image.height),
+            (8_u32, 4_u32),
+            "the written shape"
+        );
+        assert_eq!(
+            image.get(3, 2),
+            Some([9_u8, 8, 7, 255]),
+            "the painted block"
+        );
+        assert_eq!(
+            image.get(0, 0),
+            Some([255_u8, 255, 255, 255]),
+            "the paper outside the block"
+        );
+        let client = connect().await;
+        let base = iwad(dir.path());
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        let flat = call(&client, "get_flat", json!({ "name": "FLOOR1" })).await;
+        let url = flat["asset"]["url"]
+            .as_str()
+            .expect("get_flat publishes an asset");
+        let fetched = asset_png(url).await;
+        assert_eq!(
+            (fetched.width, fetched.height),
+            (64_u32, 64_u32),
+            "the fixture flat's shape over HTTP"
+        );
+        assert_eq!(
+            fetched.get(63, 63),
+            Some([1_u8, 254, 1, 255]),
+            "the fixture flat's colour over HTTP"
+        );
     }
 }

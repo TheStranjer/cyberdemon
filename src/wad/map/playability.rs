@@ -67,6 +67,7 @@ use reach::fixpoint;
 use reach::touches;
 use specials::Effect;
 use specials::Inventory;
+use specials::LockLine;
 
 /// The shortest two-sided line a player can walk through: twice the 16-unit
 /// player radius. A line shorter than this is reported in
@@ -145,7 +146,10 @@ pub struct LockInfo {
     pub line: usize,
     /// The colour of key the line wants.
     pub color: KeyColor,
-    /// Whether the walk both reached the key and reached a trigger.
+    /// Whether this line's door stands open at the end of the walk: the
+    /// walk both reached the key and worked a trigger, or another line had
+    /// already raised every sector this one acts on - the way the pair of
+    /// room-facing lines of one built door opens whichever side is pressed.
     pub opened: bool,
 }
 
@@ -339,9 +343,30 @@ fn lock_report(inventory: &Inventory, walk: &Run) -> Vec<LockInfo> {
         .map(|lock| LockInfo {
             line: lock.line,
             color: lock.color,
-            opened: walk.opened.contains(&lock.feature),
+            opened: lock_opened(inventory, walk, lock),
         })
         .collect()
+}
+
+/// Whether the walk ends with `lock`'s door up: the line's own feature was
+/// worked, or every sector that feature raises already stands raised, which
+/// is how the room-facing pair of one built door reads from the side nobody
+/// pressed. A lock whose feature raised nothing stays shut.
+fn lock_opened(inventory: &Inventory, walk: &Run, lock: &LockLine) -> bool {
+    if walk.opened.contains(&lock.feature) {
+        return true;
+    }
+    inventory
+        .features
+        .get(lock.feature)
+        .filter(|feature| feature.effect == Effect::Door)
+        .is_some_and(|feature| {
+            !feature.targets.is_empty()
+                && feature
+                    .targets
+                    .iter()
+                    .all(|sector| walk.state.open_doors.contains(sector))
+        })
 }
 
 /// The door sectors no opened feature ever raised.
@@ -362,8 +387,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{
-        ExitInfo, FeatureTargets, KeyColor, KeyInfo, LockInfo, Playability, Teleporter,
-        analyze_playability, feature_targets,
+        BlockerReason, ExitInfo, FeatureTargets, KeyColor, KeyInfo, LockInfo, Playability,
+        Teleporter, analyze_playability, blockers, feature_targets,
     };
     use crate::plan::FeatureDress;
     use crate::plan::compile::compile;
@@ -825,6 +850,57 @@ mod tests {
             found.keys.first().map(|entry| entry.reachable),
             Some(true),
             "and the player walked onto it"
+        );
+    }
+
+    /// The door `add_door` builds between two touching rooms: the slab band
+    /// sits behind both room-facing lines, each carrying the `DR` red action,
+    /// and the room behind the far one stands thirty-two units up.
+    fn paired_red_door() -> Map {
+        let mut map = hall(&[cell(0_i32), slab(0_i32), cell(32_i32)]);
+        let far = map.linedefs.get_mut(1).expect("the hall's far divider");
+        let (front, back) = (far.front, far.back);
+        far.front = back;
+        far.back = front;
+        wire(&mut map, 0, (28_i32, 0_i32, TWO_SIDED));
+        wire(&mut map, 1, (28_i32, 0_i32, TWO_SIDED));
+        stand(&mut map, RED_SKULL, middle(0), 7);
+        map
+    }
+
+    #[test]
+    fn an_unpressed_partner_line_of_a_raised_door_reads_as_opened() {
+        let map = paired_red_door();
+        let found = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);
+        assert_eq!(
+            found.reachable,
+            sectors(&[0, 1]),
+            "the band stands open; the room above it is a step too high",
+        );
+        assert_eq!(
+            found.locks,
+            vec![
+                LockInfo {
+                    line: 0,
+                    color: KeyColor::Red,
+                    opened: true,
+                },
+                LockInfo {
+                    line: 1,
+                    color: KeyColor::Red,
+                    opened: true,
+                },
+            ],
+            "both room-facing lines of the raised band read as opened",
+        );
+        assert!(found.doors_never_opened.is_empty(), "the band opened");
+        let held_out = blockers(&map, FlagFamily::Doom, &found);
+        assert_eq!(
+            held_out
+                .first()
+                .map(|blocker| (&blocker.reason, blocker.sector)),
+            Some((&BlockerReason::StepTooHigh { delta: 32 }, 2_usize)),
+            "the room is held by its step, not by the lock: {held_out:?}",
         );
     }
 

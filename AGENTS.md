@@ -284,7 +284,11 @@ src/
                   playability tools use, runs the pure
                   `wad::map::query::run_query`, and pages its hits into
                   `{kind, count, indices, rows, next_offset}` with one
-                  compact summary row per kind; the `replace_texture`/
+                  compact summary row per kind; the `bulk_edit` tool is
+                  one `Session::edit_map` step of the pure
+                  `wad::map::bulk::edits` engine over a `find_elements`
+                  selection, with thing-type name resolution, a `max`
+                  guard and a `dry_run` preview; the `replace_texture`/
                   `replace_flat`/`replace_thing_type` tools are one
                   `Session::edit` step over the `wad::map::bulk`
                   replacements, and `tools/query/
@@ -397,7 +401,9 @@ src/
                   the CD-108 bulk `replace_*` tools fold over maps, and
                   `map/bulk/edits.rs` the pure field-edit engine
                   (`FieldEdits`, `EditScope`, `apply`, `Applied`) behind
-                  the CD-108 `bulk_edit` tool,
+                  the CD-108 `bulk_edit` tool: per-kind `set`/`add`
+                  tables over all five element kinds, the family-gated
+                  linedef fields and the named flag edits,
                   `map/placement.rs` the pure thing-placement core: the
                   clearance primitives (`fits`, `keeps_distance`,
                   `boundary_clear`, `axis_points`, `thing_clearance`) the

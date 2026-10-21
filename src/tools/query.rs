@@ -1,5 +1,6 @@
 //! Query tools: `find_elements`, the set-valued read behind every
-//! plain-English "all the X" request, and CD-108's bulk `replace_*` swaps.
+//! plain-English "all the X" request, CD-108's bulk `replace_*` swaps and
+//! the `bulk_edit` field editor those reads drive.
 //!
 //! The name globs of `replace_texture` and `replace_flat` and the
 //! doomednum-or-name sides of `replace_thing_type` fold their per-map
@@ -10,7 +11,11 @@
 //! lock exactly like the playability group does, runs the query and pages
 //! the result: `count` totals every hit, `indices` and `rows` carry one
 //! ascending page of the hits with a compact summary per kind, and
-//! `next_offset` names the `offset` where the rest continues. The bulk
+//! `next_offset` names the `offset` where the rest continues. `bulk_edit`
+//! takes the very same selection and hands its indices to the pure
+//! [`crate::wad::map::bulk::edits`] engine as one `Session::edit_map`
+//! step, with a `dry_run` preview and a `max` guard over the matched set.
+//! The bulk
 //! edits act on exactly the elements `find_elements` reports; the
 //! session-facing machinery they share (the `maps` selector, the
 //! one-undo-step-over-many-maps runner, the texture stock check and the
@@ -20,6 +25,7 @@
 
 pub mod replace;
 
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -29,29 +35,40 @@ use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value};
 
 use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
+use crate::plan::things::resolve_thing_kind;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
+use crate::tools::maps::params::edit_result_fragment;
 use crate::tools::query::replace::{
     MapsSelector, ReplaceReport, Replacement, Stock, ThingRef, parse_terms, require_defined_thing,
     require_target, resolve_thing_ref, run_replacement, thing_definitions,
 };
 use crate::tools::{fail, ok};
 use crate::wad::map::Map;
+use crate::wad::map::bulk::edits::{Applied, Change, EditScope, FieldEdits, apply};
 use crate::wad::map::bulk::{Face, Surface, replace_flats, replace_textures, replace_thing_types};
 use crate::wad::map::query::{
     ElementKind, Filter, Query, QueryContext, Within, run_query, side_sector,
 };
+use crate::wad::name::LumpName;
 /// Default row cap for the `indices` and `rows` lists.
 const DEFAULT_LIMIT: usize = 200;
 /// Largest row cap the lists accept.
 const MAX_LIMIT: usize = 1000;
+/// Default `max` for [`Cyberdemon::bulk_edit`]: more matches refuse.
+const DEFAULT_MAX: usize = 5000;
+/// Longest `indices` list a `bulk_edit` report carries.
+const INDEX_PAGE: usize = 500;
+/// Longest `preview` list a `bulk_edit` report carries.
+const PREVIEW_PAGE: usize = 20;
 
 /// Arguments for [`Cyberdemon::find_elements`]: the [`Query`] fields
 /// flattened beside the paging.
@@ -545,6 +562,270 @@ fn thing_type_run(
     Ok(ThingSwapReport { from, to, swap })
 }
 
+/// Arguments for [`Cyberdemon::bulk_edit`]: the [`Query`] fields beside
+/// one [`FieldEdits`] request and the run's knobs.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BulkEditParams {
+    /// The map to edit, e.g. `"MAP01"`. Defaults to the session's active
+    /// map; with none active, the merged view's only map when it holds
+    /// exactly one.
+    #[serde(default)]
+    map: Option<String>,
+    /// The element block to edit: "sectors", "linedefs", "sidedefs",
+    /// "things" or "vertices".
+    kind: ElementKind,
+    /// The filters selecting the elements, exactly as `find_elements`'
+    /// `where`: an empty list edits everything of the kind.
+    #[serde(default, rename = "where")]
+    r#where: Vec<Filter>,
+    /// Bound the selection by region, exactly as `find_elements`'
+    /// `within`.
+    #[serde(default)]
+    within: Option<Within>,
+    /// New values by field name: integers, texture/flat names, and for
+    /// things a doomednum integer or a definition name.
+    #[serde(default)]
+    set: Option<BTreeMap<String, Value>>,
+    /// Integer amounts shifted onto each matched element's current value.
+    #[serde(default)]
+    add: Option<BTreeMap<String, i64>>,
+    /// Flag names to set on each matched linedef or thing.
+    #[serde(default)]
+    flags_set: Option<Vec<String>>,
+    /// Flag names to clear on each matched linedef or thing; a bit named
+    /// on both ends ends up set.
+    #[serde(default)]
+    flags_clear: Option<Vec<String>>,
+    /// Write texture/flat names the merged view lacks without the
+    /// existence check (default `false`). Numbers are never clamped
+    /// either way.
+    #[serde(default)]
+    allow_missing: Option<bool>,
+    /// Run the whole check and report the same numbers over a copy of the
+    /// map, writing nothing and recording no undo step (default `false`).
+    #[serde(default)]
+    dry_run: Option<bool>,
+    /// Refuse (and write nothing) when more than this many elements match
+    /// (default 5000); `max: 0` therefore refuses any non-empty match.
+    #[serde(default)]
+    max: Option<usize>,
+}
+
+/// Structured result of [`Cyberdemon::bulk_edit`]: the engine's [`Applied`]
+/// paged to the documented windows, beside the standard edit fragment.
+#[derive(Debug, Serialize)]
+struct BulkReport {
+    /// Elements the query selected.
+    matched: usize,
+    /// Elements whose values actually changed.
+    changed: usize,
+    /// Ascending indices of the changed elements, at most [`INDEX_PAGE`]
+    /// of them.
+    indices: Vec<usize>,
+    /// Whether [`Self::indices`] left changed indices out.
+    truncated: bool,
+    /// Whether the run only previewed.
+    dry_run: bool,
+    /// Up to [`PREVIEW_PAGE`] before/after change rows.
+    preview: Vec<Change>,
+    /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
+    #[serde(flatten)]
+    edit: JsonMap<String, Value>,
+    /// What to do or look at next.
+    next_steps: Vec<&'static str>,
+}
+
+/// The `next_steps` every written `bulk_edit` report carries.
+const BULK_NEXT_STEPS: [&str; 3] = [
+    "undo takes the whole edit back as one step",
+    "find_elements over the same query reads the new values",
+    "render_topdown looks at the result",
+];
+
+/// The `next_steps` a previewed `bulk_edit` report carries.
+const BULK_DRY_NEXT_STEPS: [&str; 2] = [
+    "nothing was written: run again with dry_run false to apply the edit",
+    "the preview rows list every element that would change, before and after",
+];
+
+/// The extra step a geometry edit's report carries.
+const BULK_NODES_STEP: &str =
+    "nodes_invalidated is true: run build_nodes before playing the map in vanilla Doom";
+
+/// The tool's parameters as one engine [`FieldEdits`].
+fn requested_edits(args: &BulkEditParams) -> FieldEdits {
+    FieldEdits {
+        set: args.set.clone().unwrap_or_default(),
+        add: args.add.clone().unwrap_or_default(),
+        flags_set: args.flags_set.clone().unwrap_or_default(),
+        flags_clear: args.flags_clear.clone().unwrap_or_default(),
+    }
+}
+
+/// The refusal for a call that asks for no field change at all.
+fn nothing_to_change() -> CyberError {
+    CyberError::InvalidArgument(
+        "nothing to change: pass at least one of set, add, flags_set or flags_clear".to_owned(),
+    )
+}
+
+/// The query engine's selection for this call, behind the `max` guard.
+///
+/// # Errors
+///
+/// [`run_query`]'s refusals for a bad field, op or value, and
+/// [`CyberError::LimitExceeded`] when the hits outnumber `max`.
+fn selected(
+    map: &Map,
+    defs: &Definitions,
+    args: &BulkEditParams,
+) -> Result<Vec<usize>, CyberError> {
+    let ctx = QueryContext::new(map.flag_family(), defs);
+    let query = Query {
+        kind: args.kind,
+        r#where: args.r#where.clone(),
+        within: args.within.clone(),
+    };
+    let hits = run_query(map, &ctx, &query)?;
+    let max = args.max.unwrap_or(DEFAULT_MAX);
+    if hits.len() > max {
+        return Err(CyberError::LimitExceeded(format!(
+            "{} {} match this query, above max {max}: nothing was written, \
+             dry_run included. Narrow the selection with where/within, or \
+             raise max to at least {}",
+            hits.len(),
+            args.kind.as_str(),
+            hits.len()
+        )));
+    }
+    Ok(hits)
+}
+
+/// Fold a `type` name on a `things` request into the doomednum the engine
+/// writes; integers and every other kind pass through untouched.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] listing the candidates when the
+/// session's definitions hold no thing with that name, or when one
+/// substring matches several distinct types.
+fn resolve_thing_type(
+    mut edits: FieldEdits,
+    kind: ElementKind,
+    defs: &Definitions,
+) -> Result<FieldEdits, CyberError> {
+    if kind != ElementKind::Things {
+        return Ok(edits);
+    }
+    let Some(text) = edits.set.get("type").and_then(Value::as_str) else {
+        return Ok(edits);
+    };
+    let resolved = resolve_thing_kind(defs, text).map_err(CyberError::InvalidArgument)?;
+    edits
+        .set
+        .insert("type".to_owned(), Value::from(u64::from(resolved)));
+    Ok(edits)
+}
+
+/// The edit fragment a `dry_run` reports: the named map, nothing copied,
+/// nothing invalidated.
+fn dry_fragment(name: LumpName) -> JsonMap<String, Value> {
+    [
+        ("map".to_owned(), Value::String(name.to_string())),
+        ("nodes_invalidated".to_owned(), Value::Bool(false)),
+        ("copied_to_working".to_owned(), Value::Bool(false)),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// The report's `next_steps`, by run mode and whether the step changed
+/// geometry.
+fn bulk_next_steps(dry_run: bool, edit: &JsonMap<String, Value>) -> Vec<&'static str> {
+    let nodes_invalidated = edit
+        .get("nodes_invalidated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut steps: Vec<&'static str> = if dry_run {
+        BULK_DRY_NEXT_STEPS.to_vec()
+    } else {
+        BULK_NEXT_STEPS.to_vec()
+    };
+    if nodes_invalidated {
+        steps.push(BULK_NODES_STEP);
+    }
+    steps
+}
+
+/// [`Applied`] folded into the tool's report, paged to the documented
+/// `indices` and `preview` windows, beside the edit fragment.
+fn bulk_report(applied: Applied, dry_run: bool, edit: JsonMap<String, Value>) -> BulkReport {
+    let truncated = applied.indices.len() > INDEX_PAGE;
+    let next_steps = bulk_next_steps(dry_run, &edit);
+    BulkReport {
+        matched: applied.matched,
+        changed: applied.changed,
+        indices: applied.indices.iter().copied().take(INDEX_PAGE).collect(),
+        truncated,
+        dry_run,
+        preview: applied.preview.into_iter().take(PREVIEW_PAGE).collect(),
+        edit,
+        next_steps,
+    }
+}
+
+/// `bulk_edit`'s work inside the session lock: parse the request, select
+/// with the query engine behind the `max` guard, resolve thing-type names,
+/// and run the pure engine either as a preview over the merged copy or as
+/// one undoable `Session::edit_map` step.
+///
+/// # Errors
+///
+/// [`nothing_to_change`]'s refusal, the map resolvers' errors,
+/// [`selected`]'s and [`resolve_thing_type`]'s refusals, the engine's
+/// (nothing is written behind any of them, and [`Session::edit_map`]
+/// rolls the whole step back on any error inside it) and [`Stock::load`]'s
+/// errors.
+fn bulk_in_session(session: &mut Session, args: &BulkEditParams) -> Result<BulkReport, CyberError> {
+    let requested = requested_edits(args);
+    if requested.is_empty() {
+        return Err(nothing_to_change());
+    }
+    let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let mut map = common::load_map(session, name, Scope::Merged)?;
+    let (sources, _notes) = custom_sources(session)?;
+    let defs = session_definitions(session_game(session), &sources)?;
+    let hits = selected(&map, &defs, args)?;
+    let edits = resolve_thing_type(requested, args.kind, &defs)?;
+    let stock = Stock::load(session)?;
+    let scope = EditScope {
+        format: map.format,
+        family: map.flag_family(),
+        walls: &stock.walls,
+        flats: &stock.flats,
+        allow_missing: args.allow_missing.unwrap_or(false),
+    };
+    if args.dry_run.unwrap_or(false) {
+        let applied = apply(&mut map, args.kind, &hits, &edits, &scope)?;
+        return Ok(bulk_report(applied, true, dry_fragment(name)));
+    }
+    let label = format!("bulk_edit {} ({})", args.kind.as_str(), hits.len());
+    let (applied, report) = session.edit_map(name, &label, |target| {
+        apply(target, args.kind, &hits, &edits, &scope)
+    })?;
+    Ok(bulk_report(applied, false, edit_result_fragment(&report)))
+}
+
+/// `bulk_edit`'s work: the whole request under one session lock.
+///
+/// # Errors
+///
+/// [`bulk_in_session`]'s errors and the poisoned-lock
+/// [`CyberError::Internal`].
+fn bulk_run(state: &AppState, args: &BulkEditParams) -> Result<BulkReport, CyberError> {
+    state.with_session(|session| bulk_in_session(session, args))
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -560,6 +841,20 @@ impl Cyberdemon {
         Parameters(args): Parameters<FindElementsParams>,
     ) -> Result<CallToolResult, ErrorData> {
         match find_run(self.state(), &args) {
+            Ok(report) => ok(&report),
+            Err(error) => fail(&error),
+        }
+    }
+
+    /// Applies one field-edit set to every element of a query selection.
+    #[tool(
+        description = "Query-driven bulk field editing: selects elements exactly like find_elements ({kind, where, within} over one map) and applies the same set/add/flags changes to every matched element as ONE undoable step labelled \"bulk_edit <kind> (<matched>)\". kind is \"sectors\", \"linedefs\", \"sidedefs\", \"things\" or \"vertices\". Fields per kind - settable, and which also take add amounts: sectors floor, ceiling, light, floor_flat, ceiling_flat, special, tag (addable: floor, ceiling, light, tag); sidedefs upper, middle, lower, x_offset, y_offset (addable: x_offset, y_offset; a face name \"-\" always clears); vertices x and y ADD ONLY - a set on vertices is invalid_argument; linedefs special plus tag (Doom family) or special plus arg0..arg4 (Hexen family), never add - naming the other family's field is invalid_argument naming convert_map_format; things type, angle, x, y (addable: angle, x, y). flags_set/flags_clear adjust the flag bits of linedefs and things by name from the map's family tables (blocking, blockmonsters, twosided, secret, mapped, ambush, easy, ...; set applied after clear, so a bit named on both ends ends up set); on the flagless kinds they are invalid_argument. set takes integers and texture/flat name strings; a thing type takes a doomednum integer or a definition name (resolved through the session's definitions, custom DEHACKED/DECORATE included - unknown or ambiguous is invalid_argument listing the candidates); add takes integer amounts shifted onto each element's CURRENT value. Values are NEVER clamped and nothing is half-applied: every resulting value is range-checked first (light 0..=255 and thing angle 0..=359 in every format, thing types u16 and coordinates i16 on binary maps, linedef special u16 on binary Doom and u8 on binary Hexen, args u8 on binary Hexen, the sector ceiling at or above its floor; UDMF is unbounded beyond the model's columns) and one bad value refuses the WHOLE call with invalid_argument naming the element, field and range - validate all matched elements first. Texture/flat names must exist in the merged view (not_found) unless allow_missing: true. max (default 5000) caps the matched set: a query matching more fails limit_exceeded and writes nothing, so max: 0 with matches fails. dry_run: true (default false) runs every check over a copy of the map and reports the same numbers beside a before/after preview, writing nothing and recording no undo step - run it first before large or broad edits. A map a read-only layer holds is copied into the working archive inside the step (copy-on-write). Returns {matched, changed, indices (the changed ones, ascending, capped at 500 with truncated: true when capped), truncated, dry_run, preview (up to 20 {index, before: {field: old}, after: {field: new}} rows; flags report raw bits), map, nodes_invalidated, copied_to_working, next_steps}: one undo takes every changed value on every matched element back as one step. Vertex moves are geometry (nodes_invalidated true, run build_nodes before vanilla play); thing, sector, sidedef and linedef field edits keep the nodes trusted. Select first with find_elements to see the count; see skill/reference/query.md."
+    )]
+    fn bulk_edit(
+        &self,
+        Parameters(args): Parameters<BulkEditParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match bulk_run(self.state(), &args) {
             Ok(report) => ok(&report),
             Err(error) => fail(&error),
         }
@@ -621,21 +916,24 @@ impl Cyberdemon {
 mod tests {
     use std::path::PathBuf;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
-        DEFAULT_LIMIT, FindElementsParams, MAX_LIMIT, ReplaceFlatParams, ReplaceTextureParams,
-        ReplaceThingTypeParams, Row, ThingRef, find_run, flat_run, page_hits, parse_limit, rows,
-        texture_run, thing_type_run,
+        BULK_NODES_STEP, BulkEditParams, DEFAULT_LIMIT, FindElementsParams, INDEX_PAGE, MAX_LIMIT,
+        PREVIEW_PAGE, ReplaceFlatParams, ReplaceTextureParams, ReplaceThingTypeParams, Row,
+        ThingRef, bulk_in_session, bulk_report, bulk_run, common, find_run, flat_run, page_hits,
+        parse_limit, requested_edits, rows, texture_run, thing_type_run,
     };
     use crate::defs::definitions_for;
-    use crate::session::{Layer, LayerRole, Session};
+    use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::state::AppState;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::game::Game;
+    use crate::wad::map::bulk::edits::{Applied, Change};
     use crate::wad::map::query::{ElementKind, Filter, QueryContext};
     use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Thing, Vertex, write_map};
     use crate::wad::name::LumpName;
+    use serde_json::Map as JsonMap;
     /// A parsed test map name.
     fn parsed(text: &str) -> LumpName {
         LumpName::parse(text).expect("test names are valid")
@@ -1217,6 +1515,364 @@ mod tests {
             session.undo_labels(),
             vec!["replace_thing_type 3001 -> 9999"],
             "the escape hatch writes like any other run"
+        );
+    }
+
+    /// Parse `bulk_edit` arguments from wire `JSON`, defaulting `map`.
+    fn bulk_args(wire: Value) -> BulkEditParams {
+        let mut full = wire;
+        full.as_object_mut()
+            .expect("bulk arguments are an object")
+            .entry("map")
+            .or_insert_with(|| json!("MAP01"));
+        serde_json::from_value(full).expect("test bulk arguments parse")
+    }
+
+    /// One `{field, op, value}` filter as wire `JSON`.
+    fn one_filter(field: &str, op: &str, value: &Value) -> Value {
+        json!({"field": field, "op": op, "value": value})
+    }
+
+    #[test]
+    fn requested_edits_folds_the_wire_parts_into_the_engine_request() {
+        let args = bulk_args(json!({
+            "kind": "things",
+            "set": {"angle": 90_i64},
+            "add": {"x": 4_i64},
+            "flags_set": ["ambush"],
+            "flags_clear": [],
+        }));
+        let edits = requested_edits(&args);
+        assert_eq!(
+            edits.set.get("angle"),
+            Some(&json!(90_i64)),
+            "the set map rides"
+        );
+        assert_eq!(edits.add.get("x"), Some(&4_i64), "the amounts ride");
+        assert_eq!(edits.flags_set, vec!["ambush".to_owned()], "the names ride");
+        assert!(edits.flags_clear.is_empty(), "an empty list stays empty");
+        assert!(!edits.is_empty(), "a full request is not empty");
+    }
+
+    #[test]
+    fn bulk_in_session_edits_every_match_in_one_labeled_step() {
+        let mut session = bulk_session();
+        let report = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "sectors", "set": {"light": 96_i64}, "add": {"tag": 2_i64}})),
+        )
+        .expect("the edit runs");
+        let shown = serde_json::to_value(&report).expect("the report serializes");
+        assert_eq!(shown["matched"], json!(2_u64), "both sectors matched");
+        assert_eq!(shown["changed"], json!(2_u64), "both rows moved");
+        assert_eq!(shown["indices"], json!([0_u64, 1_u64]), "ascending");
+        assert_eq!(shown["truncated"], json!(false), "both fit the page");
+        assert_eq!(shown["dry_run"], json!(false), "the edit wrote");
+        assert_eq!(shown["map"], json!("MAP01"), "the fragment names the block");
+        assert_eq!(
+            shown["nodes_invalidated"],
+            json!(false),
+            "lights and tags are properties"
+        );
+        assert_eq!(
+            shown["copied_to_working"],
+            json!(true),
+            "the map came from the layer"
+        );
+        let row = shown["preview"].get(0).expect("a preview row");
+        assert_eq!(
+            row["after"],
+            json!({"light": 96_i64, "tag": 2_i64}),
+            "set and add ride one pass: {row}"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["bulk_edit sectors (2)"],
+            "one labeled step"
+        );
+        assert!(
+            !report.next_steps.contains(&BULK_NODES_STEP),
+            "a property step names no node build: {report:?}"
+        );
+    }
+
+    #[test]
+    fn bulk_in_session_previews_without_writing_or_recording() {
+        let mut session = bulk_session();
+        let report = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({
+                "kind": "sectors",
+                "where": [one_filter("index", "eq", &json!(1_i64))],
+                "add": {"light": 8_i64},
+                "dry_run": true,
+            })),
+        )
+        .expect("the preview runs");
+        let shown = serde_json::to_value(&report).expect("the report serializes");
+        assert_eq!(
+            shown["matched"],
+            json!(1_u64),
+            "the index filter selected one"
+        );
+        assert_eq!(shown["changed"], json!(1_u64), "its light would move");
+        assert_eq!(shown["dry_run"], json!(true), "flagged as a preview");
+        assert_eq!(
+            shown["preview"][0]["before"],
+            json!({"light": 0_i64}),
+            "the past previews"
+        );
+        assert_eq!(
+            shown["preview"][0]["after"],
+            json!({"light": 8_i64}),
+            "and the future"
+        );
+        assert_eq!(
+            shown["copied_to_working"],
+            json!(false),
+            "a preview copies nothing"
+        );
+        assert_eq!(
+            shown["nodes_invalidated"],
+            json!(false),
+            "and invalidates nothing"
+        );
+        assert!(session.working().is_empty(), "the working archive stands");
+        assert!(session.undo_labels().is_empty(), "no history entry");
+        assert_eq!(
+            report.next_steps.len(),
+            2_usize,
+            "the preview carries its steps"
+        );
+    }
+
+    #[test]
+    fn bulk_in_session_refuses_an_empty_request_before_any_read() {
+        let mut session = bulk_session();
+        let error = bulk_in_session(&mut session, &bulk_args(json!({"kind": "sectors"})))
+            .expect_err("no change was asked");
+        assert_eq!(error.code(), "invalid_argument", "empty request code");
+        assert!(
+            error.to_string().contains("nothing to change"),
+            "the message names the parameters: {error}"
+        );
+        assert!(session.undo_labels().is_empty(), "and nothing was recorded");
+    }
+
+    #[test]
+    fn bulk_in_session_guards_the_matched_set_with_max() {
+        let mut session = bulk_session();
+        let error = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "vertices", "max": 1_i64, "add": {"x": 4_i64}})),
+        )
+        .expect_err("two vertices match, max is one");
+        assert_eq!(error.code(), "limit_exceeded", "over max code");
+        let message = error.to_string();
+        assert!(
+            message.contains("max") && message.contains("dry_run") && message.contains("where"),
+            "the refusal names max, dry_run and the narrowing: {message}"
+        );
+        assert!(
+            session.undo_labels().is_empty(),
+            "the guard recorded nothing"
+        );
+        assert!(session.working().is_empty(), "and wrote nothing");
+    }
+
+    #[test]
+    fn bulk_in_session_slides_vertices_as_geometry_and_things_as_property() {
+        let mut session = bulk_session();
+        let slid = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "vertices", "add": {"x": 8_i64}})),
+        )
+        .expect("the slide runs");
+        let shown = serde_json::to_value(&slid).expect("the report serializes");
+        assert_eq!(
+            shown["changed"],
+            json!(2_u64),
+            "both referenced vertices moved"
+        );
+        assert_eq!(
+            shown["nodes_invalidated"],
+            json!(true),
+            "moving referenced vertices is geometry"
+        );
+        assert!(
+            slid.next_steps.contains(&BULK_NODES_STEP),
+            "the refusal names the node build: {slid:?}"
+        );
+        assert_eq!(
+            session.undo_labels(),
+            vec!["bulk_edit vertices (2)"],
+            "one labeled step"
+        );
+        let moved = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({
+                "kind": "things",
+                "where": [one_filter("type", "eq", &json!(3001_i64))],
+                "add": {"x": 16_i64},
+            })),
+        )
+        .expect("the thing move runs");
+        let written = serde_json::to_value(&moved).expect("the report serializes");
+        assert_eq!(written["changed"], json!(1_u64), "the imp slid");
+        assert_eq!(
+            written["nodes_invalidated"],
+            json!(false),
+            "thing moves never touch the nodes"
+        );
+        assert_eq!(
+            written["copied_to_working"],
+            json!(false),
+            "the block was already editable"
+        );
+    }
+
+    #[test]
+    fn bulk_in_session_resolves_the_thing_type_name_and_refuses_the_stray() {
+        let mut session = bulk_session();
+        let swapped = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({
+                "kind": "things",
+                "where": [one_filter("name", "glob", &json!("imp*"))],
+                "set": {"type": "demon"},
+            })),
+        )
+        .expect("the name resolves against the session definitions");
+        let shown = serde_json::to_value(&swapped).expect("the report serializes");
+        assert_eq!(shown["matched"], json!(1_u64), "the glob found the imp");
+        assert_eq!(
+            shown["preview"][0]["after"],
+            json!({"type": 3002_i64}),
+            "the name landed as the doomednum"
+        );
+        let stray = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "things", "set": {"type": "platypus"}})),
+        )
+        .expect_err("nothing is named platypus");
+        assert_eq!(stray.code(), "invalid_argument", "unknown name code");
+        assert!(
+            stray.to_string().contains("get_thing_types"),
+            "the reference is named: {stray}"
+        );
+        assert_eq!(
+            session.undo_labels().len(),
+            1_usize,
+            "the refusal recorded nothing"
+        );
+    }
+
+    #[test]
+    fn bulk_in_session_sets_linedef_flags_by_name() {
+        let mut session = bulk_session();
+        let gated = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "linedefs", "flags_set": ["blockmonsters"]})),
+        )
+        .expect("the flag edit runs");
+        let shown = serde_json::to_value(&gated).expect("the report serializes");
+        assert_eq!(shown["changed"], json!(1_u64), "the fixture line moved");
+        assert_eq!(
+            shown["preview"][0]["after"],
+            json!({"flags": 3_i64}),
+            "blocking stands, blockmonsters goes on"
+        );
+        let map = common::load_map(&session, parsed("MAP01"), Scope::Merged)
+            .expect("the merged block reads");
+        assert_eq!(
+            map.linedefs.first().expect("the fixture line").flags,
+            3_u32,
+            "the bits landed"
+        );
+        let stray = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "linedefs", "flags_set": ["nope"]})),
+        )
+        .expect_err("nope is no flag");
+        assert_eq!(stray.code(), "invalid_argument", "unknown flag code");
+        assert_eq!(
+            session.undo_labels().len(),
+            1_usize,
+            "the refusal recorded nothing"
+        );
+    }
+
+    #[test]
+    fn bulk_in_session_checks_the_stock_and_allow_missing_escapes_it() {
+        let mut session = bulk_session();
+        let missing = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({"kind": "sectors", "set": {"floor_flat": "slime9"}})),
+        )
+        .expect_err("the name is not part of the stock");
+        assert_eq!(missing.code(), "not_found", "missing stock code");
+        assert!(
+            missing.to_string().contains("allow_missing"),
+            "the escape hatch is named: {missing}"
+        );
+        let written = bulk_in_session(
+            &mut session,
+            &bulk_args(json!({
+                "kind": "sectors",
+                "set": {"floor_flat": "slime9"},
+                "allow_missing": true,
+            })),
+        )
+        .expect("the escape admits the name");
+        let shown = serde_json::to_value(&written).expect("the report serializes");
+        assert_eq!(shown["changed"], json!(2_u64), "both sectors took it");
+        assert_eq!(
+            session.undo_labels(),
+            vec!["bulk_edit sectors (2)"],
+            "one labeled step wrote the unstocked names"
+        );
+    }
+
+    #[test]
+    fn bulk_run_reports_the_no_map_refusal_through_the_state() {
+        let state = AppState::default();
+        let error = bulk_run(
+            &state,
+            &bulk_args(json!({"kind": "sectors", "map": "MAP09", "set": {"light": 1_i64}})),
+        )
+        .expect_err("nothing is open");
+        assert_eq!(
+            error.code(),
+            "not_found",
+            "an explicit unknown map is missing"
+        );
+    }
+
+    #[test]
+    fn bulk_report_pages_the_index_and_preview_windows() {
+        let wide = INDEX_PAGE.checked_add(2_usize).expect("the window fits");
+        let applied = Applied {
+            matched: wide,
+            changed: wide,
+            indices: (0..wide).collect(),
+            preview: (0..wide)
+                .take(PREVIEW_PAGE.checked_add(5_usize).expect("window"))
+                .map(|index| Change {
+                    index,
+                    before: json!({"light": 0_i64}),
+                    after: json!({"light": 1_i64}),
+                })
+                .collect(),
+        };
+        let report = bulk_report(applied, false, JsonMap::new());
+        assert_eq!(report.matched, wide, "the counts travel whole");
+        assert_eq!(report.indices.len(), INDEX_PAGE, "the index list is capped");
+        assert!(report.truncated, "and says so");
+        assert_eq!(report.preview.len(), PREVIEW_PAGE, "the preview is capped");
+        assert_eq!(
+            report.next_steps.len(),
+            3_usize,
+            "a plain written run carries the three steps"
         );
     }
 }

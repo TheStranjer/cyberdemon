@@ -1,8 +1,9 @@
 //! The pure per-element field engine behind the `bulk_edit` tool.
 //!
 //! [`apply`] takes one [`FieldEdits`] request (a `set` map, an `add` map
-//! and flag-name lists) to a selection of [`Sector`], [`Sidedef`] or
-//! [`Vertex`] rows of one decoded [`Map`] and reports what moved.
+//! and flag-name lists) to a selection of [`Sector`], [`Sidedef`],
+//! [`Vertex`], [`Linedef`] or [`Thing`] rows of one decoded [`Map`] and
+//! reports what moved.
 //!
 //! Like [`replace`](super::replace) this is a function of the map model
 //! and the passed [`EditScope`] alone: the scope carries the map's
@@ -19,26 +20,38 @@
 //! | sectors | `floor`, `ceiling`, `light`, `floor_flat`, `ceiling_flat`, `special`, `tag` | `floor`, `ceiling`, `light`, `tag` |
 //! | sidedefs | `upper`, `middle`, `lower`, `x_offset`, `y_offset` | `x_offset`, `y_offset` |
 //! | vertices | (none: `set` is refused, `add` only) | `x`, `y` |
+//! | linedefs | `special` and `tag` in the `Doom` family, `special` and `arg0..arg4` in the `Hexen` one ([`EditScope::family`]) | (none: linedef numbers are set, never added) |
+//! | things | `type`, `angle`, `x`, `y` | `angle`, `x`, `y` |
 //!
 //! Any other field name is refused with [`CyberError::InvalidArgument`]
-//! listing the kind's valid fields; `flags_set` and `flags_clear` belong
-//! to linedefs and things, whose [`apply`] arms refuse with a message
-//! naming their fields until the next slice wires those engines in.
+//! listing the kind's valid fields; the other family's linedef names (`tag`
+//! on a `Hexen`-family map, `arg0..arg4` on a `Doom`-family one) refuse
+//! naming the map's family and `convert_map_format`. `flags_set` and
+//! `flags_clear` belong to linedefs and things: their names resolve
+//! through [`from_names`] in the scope's family table for the kind, the
+//! resulting bits are the current ones with the clear mask off and the set
+//! mask on (a bit named on both ends up set), and the preview reports the
+//! raw bitset under `flags`. The three flagless kinds keep refusing flag
+//! lists with a message naming the kinds that carry them.
 //!
 //! Nothing is clamped and nothing is half-applied: every matched element's
 //! resulting values are computed and range-checked first, and only when
 //! the whole selection passes are the rows written. Text fields must name
 //! a stock entry (the scope's sets), except `"-"`, always legal on the
 //! three sidedef faces; a missing name is [`CyberError::NotFound`] unless
-//! `allow_missing`. Numeric results stay in `light`'s `0..=255` in every
-//! format and inside the binary record's columns the scope's format
-//! stores them in (`i16` heights, offsets and coordinates, `u16`
-//! `special` and `tag`); `UDMF` has no such caps beyond the model's
-//! `i32` columns, and a sector's ceiling must end at or above its floor.
+//! `allow_missing`. Numeric results stay in `light`'s `0..=255` and
+//! `angle`'s `0..=359` in every format and inside the binary record's
+//! columns the scope's format stores them in (`i16` heights, offsets and
+//! coordinates; `u16` `special` and `tag` on `Doom`-format lines and all
+//! thing types; `u8` `special` and args on `Hexen`-format lines); `UDMF`
+//! has no such caps beyond the model's `i32` columns, and a sector's
+//! ceiling must end at or above its floor.
 //!
 //! [`Sector`]: crate::wad::map::Sector
 //! [`Sidedef`]: crate::wad::map::Sidedef
 //! [`Vertex`]: crate::wad::map::Vertex
+//! [`Linedef`]: crate::wad::map::Linedef
+//! [`Thing`]: crate::wad::map::Thing
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -49,8 +62,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
-use super::super::flags::FlagFamily;
-use super::super::model::Map;
+use super::super::flags::{FlagFamily, FlagKind, from_names};
+use super::super::model::{Linedef, Map};
 use super::super::query::ElementKind;
 use crate::error::CyberError;
 use crate::wad::classify::MapFormat;
@@ -61,6 +74,14 @@ const NO_TEXTURE: &str = "-";
 const LIGHT_MIN: i64 = 0_i64;
 /// The highest light level the vanilla range allows (`u8::MAX`).
 const LIGHT_MAX: i64 = 255_i64;
+/// The lowest facing angle a thing may end at.
+const ANGLE_MIN: i64 = 0_i64;
+/// The highest facing angle a thing may end at, one below a full circle.
+const ANGLE_MAX: i64 = 359_i64;
+/// The lowest value a `u8` binary column holds.
+const U8_MIN: i64 = 0_i64;
+/// The highest value a `u8` binary column holds (`u8::MAX`).
+const U8_MAX: i64 = 0xFF_i64;
 /// The lowest value an `i16` binary column holds (`i16::MIN`).
 const I16_MIN: i64 = -0x8000_i64;
 /// The highest value an `i16` binary column holds (`i16::MAX`).
@@ -120,8 +141,8 @@ impl FieldEdits {
 pub struct EditScope<'stock> {
     /// The map block's storage format, deciding the binary field ranges.
     pub format: MapFormat,
-    /// The flag family the flag names read from, once the kinds with
-    /// flags are wired in.
+    /// The flag family the `flags_set`/`flags_clear` names of linedefs and
+    /// things read from, and the family that gates the linedef fields.
     pub family: FlagFamily,
     /// The known texture names for the sidedef faces, uppercase.
     pub walls: &'stock BTreeSet<String>,
@@ -160,10 +181,17 @@ pub struct Applied {
 enum NumRange {
     /// The vanilla light level: `0..=255` in every format.
     Light,
+    /// A thing's facing: `0..=359` in every format, never normalised.
+    Angle,
     /// A height, offset or coordinate: an `i16` column on binary maps.
     Small,
     /// A `special` or `tag`: a `u16` column on binary maps.
     Unsigned,
+    /// A linedef's `special`: a `u16` column on binary `Doom`, a `u8`
+    /// column on binary `Hexen`.
+    LineSpecial,
+    /// A `Hexen` script argument: a `u8` column on binary maps.
+    Byte,
 }
 
 /// The stock list one editable text field's name is checked against.
@@ -277,6 +305,83 @@ const VERTEX_FIELDS: &[FieldSpec] = &[
     },
 ];
 
+/// `Doom`-family linedef fields: the action and the trigger tag. The
+/// `Hexen` family stores its parameters in `LINEDEF_HEXEN_FIELDS` instead,
+/// and no linedef number takes an `add` amount.
+const LINEDEF_DOOM_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        name: "special",
+        addable: false,
+        kind: FieldKind::Num(NumRange::LineSpecial),
+    },
+    FieldSpec {
+        name: "tag",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Unsigned),
+    },
+];
+
+/// `Hexen`-family linedef fields: the action and the five script
+/// arguments; `tag` belongs to the `Doom` family and is gated out here.
+const LINEDEF_HEXEN_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        name: "arg0",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Byte),
+    },
+    FieldSpec {
+        name: "arg1",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Byte),
+    },
+    FieldSpec {
+        name: "arg2",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Byte),
+    },
+    FieldSpec {
+        name: "arg3",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Byte),
+    },
+    FieldSpec {
+        name: "arg4",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Byte),
+    },
+    FieldSpec {
+        name: "special",
+        addable: false,
+        kind: FieldKind::Num(NumRange::LineSpecial),
+    },
+];
+
+/// Thing fields: type, facing and position. The facing stays within a
+/// circle in every format; the type is an integer doomednum here, names
+/// resolve in the tool layer.
+const THING_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        name: "angle",
+        addable: true,
+        kind: FieldKind::Num(NumRange::Angle),
+    },
+    FieldSpec {
+        name: "type",
+        addable: false,
+        kind: FieldKind::Num(NumRange::Unsigned),
+    },
+    FieldSpec {
+        name: "x",
+        addable: true,
+        kind: FieldKind::Num(NumRange::Small),
+    },
+    FieldSpec {
+        name: "y",
+        addable: true,
+        kind: FieldKind::Num(NumRange::Small),
+    },
+];
+
 /// Reads one numeric field of the row at an index.
 type NumReader = fn(&Map, usize, &str) -> Option<i32>;
 /// Reads one text field of the row at an index.
@@ -285,6 +390,10 @@ type TextReader = fn(&Map, usize, &str) -> Option<String>;
 type NumWriter = fn(&mut Map, usize, &str, i32);
 /// Writes one planned name onto the row at an index.
 type TextWriter = fn(&mut Map, usize, &str, &str);
+/// Reads the raw flag bits of the row at an index.
+type FlagReader = fn(&Map, usize) -> Option<u32>;
+/// Writes planned raw flag bits onto the row at an index.
+type FlagWriter = fn(&mut Map, usize, u32);
 
 /// The block-specific plumbing one [`apply`] run drives.
 struct KindPlan {
@@ -292,6 +401,9 @@ struct KindPlan {
     thing: &'static str,
     /// The fields this kind edits.
     fields: &'static [FieldSpec],
+    /// The kind's flag table, `None` for the kinds without a `flags`
+    /// column.
+    flag_kind: Option<FlagKind>,
     /// Reads a numeric field of the row at an index.
     get_num: NumReader,
     /// Reads a text field of the row at an index.
@@ -300,37 +412,105 @@ struct KindPlan {
     write_num: NumWriter,
     /// Writes one planned name onto the row at its index.
     write_text: TextWriter,
+    /// Reads the row's flag bits.
+    get_flags: FlagReader,
+    /// Writes the row's flag bits.
+    write_flags: FlagWriter,
 }
 
 /// The sector block's plan.
 const SECTOR_PLAN: KindPlan = KindPlan {
     thing: "sector",
     fields: SECTOR_FIELDS,
+    flag_kind: None,
     get_num: sector_num,
     get_text: sector_text,
     write_num: write_sector_num,
     write_text: write_sector_text,
+    get_flags: no_flags,
+    write_flags: write_no_flags,
 };
 
 /// The sidedef block's plan.
 const SIDEDEF_PLAN: KindPlan = KindPlan {
     thing: "sidedef",
     fields: SIDEDEF_FIELDS,
+    flag_kind: None,
     get_num: side_num,
     get_text: side_text,
     write_num: write_side_num,
     write_text: write_side_text,
+    get_flags: no_flags,
+    write_flags: write_no_flags,
 };
 
 /// The vertex block's plan.
 const VERTEX_PLAN: KindPlan = KindPlan {
     thing: "vertex",
     fields: VERTEX_FIELDS,
+    flag_kind: None,
     get_num: vertex_num,
     get_text: vertex_text,
     write_num: write_vertex_num,
     write_text: write_vertex_text,
+    get_flags: no_flags,
+    write_flags: write_no_flags,
 };
+
+/// The `Doom`-family linedef plan.
+const LINEDEF_DOOM_PLAN: KindPlan = KindPlan {
+    thing: "linedef",
+    fields: LINEDEF_DOOM_FIELDS,
+    flag_kind: Some(FlagKind::Linedef),
+    get_num: line_num,
+    get_text: line_text,
+    write_num: write_line_num,
+    write_text: write_line_text,
+    get_flags: line_flags,
+    write_flags: write_line_flags,
+};
+
+/// The `Hexen`-family linedef plan.
+const LINEDEF_HEXEN_PLAN: KindPlan = KindPlan {
+    thing: "linedef",
+    fields: LINEDEF_HEXEN_FIELDS,
+    flag_kind: Some(FlagKind::Linedef),
+    get_num: line_num,
+    get_text: line_text,
+    write_num: write_line_num,
+    write_text: write_line_text,
+    get_flags: line_flags,
+    write_flags: write_line_flags,
+};
+
+/// The thing plan, shared by both families (only the flag table differs,
+/// and that read goes through the scope's family).
+const THING_PLAN: KindPlan = KindPlan {
+    thing: "thing",
+    fields: THING_FIELDS,
+    flag_kind: Some(FlagKind::Thing),
+    get_num: thing_num,
+    get_text: thing_text,
+    write_num: write_thing_num,
+    write_text: write_thing_text,
+    get_flags: thing_flags,
+    write_flags: write_thing_flags,
+};
+
+/// The block plan one [`apply`] run drives: the linedef table follows the
+/// scope's flag family, everything else is the block itself.
+const fn plan_for(kind: ElementKind, family: FlagFamily) -> &'static KindPlan {
+    match kind {
+        ElementKind::Sectors => &SECTOR_PLAN,
+        ElementKind::Sidedefs => &SIDEDEF_PLAN,
+        ElementKind::Vertices => &VERTEX_PLAN,
+        ElementKind::Linedefs => match family {
+            FlagFamily::Doom => &LINEDEF_DOOM_PLAN,
+            FlagFamily::Hexen => &LINEDEF_HEXEN_PLAN,
+        },
+        ElementKind::Things => &THING_PLAN,
+    }
+}
 
 /// Applies `edits` to the `indices` rows of one element `kind` of `map`.
 ///
@@ -343,16 +523,18 @@ const VERTEX_PLAN: KindPlan = KindPlan {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for an empty request, flag names on
-/// these flagless kinds, a field the kind does not carry or cannot
-/// `add`, a `set` on vertices, the same field in both `set` and `add`, a
-/// value of the wrong type for its field, or a resulting value outside
-/// the field's range or the sector's `ceiling >= floor` rule; each names
-/// the offending field and the rule. [`CyberError::NotFound`] for a
-/// texture/flat name the scope's stock lacks without `allow_missing`, or
-/// for an index past the block.
+/// the flagless kinds, a field the kind does not carry or cannot `add`,
+/// a `set` on vertices, the other flag family's linedef names (naming the
+/// map's family and `convert_map_format`), a flag name the family table
+/// does not hold, the same field in both `set` and `add`, a value of the
+/// wrong type for its field, or a resulting value outside the field's
+/// range or the sector's `ceiling >= floor` rule; each names the offending
+/// field and the rule. [`CyberError::NotFound`] for a texture/flat name
+/// the scope's stock lacks without `allow_missing`, or for an index past
+/// the block.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the CD-108 slice fixes this engine entry point: the next slice's bulk_edit tool calls apply(map, kind, indices, edits, scope) verbatim"
+    reason = "the CD-108 slice fixes this engine entry point: the bulk_edit tool calls apply(map, kind, indices, edits, scope) verbatim"
 )]
 #[inline]
 pub fn apply(
@@ -362,26 +544,12 @@ pub fn apply(
     edits: &FieldEdits,
     scope: &EditScope<'_>,
 ) -> Result<Applied, CyberError> {
-    let plan: &'static KindPlan = match kind {
-        ElementKind::Sectors => &SECTOR_PLAN,
-        ElementKind::Sidedefs => &SIDEDEF_PLAN,
-        ElementKind::Vertices => &VERTEX_PLAN,
-        ElementKind::Linedefs => return apply_linedefs(),
-        ElementKind::Things => return apply_things(),
-    };
-    run(
-        &Job {
-            kind,
-            plan,
-            edits,
-            scope,
-        },
-        map,
-        indices,
-    )
+    let job = new_job(kind, edits, scope)?;
+    run(&job, map, indices)
 }
 
-/// One [`apply`] run: the request, its kind's plan and the scope.
+/// One [`apply`] run: the request, its kind's plan, the scope and the
+/// resolved flag masks.
 struct Job<'req> {
     /// The selected element block.
     kind: ElementKind,
@@ -391,6 +559,10 @@ struct Job<'req> {
     edits: &'req FieldEdits,
     /// Format, flag family and stock sets.
     scope: &'req EditScope<'req>,
+    /// Bits the `flags_set` names carry; `0` without a kind or a name.
+    set_mask: u32,
+    /// Bits the `flags_clear` names carry; `0` without a kind or a name.
+    clear_mask: u32,
 }
 
 /// One selected row's planned values, computed before anything is written.
@@ -401,11 +573,13 @@ struct Pending {
     nums: Vec<(&'static str, i64)>,
     /// Planned names (uppercase, stock-checked) by field name.
     texts: Vec<(&'static str, String)>,
+    /// Planned flag bits, `None` when this request leaves flags alone.
+    flags: Option<u32>,
 }
 
-/// The whole all-or-nothing pass over one map.
+/// The whole all-or-nothing pass over one map. The job's request has
+/// already passed [`new_job`]'s checks by the time this runs.
 fn run(job: &Job<'_>, map: &mut Map, indices: &[usize]) -> Result<Applied, CyberError> {
-    job.check_request()?;
     let targets = job.selection(map, indices)?;
     let matched = targets.len();
     let mut planned: Vec<Pending> = Vec::with_capacity(matched);
@@ -419,9 +593,28 @@ fn run(job: &Job<'_>, map: &mut Map, indices: &[usize]) -> Result<Applied, Cyber
     Ok(report)
 }
 
+/// Builds the run and refuses every request it cannot carry, with the
+/// flag names resolved into the masks [`Job::plan_flags`] applies.
+fn new_job<'req>(
+    kind: ElementKind,
+    edits: &'req FieldEdits,
+    scope: &'req EditScope<'req>,
+) -> Result<Job<'req>, CyberError> {
+    let mut job = Job {
+        kind,
+        plan: plan_for(kind, scope.family),
+        edits,
+        scope,
+        set_mask: 0_u32,
+        clear_mask: 0_u32,
+    };
+    job.check_request()?;
+    Ok(job)
+}
+
 impl Job<'_> {
     /// Refuses a request this kind cannot carry before any map reads.
-    fn check_request(&self) -> Result<(), CyberError> {
+    fn check_request(&mut self) -> Result<(), CyberError> {
         if self.edits.is_empty() {
             return Err(CyberError::InvalidArgument(
                 "nothing to change: pass at least one of set, add, flags_set or \
@@ -436,16 +629,29 @@ impl Job<'_> {
         check_values(self)
     }
 
-    /// Refuses flag names, which these kinds do not store.
-    fn check_flags(&self) -> Result<(), CyberError> {
-        if self.edits.flags_set.is_empty() && self.edits.flags_clear.is_empty() {
-            return Ok(());
+    /// Refuses flag names on the kinds without a `flags` column; resolves
+    /// them into this run's set and clear masks on the kinds with one.
+    fn check_flags(&mut self) -> Result<(), CyberError> {
+        match self.plan.flag_kind {
+            None if self.edits.flags_set.is_empty() && self.edits.flags_clear.is_empty() => Ok(()),
+            None => Err(CyberError::InvalidArgument(format!(
+                "{} have no flags field: flags_set and flags_clear apply to linedefs \
+                 and things",
+                self.kind.as_str()
+            ))),
+            Some(flag_kind) => {
+                self.set_mask = from_names(&self.edits.flags_set, flag_kind, self.scope.family)?;
+                self.clear_mask =
+                    from_names(&self.edits.flags_clear, flag_kind, self.scope.family)?;
+                Ok(())
+            }
         }
-        Err(CyberError::InvalidArgument(format!(
-            "{} have no flags field: flags_set and flags_clear apply to linedefs \
-             and things",
-            self.kind.as_str()
-        )))
+    }
+
+    /// Whether this request touches the row's `flags` column.
+    fn carries_flags(&self) -> bool {
+        self.plan.flag_kind.is_some()
+            && !(self.edits.flags_set.is_empty() && self.edits.flags_clear.is_empty())
     }
 
     /// Refuses a `set` on vertices and every field name outside the table.
@@ -488,15 +694,20 @@ impl Job<'_> {
         )))
     }
 
-    /// The table entry a request name refers to.
+    /// The table entry a request name refers to. The other flag family's
+    /// linedef names refuse with their own message.
     fn field(&self, key: &str) -> Result<&'static FieldSpec, CyberError> {
-        find_field(self.plan.fields, key).ok_or_else(|| {
-            CyberError::InvalidArgument(format!(
-                "unknown field '{key}' for {}: valid fields are {}",
-                self.kind.as_str(),
-                names_of(self.plan.fields, false)
-            ))
-        })
+        if let Some(spec) = find_field(self.plan.fields, key) {
+            return Ok(spec);
+        }
+        if self.kind == ElementKind::Linedefs && wrong_family(self.scope.family, key) {
+            return Err(wrong_family_error(self.scope.family, key));
+        }
+        Err(CyberError::InvalidArgument(format!(
+            "unknown field '{key}' for {}: valid fields are {}",
+            self.kind.as_str(),
+            names_of(self.plan.fields, false)
+        )))
     }
 
     /// The sorted, deduplicated selection, refused past the block's end.
@@ -519,12 +730,27 @@ impl Job<'_> {
             index,
             nums: Vec::new(),
             texts: Vec::new(),
+            flags: None,
         };
         plan_set(self, &mut pending)?;
         plan_add(self, map, &mut pending)?;
+        self.plan_flags(map, &mut pending)?;
         check_numbers(self, map, &pending)?;
         self.check_height_order(map, &pending)?;
         Ok(pending)
+    }
+
+    /// Plans the row's resulting flag bits: the clear mask off first, the
+    /// set mask on last, so a bit named on both ends comes out set.
+    fn plan_flags(&self, map: &Map, pending: &mut Pending) -> Result<(), CyberError> {
+        if !self.carries_flags() {
+            return Ok(());
+        }
+        let Some(current) = (self.plan.get_flags)(map, pending.index) else {
+            return Err(self.vanished("flags"));
+        };
+        pending.flags = Some(self.set_mask | (current & !self.clear_mask));
+        Ok(())
     }
 
     /// Refuses one resulting numeric value outside its field's range.
@@ -594,13 +820,22 @@ impl Job<'_> {
 fn check_add_fields(job: &Job<'_>) -> Result<(), CyberError> {
     for key in job.edits.add.keys() {
         let spec = job.field(key)?;
-        if !spec.addable {
+        if spec.addable {
+            continue;
+        }
+        let addable = names_of(job.plan.fields, true);
+        if addable.is_empty() {
             return Err(CyberError::InvalidArgument(format!(
-                "field '{key}' is not addable on {}: addable fields are {}",
+                "field '{key}' is not addable on {}: {} numbers are set, never \
+                 added to",
                 job.kind.as_str(),
-                names_of(job.plan.fields, true)
+                job.plan.thing
             )));
         }
+        return Err(CyberError::InvalidArgument(format!(
+            "field '{key}' is not addable on {}: addable fields are {addable}",
+            job.kind.as_str()
+        )));
     }
     Ok(())
 }
@@ -718,6 +953,9 @@ fn commit(job: &Job<'_>, map: &mut Map, pending: &Pending) -> Result<(), CyberEr
     for planned in &pending.texts {
         (job.plan.write_text)(map, pending.index, planned.0, &planned.1);
     }
+    if let Some(bits) = pending.flags {
+        (job.plan.write_flags)(map, pending.index, bits);
+    }
     Ok(())
 }
 
@@ -756,6 +994,11 @@ fn diffs(job: &Job<'_>, map: &Map, pending: &Pending) -> Option<Change> {
             after.push((spec.name.to_owned(), new));
         }
     }
+    if let Some((old, new)) = flags_pair(job, map, pending) {
+        changed |= old != new;
+        before.push(("flags".to_owned(), old));
+        after.push(("flags".to_owned(), new));
+    }
     if !changed {
         return None;
     }
@@ -764,6 +1007,16 @@ fn diffs(job: &Job<'_>, map: &Map, pending: &Pending) -> Option<Change> {
         before: into_object(before),
         after: into_object(after),
     })
+}
+
+/// The before/after pair of the planned flag bits, if this row plans them.
+fn flags_pair(job: &Job<'_>, map: &Map, pending: &Pending) -> Option<(Value, Value)> {
+    let planned = pending.flags?;
+    let current = (job.plan.get_flags)(map, pending.index)?;
+    Some((
+        Value::from(u64::from(current)),
+        Value::from(u64::from(planned)),
+    ))
 }
 
 /// The before/after pair of a planned numeric field, if this row plans one.
@@ -805,17 +1058,60 @@ fn names_of(fields: &[FieldSpec], addable_only: bool) -> String {
 /// The inclusive bounds `range` enforces on a map stored in `format`.
 fn bounds(range: NumRange, format: MapFormat) -> (i64, i64) {
     if format == MapFormat::Udmf {
-        let storage = matches!(range, NumRange::Small | NumRange::Unsigned);
-        if storage {
-            return (I32_MIN, I32_MAX);
-        }
-        return (LIGHT_MIN, LIGHT_MAX);
+        return udmf_bounds(range);
     }
     match range {
         NumRange::Light => (LIGHT_MIN, LIGHT_MAX),
+        NumRange::Angle => (ANGLE_MIN, ANGLE_MAX),
         NumRange::Small => (I16_MIN, I16_MAX),
         NumRange::Unsigned => (U16_MIN, U16_MAX),
+        NumRange::LineSpecial => line_special_bounds(format),
+        NumRange::Byte => (U8_MIN, U8_MAX),
     }
+}
+
+/// `UDMF` keeps only the format-independent caps; everything else lives
+/// in the model's `i32` columns.
+const fn udmf_bounds(range: NumRange) -> (i64, i64) {
+    match range {
+        NumRange::Light => (LIGHT_MIN, LIGHT_MAX),
+        NumRange::Angle => (ANGLE_MIN, ANGLE_MAX),
+        NumRange::Small | NumRange::Unsigned | NumRange::LineSpecial | NumRange::Byte => {
+            (I32_MIN, I32_MAX)
+        }
+    }
+}
+
+/// A `Doom` record stores the linedef `special` as `u16`, a `Hexen` one
+/// as `u8` (the `UDMF` case never reaches here).
+const fn line_special_bounds(format: MapFormat) -> (i64, i64) {
+    match format {
+        MapFormat::Doom => (U16_MIN, U16_MAX),
+        MapFormat::Hexen | MapFormat::Udmf => (U8_MIN, U8_MAX),
+    }
+}
+
+/// Whether `key` names a linedef field only the other flag family stores.
+fn wrong_family(family: FlagFamily, key: &str) -> bool {
+    match family {
+        FlagFamily::Doom => matches!(key, "arg0" | "arg1" | "arg2" | "arg3" | "arg4"),
+        FlagFamily::Hexen => key == "tag",
+    }
+}
+
+/// The refusal naming the map's family, the fields it does store and the
+/// tool that changes families.
+fn wrong_family_error(family: FlagFamily, key: &str) -> CyberError {
+    let (wanted, stored) = match family {
+        FlagFamily::Doom => ("Hexen", "special and tag"),
+        FlagFamily::Hexen => ("Doom", "special, arg0, arg1, arg2, arg3 and arg4"),
+    };
+    CyberError::InvalidArgument(format!(
+        "linedef field '{key}' belongs to the {wanted} family: this map stores the \
+         {} family, whose settable linedef fields are {stored}; run convert_map_format \
+         to move the map between families",
+        family.as_str()
+    ))
 }
 
 /// The integer a numeric field's set value carries.
@@ -964,29 +1260,122 @@ fn write_vertex_num(map: &mut Map, index: usize, field: &str, number: i32) {
 /// Vertices store no text fields, so this writes nothing.
 const fn write_vertex_text(_map: &mut Map, _index: usize, _field: &str, _name: &str) {}
 
-/// The refusal for a linedef selection: `bulk_edit` covers sectors,
-/// sidedefs and vertices here, and the linedef fields (`flags`,
-/// `special`, tag or `args`, `v1` and `v2`) land with the next bulk
-/// slice's engine; until then this names the way forward.
-fn apply_linedefs() -> Result<Applied, CyberError> {
-    Err(CyberError::InvalidArgument(
-        "linedef bulk editing is not wired yet: it will cover flags, special, tag, \
-         args, v1 and v2; until then use edit_linedef per line"
-            .to_owned(),
-    ))
+/// Reads the numeric linedef field `field` of `map`'s row `index`.
+fn line_num(map: &Map, index: usize, field: &str) -> Option<i32> {
+    let row = map.linedefs.get(index)?;
+    match field {
+        "special" => Some(row.special),
+        "tag" => Some(row.tag),
+        other => arg_slot(other).and_then(|slot| row.args.get(slot).copied()),
+    }
 }
 
-/// The refusal for a thing selection: `bulk_edit` covers sectors,
-/// sidedefs and vertices here, and the thing fields (position, facing,
-/// `type`, `flags`, `tid` and friends) land with the next bulk slice's
-/// engine; until then this names the way forward.
-fn apply_things() -> Result<Applied, CyberError> {
-    Err(CyberError::InvalidArgument(
-        "thing bulk editing is not wired yet: it will cover x, y, z, angle, type, \
-         flags, tid, special and args; until then use edit_thing per thing"
-            .to_owned(),
-    ))
+/// Linedefs store no text fields, so this reads none.
+const fn line_text(_map: &Map, _index: usize, _field: &str) -> Option<String> {
+    None
 }
+
+/// Writes one planned integer onto a linedef row.
+fn write_line_num(map: &mut Map, index: usize, field: &str, number: i32) {
+    let Some(row) = map.linedefs.get_mut(index) else {
+        return;
+    };
+    match field {
+        "special" => row.special = number,
+        "tag" => row.tag = number,
+        other => write_arg(row, other, number),
+    }
+}
+
+/// Linedefs store no text fields, so this writes nothing.
+const fn write_line_text(_map: &mut Map, _index: usize, _field: &str, _name: &str) {}
+
+/// The `arg0..arg4` slot one field name reads, `None` for any other name.
+fn arg_slot(field: &str) -> Option<usize> {
+    match field {
+        "arg0" => Some(0_usize),
+        "arg1" => Some(1_usize),
+        "arg2" => Some(2_usize),
+        "arg3" => Some(3_usize),
+        "arg4" => Some(4_usize),
+        _ => None,
+    }
+}
+
+/// Writes one planned integer onto the argument slot `field` names.
+fn write_arg(row: &mut Linedef, field: &str, number: i32) {
+    if let Some(cell) = arg_slot(field).and_then(|slot| row.args.get_mut(slot)) {
+        *cell = number;
+    }
+}
+
+/// Reads the numeric thing field `field` of `map`'s row `index`.
+fn thing_num(map: &Map, index: usize, field: &str) -> Option<i32> {
+    let row = map.things.get(index)?;
+    match field {
+        "angle" => Some(row.angle),
+        "type" => Some(row.kind),
+        "x" => Some(row.x),
+        "y" => Some(row.y),
+        _ => None,
+    }
+}
+
+/// Things store no text fields, so this reads none.
+const fn thing_text(_map: &Map, _index: usize, _field: &str) -> Option<String> {
+    None
+}
+
+/// Writes one planned integer onto a thing row.
+fn write_thing_num(map: &mut Map, index: usize, field: &str, number: i32) {
+    let Some(row) = map.things.get_mut(index) else {
+        return;
+    };
+    match field {
+        "angle" => row.angle = number,
+        "type" => row.kind = number,
+        "x" => row.x = number,
+        "y" => row.y = number,
+        _ => {}
+    }
+}
+
+/// Things store no text fields, so this writes nothing.
+const fn write_thing_text(_map: &mut Map, _index: usize, _field: &str, _name: &str) {}
+
+/// Reads the flag bits of `map`'s linedef row `index`.
+fn line_flags(map: &Map, index: usize) -> Option<u32> {
+    let row = map.linedefs.get(index)?;
+    Some(row.flags)
+}
+
+/// Writes planned flag bits onto `map`'s linedef row `index`.
+fn write_line_flags(map: &mut Map, index: usize, bits: u32) {
+    if let Some(row) = map.linedefs.get_mut(index) {
+        row.flags = bits;
+    }
+}
+
+/// Reads the flag bits of `map`'s thing row `index`.
+fn thing_flags(map: &Map, index: usize) -> Option<u32> {
+    let row = map.things.get(index)?;
+    Some(row.flags)
+}
+
+/// Writes planned flag bits onto `map`'s thing row `index`.
+fn write_thing_flags(map: &mut Map, index: usize, bits: u32) {
+    if let Some(row) = map.things.get_mut(index) {
+        row.flags = bits;
+    }
+}
+
+/// The kinds without a `flags` column read no bits.
+const fn no_flags(_map: &Map, _index: usize) -> Option<u32> {
+    None
+}
+
+/// The kinds without a `flags` column write no bits.
+const fn write_no_flags(_map: &mut Map, _index: usize, _bits: u32) {}
 
 #[cfg(test)]
 mod tests {
@@ -998,9 +1387,9 @@ mod tests {
 
     use super::{Applied, Change, EditScope, FieldEdits, apply};
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::flags::FlagFamily;
+    use crate::wad::map::flags::{FlagFamily, FlagKind, to_names};
     use crate::wad::map::query::ElementKind;
-    use crate::wad::map::{Map, Sector, Sidedef, Vertex};
+    use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 
     /// The test stock: the names the sample map's textures and flats
     /// come from, and the scopes the engine runs under.
@@ -1025,6 +1414,17 @@ mod tests {
             EditScope {
                 format: MapFormat::Doom,
                 family: FlagFamily::Doom,
+                walls: &self.walls,
+                flats: &self.flats,
+                allow_missing: false,
+            }
+        }
+
+        /// The binary `Hexen` scope over this stock.
+        fn hexen(&self) -> EditScope<'_> {
+            EditScope {
+                format: MapFormat::Hexen,
+                family: FlagFamily::Hexen,
                 walls: &self.walls,
                 flats: &self.flats,
                 allow_missing: false,
@@ -1084,59 +1484,133 @@ mod tests {
         }
     }
 
-    /// The sample map: two vertices, two sidedefs, two sectors.
+    /// A request carrying only flag names.
+    fn flags_request(set: &[&str], clear: &[&str]) -> FieldEdits {
+        FieldEdits {
+            flags_set: set.iter().copied().map(str::to_owned).collect(),
+            flags_clear: clear.iter().copied().map(str::to_owned).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A vertex at `x`/`y`.
+    fn vertex(x: i32, y: i32) -> Vertex {
+        Vertex {
+            x,
+            y,
+            ..Default::default()
+        }
+    }
+
+    /// A fully visible spawn of `kind` at `x`/`y` facing `angle`.
+    fn spawn(kind: i32, x: i32, y: i32, angle: i32) -> Thing {
+        Thing {
+            kind,
+            x,
+            y,
+            angle,
+            flags: 7_u32,
+            ..Default::default()
+        }
+    }
+
+    /// The sample lines: a `Doom`-family action line with sidedef 0 in
+    /// front, and a plain two-sided one.
+    fn sample_lines() -> Vec<Linedef> {
+        vec![
+            Linedef {
+                v1: 0_usize,
+                v2: 1_usize,
+                flags: 1_u32,
+                special: 10_i32,
+                tag: 3_i32,
+                front: Some(0_usize),
+                ..Default::default()
+            },
+            Linedef {
+                v1: 1_usize,
+                v2: 0_usize,
+                flags: 4_u32,
+                front: Some(0_usize),
+                back: Some(1_usize),
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// The sample surfaces: both `"-"` uppers, one wearing a `BRICK1`
+    /// lower, the other shifted off its seam.
+    fn sample_sides() -> Vec<Sidedef> {
+        vec![
+            Sidedef {
+                upper: "-".to_owned(),
+                middle: "STARTAN1".to_owned(),
+                lower: "BRICK1".to_owned(),
+                ..Default::default()
+            },
+            Sidedef {
+                upper: "-".to_owned(),
+                middle: "STARTAN1".to_owned(),
+                lower: "-".to_owned(),
+                x_offset: 8_i32,
+                y_offset: -8_i32,
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// The sample rooms: the plain hall and the tagged, brighter back
+    /// room on `FLAT1`.
+    fn sample_sectors() -> Vec<Sector> {
+        vec![
+            Sector {
+                floor_height: 0_i32,
+                ceiling_height: 128_i32,
+                floor_flat: "FLOOR4_8".to_owned(),
+                ceiling_flat: "CEIL5".to_owned(),
+                light: 160_i32,
+                ..Default::default()
+            },
+            Sector {
+                floor_height: 32_i32,
+                ceiling_height: 128_i32,
+                floor_flat: "FLAT1".to_owned(),
+                ceiling_flat: "FLAT1".to_owned(),
+                light: 192_i32,
+                special: 9_i32,
+                tag: 1_i32,
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// The sample map: two vertices, two lines, two things, two sidedefs
+    /// and two sectors.
     fn sample_map() -> Map {
         Map {
-            vertices: vec![
-                Vertex {
-                    x: 0_i32,
-                    y: 0_i32,
-                    ..Default::default()
-                },
-                Vertex {
-                    x: 128_i32,
-                    y: 0_i32,
-                    ..Default::default()
-                },
+            vertices: vec![vertex(0_i32, 0_i32), vertex(128_i32, 0_i32)],
+            linedefs: sample_lines(),
+            things: vec![
+                spawn(3001_i32, 64_i32, 128_i32, 90_i32),
+                spawn(1_i32, -64_i32, -128_i32, 0_i32),
             ],
-            sidedefs: vec![
-                Sidedef {
-                    upper: "-".to_owned(),
-                    middle: "STARTAN1".to_owned(),
-                    lower: "BRICK1".to_owned(),
-                    ..Default::default()
-                },
-                Sidedef {
-                    upper: "-".to_owned(),
-                    middle: "STARTAN1".to_owned(),
-                    lower: "-".to_owned(),
-                    x_offset: 8_i32,
-                    y_offset: -8_i32,
-                    ..Default::default()
-                },
-            ],
-            sectors: vec![
-                Sector {
-                    floor_height: 0_i32,
-                    ceiling_height: 128_i32,
-                    floor_flat: "FLOOR4_8".to_owned(),
-                    ceiling_flat: "CEIL5".to_owned(),
-                    light: 160_i32,
-                    ..Default::default()
-                },
-                Sector {
-                    floor_height: 32_i32,
-                    ceiling_height: 128_i32,
-                    floor_flat: "FLAT1".to_owned(),
-                    ceiling_flat: "FLAT1".to_owned(),
-                    light: 192_i32,
-                    special: 9_i32,
-                    tag: 1_i32,
-                    ..Default::default()
-                },
-            ],
+            sidedefs: sample_sides(),
+            sectors: sample_sectors(),
             ..Map::default()
         }
+    }
+
+    /// The sample block as a binary `Hexen` map: the first line carries
+    /// `Hexen` script arguments.
+    fn hexen_map() -> Map {
+        let mut map = sample_map();
+        map.format = MapFormat::Hexen;
+        let line = map
+            .linedefs
+            .get_mut(0_usize)
+            .expect("the fixture has linedefs");
+        line.args = [7_i32, 0_i32, 0_i32, 0_i32, 250_i32];
+        map
     }
 
     /// The stored value of `key` on `row`, read through its serialization.
@@ -1622,36 +2096,446 @@ mod tests {
         }
     }
 
-    /// Linedefs and things refuse by name until the next slice's engines.
+    /// `Doom`-family linedefs set their action and tag, refuse any `add`
+    /// and keep the `u16` columns.
     #[test]
-    fn linedefs_and_things_refuse_with_their_coming_fields() {
+    fn linedef_numbers_set_and_never_add() {
         let stock = Stock::new();
         let scope = stock.doom();
         let mut map = sample_map();
-        let before = map.clone();
-        let request = set_request(&[("light", json!(1_i64))]);
-        let line_error = apply(&mut map, ElementKind::Linedefs, &[0], &request, &scope)
-            .expect_err("linedef support lands next");
+        let applied = apply(
+            &mut map,
+            ElementKind::Linedefs,
+            &[0, 1],
+            &set_request(&[("special", json!(88_i64)), ("tag", json!(5_i64))]),
+            &scope,
+        )
+        .expect("special and tag set");
+        assert_eq!(applied.matched, 2_usize, "both lines matched");
+        assert_eq!(applied.changed, 2_usize, "both lines moved");
+        assert_eq!(map.linedefs[0].special, 88_i32, "the action landed");
+        assert_eq!(map.linedefs[1].tag, 5_i32, "and the tag");
+        let row = applied.preview.first().expect("one preview row");
         assert_eq!(
-            line_error.code(),
-            "invalid_argument",
-            "a linedef selection refuses"
+            row.before.get("special"),
+            Some(&json!(10_i64)),
+            "the old action previews"
         );
-        let line_message = line_error.to_string();
+        assert_eq!(row.after.get("tag"), Some(&json!(5_i64)), "and the new tag");
+        let error = apply(
+            &mut map,
+            ElementKind::Linedefs,
+            &[0],
+            &add_request(&[("tag", 1_i64)]),
+            &scope,
+        )
+        .expect_err("linedef numbers are never added to");
+        assert_eq!(error.code(), "invalid_argument", "linedef add code");
         assert!(
-            line_message.contains("flags")
-                && line_message.contains("args")
-                && line_message.contains("edit_linedef"),
-            "the refusal names the coming fields and the way forward: {line_message}"
+            error
+                .to_string()
+                .contains("linedef numbers are set, never added to"),
+            "the refusal says so: {error}"
         );
-        let spawn_error = apply(&mut map, ElementKind::Things, &[0], &request, &scope)
-            .expect_err("thing support lands next");
-        let spawn_message = spawn_error.to_string();
+        let over = apply(
+            &mut map,
+            ElementKind::Linedefs,
+            &[0],
+            &set_request(&[("tag", json!(0x1_0000_i64))]),
+            &scope,
+        )
+        .expect_err("65536 leaves the u16 tag column");
         assert!(
-            spawn_message.contains("angle") && spawn_message.contains("edit_thing"),
-            "and the same for things: {spawn_message}"
+            over.to_string()
+                .contains("linedef 0 tag would become 65536; tag must stay within 0..=65535"),
+            "the refusal names row, field and range: {over}"
         );
-        assert_eq!(map, before, "nothing was written");
+    }
+
+    /// The `Hexen` family sets `special` and the script arguments; a bad
+    /// `arg4` holds the whole selection back, the legal `arg0` included.
+    #[test]
+    fn hexen_linedef_fields_apply_and_validate_as_one() {
+        let stock = Stock::new();
+        let scope = stock.hexen();
+        let mut map = hexen_map();
+        let applied = apply(
+            &mut map,
+            ElementKind::Linedefs,
+            &[0, 1],
+            &set_request(&[("arg0", json!(3_i64)), ("special", json!(80_i64))]),
+            &scope,
+        )
+        .expect("args and special set on a Hexen map");
+        assert_eq!(applied.changed, 2_usize, "both lines moved");
+        assert_eq!(map.linedefs[0].args[0], 3_i32, "arg0 landed");
+        assert_eq!(map.linedefs[0].special, 80_i32, "and the action");
+        assert_eq!(
+            map.linedefs[0].args[4], 250_i32,
+            "the untouched argument stands"
+        );
+        let row = applied.preview.first().expect("one preview row");
+        assert_eq!(
+            row.before.get("arg0"),
+            Some(&json!(7_i64)),
+            "the argument previews its past"
+        );
+        assert_eq!(row.after.get("arg0"), Some(&json!(3_i64)), "and its future");
+        let mut standing = hexen_map();
+        let error = apply(
+            &mut standing,
+            ElementKind::Linedefs,
+            &[0, 1],
+            &set_request(&[("arg0", json!(9_i64)), ("arg4", json!(300_i64))]),
+            &scope,
+        )
+        .expect_err("300 leaves the u8 argument column");
+        assert_eq!(error.code(), "invalid_argument", "arg4 range code");
+        assert!(
+            error
+                .to_string()
+                .contains("linedef 0 arg4 would become 300; arg4 must stay within 0..=255"),
+            "the refusal names the offending row: {error}"
+        );
+        assert_eq!(standing, hexen_map(), "the legal arg0 never landed either");
+    }
+
+    /// The other family's linedef names refuse, naming the map's family
+    /// and `convert_map_format`.
+    #[test]
+    fn linedef_fields_are_gated_to_their_family() {
+        let stock = Stock::new();
+        let mut map = sample_map();
+        let doom_error = apply(
+            &mut map,
+            ElementKind::Linedefs,
+            &[0],
+            &set_request(&[("arg0", json!(7_i64))]),
+            &stock.doom(),
+        )
+        .expect_err("args are Hexen-only");
+        assert_eq!(doom_error.code(), "invalid_argument", "family gate code");
+        let doom_message = doom_error.to_string();
+        assert!(
+            doom_message.contains("doom family")
+                && doom_message.contains("special and tag")
+                && doom_message.contains("convert_map_format"),
+            "the refusal names the stored family, its fields and the fix: {doom_message}"
+        );
+        let mut standing = hexen_map();
+        let hexen_error = apply(
+            &mut standing,
+            ElementKind::Linedefs,
+            &[0],
+            &set_request(&[("tag", json!(4_i64))]),
+            &stock.hexen(),
+        )
+        .expect_err("Hexen-family lines take no tag");
+        let hexen_message = hexen_error.to_string();
+        assert!(
+            hexen_message.contains("hexen family")
+                && hexen_message.contains("arg0")
+                && hexen_message.contains("convert_map_format"),
+            "and the same the other way: {hexen_message}"
+        );
+        assert_eq!(map, sample_map(), "nothing was written");
+        assert_eq!(standing, hexen_map(), "nor on the Hexen side");
+    }
+
+    /// Named linedef flags fold into the bits, set applied after clear,
+    /// and read back through the family's table.
+    #[test]
+    fn linedef_flags_round_trip_through_the_table() {
+        let stock = Stock::new();
+        let scope = stock.doom();
+        let mut map = sample_map();
+        let applied = apply(
+            &mut map,
+            ElementKind::Linedefs,
+            &[0, 1],
+            &flags_request(&["blockmonsters", "mapped"], &[]),
+            &scope,
+        )
+        .expect("two linedef names set");
+        assert_eq!(applied.changed, 2_usize, "both lines gained the bits");
+        assert_eq!(map.linedefs[0].flags, 259_u32, "blocking and more");
+        let names = to_names(map.linedefs[0].flags, FlagKind::Linedef, FlagFamily::Doom);
+        assert!(
+            names.contains(&"blocking")
+                && names.contains(&"blockmonsters")
+                && names.contains(&"mapped"),
+            "the set names read back: {}",
+            names.join(", ")
+        );
+        let row = applied.preview.first().expect("one preview row");
+        assert_eq!(
+            row.before.get("flags"),
+            Some(&json!(1_i64)),
+            "the past bits preview"
+        );
+        assert_eq!(
+            row.after.get("flags"),
+            Some(&json!(259_i64)),
+            "and the future ones"
+        );
+        let mut both = sample_map();
+        apply(
+            &mut both,
+            ElementKind::Linedefs,
+            &[0],
+            &flags_request(&["secret"], &["blocking", "secret"]),
+            &scope,
+        )
+        .expect("one name on both ends");
+        assert_eq!(
+            both.linedefs[0].flags, 32_u32,
+            "the clear mask went first and the set mask last"
+        );
+        let standing = apply(
+            &mut both,
+            ElementKind::Linedefs,
+            &[0],
+            &flags_request(&["secret"], &[]),
+            &scope,
+        )
+        .expect("setting a held bit is legal");
+        assert_eq!(standing.matched, 1_usize, "the line matched");
+        assert_eq!(standing.changed, 0_usize, "and nothing moved");
+    }
+
+    /// Named thing flags fold the same way, through the thing table.
+    #[test]
+    fn thing_flags_round_trip_through_the_table() {
+        let stock = Stock::new();
+        let scope = stock.doom();
+        let mut map = sample_map();
+        let applied = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0, 1],
+            &flags_request(&["ambush"], &["easy"]),
+            &scope,
+        )
+        .expect("one name on each end");
+        assert_eq!(applied.changed, 2_usize, "both things moved");
+        for row in &map.things {
+            let names = to_names(row.flags, FlagKind::Thing, FlagFamily::Doom);
+            let listed = names.join(", ");
+            assert!(
+                names.contains(&"ambush")
+                    && !names.contains(&"easy")
+                    && names.contains(&"medium")
+                    && names.contains(&"hard"),
+                "ambush set, easy cleared, the rest stands: {listed}"
+            );
+        }
+    }
+
+    /// A flag name the family's table does not carry is refused with the
+    /// table listed, before anything is planned.
+    #[test]
+    fn unknown_flag_names_list_the_family_table() {
+        let stock = Stock::new();
+        let mut map = sample_map();
+        let error = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &flags_request(&["twosided"], &[]),
+            &stock.doom(),
+        )
+        .expect_err("twosided is no thing flag");
+        assert_eq!(error.code(), "invalid_argument", "unknown flag code");
+        assert!(
+            error.to_string().contains("unknown thing flag 'twosided'")
+                && error.to_string().contains("easy, medium, hard, ambush"),
+            "the refusal names the bad flag and lists the table: {error}"
+        );
+        let mut standing = hexen_map();
+        let line_error = apply(
+            &mut standing,
+            ElementKind::Linedefs,
+            &[0],
+            &flags_request(&["passuse"], &[]),
+            &stock.hexen(),
+        )
+        .expect_err("passuse is a Doom-only linedef name");
+        assert!(
+            line_error.to_string().contains("hexen family"),
+            "the refusal reads the scope's family table: {line_error}"
+        );
+        assert_eq!(map, sample_map(), "nothing was written");
+        assert_eq!(standing, hexen_map(), "and nothing on the Hexen side");
+    }
+
+    /// Things take an integer type, a `add`ed turn and a shift, all
+    /// previewed in table order.
+    #[test]
+    fn thing_numbers_set_and_add_in_one_pass() {
+        let stock = Stock::new();
+        let scope = stock.doom();
+        let mut map = sample_map();
+        let applied = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &mixed(
+                &[("type", json!(3002_i64))],
+                &[("angle", 90_i64), ("x", -16_i64)],
+            ),
+            &scope,
+        )
+        .expect("a number, a turn and a shift ride one pass");
+        assert_eq!(applied.matched, 1_usize, "one thing matched");
+        assert_eq!(applied.changed, 1_usize, "and moved");
+        assert_eq!(map.things[0].kind, 3002_i32, "the doomednum landed");
+        assert_eq!(map.things[0].angle, 180_i32, "the turn landed");
+        assert_eq!(map.things[0].x, 48_i32, "and the shift");
+        assert_eq!(map.things[1].kind, 1_i32, "the unselected thing stands");
+        let row = applied.preview.first().expect("one preview row");
+        assert_eq!(
+            row.before,
+            json!({"angle": 90_i64, "type": 3001_i64, "x": 64_i64}),
+            "the preview lists every touched field"
+        );
+        assert_eq!(
+            row.after,
+            json!({"angle": 180_i64, "type": 3002_i64, "x": 48_i64}),
+            "before and after"
+        );
+        let error = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &add_request(&[("type", 1_i64)]),
+            &scope,
+        )
+        .expect_err("the type is set, never added to");
+        assert!(
+            error
+                .to_string()
+                .contains("not addable on things: addable fields are angle, x, y"),
+            "the refusal names the addable table: {error}"
+        );
+    }
+
+    /// A thing's facing must end inside the circle in every format,
+    /// and nothing normalises it.
+    #[test]
+    fn thing_angles_stay_within_the_circle() {
+        let stock = Stock::new();
+        let scope = stock.doom();
+        let mut map = sample_map();
+        let error = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &set_request(&[("angle", json!(360_i64))]),
+            &scope,
+        )
+        .expect_err("360 is one past the circle");
+        assert_eq!(error.code(), "invalid_argument", "angle code");
+        assert!(
+            error
+                .to_string()
+                .contains("thing 0 angle would become 360; angle must stay within 0..=359"),
+            "the refusal says so instead of wrapping: {error}"
+        );
+        let negative = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &set_request(&[("angle", json!(-1_i64))]),
+            &scope,
+        )
+        .expect_err("a backward degree is no facing");
+        assert!(
+            negative
+                .to_string()
+                .contains("angle would become -1; angle must stay within 0..=359"),
+            "and the same below zero: {negative}"
+        );
+        let mut spun = sample_map();
+        let past = apply(
+            &mut spun,
+            ElementKind::Things,
+            &[0],
+            &add_request(&[("angle", 270_i64)]),
+            &stock.udmf(),
+        )
+        .expect_err("90 + 270 passes 359 even on UDMF");
+        assert_eq!(past.code(), "invalid_argument", "added angle code");
+        assert_eq!(spun, sample_map(), "nothing was written");
+    }
+
+    /// Thing coordinates and types keep their binary ranges; `UDMF`
+    /// stores wider values.
+    #[test]
+    fn thing_numbers_keep_the_binary_ranges() {
+        let stock = Stock::new();
+        let scope = stock.doom();
+        let mut map = sample_map();
+        let far = apply(
+            &mut map,
+            ElementKind::Things,
+            &[1],
+            &add_request(&[("x", 32832_i64)]),
+            &scope,
+        )
+        .expect_err("-64 + 32832 leaves i16");
+        assert!(
+            far.to_string()
+                .contains("thing 1 x would become 32768; x must stay within -32768..=32767"),
+            "the refusal names the row and range: {far}"
+        );
+        let huge = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &set_request(&[("type", json!(0x1_0000_i64))]),
+            &scope,
+        )
+        .expect_err("65536 leaves the u16 type column");
+        assert!(
+            huge.to_string()
+                .contains("type would become 65536; type must stay within 0..=65535"),
+            "and the type range: {huge}"
+        );
+        assert_eq!(map, sample_map(), "nothing was written");
+        apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &set_request(&[("x", json!(40000_i64))]),
+            &stock.udmf(),
+        )
+        .expect("UDMF stores what an i16 column cannot");
+        assert_eq!(map.things[0].x, 40000_i32, "the wide coordinate landed");
+    }
+
+    /// A string thing type is the tool layer's job: the engine takes the
+    /// integer doomednum only.
+    #[test]
+    fn thing_types_take_integers_only() {
+        let stock = Stock::new();
+        let scope = stock.doom();
+        let mut map = sample_map();
+        let error = apply(
+            &mut map,
+            ElementKind::Things,
+            &[0],
+            &set_request(&[("type", json!("demon"))]),
+            &scope,
+        )
+        .expect_err("a name is no doomednum here");
+        assert_eq!(error.code(), "invalid_argument", "name type code");
+        assert!(
+            error
+                .to_string()
+                .contains("thing field 'type' needs an integer value"),
+            "the refusal points at the field: {error}"
+        );
+        assert_eq!(map, sample_map(), "nothing was written");
     }
 
     /// The report: matched counts the selection, changed counts moves.

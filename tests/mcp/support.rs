@@ -1,8 +1,12 @@
-//! Shared harness: real rmcp clients over in-memory pipes, plus a probe
-//! server that speaks the structured-result contract (`ok`/`fail`) so those
-//! helpers are exercised end to end, not just compiled.
+//! Shared harness: real rmcp clients over in-memory pipes.
+//!
+//! Plus a probe server that speaks the structured-result contract
+//! (`ok`/`fail`) so those helpers are exercised end to end, not just
+//! compiled, and small hand-written byte builders for the media files
+//! (`PNG`, `MIDI`, `WAV`) the guide recipes import.
 
 use core::time::Duration;
+use std::io::Write as _;
 
 use cyberdemon::Cyberdemon;
 use cyberdemon::error::CyberError;
@@ -266,4 +270,176 @@ fn split_reply(raw: &[u8]) -> (u16, Vec<u8>) {
         .parse()
         .expect("a numeric status code");
     (status, raw[body_start..].to_vec())
+}
+
+/// Appends `value` as a big-endian `u32` by reversing its little-endian
+/// bytes (the crate denies `to_be_bytes`).
+fn put_be_u32(out: &mut Vec<u8>, value: u32) {
+    let mut word = value.to_le_bytes();
+    word.reverse();
+    out.extend_from_slice(&word);
+}
+
+/// Appends `value` as a big-endian `u16`.
+fn put_be_u16(out: &mut Vec<u8>, value: u16) {
+    let mut word = value.to_le_bytes();
+    word.reverse();
+    out.extend_from_slice(&word);
+}
+
+/// Appends one `PNG` chunk: length, kind, payload, `CRC32`.
+fn png_chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
+    put_be_u32(
+        out,
+        u32::try_from(data.len()).expect("a test chunk fits a u32"),
+    );
+    out.extend_from_slice(&kind);
+    out.extend_from_slice(data);
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&kind);
+    hasher.update(data);
+    put_be_u32(out, hasher.finalize());
+}
+
+/// The pixel run of one `PNG` scanline: cyan on the border columns,
+/// red inside.
+fn png_row(side: u32, last: u32, edge: bool) -> Vec<u8> {
+    let mut row = Vec::new();
+    for x in 0..side {
+        let border = edge || x == 0 || x == last;
+        let pixel: [u8; 3] = if border {
+            [0_u8, 255_u8, 255_u8]
+        } else {
+            [220_u8, 40_u8, 40_u8]
+        };
+        row.extend_from_slice(&pixel);
+    }
+    row
+}
+
+/// A 16x16 8-bit `RGB` `PNG`: cyan border, red middle.
+///
+/// The test image behind recipe `source` placeholders. The cyan border is
+/// what `create_sprite_from_image`'s background flood removes, so the
+/// surviving red block keeps every importer on real, non-degenerate
+/// pixels.
+///
+/// # Panics
+///
+/// Panics if the zlib deflate of the pixel rows fails.
+#[must_use]
+#[inline]
+pub fn png_bytes() -> Vec<u8> {
+    let side = 16_u32;
+    let last = side.checked_sub(1).expect("16 is above 1");
+    let mut header = Vec::new();
+    put_be_u32(&mut header, side);
+    put_be_u32(&mut header, side);
+    header.extend_from_slice(&[8_u8, 2_u8, 0_u8, 0_u8, 0_u8]);
+    let mut raw = Vec::new();
+    for y in 0..side {
+        raw.push(0_u8);
+        let edge = y == 0 || y == last;
+        raw.extend_from_slice(&png_row(side, last, edge));
+    }
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+    encoder.write_all(&raw).expect("the test PNG deflates");
+    let idat = encoder.finish().expect("the test PNG deflates");
+    let mut out = Vec::new();
+    out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    png_chunk(&mut out, *b"IHDR", &header);
+    png_chunk(&mut out, *b"IDAT", &idat);
+    png_chunk(&mut out, *b"IEND", &[]);
+    out
+}
+
+/// A minimal type-0 `Standard MIDI` file.
+///
+/// One track with a 500 000 microseconds-per-quarter tempo, a program
+/// change, four short quarter notes on `MIDI` channel 1 and the end
+/// marker. Small enough to convert to `MUS` and too simple to depend on
+/// any `SMF` extra.
+///
+/// # Panics
+///
+/// Panics if a length does not fit a `u32` (test data always fits).
+#[must_use]
+#[inline]
+pub fn midi_bytes() -> Vec<u8> {
+    let mut track = Vec::new();
+    track.extend_from_slice(&[0_u8, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20]);
+    track.extend_from_slice(&[0_u8, 0xC0, 0x00]);
+    for note in [60_u8, 64_u8, 67_u8, 72_u8] {
+        track.extend_from_slice(&[0_u8, 0x90, note, 0x64]);
+        track.extend_from_slice(&[60_u8, 0x80, note, 0x40]);
+    }
+    track.extend_from_slice(&[0_u8, 0xFF, 0x2F, 0x00]);
+    let mut out = Vec::new();
+    out.extend_from_slice(b"MThd");
+    put_be_u32(&mut out, 6_u32);
+    put_be_u16(&mut out, 0_u16);
+    put_be_u16(&mut out, 1_u16);
+    put_be_u16(&mut out, 480_u16);
+    out.extend_from_slice(b"MTrk");
+    put_be_u32(
+        &mut out,
+        u32::try_from(track.len()).expect("a test track fits a u32"),
+    );
+    out.extend_from_slice(&track);
+    out
+}
+
+/// Appends one little-endian `RIFF` chunk: id, `u32` length, payload.
+fn riff_chunk(out: &mut Vec<u8>, id: [u8; 4], data: &[u8]) {
+    out.extend_from_slice(&id);
+    out.extend_from_slice(
+        &u32::try_from(data.len())
+            .expect("a test chunk fits a u32")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(data);
+}
+
+/// A minimal 8000 Hz mono 16-bit `PCM` `WAV`.
+///
+/// 400 samples of a +-6400 triangle, four 100-sample ramps. Long enough
+/// to resample, short enough that `import_sound` never nears its length
+/// caps.
+///
+/// # Panics
+///
+/// Panics if a ramp step or length does not fit its field (test data
+/// always fits).
+#[must_use]
+#[inline]
+pub fn wav_bytes() -> Vec<u8> {
+    let mut format = Vec::new();
+    format.extend_from_slice(&1_u16.to_le_bytes());
+    format.extend_from_slice(&1_u16.to_le_bytes());
+    format.extend_from_slice(&8000_u32.to_le_bytes());
+    format.extend_from_slice(&16000_u32.to_le_bytes());
+    format.extend_from_slice(&2_u16.to_le_bytes());
+    format.extend_from_slice(&16_u16.to_le_bytes());
+    let mut pcm = Vec::new();
+    let mut value = 0_i16;
+    for ramp in 0..4_usize {
+        let step = if ramp & 1 == 0 { 64_i16 } else { -64_i16 };
+        for _sample in 0..100_usize {
+            value = value.checked_add(step).expect("the test ramp fits");
+            pcm.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WAVE");
+    riff_chunk(&mut body, *b"fmt ", &format);
+    riff_chunk(&mut body, *b"data", &pcm);
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    let size = u32::try_from(body.len())
+        .expect("a test WAV fits a u32")
+        .checked_sub(8_u32)
+        .expect("the RIFF header is accounted for");
+    out.extend_from_slice(&size.to_le_bytes());
+    out.extend_from_slice(&body);
+    out
 }

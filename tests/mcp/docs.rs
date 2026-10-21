@@ -1,7 +1,9 @@
 //! Documentation-layout checks: the `skill/` tree and `README.md` keep the
 //! cross-references and size limits the contributor rules promise, every
-//! guide's `Tools:` line names real tools the guide also uses, and every
-//! `json plan-example` block in the guides compiles into a playable map.
+//! guide's `Tools:` line names real tools the guide also uses, every
+//! `json plan-example` block in the guides compiles into a playable map,
+//! and every `json recipe` block is a well-formed `run_batch` payload whose
+//! fixture-runnable steps actually succeed on the features fixture session.
 
 #[cfg(test)]
 mod tests {
@@ -12,7 +14,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::iwad_features;
-    use crate::support::{call, connect};
+    use crate::support::{call, connect, midi_bytes, png_bytes, wav_bytes};
 
     /// The prefix every guide's tool-list line starts with.
     const TOOLS_PREFIX: &str = "Tools:";
@@ -280,5 +282,225 @@ mod tests {
             lines <= 250,
             "images-to-assets.md is {lines} lines, the limit is 250"
         );
+    }
+
+    #[test]
+    fn editing_guide_stays_within_its_line_budget() {
+        let lines = read("skill/guides/editing-existing-maps.md")
+            .lines()
+            .count();
+        assert!(
+            lines <= 250,
+            "editing-existing-maps.md is {lines} lines, the limit is 250"
+        );
+    }
+
+    #[test]
+    fn recipes_guide_stays_within_its_line_budget() {
+        let lines = read("skill/guides/recipes.md").lines().count();
+        assert!(
+            lines <= 400,
+            "recipes.md is {lines} lines, the limit is 400"
+        );
+    }
+
+    /// The fence info string a runnable recipe carries.
+    const RECIPE_FENCE: &str = "```json recipe";
+
+    /// The placeholder a recipe uses for a `PNG` file source.
+    const IMAGE_PLACEHOLDER: &str = "<IMAGE>";
+
+    /// The placeholder a recipe uses for a MIDI file source.
+    const MIDI_PLACEHOLDER: &str = "<MIDI>";
+
+    /// The placeholder a recipe uses for a `WAV` file source.
+    const WAV_PLACEHOLDER: &str = "<WAV>";
+
+    /// The floors for the recipe checks: a minimum count of
+    /// fixture-runnable recipes.
+    const MIN_FIXTURE_RECIPES: usize = 15;
+
+    /// The bodies of every `json recipe` fenced block in `markdown`.
+    fn recipe_blocks(markdown: &str) -> Vec<Value> {
+        markdown
+            .split(RECIPE_FENCE)
+            .skip(1)
+            .filter_map(|rest| rest.split("\n```").next())
+            .map(|body| serde_json::from_str(body).expect("every json recipe block is valid JSON"))
+            .collect()
+    }
+
+    /// The `(guide, recipe)` pairs of every recipe block in every guide.
+    fn all_recipes() -> Vec<(String, Value)> {
+        guide_file_names()
+            .into_iter()
+            .flat_map(|file| {
+                recipe_blocks(&guide_text(&file))
+                    .into_iter()
+                    .map(move |block| (file.clone(), block))
+            })
+            .collect()
+    }
+
+    /// Requires one recipe to be `{fixture: bool, steps: [...]}` with
+    /// every step naming a listed tool and carrying object arguments.
+    fn check_recipe_shape(file: &str, recipe: &Value, known: &[&str]) {
+        let Some(object) = recipe.as_object() else {
+            panic!("{file}: a recipe block must hold a JSON object");
+        };
+        assert!(
+            !object.keys().any(|key| key != "fixture" && key != "steps"),
+            "{file}: a recipe holds more than the fixture and steps keys",
+        );
+        assert!(
+            recipe.get("fixture").and_then(Value::as_bool).is_some(),
+            "{file}: a recipe needs a boolean fixture flag",
+        );
+        let Some(steps) = recipe.get("steps").and_then(Value::as_array) else {
+            panic!("{file}: a recipe needs a steps array");
+        };
+        assert!(!steps.is_empty(), "{file}: a recipe has no steps");
+        for step in steps {
+            check_recipe_step(file, step, known);
+        }
+    }
+
+    /// Requires one recipe step to name a listed tool, with object
+    /// arguments when it carries any.
+    fn check_recipe_step(file: &str, step: &Value, known: &[&str]) {
+        let Some(tool) = step.get("tool").and_then(Value::as_str) else {
+            panic!("{file}: a recipe step needs a tool name");
+        };
+        assert!(
+            known.contains(&tool),
+            "{file}: a recipe step calls the unknown tool {tool}",
+        );
+        assert!(
+            step.get("arguments").is_none_or(Value::is_object),
+            "{file}: step {tool} arguments must be an object",
+        );
+    }
+
+    /// Checks every recipe block in every guide against `known`.
+    fn check_all_recipe_shapes(known: &[&str]) {
+        let recipes = all_recipes();
+        assert!(!recipes.is_empty(), "no `json recipe` block in any guide");
+        for entry in &recipes {
+            check_recipe_shape(&entry.0, &entry.1, known);
+        }
+    }
+
+    #[tokio::test]
+    async fn every_recipe_is_well_formed_with_real_tools() {
+        let client = connect().await;
+        let listed = client.list_all_tools().await.expect("list tools");
+        let known: Vec<&str> = listed.iter().map(|tool| tool.name.as_ref()).collect();
+        check_all_recipe_shapes(&known);
+    }
+
+    /// Writes the three media files a recipe placeholder can name into
+    /// `dir` and returns the placeholder -> path lookup as a JSON object.
+    fn write_media(dir: &Path) -> Value {
+        let png = dir.join("recipe-media.png");
+        let midi = dir.join("recipe-media.mid");
+        let wav = dir.join("recipe-media.wav");
+        fs::write(&png, png_bytes()).expect("write the test PNG");
+        fs::write(&midi, midi_bytes()).expect("write the test MIDI");
+        fs::write(&wav, wav_bytes()).expect("write the test WAV");
+        json!({
+            IMAGE_PLACEHOLDER: png.display().to_string(),
+            MIDI_PLACEHOLDER: midi.display().to_string(),
+            WAV_PLACEHOLDER: wav.display().to_string(),
+        })
+    }
+
+    /// The media path a placeholder string names, if `value` is one.
+    fn placeholder_path(value: &Value, media: &Value) -> Option<String> {
+        let text = value.as_str()?;
+        let found = media.get(text).and_then(Value::as_str)?;
+        Some(found.to_owned())
+    }
+
+    /// Replaces every placeholder string inside `value` with its media
+    /// path from the `media` lookup.
+    fn substitute(value: &mut Value, media: &Value) {
+        if let Some(path) = placeholder_path(value, media) {
+            *value = json!(path);
+            return;
+        }
+        substitute_children(value, media);
+    }
+
+    /// Recurses into the children of a `value` that is no string.
+    fn substitute_children(value: &mut Value, media: &Value) {
+        if let Some(entries) = value.as_object_mut() {
+            let items: Vec<&mut Value> = entries.values_mut().collect();
+            substitute_all(items, media);
+            return;
+        }
+        if let Some(items) = value.as_array_mut() {
+            let references: Vec<&mut Value> = items.iter_mut().collect();
+            substitute_all(references, media);
+        }
+    }
+
+    /// Substitutes through every child.
+    fn substitute_all(items: Vec<&mut Value>, media: &Value) {
+        for item in items {
+            substitute(item, media);
+        }
+    }
+
+    /// Whether one recipe is flagged fixture-runnable.
+    fn is_fixture_recipe(recipe: &Value) -> bool {
+        recipe.get("fixture") == Some(&json!(true))
+    }
+
+    /// Runs one fixture recipe through `run_batch` on a fresh fixture
+    /// session and requires the batch to succeed.
+    async fn run_fixture_recipe(dir: &Path, media: &Value, file: &str, recipe: &Value) {
+        let client = connect().await;
+        let base = iwad_features(dir);
+        call(
+            &client,
+            "open_iwad",
+            json!({"path": base.display().to_string()}),
+        )
+        .await;
+        call(&client, "new_wad", json!({})).await;
+        let mut args = json!({"steps": recipe["steps"].clone(), "label": file});
+        substitute(&mut args, media);
+        let report = call(&client, "run_batch", args).await;
+        assert_eq!(
+            report.get("ok"),
+            Some(&json!(true)),
+            "{file}: the fixture recipe runs clean: {report}",
+        );
+    }
+
+    /// Runs every fixture recipe, each in its own session.
+    async fn run_all_fixture_recipes(dir: &Path, media: &Value, recipes: Vec<(String, Value)>) {
+        let fixture_count = recipes
+            .iter()
+            .filter(|entry| is_fixture_recipe(&entry.1))
+            .count();
+        assert!(
+            fixture_count >= MIN_FIXTURE_RECIPES,
+            "only {fixture_count} fixture recipes, the floor is {MIN_FIXTURE_RECIPES}",
+        );
+        let runnable: Vec<(String, Value)> = recipes
+            .into_iter()
+            .filter(|entry| is_fixture_recipe(&entry.1))
+            .collect();
+        for (file, recipe) in runnable {
+            run_fixture_recipe(dir, media, &file, &recipe).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn every_fixture_recipe_runs_through_run_batch() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let media = write_media(dir.path());
+        run_all_fixture_recipes(dir.path(), &media, all_recipes()).await;
     }
 }

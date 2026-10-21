@@ -290,15 +290,20 @@ fn check_requested(map: &Map, request: &SelectionRequest) -> Result<(), CyberErr
 }
 
 /// Refuse the first index of `kind` at or past `count`, phrased the way the
-/// shared validator phrases it (`"vertex 9 does not exist (map has 6
-/// vertices)"`). `plural` is spelled per kind because `"vertex"` takes no
-/// plain `s`.
+/// shared validator phrases it (`"vertex 9 does not exist (the map has 6
+/// vertices, valid indices are 0..=5)"`), with the index-listing hint.
+/// `plural` is spelled per kind because `"vertex"` takes no plain `s`.
 fn check_kind(kind: &str, plural: &str, indices: &[usize], count: usize) -> Result<(), CyberError> {
     for index in indices {
         if *index >= count {
-            return Err(CyberError::NotFound(format!(
-                "{kind} {index} does not exist (map has {count} {plural})"
-            )));
+            let range = count.checked_sub(1).map_or_else(
+                || format!("the map has no {plural}"),
+                |last| format!("the map has {count} {plural}, valid indices are 0..={last}"),
+            );
+            return Err(
+                CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
+                    .with_hint("describe_map or find_elements returns indices"),
+            );
         }
     }
     Ok(())
@@ -901,28 +906,28 @@ mod tests {
                     vertices: vec![9],
                     ..Default::default()
                 },
-                "vertex 9 does not exist (map has 6 vertices)",
+                "vertex 9 does not exist (the map has 6 vertices, valid indices are 0..=5)",
             ),
             (
                 SelectionRequest {
                     linedefs: vec![7],
                     ..Default::default()
                 },
-                "linedef 7 does not exist (map has 7 linedefs)",
+                "linedef 7 does not exist (the map has 7 linedefs, valid indices are 0..=6)",
             ),
             (
                 SelectionRequest {
                     sectors: vec![2],
                     ..Default::default()
                 },
-                "sector 2 does not exist (map has 2 sectors)",
+                "sector 2 does not exist (the map has 2 sectors, valid indices are 0..=1)",
             ),
             (
                 SelectionRequest {
                     things: vec![2],
                     ..Default::default()
                 },
-                "thing 2 does not exist (map has 2 things)",
+                "thing 2 does not exist (the map has 2 things, valid indices are 0..=1)",
             ),
         ];
         for (picked, phrasing) in cases {

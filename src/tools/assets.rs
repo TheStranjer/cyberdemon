@@ -334,7 +334,7 @@ fn fallback_to_texture(
     request: &Request<'_>,
     error: CyberError,
 ) -> Result<Prepared, CyberError> {
-    if !matches!(error, CyberError::NotFound(_)) {
+    if error.code() != "not_found" {
         return Err(error);
     }
     if !holds_texture(view.session, request.name)? {
@@ -635,7 +635,7 @@ fn publish_asset(
 impl Cyberdemon {
     /// Reports the asset server's origin and the store's current fill.
     #[tool(
-        description = "Reports the localhost asset server (base URL and upload URL template) and the store's capacity and current fill; call it before uploading files or checking what is stored. Starts the asset server if it is not running yet."
+        description = "Reports the localhost asset server (base URL and upload URL template) plus the store's capacity and current fill, starting the server when it has not run yet. Use it before uploading files a tool should fetch, or to check what the store holds."
     )]
     async fn get_asset_server_info(&self) -> Result<CallToolResult, ErrorData> {
         let state = self.state();
@@ -661,7 +661,7 @@ impl Cyberdemon {
 
     /// Resizes the asset store at runtime.
     #[tool(
-        description = "Sets how many of the most recent assets the store keeps (1..=10000) and reports how many the change evicted; use it when the default of 50 keeps too few or too many generated files in memory."
+        description = "Sets how many of the most recent assets the store keeps (1..=10000) and reports how many the change evicted. Use it when the default 50 keeps too few renders or fills memory; an evicted asset's URL returns 404, so regenerate rather than retry."
     )]
     async fn set_asset_capacity(
         &self,
@@ -682,7 +682,7 @@ impl Cyberdemon {
 
     /// Publishes any viewable or playable session resource as one asset.
     #[tool(
-        description = "Give me something to look at or listen to for NAME: one entry point that resolves a name and publishes a viewable or playable file on the localhost asset server; the archives are never modified. Takes the shared lump selector (name plus optional scope - \"merged\" default, \"working\", \"layer:N\" - namespace and occurrence, default the last winning match), optional palette (the PLAYPAL entry that colours indexed pictures and the swatch, default 0) and prefer (\"lump\" default or \"texture\": which of a name's lump and TEXTURE1/TEXTURE2 definition to publish; a texture name no lump carries composites either way). Dispatch: a composite texture -> PNG of its PNAMES patches drawn on its canvas; a flat or flats-region lump -> PNG of the indexed plane (a PNG flat is quantized then recoloured); a patch or sprite lump, or any bytes with a Doom patch header -> PNG with the drawing offsets in a grAb chunk; a PNG/JPEG/GIF lump -> re-encoded PNG, keeping its grAb offsets; a doom_sound/pc_speaker/wav/ogg/mp3/flac lump -> the conversion preview_sound does (WAV, or the original container); a MUS/MIDI/tracker-module lump -> the conversion preview_music does (MIDI for MUS); PLAYPAL -> the 256x256 swatch of the requested entry; COLORMAP or a colormaps-region lump -> a PNG one row per light table and one column per palette index, drawn through palette 0. Anything else is unsupported (get_lump format=url serves the raw bytes); a name that is neither a lump nor a texture definition is not_found. Returns {name, resolved_as: \"texture\"|\"flat\"|\"patch\"|\"sprite\"|\"image\"|\"sound\"|\"music\"|\"palette\"|\"colormap\", mime, asset: {url, filename, mime, size}, width, height} - width and height only for a picture."
+        description = "Resolves one name - a composite texture, flat, patch, sprite, embedded picture, sound, song, PLAYPAL or COLORMAP - and publishes it as a viewable or playable file on the localhost asset server; nothing is edited. Takes the shared lump selector plus palette and prefer. Use it whenever asked to show or play something by name; the specific get_* tools report richer measurements."
     )]
     fn get_asset_url(
         &self,

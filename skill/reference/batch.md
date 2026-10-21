@@ -31,7 +31,7 @@ does not make the server think.
 - The result lists the steps that **ran**: an atomic batch that stopped at
   step 3 reports three entries, the last carrying the step's error. A step
   failed when the tool returned a domain error, so its `error` is the usual
-  `{"error", "message"}` object and `result` is `null`.
+  `{"error", "message", "hint"}` object and `result` is `null`.
 - `run_batch` itself answers with an error result (nothing has run then)
   only for batch-level refusals: a step count outside `1..=50`, a
   **forbidden tool** in any step (`run_batch`, `undo`, `redo`, `open_iwad`,

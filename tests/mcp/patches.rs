@@ -341,7 +341,7 @@ mod tests {
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "TWIN.png", &palette_png());
         add(&client, &file, "TWIN").await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_patch",
             patch_args(&file, json!({ "name": "TWIN" })),
@@ -370,7 +370,7 @@ mod tests {
     async fn refuse_all(client: &Client, cases: &[Refusal]) {
         for case in cases {
             let (label, args, expect_code, expect_text) = (case.0, &case.1, case.2, case.3);
-            let (code, message) = call_err(client, "add_patch", args.clone()).await;
+            let (code, message, _) = call_err(client, "add_patch", args.clone()).await;
             assert_eq!(code, *expect_code, "{label} code: {message}");
             assert!(
                 message.contains(expect_text),
@@ -383,7 +383,7 @@ mod tests {
     async fn refuse_replacements(client: &Client, cases: &[Refusal]) {
         for case in cases {
             let (label, args, expect_code, expect_text) = (case.0, &case.1, case.2, case.3);
-            let (code, message) = call_err(client, "replace_patch", args.clone()).await;
+            let (code, message, _) = call_err(client, "replace_patch", args.clone()).await;
             assert_eq!(code, *expect_code, "{label} code: {message}");
             assert!(
                 message.contains(expect_text),
@@ -650,7 +650,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "MYART.png", &palette_png());
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "replace_patch",
             patch_args(&file, json!({ "name": "NOPE" })),
@@ -845,13 +845,14 @@ mod tests {
     async fn removing_an_iwad_owned_patch_refuses_naming_replace_patch() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) = call_err(&client, "remove_patch", json!({ "name": "WALLP1" })).await;
+        let (code, message, _) =
+            call_err(&client, "remove_patch", json!({ "name": "WALLP1" })).await;
         assert_eq!(code, "not_found", "no working copy exists");
         assert!(
             message.contains("replace_patch") && message.contains("working"),
             "the hint names the way to a working copy: {message}"
         );
-        let (bad_code, bad_message) =
+        let (bad_code, bad_message, _) =
             call_err(&client, "remove_patch", json!({ "name": "TOOLONGNM" })).await;
         assert_eq!(bad_code, "invalid_argument", "nine characters");
         assert!(
@@ -881,7 +882,7 @@ mod tests {
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "NEWWALL.png", &palette_png());
         replace(&client, &file, "WALLP1").await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "remove_patch",
             json!({ "name": "WALLP1", "remove_from_pnames": true }),

@@ -316,7 +316,7 @@ mod tests {
             samples: vec![7_i16; 8],
         };
         fs::write(&hidden, encode_wav(&pcm, 16).expect("encodes")).expect("write .wav");
-        let (code, message) = call_err(&client, "import_sound", source_arg(&hidden)).await;
+        let (code, message, _) = call_err(&client, "import_sound", source_arg(&hidden)).await;
         assert_eq!(code, "invalid_argument", "nothing usable to derive from");
         assert!(
             message.contains("pass name"),
@@ -330,7 +330,7 @@ mod tests {
         let client = connect().await;
         let wav = write_stereo_wav(dir.path(), "pistol", ONE_SECOND);
         call(&client, "import_sound", source_arg(&wav)).await;
-        let (code, message) = call_err(&client, "import_sound", source_arg(&wav)).await;
+        let (code, message, _) = call_err(&client, "import_sound", source_arg(&wav)).await;
         assert_eq!(code, "already_exists", "the derived twin is refused");
         assert!(
             message.contains("replace true"),
@@ -369,7 +369,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;
         let long = write_long_wav(dir.path(), "siren", 200);
-        let (code, message) = call_err(&client, "import_sound", source_arg(&long)).await;
+        let (code, message, _) = call_err(&client, "import_sound", source_arg(&long)).await;
         assert_eq!(code, "limit_exceeded", "200 s over the 60 s default");
         assert!(
             message.contains("max_seconds"),
@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(report["duration_ms"], json!(200_000_u64), "200 s kept");
         let mut zero = source_arg(&long);
         zero["max_seconds"] = json!(0_u64);
-        let (zero_code, _) = call_err(&client, "import_sound", zero).await;
+        let (zero_code, _, _) = call_err(&client, "import_sound", zero).await;
         assert_eq!(
             zero_code, "invalid_argument",
             "a zero cap is refused at parse time"
@@ -396,7 +396,7 @@ mod tests {
         let client = connect().await;
         let junk = dir.path().join("junk.wav");
         fs::write(&junk, b"total nonsense, no container here").expect("write the junk");
-        let (code, message) = call_err(&client, "import_sound", source_arg(&junk)).await;
+        let (code, message, _) = call_err(&client, "import_sound", source_arg(&junk)).await;
         assert_eq!(code, "format_error", "unrecognized bytes");
         assert!(
             message.contains("cannot identify"),
@@ -404,7 +404,7 @@ mod tests {
         );
         let hinted = dir.path().join("junk.xyzzy");
         fs::write(&hinted, b"total nonsense, no container here").expect("write the junk");
-        let (hint_code, _) = call_err(&client, "import_sound", source_arg(&hinted)).await;
+        let (hint_code, _, _) = call_err(&client, "import_sound", source_arg(&hinted)).await;
         assert_eq!(
             hint_code, "format_error",
             "an unknown hint with junk still fails"
@@ -414,18 +414,18 @@ mod tests {
         let cut = dir.path().join("cut.wav");
         let head = raw.get(..14).expect("the fixture is longer");
         fs::write(&cut, head).expect("write the truncated fixture");
-        let (cut_code, _) = call_err(&client, "import_sound", source_arg(&cut)).await;
+        let (cut_code, _, _) = call_err(&client, "import_sound", source_arg(&cut)).await;
         assert_eq!(cut_code, "format_error", "a header that never completes");
         let mut rate = source_arg(&good);
         rate["sample_rate"] = json!(3999_u64);
-        let (rate_code, _) = call_err(&client, "import_sound", rate).await;
+        let (rate_code, _, _) = call_err(&client, "import_sound", rate).await;
         assert_eq!(rate_code, "invalid_argument", "below the rate window");
         let mut format = source_arg(&good);
         format["format"] = json!("zdoom");
-        let (format_code, _) = call_err(&client, "import_sound", format).await;
+        let (format_code, _, _) = call_err(&client, "import_sound", format).await;
         assert_eq!(format_code, "invalid_argument", "not a storage format");
         let missing = dir.path().join("nowhere.wav");
-        let (missing_code, _) = call_err(&client, "import_sound", source_arg(&missing)).await;
+        let (missing_code, _, _) = call_err(&client, "import_sound", source_arg(&missing)).await;
         assert_eq!(missing_code, "not_found", "fetch errors surface unchanged");
         assert_untouched(&client).await;
     }
@@ -609,7 +609,7 @@ mod tests {
     async fn preview_sound_refuses_non_sounds_and_bad_widths() {
         let client = connect().await;
         add_working_lump(&client, "PLAYPAL", b"palettes-not-sounds").await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "preview_sound", json!({ "name": "PLAYPAL" })).await;
         assert_eq!(code, "unsupported", "a palette is not a sound");
         assert!(
@@ -617,7 +617,7 @@ mod tests {
             "the message names the lump and the way out: {message}"
         );
         add_working_lump(&client, "DSTEST", &dmx_fixture()).await;
-        let (bits_code, bits_message) = call_err(
+        let (bits_code, bits_message, _) = call_err(
             &client,
             "preview_sound",
             json!({ "name": "DSTEST", "bits": 12_u64 }),
@@ -633,7 +633,8 @@ mod tests {
     #[tokio::test]
     async fn preview_sound_missing_lump_is_not_found() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "preview_sound", json!({ "name": "DSNOPE" })).await;
+        let (code, message, _) =
+            call_err(&client, "preview_sound", json!({ "name": "DSNOPE" })).await;
         assert_eq!(code, "not_found", "no such lump");
         assert!(
             message.contains("DSNOPE"),

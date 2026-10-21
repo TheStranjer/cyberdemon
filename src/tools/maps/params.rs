@@ -104,18 +104,26 @@ impl IndexSelector {
 
 /// Refuses an element `index` outside `0..len`.
 ///
+/// The message states the valid range `0..=N-1`; the hint names the tools
+/// that answer with real indices.
+///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] phrased for `kind` (e.g. `"linedef 12 does not
-/// exist (map has 7 linedefs)"`).
+/// exist (the map has 7 linedefs, valid indices are 0..=6)"`).
 #[inline]
 pub fn check_index(kind: &str, index: usize, len: usize) -> Result<(), CyberError> {
     if index < len {
         return Ok(());
     }
-    Err(CyberError::NotFound(format!(
-        "{kind} {index} does not exist (map has {len} {kind}s)"
-    )))
+    let range = len.checked_sub(1).map_or_else(
+        || format!("the map has no {kind}s"),
+        |last| format!("the map has {len} {kind}s, valid indices are 0..={last}"),
+    );
+    Err(
+        CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
+            .with_hint("describe_map or find_elements returns indices"),
+    )
 }
 
 /// Validates one texture or flat name and returns it uppercased.
@@ -291,14 +299,19 @@ mod tests {
         let error = check_index("linedef", 12, 7).expect_err("12 is out");
         assert_eq!(error.code(), "not_found", "out of range code");
         assert_eq!(
-            error.to_string(),
-            "linedef 12 does not exist (map has 7 linedefs)",
-            "the documented phrasing"
+            error.message(),
+            "linedef 12 does not exist (the map has 7 linedefs, valid indices are 0..=6)",
+            "the documented phrasing names the valid range"
+        );
+        assert_eq!(
+            error.hint(),
+            "describe_map or find_elements returns indices",
+            "the hint names the index-listing tools"
         );
         let zero = check_index("sector", 0, 0).expect_err("an empty map has none");
         assert_eq!(
-            zero.to_string(),
-            "sector 0 does not exist (map has 0 sectors)",
+            zero.message(),
+            "sector 0 does not exist (the map has no sectors)",
             "the empty-map phrasing"
         );
     }

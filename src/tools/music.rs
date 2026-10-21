@@ -411,7 +411,7 @@ fn preview(state: &AppState, args: &PreviewMusicParams) -> Result<PreviewMusicRe
 impl Cyberdemon {
     /// Imports a music file as a lump in the working archive.
     #[tool(
-        description = "Imports a music file as a lump in the working archive, as one undoable edit labelled \"import_music NAME\" (save_wad writes the result). source: absolute path, file:// URI, http(s):// URL or this server's asset URL. The input container is sniffed from the bytes: MUS, MIDI, OGG, MP3, FLAC, WAV, XM, IT, S3M and MOD are recognised; anything else is a format_error. format \"mus\" stores a vanilla Doom MUS lump: MIDI is converted (the result's warnings list the MIDI events MUS cannot carry), MUS is validated and stored unchanged; any other input is invalid_argument. format \"passthrough\" stores the original file bytes unchanged. Unset format defaults to \"mus\" for MIDI or MUS input and \"passthrough\" otherwise. Vanilla Doom plays only MUS from D_* lumps (Heretic uses MUS_* names; Hexen map music names come from MAPINFO), while ZDoom-family ports also play MIDI, OGG, MP3, FLAC and tracker module lumps. name defaults to \"D_\" plus the file stem uppercased and trimmed to 8 characters (runnin.mid -> D_RUNNIN); when nothing usable can be derived the call fails asking for this name. A working lump of the same name is already_exists unless replace=true (replace overwrites the last copy in place). Returns {name, input_format, stored_format, bytes, warnings}."
+        description = "Imports a music file as a lump in the working archive as one undoable edit: the container is sniffed from the bytes (MUS, MIDI, OGG, MP3, FLAC, XM, IT, S3M, MOD); format mus converts MIDI to a vanilla D_-lump and warns about events MUS cannot carry, while port formats keep their names. preview_music publishes it back as a playable file."
     )]
     async fn import_music(
         &self,
@@ -425,7 +425,7 @@ impl Cyberdemon {
 
     /// Publishes one music lump as a playable MIDI or original-file asset.
     #[tool(
-        description = "Publishes one music lump of the session as a playable file on the localhost asset server; the archives are not modified. Takes the shared lump selector: name plus optional scope (\"merged\" default, \"working\", \"layer:N\"), namespace and occurrence (default the last, winning match). The lump's bytes are sniffed: a MUS (vanilla Doom D_* score) is converted to a type-0 Standard MIDI File and published as NAME.mid (audio/midi), a corrupt one is a format_error; a MIDI lump is published unchanged as NAME.mid; OGG, MP3, FLAC and WAV lumps pass through unchanged with their own extension (audio/ogg, audio/mpeg, audio/flac, audio/wav); tracker modules (XM, IT, S3M, MOD) pass through unchanged as NAME.xm/.it/.s3m/.mod (application/octet-stream). Bytes no recognised music container owns are unsupported (use get_lump format=url for raw bytes); a name with no match is not_found. Returns {name, input_format, output_format, asset: {url, filename, mime, size}}."
+        description = "Publishes one music lump of the session as a playable file on the localhost asset server; the archives are not modified. A MUS lump converts to a type-0 MIDI and a port format (OGG, MP3, FLAC, tracker modules) is served as stored. Takes the shared lump selector. Use it to hear a track before replacing or renaming it."
     )]
     fn preview_music(
         &self,

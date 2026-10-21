@@ -452,7 +452,7 @@ mod tests {
             "without the flag the field reads null"
         );
 
-        let (skill_code, skill_message) = call_err(
+        let (skill_code, skill_message, _) = call_err(
             &client,
             "check_playability",
             json!({"map": "MAP01", "skill": "nightmare"}),
@@ -463,7 +463,7 @@ mod tests {
             skill_message.contains("\"medium\""),
             "and names the choices: {skill_message}"
         );
-        let (map_code, _map_message) = call_err(
+        let (map_code, _map_message, _) = call_err(
             &client,
             "check_playability",
             json!({"map": "MAP99", "skill": "hard"}),
@@ -831,7 +831,7 @@ mod tests {
     /// An index at the sector count refuses `not_found` with the range
     /// and the parameter named.
     async fn expect_index_refused(client: &Client, count: u64) {
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             client,
             "describe_map",
             json!({"map": "MAP12", "sectors": [count]}),
@@ -884,7 +884,7 @@ mod tests {
 
     /// The two ends of the `limit` range, each refused by name.
     async fn expect_limits_refused(client: &Client) {
-        let (zero_code, zero_message) = call_err(
+        let (zero_code, zero_message, _) = call_err(
             client,
             "describe_map",
             json!({"map": "MAP12", "limit": 0_u64}),
@@ -895,7 +895,7 @@ mod tests {
             zero_message.contains("between 1 and 500"),
             "the message names the range: {zero_message}"
         );
-        let (over_code, over_message) = call_err(
+        let (over_code, over_message, _) = call_err(
             client,
             "describe_map",
             json!({"map": "MAP12", "limit": 501_u64}),
@@ -927,12 +927,12 @@ mod tests {
     async fn describe_map_refuses_the_way_the_other_map_tools_do() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = features_loaded(dir.path()).await;
-        let (map_code, _map_message) =
+        let (map_code, _map_message, _) =
             call_err(&client, "describe_map", json!({"map": "MAP99"})).await;
         assert_eq!(map_code, "not_found", "an unknown map refuses");
 
         let bare = connect().await;
-        let (empty_code, empty_message) = call_err(&bare, "describe_map", json!({})).await;
+        let (empty_code, empty_message, _) = call_err(&bare, "describe_map", json!({})).await;
         assert_eq!(empty_code, "invalid_argument", "the empty session refuses");
         assert!(
             empty_message.contains("no map given and no active map"),

@@ -1269,6 +1269,7 @@ fn thing_sprite_def(session: &Session, kind: u32) -> Result<ThingDef, CyberError
                 "no thing type {kind} in the session definitions; get_thing_types lists what the \
                  game has, and custom types need their archive loaded"
             ))
+            .with_hint("get_thing_types with a search term")
         })?;
     if def.sprite.is_empty() {
         return Err(CyberError::NotFound(format!(
@@ -1321,7 +1322,7 @@ fn prepare_thing_sprite(
     let sprite = def.sprite.clone();
     let found = match load_sprite(session, &sprite, frame, request.rotation) {
         Ok(found) => found,
-        Err(CyberError::NotFound(_)) => {
+        Err(error) if error.code() == "not_found" => {
             return Err(missing_thing_sprite(&sprite, frame, request.rotation));
         }
         Err(error) => return Err(error),
@@ -1525,7 +1526,7 @@ async fn decode_patch_run(
 impl Cyberdemon {
     /// Lists the flat textures of the session.
     #[tool(
-        description = "Lists the flat (wall/floor/ceiling) lumps of the merged view's flats regions (between F_START/F_END or FF_START/FF_END; markers excluded, and when a name repeats the last lump wins): {name, size, width, height, format, source}. format is `\"png\"` when the bytes carry a PNG signature - then width/height come from the IHDR - and `\"raw\"` otherwise, where the vanilla shapes answer: 4096 bytes is 64x64, 8192 is 64x128, 16384 is 128x128, 65536 is 256x256; an unsupported size answers width/height null. source is list_lumps' archive origin (\"working\" or {\"layer\": N}). A session without flats answers {total: 0, flats: []}, not an error. Optional pattern is a case-insensitive name glob (* and ?); paging is offset (default 0) and limit (default 200, max 2000). Returns {total, flats} where total counts pattern matches before paging. Patch lumps (texture components) are listed by list_patches and sprite graphics by list_sprites; publish a flat's picture with get_flat, or read its bytes with get_lump or extract_lump."
+        description = "Lists the flat lumps of the merged view's flats regions (F_START/F_END or FF_START/FF_END markers, last same-name copy winning as an engine reads), with name, size, format, dimensions and source archive. pattern is a case-insensitive glob. Use it to find a flat before edit_sector or replace_flat; get_flat publishes one as a picture."
     )]
     fn list_flats(
         &self,
@@ -1546,7 +1547,7 @@ impl Cyberdemon {
 
     /// Lists the patch lumps of the session.
     #[tool(
-        description = "Lists the patch lumps of the merged view: every lump in a patches region (between P_START/P_END or PP_START/PP_END; markers excluded, last lump with a name wins) plus every lump PNAMES names from outside the flats and sprites regions. Rows are {name, size, width, height, left_offset, top_offset, format, in_pnames, namespace, source}: format is `\"doom\"` when the first eight bytes read as a Doom patch header (dimensions and drawing offsets from it; the column bodies are never touched), `\"png\"` for a PNG lump (dimensions from the IHDR, offsets from a grAb chunk when present) and `\"unknown\"` otherwise, where every measurement is null. in_pnames says whether PNAMES lists the name; namespace is `\"patches\"` inside a patches region and null elsewhere; source is list_lumps' archive origin. A session without patches answers {total: 0, patches: []}, not an error; a malformed PNAMES fails with format_error. Optional pattern is a case-insensitive name glob (* and ?), in_pnames_only (default false) restricts the list to PNAMES entries, and paging is offset (default 0) and limit (default 200, max 2000). Returns {total, patches} where total counts matches before paging. See list_textures and list_pnames for the textures these patches compose, list_flats and list_sprites for the other graphic lumps; publish one as a picture with get_patch."
+        description = "Lists the patch lumps of the merged view's patches regions (P_START/P_END or PP_START/PP_END, plus PNAMES-listed loose copies), last same-name winning, with dimensions, offsets and source. pattern filters names. Use it before add_patch or build_texture to see what exists; get_patch publishes one as an image."
     )]
     fn list_patches(
         &self,
@@ -1572,7 +1573,7 @@ impl Cyberdemon {
 
     /// Lists the sprite lumps of the session, grouped by sprite.
     #[tool(
-        description = "Groups the merged view's sprite-region lumps (between S_START/S_END or SS_START/SS_END; markers excluded, last lump with a name wins) by the Doom sprite name grammar: four characters of sprite name, a frame letter (A-Z, then [, \\, ]), a rotation digit 0-8 - and optionally a second frame+rotation served by the same image horizontally mirrored, e.g. POSSA2A8 serves rotation 2 directly and rotation 8 flipped; rotation 0 serves every angle with the one image. Answers {total, sprites, invalid}: sprites is [{sprite, frames: [{frame, rotations: [{rotation, lump, mirrored}]}]}] grouped by prefix, frames in letter order, rotations by number then lump name; invalid lists the region lumps whose names match no grammar, in directory order. total counts sprite groups before paging (the prefix filter applied); paging is offset (default 0) and limit (default 200, max 2000) over groups. Optional prefix keeps one four-character sprite (case-insensitive letters or digits) - any other text fails with invalid_argument. A session without sprites answers {total: 0, sprites: [], invalid: []}, not an error. Flats are listed by list_flats, patches by list_patches; publish one rotation with get_sprite."
+        description = "Groups the merged view's sprite-region lumps (S_START/S_END or SS_START/SS_END) by sprite, frame and the rotations their names serve, with an optional prefix filter. Use it before import_image_as_sprite or create_sprite_from_image to see which rotations exist; get_sprite publishes one rotation as a picture."
     )]
     fn list_sprites(
         &self,
@@ -1597,7 +1598,7 @@ impl Cyberdemon {
 
     /// Publishes one flat as an image asset.
     #[tool(
-        description = "Publishes one flat (wall/floor/ceiling) texture as an image asset on the localhost asset server; nothing is edited. name (1 to 8 printable ASCII characters, case-insensitive) is resolved the way an engine resolves it in the merged view: the last flats-region lump of that name wins, then any other lump of that name. A raw flat is decoded from the vanilla sizes (4096 bytes = 64x64, 8192 = 64x128, 16384 = 128x128, 65536 = 256x256); a PNG flat, as ZDoom-family mods store them, is decoded and quantized to PLAYPAL entry 0, so alpha-transparent pixels stay transparent holes. palette picks the PLAYPAL entry that colours the published picture (default 0); an index the PLAYPAL does not hold, or a session with no PLAYPAL at all, is not_found - open_iwad first. format is \"png\" (default: a PNG asset NAME.png, image/png) or \"rgba\" (raw row-major RGBA8 bytes, width*height*4 of them, NAME.rgba, application/octet-stream). scale (1..=8, default 1) upscales nearest-neighbour before publishing and multiplies the reported dimensions. Flats store no drawing offsets, so the result has none. A name no archive holds is not_found (list_flats shows the names); bytes that are neither a supported raw size nor a readable PNG are format_error. Returns {name, width, height, asset: {url, filename, mime, size}}; fetch the url to see the picture. get_patch publishes texture components, get_sprite one sprite rotation."
+        description = "Publishes one flat as an image asset on the localhost server and reports its dimensions; nothing is edited. name resolves the way an engine resolves it in the merged view (last flats-region match wins); raw vanilla sizes and ZDoom PNG flats decode, palette picks the PLAYPAL entry, scale upscales and format picks png or rgba. A name no archive holds is not_found - list_flats shows the names."
     )]
     fn get_flat(
         &self,
@@ -1619,7 +1620,7 @@ impl Cyberdemon {
 
     /// Publishes one patch lump as an image asset.
     #[tool(
-        description = "Publishes one patch lump (a texture component, HUD graphic or port graphic) as an image asset; nothing is edited. name (1 to 8 printable ASCII characters, case-insensitive) is resolved in the merged view: the last patches-region lump of that name wins, then the last loose lump of that name from outside the flats and sprites regions (PNAMES can name a patch anywhere). Doom column/post patches decode with their header drawing offsets; PNG patches are quantized to PLAYPAL entry 0 with alpha transparency and take their offsets from a grAb chunk, defaulting to 0,0. Transparent pixels are published as holes. palette (default 0) colours the published picture and is not_found when the PLAYPAL lacks that entry. format is \"png\" (default: NAME.png, with the offsets kept in a grAb chunk) or \"rgba\" (raw row-major RGBA8 bytes, width*height*4 of them, NAME.rgba, application/octet-stream). scale (1..=8, default 1) upscales nearest-neighbour and multiplies the reported dimensions and offsets alike. A name no archive holds is not_found (list_patches shows the names, get_lump or extract_lump the raw bytes); bytes that are neither format are format_error. Returns {name, width, height, left_offset, top_offset, asset}; left_offset and top_offset are where the image's top-left corner sits relative to the drawing point, in published pixels."
+        description = "Publishes one patch lump (a texture component, HUD or port graphic) as a PNG image asset with its drawing offsets, or raw RGBA bytes with format \"rgba\"; nothing is edited. name resolves the merged view with the last patches-region match winning; palette and scale tune the picture. list_patches shows the names; decode_patch also reads external files."
     )]
     fn get_patch(
         &self,
@@ -1641,7 +1642,7 @@ impl Cyberdemon {
 
     /// Publishes one sprite lump or rotation as an image asset.
     #[tool(
-        description = "Publishes one sprite rotation as an image asset; nothing is edited. Name the picture exactly one way: name is a whole sprite lump name, served as stored (\"TROOA1\", or \"TROOA2A8\" for that lump's own unflipped image), while sprite is the four-character prefix with an optional frame (one letter A-Z, then [, \\, ]; default \"A\") and rotation (0..=8; default 1). Both given, or neither, is invalid_argument. A sprite/frame/rotation request resolves the way an engine does: the lump named for that rotation wins, then a lump whose eight-character name carries this rotation as its mirror pair - published flipped horizontally, its left_offset mirrored to width - left_offset - then the frame's rotation-0 all-angles image, so PLAYA0 answers every rotation of frame A; rotation 0 is that all-angles image itself. Rotations are looked for in the sprite regions; a whole lump name falls back to the patches region and to loose lumps. palette (default 0), format (\"png\" default, \"rgba\" for raw row-major RGBA8 bytes) and scale (1..=8, default 1) work as in get_patch, and PNG assets carry the drawing offsets in a grAb chunk. An unknown sprite, frame or rotation is not_found (list_sprites groups what exists); a malformed selector is invalid_argument; a lump that is no picture is format_error. Returns {name, lump, mirrored, width, height, left_offset, top_offset, asset}: name is the rotation asked for (\"TROOA8\"), lump the name whose pixels served it and mirrored whether they were flipped."
+        description = "Publishes one sprite rotation as an image asset; nothing is edited. Either name gives a whole sprite lump name served as stored, or sprite with optional frame (default A) and rotation (0..=8, default 1) resolves the way the engine's viewer-angle buckets do, mirrored frames included. Both or neither is invalid_argument. get_thing_sprite starts from a doomednum."
     )]
     fn get_sprite(
         &self,
@@ -1663,7 +1664,7 @@ impl Cyberdemon {
 
     /// Previews one thing type's sprite rotation as an image asset.
     #[tool(
-        description = "Publishes what one thing type looks like in game as an image asset; nothing is edited. type (e.g. 3001, the Imp) is looked up in the SESSION-AWARE definitions: the game's built-in thing table (the session's detected game, DOOM II when unidentified) overlaid with the merged view's DEHACKED, DECORATE, ZScript and MAPINFO custom types - load the archives first (open_iwad/merge_wad). Optional frame (one letter A-Z, then [, \\, ]; case-insensitive; default: the definition's own frame) and rotation (1..=8, default 1: the eight views, 1 the front a head-on viewer sees, 5 the back) pick the picture. The rotation resolves the way an engine does, exactly as get_sprite: the lump named for it (\"TROOA1\") wins, then a mirror-pair lump published flipped (\"TROOA2A8\" serves 8), then the frame's rotation-0 all-angles image (\"PLAYA0\"). palette (default 0), format (\"png\" default with the drawing offsets in a grAb chunk, \"rgba\" for raw row-major RGBA8 bytes) and scale (1..=8, default 1) work as in get_sprite. An unknown type is not_found (get_thing_types lists what exists); a definition without a sprite is not_found (\"thing type N has no sprite\"); a frame or rotation no lump serves is not_found naming the expected lump pattern (e.g. \"TROOA1 / TROOA0\", list_sprites shows the rest); a malformed frame or a rotation outside 1..=8 is invalid_argument. Returns {type, name, sprite, frame, rotation, lump, mirrored, width, height, left_offset, top_offset, hanging, asset}: name is the definition's display name, lump the sprite lump whose pixels served, mirrored whether they were flipped, hanging whether the thing hangs from the ceiling."
+        description = "Publishes what one thing type looks like in game as an image asset; nothing is edited. type is looked up in the session-aware definitions - the detected game's table overlaid with DEHACKED, DECORATE, ZScript and MAPINFO customs, so load the archives first; optional frame and rotation pick the view. An unknown type is not_found: get_thing_types lists the numbers."
     )]
     fn get_thing_sprite(
         &self,
@@ -1686,7 +1687,7 @@ impl Cyberdemon {
     /// Decodes a Doom-format patch from a lump or a file and publishes it
     /// as both a PNG and raw RGBA.
     #[tool(
-        description = "Decodes one Doom-format patch - from a session lump or from an external file - and publishes it both ways, so the caller can pick an encoding; nothing is edited. Exactly one of name and source is required, both or neither is invalid_argument: name is a lump (1 to 8 printable ASCII characters, case-insensitive) resolved anywhere in the merged view, source an absolute path, file:// URI, http(s):// URL or this server's asset URL, fetched for its bytes. Only the Doom column/post encoding is read here, DeePsea tall patches included; PNG lumps and files are not (get_patch and list_patches read those), and bytes that are no Doom patch fail with format_error, as does a name no archive holds (not_found). palette picks the PLAYPAL entry that colours both pictures (default 0; not_found when the PLAYPAL lacks it). The result always carries both assets: png is a PNG named after the lump or file with the drawing offsets in a grAb chunk, rgba the same picture as raw row-major RGBA8 bytes (width*height*4 of them, application/octet-stream). Transparent pixels stay transparent. Returns {name, width, height, left_offset, top_offset, palette, png, rgba}; name is the lump name, or the fetched file's stem uppercased to a lump name when it allows one. Use it to read a patch file that is not in a WAD yet (add it later with add_lump or import_file_as_lump), or to check the bytes you wrote into a P_START lump."
+        description = "Decodes one Doom-format patch - from a session lump (name) or an external file (source; exactly one) - and publishes it both ways: a PNG with the grAb offsets and raw RGBA8 bytes, so you can pick an encoding; nothing is edited. Tall DeePsea patches read; PNG bytes are not patch data, use get_asset_url for those."
     )]
     async fn decode_patch(
         &self,

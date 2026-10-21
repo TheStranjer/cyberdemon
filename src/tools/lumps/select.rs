@@ -79,7 +79,8 @@ fn choose(
         return Err(CyberError::NotFound(format!(
             "lump {name} not found in {scope}",
             scope = scope_label(scope)
-        )));
+        ))
+        .with_hint("search_lumps finds lumps by pattern"));
     };
     let wanted = occurrence.unwrap_or(last);
     matched.into_iter().nth(wanted).ok_or_else(|| {

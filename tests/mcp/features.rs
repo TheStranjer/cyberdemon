@@ -179,7 +179,7 @@ mod tests {
     /// naming `needle`.
     async fn refuse_secret(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "mark_secret", args).await;
+        let (code, message, _) = call_err(client, "mark_secret", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -191,7 +191,7 @@ mod tests {
     /// naming `needle`.
     async fn refuse_light(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "set_light_effect", args).await;
+        let (code, message, _) = call_err(client, "set_light_effect", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -246,7 +246,7 @@ mod tests {
     /// naming `needle`.
     async fn refuse_with(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_door", args).await;
+        let (code, message, _) = call_err(client, "add_door", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -258,7 +258,7 @@ mod tests {
     /// naming `needle`.
     async fn refuse_window(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_window", args).await;
+        let (code, message, _) = call_err(client, "add_window", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -300,7 +300,7 @@ mod tests {
     /// naming `needle`.
     async fn refuse_switch(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_switch", args).await;
+        let (code, message, _) = call_err(client, "add_switch", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -312,7 +312,7 @@ mod tests {
     /// naming `needle`.
     async fn refuse_exit(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_exit", args).await;
+        let (code, message, _) = call_err(client, "add_exit", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
@@ -547,7 +547,7 @@ mod tests {
             "256 map units long",
         )
         .await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -802,7 +802,7 @@ mod tests {
             "at least 16",
         )
         .await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -837,7 +837,7 @@ mod tests {
             "linedef 999 is out of range",
         )
         .await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -1087,7 +1087,7 @@ mod tests {
             "positive",
         )
         .await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -1326,7 +1326,7 @@ mod tests {
             "linedef 999 is out of range",
         )
         .await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -1807,7 +1807,7 @@ mod tests {
             "sector 42 is out of range",
         )
         .await;
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -1873,13 +1873,13 @@ mod tests {
     /// naming `needle`, and the working archive to hold nothing.
     async fn refuse_stairs(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_stairs", args).await;
+        let (code, message, _) = call_err(client, "add_stairs", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
             "the refusal for {note} must mention {needle:?}: {message}"
         );
-        let (missing, _) = call_err(
+        let (missing, _, _) = call_err(
             client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -2024,7 +2024,7 @@ mod tests {
             json!(["add stairs"]),
             "the whole staircase rolls back together"
         );
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -2133,13 +2133,13 @@ mod tests {
     /// naming `needle`, and the working archive to hold nothing.
     async fn refuse_lift(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_lift", args).await;
+        let (code, message, _) = call_err(client, "add_lift", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
             "the refusal for {note} must mention {needle:?}: {message}"
         );
-        let (missing, _) = call_err(
+        let (missing, _, _) = call_err(
             client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -2538,7 +2538,7 @@ mod tests {
             json!(["add use_wall lift"]),
             "the whole lift rolls back together"
         );
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -2551,13 +2551,13 @@ mod tests {
     /// naming `needle`, and the working archive to hold nothing.
     async fn refuse_teleporter(client: &Client, args: Value, needle: &str) {
         let note = args.to_string();
-        let (code, message) = call_err(client, "add_teleporter", args).await;
+        let (code, message, _) = call_err(client, "add_teleporter", args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {note}");
         assert!(
             message.contains(needle),
             "the refusal for {note} must mention {needle:?}: {message}"
         );
-        let (missing, _) = call_err(
+        let (missing, _, _) = call_err(
             client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
@@ -3004,7 +3004,7 @@ mod tests {
     /// Asserts `place_things` refuses `args` with `code` for a message
     /// containing `needle`.
     async fn refuse_places(client: &Client, args: Value, code: &str, needle: &str) {
-        let (found, message) = call_err(client, "place_things", args).await;
+        let (found, message, _) = call_err(client, "place_things", args).await;
         assert_eq!(found, code, "refusal code for {needle:?}: {message}");
         assert!(message.contains(needle), "{needle:?}: {message}");
     }
@@ -3255,7 +3255,7 @@ mod tests {
         assert_eq!(result["placed"], json!(4_u64), "the dry run computes four");
         assert_eq!(result["dry_run"], json!(true));
         assert_eq!(result["positions"].as_array().expect("positions").len(), 4);
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "assemble_map",
             json!({"map": "MAP01", "scope": "working"}),

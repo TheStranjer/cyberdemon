@@ -125,6 +125,7 @@ pub(crate) fn load_palette(session: &Session, index: usize) -> Result<Palette, C
 fn require_playpal(session: &Session) -> Result<Vec<u8>, CyberError> {
     let entry = find_global(session, PLAYPAL_RAW).ok_or_else(|| {
         CyberError::NotFound("no PLAYPAL in the session; open an IWAD with open_iwad".to_owned())
+            .with_hint("call open_iwad (game data) first, then new_wad or open_wad")
     })?;
     Ok(entry.lump.data.to_vec())
 }
@@ -551,7 +552,7 @@ async fn set_palette_run(
 impl Cyberdemon {
     /// Reads one `PLAYPAL` palette of the session.
     #[tool(
-        description = "Reads one PLAYPAL palette of the merged view (index, default 0: 0 is the normal palette, 1..=8 the red damage tints, 9..=12 the gold pickup tints and 13 the green radiation-suit tint; other entries exist in some ports). Returns {palettes: entries the PLAYPAL holds, index, colors: 256 \"#RRGGBB\" strings, swatch: a published 256x256 PNG preview drawn as a 16x16 grid of 16-pixel cells, has_colormap: whether the session also has a COLORMAP lump}. not_found when no loaded archive holds a PLAYPAL (open an IWAD first) or when index is past the last entry. Change the palette with set_palette."
+        description = "Reads one PLAYPAL palette of the merged view as 256 #RRGGBB strings with a published 256x256 swatch, and reports whether a COLORMAP exists. index picks the entry (0 the normal palette, 1..=8 damage tints, 9..=12 pickup, 13 the radiation suit). No PLAYPAL loaded is not_found - open_iwad first. set_palette writes new palettes."
     )]
     fn get_palette(
         &self,
@@ -565,7 +566,7 @@ impl Cyberdemon {
 
     /// Replaces `PLAYPAL` palettes, optionally rebuilding tints and `COLORMAP`.
     #[tool(
-        description = "Writes palettes into the working archive's PLAYPAL as ONE undoable edit labelled `set_palette` (copy-on-write: the merged PLAYPAL is brought in first when the working archive has none; save_wad writes the result; read-only layers are never touched). Exactly one source: colors (exactly 256 \"#RRGGBB\" strings - bad hex or the wrong count is invalid_argument) or source (an absolute path, file:// URI, http(s):// URL or uploaded asset URL of either an image with exactly 256 pixels, read row-major with alpha dropped - e.g. a 16x16 PNG - or raw palette bytes whose length is a non-empty multiple of 768, which replace the WHOLE PLAYPAL). index (default 0) says which entry a 256-colour payload replaces; index equal to the current palette count appends a palette, a larger index is invalid_argument. regenerate_tints=true rebuilds palettes 1..=13 from palette 0, appending what is missing to reach the vanilla 14: red tints 1..=8 tint towards (255,0,0) with weight i/9, gold 9..=12 towards (215,186,69) with weight (i-8)/8 and green 13 towards (0,255,0) with weight 1/8, per channel c' = c + (t - c)*num/den rounded - an integer approximation of the vanilla tables. regenerate_colormap=true rebuilds COLORMAP (34 tables x 256) from palette 0 by nearest-colour matching: map k scales colours by (32-k)/32, map 32 is the inverted greyscale 255 - (299r+587g+114b)/1000 (the invulnerability map) and map 33 maps everything to the nearest colour to black. Returns {palettes: entries after the edit, replaced: ascending indices the call wrote (a raw source writes all of them; the tints add 1..=13), colormap_regenerated}."
+        description = "Writes palettes into the working archive's PLAYPAL as ONE undoable edit (copy-on-write from the merged lump): colors is exactly 256 #RRGGBB strings replacing the entry index (default 0, passing the count appends), or source is a 256-pixel image or raw palette bytes; regenerate_tints rebuilds the vanilla 1..=13 and regenerate_colormap rebuilds COLORMAP. Returns a swatch preview."
     )]
     async fn set_palette(
         &self,

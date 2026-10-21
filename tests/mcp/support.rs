@@ -139,18 +139,19 @@ pub async fn call(client: &RunningService<RoleClient, ()>, tool: &str, args: Val
 }
 
 /// Call a tool, assert it failed with the documented error shape, and return
-/// the `(error code, message)` pair from its structured content.
+/// the `(error code, message, hint)` triple from its structured content.
 ///
 /// # Panics
 ///
 /// Panics if the protocol call fails, the result is not an error, or the
-/// structured content lacks the documented `error`/`message` string fields.
+/// structured content lacks the documented `error`/`message`/`hint` string
+/// fields.
 #[inline]
 pub async fn call_err(
     client: &RunningService<RoleClient, ()>,
     tool: &str,
     args: Value,
-) -> (String, String) {
+) -> (String, String, String) {
     let result = client
         .call_tool(params_for(tool, args))
         .await
@@ -165,7 +166,8 @@ pub async fn call_err(
         .expect("structured content on failure");
     let code = string_field(&content, "error");
     let message = string_field(&content, "message");
-    (code, message)
+    let hint = string_field(&content, "hint");
+    (code, message, hint)
 }
 
 /// Read a required string field out of a structured content object.

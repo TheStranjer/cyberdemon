@@ -47,7 +47,7 @@ mod tests {
     /// Asserts `tool` rejects `args` with the error code `want`.
     async fn refuse(client: &Client, tool: &str, args: Value, want: &str) {
         let note = args.to_string();
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, want, "refusal code for {tool} {note}");
     }
 
@@ -201,7 +201,7 @@ mod tests {
     async fn set_texture_theme_refuses_noise() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "set_texture_theme", json!({"theme": "pastel"})).await;
         assert_eq!(code, "invalid_argument", "unknown theme");
         assert!(
@@ -354,7 +354,7 @@ mod tests {
         )
         .await;
         let bare = connect().await;
-        let (code, message) = call_err(&bare, "auto_texture", json!({})).await;
+        let (code, message, _) = call_err(&bare, "auto_texture", json!({})).await;
         assert_eq!(code, "invalid_argument", "no map anywhere");
         assert!(
             message.contains("set_active_map"),

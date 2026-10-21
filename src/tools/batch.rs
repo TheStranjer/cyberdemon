@@ -96,8 +96,8 @@ struct StepOutcome {
     ok: bool,
     /// The call's structured content on success; `null` on failure.
     result: Option<Value>,
-    /// The call's `{"error", "message"}` object on failure; `null` on
-    /// success.
+    /// The call's `{"error", "message", "hint"}` object on failure; `null`
+    /// on success.
     error: Option<Value>,
 }
 
@@ -138,6 +138,7 @@ impl StepOutcome {
             error: Some(json!({
                 "error": TOOL_ERROR,
                 "message": format!("the step could not run: {message}"),
+                "hint": Value::Null,
             })),
         }
     }
@@ -148,10 +149,7 @@ impl StepOutcome {
             tool: tool.to_owned(),
             ok: false,
             result: None,
-            error: Some(json!({
-                "error": error.code(),
-                "message": error.to_string(),
-            })),
+            error: Some(crate::tools::error_json(error)),
         }
     }
 }
@@ -168,9 +166,9 @@ fn is_failure(result: &CallToolResult) -> bool {
         .is_some_and(|value| value.get(ERROR_KEY).is_some())
 }
 
-/// The error payload of a failed call: its structured `{"error", "message"}`
-/// object when it carries one, else a [`TOOL_ERROR`] built from the result's
-/// first text block.
+/// The error payload of a failed call: its structured `{"error", "message",
+/// "hint"}` object when it carries one, else a [`TOOL_ERROR`] built from the
+/// result's first text block.
 fn error_payload(result: &CallToolResult) -> Value {
     let structured = result
         .structured_content
@@ -182,7 +180,7 @@ fn error_payload(result: &CallToolResult) -> Value {
             .first()
             .and_then(ContentBlock::as_text)
             .map_or_else(String::new, |item| item.text.clone());
-        json!({ "error": TOOL_ERROR, "message": text })
+        json!({ "error": TOOL_ERROR, "message": text, "hint": Value::Null })
     })
 }
 
@@ -529,7 +527,7 @@ impl Runner<'_> {
 impl Cyberdemon {
     /// Runs several tool calls as one atomic, single-undo batch.
     #[tool(
-        description = "Runs up to 50 tool calls in order as one undoable step: any batch that ends without an atomic rollback leaves a single undo entry labelled label (default \"batch: tool1, tool2, ...\", kept to 80 characters), so one undo reverts the whole sequence and one redo re-applies it. Each step is {tool, arguments?}; an argument object of the exact form {\"$ref\": \"<step index>/<json pointer>\"} (e.g. {\"index\": {\"$ref\": \"0/index\"}}, or {\"$ref\": \"1/things/0\"}) is replaced by that value from that earlier step's structured result before the step runs. atomic (default true) stops at the first failing step and undoes everything the batch recorded (rolled_back true); atomic false keeps going and keeps the successful edits. run_batch, undo, redo, open_iwad, open_wad, new_wad, merge_wad and save_wad cannot run inside a batch, and neither can unknown tools or counts outside 1..=50: those fail the whole call with invalid_argument before anything runs. A rollback restores only the working archive: a texture theme, render settings, asset capacity and the active map set by earlier steps stay. Returns {ok, rolled_back, steps: [{tool, ok, result, error}], undo_label}; failed steps report through the result, so the call itself carries an error result only for the batch-level refusals above."
+        description = "Runs up to 50 tool calls in order as ONE undoable step: each step is {tool, arguments?}, an argument {\"$ref\": \"<step>/<json-pointer>\"} takes that earlier step's result value, and atomic (default true) stops at the first failure and rolls every recorded edit back. run_batch, undo, redo and the archive tools cannot nest inside. Returns {ok, rolled_back, steps, undo_label}."
     )]
     async fn run_batch(
         &self,

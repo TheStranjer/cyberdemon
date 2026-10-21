@@ -315,17 +315,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;
         load_iwad(&client, dir.path()).await;
-        let (unknown_code, unknown_message) =
+        let (unknown_code, unknown_message, _) =
             call_err(&client, "diff_wads", json!({ "a": "sideways" })).await;
         assert_eq!(unknown_code, "invalid_argument", "unknown side code");
         assert!(
             unknown_message.contains("absolute path"),
             "the message lists the forms: {unknown_message}"
         );
-        let (relative_code, _) =
+        let (relative_code, _, _) =
             call_err(&client, "diff_wads", json!({ "b": "wads/extra.wad" })).await;
         assert_eq!(relative_code, "invalid_argument", "relative path code");
-        let (layer_code, _) = call_err(&client, "diff_wads", json!({ "b": "layer:x" })).await;
+        let (layer_code, _, _) = call_err(&client, "diff_wads", json!({ "b": "layer:x" })).await;
         assert_eq!(layer_code, "invalid_argument", "non-numeric layer code");
     }
 
@@ -334,7 +334,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;
         load_iwad(&client, dir.path()).await;
-        let (missing_code, missing_message) = call_err(
+        let (missing_code, missing_message, _) = call_err(
             &client,
             "diff_wads",
             json!({ "b": dir.path().join("absent.wad").display().to_string() }),
@@ -345,10 +345,10 @@ mod tests {
             missing_message.contains("absent.wad"),
             "the message names the file: {missing_message}"
         );
-        let (range_code, _) = call_err(&client, "diff_wads", json!({ "b": "layer:3" })).await;
+        let (range_code, _, _) = call_err(&client, "diff_wads", json!({ "b": "layer:3" })).await;
         assert_eq!(range_code, "not_found", "out of range layer code");
         let junk = not_a_wad(dir.path());
-        let (junk_code, junk_message) = call_err(
+        let (junk_code, junk_message, _) = call_err(
             &client,
             "diff_wads",
             json!({ "b": junk.display().to_string() }),
@@ -389,14 +389,14 @@ mod tests {
             json!(17_i64),
             "sixteen lumps and one map, counted before paging"
         );
-        let (zero_code, zero_message) =
+        let (zero_code, zero_message, _) =
             call_err(&client, "diff_wads", json!({ "limit": 0_u64 })).await;
         assert_eq!(zero_code, "invalid_argument", "zero is no page");
         assert!(
             zero_message.contains("1 and 5000"),
             "the message names the range: {zero_message}"
         );
-        let (over_code, _) = call_err(&client, "diff_wads", json!({ "limit": 5001_u64 })).await;
+        let (over_code, _, _) = call_err(&client, "diff_wads", json!({ "limit": 5001_u64 })).await;
         assert_eq!(over_code, "invalid_argument", "past the ceiling");
     }
 
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(report["dry_run"], json!(false), "the run applied");
         assert_eq!(report["lumps_removed"], json!(5_i64), "five entries went");
         assert_eq!(working_lumps(&client).await, 3, "three stay");
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "get_lump",
             json!({ "name": "PLAYPAL", "scope": "working", "format": "info" }),
@@ -567,7 +567,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;
         load_iwad(&client, dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "optimize_wad",
             json!({ "operations": ["unused_things"] }),
@@ -593,7 +593,7 @@ mod tests {
             json!({ "name": "PNAMES", "hex": "05 00 00 00" }),
         )
         .await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "optimize_wad",
             json!({ "operations": ["unused_pnames"], "dry_run": false }),

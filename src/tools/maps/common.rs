@@ -123,11 +123,14 @@ pub(in crate::tools) fn resolve_map_name(
 /// does not hold exactly one map.
 fn no_map_error() -> CyberError {
     CyberError::InvalidArgument(
-        "no map given and no active map; pass map or call set_active_map (list_maps shows the \
-         maps of the merged view)"
-            .to_owned(),
+        "no map given and no active map; pass map or call set_active_map".to_owned(),
     )
+    .with_hint(MAP_LIST_HINT)
 }
+
+/// The hint attached to every refusal about a map the session does not
+/// name: list what exists, or make a new one.
+const MAP_LIST_HINT: &str = "list_maps shows the maps; create_map makes a new one";
 
 /// Read the map named `name` out of `scope`, decoding its block.
 ///
@@ -147,9 +150,10 @@ pub(crate) fn load_map(session: &Session, name: LumpName, scope: Scope) -> Resul
 /// The `not_found` refusal for a map a scope does not hold.
 pub(in crate::tools) fn missing_map(name: LumpName, scope: Scope) -> CyberError {
     CyberError::NotFound(format!(
-        "no map block named {name} in the {} scope: list_maps shows the maps of each scope",
+        "no map block named {name} in the {} scope",
         scope_label(scope)
     ))
+    .with_hint(MAP_LIST_HINT)
 }
 
 /// The scope's wire name, for messages.

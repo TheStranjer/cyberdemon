@@ -416,7 +416,11 @@ impl Stock {
         Err(CyberError::NotFound(format!(
             "wall texture {name} does not exist in the merged view: list_textures shows \
              the composites, build_texture and the import tools add more"
-        )))
+        ))
+        .with_hint(
+            "list_textures / list_flats with a glob pattern; or create one with \
+                    create_texture_from_image / create_flat_from_image",
+        ))
     }
 
     /// Refuse a flat name the merged view lacks.
@@ -433,7 +437,11 @@ impl Stock {
         Err(CyberError::NotFound(format!(
             "flat {name} does not exist in the merged view: list_flats shows the flats, \
              import_image_as_flat adds one"
-        )))
+        ))
+        .with_hint(
+            "list_textures / list_flats with a glob pattern; or create one with \
+                    create_texture_from_image / create_flat_from_image",
+        ))
     }
 }
 
@@ -657,8 +665,9 @@ pub(in crate::tools) fn resolve_thing_ref(
         ThingRef::Number(number) => stored_kind(number),
         ThingRef::Name(text) => {
             let definitions = thing_definitions(session)?;
-            let resolved =
-                resolve_thing_kind(&definitions, &text).map_err(CyberError::InvalidArgument)?;
+            let resolved = resolve_thing_kind(&definitions, &text).map_err(|problem| {
+                CyberError::InvalidArgument(problem).with_hint("get_thing_types with a search term")
+            })?;
             stored_kind(resolved)
         }
     }
@@ -698,7 +707,6 @@ mod tests {
         parse_terms, require_defined_thing, require_target, resolve, resolve_thing_ref,
         run_replacement, thing_definitions,
     };
-    use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::tools::maps::common;
     use crate::wad::archive::{Lump, Wad, WadKind};
@@ -862,11 +870,9 @@ mod tests {
             vec![name("MAP02"), name("MAP01")],
             "given order, uppercased, deduplicated"
         );
-        let CyberError::NotFound(message) =
-            resolve(&session, Some(&names_of(&["MAP09"]))).expect_err("no MAP09 here")
-        else {
-            panic!("a missing map is not_found");
-        };
+        let error = resolve(&session, Some(&names_of(&["MAP09"]))).expect_err("no MAP09 here");
+        assert_eq!(error.code(), "not_found", "a missing map is not_found");
+        let message = error.message();
         assert!(message.contains("MAP09"), "the message names it: {message}");
         let long = resolve(&session, Some(&names_of(&["MAP012345"])))
             .expect_err("nine characters is over");

@@ -620,7 +620,9 @@ mod tests {
 
     /// One failing `import_image_as_patch` of `file` with `extra`.
     async fn import_twin_err(client: &Client, file: &Path, extra: Value) -> (String, String) {
-        call_err(client, "import_image_as_patch", source_args(file, extra)).await
+        let (code, message, _) =
+            call_err(client, "import_image_as_patch", source_args(file, extra)).await;
+        (code, message)
     }
 
     /// Undo steps each import back separately, the `PNAMES` override
@@ -691,7 +693,7 @@ mod tests {
     async fn refuse_all(client: &Client, tool: &str, cases: &[Refusal]) {
         for case in cases {
             let (label, expect_code, expect_text) = (case.0, case.2, case.3);
-            let (code, message) = call_err(client, tool, case.1.clone()).await;
+            let (code, message, _) = call_err(client, tool, case.1.clone()).await;
             assert_eq!(code, expect_code, "{label} code: {message}");
             assert!(
                 message.contains(expect_text),
@@ -789,7 +791,7 @@ mod tests {
         let client = connect().await;
         let dir = tempfile::tempdir().expect("a scratch directory");
         let file = write_file(dir.path(), "ART.png", &palette_png(SIDE, SIDE, None, None));
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "import_image_as_patch",
             source_args(&file, json!({ "name": "ART" })),
@@ -894,7 +896,9 @@ mod tests {
 
     /// One failing `import_image_as_flat` of `file` with `extra`.
     async fn flat_import_err(client: &Client, file: &Path, extra: Value) -> (String, String) {
-        call_err(client, "import_image_as_flat", source_args(file, extra)).await
+        let (code, message, _) =
+            call_err(client, "import_image_as_flat", source_args(file, extra)).await;
+        (code, message)
     }
 
     /// Assert a flat report stores the given shape and resize verdict.
@@ -1304,7 +1308,7 @@ mod tests {
             json!("patches"),
             "the region classifies it"
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "import_image_as_raw",
             source_args(&file, json!({ "namespace": "patches" })),
@@ -1346,7 +1350,7 @@ mod tests {
             "notes.txt",
             b"this is a text file, not an image",
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "import_image_as_raw",
             source_args(&junk, Value::Null),
@@ -1356,7 +1360,7 @@ mod tests {
         assert!(message.contains("image"), "the message explains: {message}");
         let empty = call(&client, "list_lumps", json!({ "scope": "working" })).await;
         assert_eq!(empty["total"], json!(1_u64), "only the JPEG landed");
-        let (bad_region, _) = call_err(
+        let (bad_region, _, _) = call_err(
             &client,
             "import_image_as_raw",
             source_args(&jpeg, json!({ "namespace": "nope", "name": "SECOND" })),
@@ -1639,7 +1643,7 @@ mod tests {
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "BOBA.png", &hole_png());
         let first = sprite_import(&client, &file, json!({ "name": "BOBAA1" })).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "import_image_as_sprite",
             source_args(&file, json!({ "name": "BOBAA1" })),
@@ -1894,7 +1898,7 @@ mod tests {
             "PLAIN.png",
             &flat_png(100_u32, 60_u32, |_| false),
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "process_image",
             source_args(
@@ -1991,7 +1995,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "ODD.png", &flat_png(100_u32, 60_u32, |_| false));
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "create_texture_from_image",
             source_args(&file, json!({ "name": "NOPE", "width": 100_u64 })),
@@ -2098,7 +2102,7 @@ mod tests {
             "CLASH.png",
             &flat_png(64_u32, 128_u32, |_| false),
         );
-        let (patch_code, patch_message) = call_err(
+        let (patch_code, patch_message, _) = call_err(
             &client,
             "create_texture_from_image",
             source_args(&file, json!({ "name": "CLASH", "patch_name": "WALLP1" })),
@@ -2113,7 +2117,7 @@ mod tests {
             patch_message.contains("pass patch_name"),
             "and the way out: {patch_message}"
         );
-        let (texture_code, texture_message) = call_err(
+        let (texture_code, texture_message, _) = call_err(
             &client,
             "create_texture_from_image",
             source_args(&file, json!({ "name": "WALL1" })),
@@ -2188,7 +2192,7 @@ mod tests {
 
     /// One `create_texture_from_image` call asking for role `role`.
     async fn refuse_role(client: &Client, file: &Path, role: &str) {
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             client,
             "create_texture_from_image",
             source_args(file, json!({ "name": "NOPE", "assign_role": role })),
@@ -2331,7 +2335,9 @@ mod tests {
 
     /// One failing `create_flat_from_image` call of `file` with `extra`.
     async fn create_flat_err(client: &Client, file: &Path, extra: Value) -> (String, String) {
-        call_err(client, "create_flat_from_image", source_args(file, extra)).await
+        let (code, message, _) =
+            call_err(client, "create_flat_from_image", source_args(file, extra)).await;
+        (code, message)
     }
 
     /// The `RGBA` pixel at row-major `index` of a fetched picture.
@@ -2469,7 +2475,7 @@ mod tests {
             "CLASH.png",
             &flat_png(32_u32, 32_u32, |_| false),
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "create_flat_from_image",
             source_args(&file, json!({ "name": "FLOOR1" })),
@@ -2504,7 +2510,7 @@ mod tests {
             json!("working"),
             "the working copy now serves"
         );
-        let (twin_code, twin_message) = call_err(
+        let (twin_code, twin_message, _) = call_err(
             &client,
             "create_flat_from_image",
             source_args(&file, json!({ "name": "FLOOR1" })),
@@ -2621,7 +2627,7 @@ mod tests {
             json!(["create_flat UNDONE"]),
             "the single step rolls back"
         );
-        let (code, _) = call_err(&client, "get_flat", json!({ "name": "UNDONE" })).await;
+        let (code, _, _) = call_err(&client, "get_flat", json!({ "name": "UNDONE" })).await;
         assert_eq!(code, "not_found", "the flat left with its edit");
     }
 
@@ -2716,7 +2722,7 @@ mod tests {
     /// Every one of `names` answers `not_found` from `get_sprite`.
     async fn sprites_are_gone(client: &Client, names: &[&str]) {
         for name in names {
-            let (code, _) = call_err(client, "get_sprite", json!({ "name": name })).await;
+            let (code, _, _) = call_err(client, "get_sprite", json!({ "name": name })).await;
             assert_eq!(code, "not_found", "{name} left with the edit");
         }
     }
@@ -2924,7 +2930,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "WHITE.png", &white_png());
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "create_sprite_from_image",
             source_args(&file, json!({ "sprite": "BOBA" })),
@@ -2982,7 +2988,7 @@ mod tests {
         let client = iwad_client(dir.path()).await;
         let file = write_file(dir.path(), "FIGURE.png", &figure_png());
         create_sprite(&client, &file, json!({ "sprite": "BOBA" })).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "create_sprite_from_image",
             source_args(&file, json!({ "sprite": "BOBA" })),

@@ -29,10 +29,18 @@ mod tests {
             "server version"
         );
         assert!(info.capabilities.tools.is_some(), "tools capability");
-        assert_eq!(
-            info.instructions.as_deref(),
-            Some("Cyberdemon reads and edits Doom WAD files."),
-            "instructions"
+        let instructions = info
+            .instructions
+            .as_deref()
+            .expect("server instructions after initialize");
+        assert!(
+            instructions.starts_with("Cyberdemon reads and edits Doom WAD files over MCP"),
+            "instructions open with what the server does: {instructions}"
+        );
+        assert!(
+            instructions.lines().count() <= 25,
+            "the instructions stay at most 25 lines: {}",
+            instructions.lines().count()
         );
     }
 
@@ -639,7 +647,7 @@ mod tests {
     #[tokio::test]
     async fn call_err_returns_the_documented_error_pair() {
         let client = connect_probe().await;
-        let (code, message) = call_err(&client, "missing", Value::Null).await;
+        let (code, message, _) = call_err(&client, "missing", Value::Null).await;
         assert_eq!(code, "not_found", "error code field");
         assert_eq!(message, "probe lump does not exist", "message field");
     }

@@ -567,16 +567,16 @@ mod tests {
         let file = write_png(dir.path(), "sketch.png", &sketch(1));
         let mut outside = trace_args(&file);
         outside["crop"] = json!({"x": 380_u64, "y": 0_u64, "width": 40_u64, "height": 100_u64});
-        let (crop_code, crop_message) = call_err(&client, "trace_sketch", outside).await;
+        let (crop_code, crop_message, _) = call_err(&client, "trace_sketch", outside).await;
         assert_eq!(crop_code, "invalid_argument", "a crop past the edge");
         assert!(crop_message.contains("crop.x"), "{crop_message}");
         let mut small_max = trace_args(&file);
         small_max["max_size"] = json!(64_u64);
-        let (size_code, size_message) = call_err(&client, "trace_sketch", small_max).await;
+        let (size_code, size_message, _) = call_err(&client, "trace_sketch", small_max).await;
         assert_eq!(size_code, "invalid_argument", "max_size below the floor");
         assert!(size_message.contains("max_size"), "{size_message}");
         let no_pen = json!({"source": file, "ink": {"mode": "color"}});
-        let (pen_code, pen_message) = call_err(&client, "trace_sketch", no_pen).await;
+        let (pen_code, pen_message, _) = call_err(&client, "trace_sketch", no_pen).await;
         assert_eq!(pen_code, "invalid_argument", "color without a colour");
         assert!(pen_message.contains("ink.color"), "{pen_message}");
     }
@@ -587,7 +587,7 @@ mod tests {
         let client = connect().await;
         let path = dir.path().join("notes.txt");
         std::fs::write(&path, b"not an image at all").expect("write the fixture");
-        let (code, _message) = call_err(
+        let (code, _message, _) = call_err(
             &client,
             "trace_sketch",
             json!({"source": path.display().to_string()}),
@@ -603,7 +603,7 @@ mod tests {
         let file = write_png(dir.path(), "sketch.png", &sketch(1));
         let mut grid_args = trace_args(&file);
         grid_args["grid"] = json!(0_i64);
-        let (code, message) = call_err(&client, "trace_sketch", grid_args).await;
+        let (code, message, _) = call_err(&client, "trace_sketch", grid_args).await;
         assert_eq!(code, "invalid_argument", "snapping needs a grid");
         assert!(message.contains("grid"), "{message}");
     }

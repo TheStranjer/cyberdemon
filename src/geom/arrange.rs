@@ -142,26 +142,36 @@ fn self_crossing(vertices: &[Pt]) -> Option<(usize, usize)> {
 }
 
 /// Reject a layer polygon the arrangement cannot represent.
+///
+/// Every refusal carries the geometry hint: the calling map tools are
+/// undoable, so the client's way out is always to look closer or step back.
 fn validate_polygon(index: usize, label: Label, vertices: &[Pt]) -> Result<(), CyberError> {
     let name = label.describe();
     if vertices.len() < MIN_VERTICES {
         return Err(CyberError::InvalidArgument(format!(
             "layer {index} ({name}): needs at least {MIN_VERTICES} distinct vertices, found {}",
             vertices.len()
-        )));
+        ))
+        .with_hint(GEOMETRY_HINT));
     }
     if polygon_area2(vertices) == 0 {
         return Err(CyberError::InvalidArgument(format!(
             "layer {index} ({name}): polygon has zero area"
-        )));
+        ))
+        .with_hint(GEOMETRY_HINT));
     }
     if let Some((first, second)) = self_crossing(vertices) {
         return Err(CyberError::InvalidArgument(format!(
             "layer {index} ({name}): polygon is self-intersecting, edges {first} and {second} cross"
-        )));
+        ))
+        .with_hint(GEOMETRY_HINT));
     }
     Ok(())
 }
+
+/// The hint attached to every invalid-geometry refusal from the
+/// arrangement engine.
+const GEOMETRY_HINT: &str = "validate_map shows details; undo reverts the last change";
 
 /// Validate every layer and collect polygon edges plus external segments.
 fn collect_segments(

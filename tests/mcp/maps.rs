@@ -177,13 +177,14 @@ mod tests {
     async fn list_maps_reports_scope_errors_like_the_lumps_tools() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (code, message) = call_err(&client, "list_maps", json!({ "scope": "nope" })).await;
+        let (code, message, _) = call_err(&client, "list_maps", json!({ "scope": "nope" })).await;
         assert_eq!(code, "invalid_argument", "unknown scope");
         assert!(
             message.contains("merged") && message.contains("layer:"),
             "the error lists the forms: {message}"
         );
-        let (layer_code, _) = call_err(&client, "list_maps", json!({ "scope": "layer:5" })).await;
+        let (layer_code, _, _) =
+            call_err(&client, "list_maps", json!({ "scope": "layer:5" })).await;
         assert_eq!(layer_code, "not_found", "layer 5 is not loaded");
     }
 
@@ -251,7 +252,7 @@ mod tests {
             json!(0_u64),
             "empty nodes"
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "get_map_lumps",
             json!({ "map": "MAP02", "scope": "layer:0" }),
@@ -314,7 +315,7 @@ mod tests {
     async fn get_map_lumps_resolves_map_active_map_and_the_only_map() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (code, message) = call_err(&client, "get_map_lumps", json!({})).await;
+        let (code, message, _) = call_err(&client, "get_map_lumps", json!({})).await;
         assert_eq!(code, "invalid_argument", "two maps, no default");
         assert!(
             message.contains("pass map or call set_active_map"),
@@ -342,7 +343,7 @@ mod tests {
             "a single map needs no selection"
         );
         let empty = connect().await;
-        let (empty_code, _) = call_err(&empty, "get_map_lumps", json!({})).await;
+        let (empty_code, _, _) = call_err(&empty, "get_map_lumps", json!({})).await;
         assert_eq!(
             empty_code, "invalid_argument",
             "no archives, no map to read"
@@ -353,19 +354,25 @@ mod tests {
     async fn get_map_lumps_rejects_unknown_maps_and_bad_names() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (unknown_code, message) =
+        let (unknown_code, message, hint) =
             call_err(&client, "get_map_lumps", json!({ "map": "MAP99" })).await;
         assert_eq!(unknown_code, "not_found", "no such map");
         assert!(
-            message.contains("MAP99") && message.contains("list_maps"),
-            "the message names the map and the way out: {message}"
+            message.contains("MAP99"),
+            "the message names the map: {message}"
         );
-        let (name_code, _) = call_err(&client, "get_map_lumps", json!({ "map": "BAD NAME" })).await;
+        assert!(
+            hint.contains("list_maps") && hint.contains("create_map"),
+            "the hint names the way out: {hint}"
+        );
+        let (name_code, _, _) =
+            call_err(&client, "get_map_lumps", json!({ "map": "BAD NAME" })).await;
         assert_eq!(
             name_code, "invalid_argument",
             "spaces are not allowed in names"
         );
-        let (scope_code, _) = call_err(&client, "get_map_lumps", json!({ "scope": "nope" })).await;
+        let (scope_code, _, _) =
+            call_err(&client, "get_map_lumps", json!({ "scope": "nope" })).await;
         assert_eq!(scope_code, "invalid_argument", "unknown scope");
     }
 
@@ -479,40 +486,47 @@ mod tests {
     async fn get_map_summary_reports_unknown_maps_and_missing_defaults() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (code, message) = call_err(&client, "get_map_summary", json!({ "map": "MAP99" })).await;
+        let (code, message, hint) =
+            call_err(&client, "get_map_summary", json!({ "map": "MAP99" })).await;
         assert_eq!(code, "not_found", "no such map");
         assert!(
-            message.contains("MAP99") && message.contains("list_maps"),
-            "the message names the map and the way out: {message}",
+            message.contains("MAP99"),
+            "the message names the map: {message}"
         );
-        let (default_code, default_message) = call_err(&client, "get_map_summary", json!({})).await;
+        assert!(
+            hint.contains("list_maps") && hint.contains("create_map"),
+            "the hint names the way out: {hint}",
+        );
+        let (default_code, default_message, _) =
+            call_err(&client, "get_map_summary", json!({})).await;
         assert_eq!(default_code, "invalid_argument", "two maps, no default");
         assert!(
             default_message.contains("pass map or call set_active_map"),
             "the error names the fixes: {default_message}",
         );
-        let (layer_code, _) = call_err(
+        let (layer_code, _, _) = call_err(
             &client,
             "get_map_summary",
             json!({ "map": "MAP02", "scope": "layer:0" }),
         )
         .await;
         assert_eq!(layer_code, "not_found", "MAP02 is not in layer 0");
-        let (scope_code, _) = call_err(
+        let (scope_code, _, _) = call_err(
             &client,
             "get_map_summary",
             json!({ "map": "MAP02", "scope": "nope" }),
         )
         .await;
         assert_eq!(scope_code, "invalid_argument", "unknown scope");
-        let (name_code, _) =
+        let (name_code, _, _) =
             call_err(&client, "get_map_summary", json!({ "map": "BAD NAME" })).await;
         assert_eq!(
             name_code, "invalid_argument",
             "spaces are not allowed in names"
         );
         let empty = connect().await;
-        let (empty_code, _) = call_err(&empty, "get_map_summary", json!({ "map": "MAP01" })).await;
+        let (empty_code, _, _) =
+            call_err(&empty, "get_map_summary", json!({ "map": "MAP01" })).await;
         assert_eq!(
             empty_code, "not_found",
             "nothing is loaded, MAP01 is nowhere"
@@ -523,11 +537,11 @@ mod tests {
     async fn set_active_map_selects_validates_clears_and_shows_in_session_info() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (missing_code, message) =
+        let (missing_code, message, _) =
             call_err(&client, "set_active_map", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "MAP99 exists nowhere");
         assert!(message.contains("MAP99"), "the message names it: {message}");
-        let (blank_code, _) = call_err(&client, "set_active_map", json!({ "map": "" })).await;
+        let (blank_code, _, _) = call_err(&client, "set_active_map", json!({ "map": "" })).await;
         assert_eq!(
             blank_code, "invalid_argument",
             "an empty name does not parse"
@@ -702,7 +716,7 @@ mod tests {
             report.get("problems").is_some(),
             "problems always ride along"
         );
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "assemble_map", json!({ "include": ["nope"] })).await;
         assert_eq!(code, "invalid_argument", "unknown include name");
         assert!(
@@ -759,10 +773,10 @@ mod tests {
     async fn assemble_map_refuses_inline_limits_outside_the_range() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_loaded(dir.path()).await;
-        let (zero_code, _) =
+        let (zero_code, _, _) =
             call_err(&client, "assemble_map", json!({ "inline_limit": 0_u64 })).await;
         assert_eq!(zero_code, "invalid_argument", "zero inlines nothing");
-        let (big_code, big_message) = call_err(
+        let (big_code, big_message, _) = call_err(
             &client,
             "assemble_map",
             json!({ "inline_limit": 20001_u64 }),
@@ -821,15 +835,15 @@ mod tests {
     async fn assemble_map_shares_the_group_map_and_scope_errors() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (code, message) = call_err(&client, "assemble_map", json!({ "map": "MAP99" })).await;
+        let (code, message, _) = call_err(&client, "assemble_map", json!({ "map": "MAP99" })).await;
         assert_eq!(code, "not_found", "no such map");
         assert!(
             message.contains("MAP99"),
             "the message names the map: {message}"
         );
-        let (default_code, _) = call_err(&client, "assemble_map", json!({})).await;
+        let (default_code, _, _) = call_err(&client, "assemble_map", json!({})).await;
         assert_eq!(default_code, "invalid_argument", "two maps, no default");
-        let (scope_code, _) = call_err(
+        let (scope_code, _, _) = call_err(
             &client,
             "assemble_map",
             json!({ "map": "MAP01", "scope": "nope" }),
@@ -945,7 +959,7 @@ mod tests {
                 .is_some_and(|text| text.contains("SLICK01") && text.contains("MAPINFO")),
             "the warning names the map and the fix: {warnings:?}",
         );
-        let (format_code, format_message) = call_err(
+        let (format_code, format_message, _) = call_err(
             &client,
             "create_map",
             json!({ "name": "MAP08", "format": "zdoom" }),
@@ -956,14 +970,14 @@ mod tests {
             format_message.contains("doom") && format_message.contains("udmf"),
             "the message lists the formats: {format_message}",
         );
-        let (ns_code, _) = call_err(
+        let (ns_code, _, _) = call_err(
             &client,
             "create_map",
             json!({ "name": "MAP08", "namespace": "zdoom" }),
         )
         .await;
         assert_eq!(ns_code, "invalid_argument", "namespace on a binary map");
-        let (name_code, _) = call_err(&client, "create_map", json!({ "name": "" })).await;
+        let (name_code, _, _) = call_err(&client, "create_map", json!({ "name": "" })).await;
         assert_eq!(name_code, "invalid_argument", "an empty name");
         let listing = call(&client, "list_maps", json!({ "scope": "working" })).await;
         let maps = listing["maps"].as_array().expect("maps is an array");
@@ -985,7 +999,7 @@ mod tests {
             json!("working"),
             "the empty block overrides the IWAD's",
         );
-        let (code, message) = call_err(&client, "create_map", json!({ "name": "MAP01" })).await;
+        let (code, message, _) = call_err(&client, "create_map", json!({ "name": "MAP01" })).await;
         assert_eq!(code, "already_exists", "the working override clashes");
         assert!(
             message.contains("replace"),
@@ -1158,7 +1172,7 @@ mod tests {
             ]),
             "its marker follows the new name",
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "copy_map",
             json!({ "from": "MAP03", "to": "MAP08" }),
@@ -1172,7 +1186,7 @@ mod tests {
             json!({ "from": "MAP03", "to": "MAP08", "replace": true }),
         )
         .await;
-        let (missing_code, missing_message) = call_err(
+        let (missing_code, missing_message, _) = call_err(
             &client,
             "copy_map",
             json!({ "from": "MAP99", "to": "MAP09" }),
@@ -1257,7 +1271,7 @@ mod tests {
     async fn rename_map_refuses_layer_maps_self_renames_and_missing_names() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "rename_map",
             json!({ "from": "MAP01", "to": "MAP07" }),
@@ -1274,14 +1288,14 @@ mod tests {
             json!({ "from": "MAP01", "to": "MAP07" }),
         )
         .await;
-        let (self_code, _) = call_err(
+        let (self_code, _, _) = call_err(
             &client,
             "rename_map",
             json!({ "from": "MAP07", "to": "MAP07" }),
         )
         .await;
         assert_eq!(self_code, "invalid_argument", "a self rename is a refusal");
-        let (missing_code, _) = call_err(
+        let (missing_code, _, _) = call_err(
             &client,
             "rename_map",
             json!({ "from": "MAP99", "to": "MAP08" }),
@@ -1289,7 +1303,7 @@ mod tests {
         .await;
         assert_eq!(missing_code, "not_found", "MAP99 is not working");
         call(&client, "create_map", json!({ "name": "MAP08" })).await;
-        let (taken_code, taken_message) = call_err(
+        let (taken_code, taken_message, _) = call_err(
             &client,
             "rename_map",
             json!({ "from": "MAP07", "to": "MAP08" }),
@@ -1348,7 +1362,7 @@ mod tests {
         );
         let empty = call(&client, "list_maps", json!({ "scope": "working" })).await;
         assert_eq!(empty["maps"], json!([]), "nothing is left in working");
-        let (code, message) = call_err(&client, "remove_map", json!({ "name": "MAP03" })).await;
+        let (code, message, _) = call_err(&client, "remove_map", json!({ "name": "MAP03" })).await;
         assert_eq!(code, "not_found", "the layer's own MAP03 stays put");
         assert!(
             message.contains("read-only"),

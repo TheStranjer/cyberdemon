@@ -1310,7 +1310,7 @@ async fn imported(state: &AppState, args: &ImportParams) -> Result<CallToolResul
 impl Cyberdemon {
     /// Lists one scope's lump directory with filters and paging.
     #[tool(
-        description = "Lists a scope's lumps in directory order. scope is \"merged\" (the default: what an engine sees), \"working\" or \"layer:N\" (0 is the IWAD). Optional filters: namespace (sprites, flats, patches, colormaps, acs, voices, hires, textures), kind (a LumpKind type hint such as map_marker, flat, sprite, patch, palette, doom_sound), map (only that map block's lumps, e.g. \"MAP01\"). Paging: offset (default 0), limit (default 200, max 2000). Returns {scope, total, offset, count, lumps:[{index, name, size, offset, kind, namespace, map, source}]} where index counts positions in the listed scope and offset is the byte position of the lump's data inside its source archive as save_wad would lay it out."
+        description = "Lists one scope's lumps in directory order with index, name, size, kind, namespace, owning map and source archive. scope is merged (default: what an engine sees), working or layer:N; namespace, kind, map and a name pattern filter, offset and limit page. Use it to see what exists; search_lumps matches content instead."
     )]
     fn list_lumps(
         &self,
@@ -1328,7 +1328,7 @@ impl Cyberdemon {
 
     /// Searches a scope's directory by name, type, namespace or content.
     #[tool(
-        description = "Searches a scope's lumps (scope: \"merged\" default, \"working\" or \"layer:N\"); give at least one criterion. pattern is a case-insensitive name glob (* and ?), kind and namespace filter like list_lumps, contains_text is a case-insensitive ASCII substring of the payload and contains_hex is a byte substring written as hex, spaces allowed (e.g. \"4D 55 53 1A\"); all criteria combine with AND. Returns {scope, count, truncated, lumps:[row + match_offset]} where row is list_lumps' shape and match_offset is the first content-match byte offset (null when only name/kind/namespace was searched). limit defaults to 200, max 2000; truncated says more matched."
+        description = "Searches a scope's lumps by at least one criterion: pattern (a case-insensitive name glob with * and ?), contains_hex (a byte needle), kind, namespace and map filters, paged by offset and limit. Returns the matching rows. Use it whenever a lump name is unknown or a not_found error points here."
     )]
     fn search_lumps(
         &self,
@@ -1346,7 +1346,7 @@ impl Cyberdemon {
 
     /// Reads one lump through the shared selector.
     #[tool(
-        description = "Reads one lump chosen by the shared selector: name (1 to 8 printable ASCII characters, case-insensitive) plus optional scope (\"merged\" default, \"working\", \"layer:N\"), namespace (keep only matches inside that region, e.g. \"flats\") and occurrence (0-based index among the same-name matches in the scope's directory order; the default is the LAST one, the copy that wins). format: \"info\" returns just the list_lumps row fields (name, size, kind, namespace, source, ...); \"text\" decodes UTF-8 replacing invalid sequences (\"text\", \"lossy\", \"truncated\"; max_chars default 100000); \"hex\" returns \"hex\" (space-separated uppercase bytes), \"start\" (default 0) and \"length\" (default 256, max 4096, clipped to the payload; a start past the end is invalid_argument); \"url\" publishes the raw bytes to the asset server and returns \"asset\": {url, filename, mime, size} - no base64 crosses the stdio channel; \"auto\" (the default) picks text for text-like kinds (text, dehacked, decorate, zscript, mapinfo), info for empty lumps, and url plus \"preview_hex\" (first 64 bytes) for everything else. The result always carries the row fields plus \"format\" (what actually ran). Images and sounds have dedicated decoding tools (to be added later); until then, or for any whole-binary read, use format url. Unknown formats are invalid_argument; a name with no match, or an occurrence past the last match, is not_found."
+        description = "Reads one lump chosen by the shared selector: name plus optional scope (merged default, working, layer:N), namespace and occurrence (default the last, winning copy). format info returns the row fields, text the decoded string, hex a byte window, url the bytes as an asset URL, and auto (default) picks by the lump's kind. Use it to inspect any lump; extract_lump writes it to a file."
     )]
     fn get_lump(
         &self,
@@ -1371,7 +1371,7 @@ impl Cyberdemon {
 
     /// Writes one lump's raw bytes to a file.
     #[tool(
-        description = "Writes one lump's raw bytes to an absolute filesystem path, atomically (staged beside the target, then renamed). Takes the same selector as get_lump: name plus optional scope, namespace and occurrence (default occurrence is the last, winning match). A relative path is invalid_argument; an existing target is already_exists unless overwrite is true; a missing parent directory is not_found. Returns {path, bytes}."
+        description = "Writes one lump's raw bytes to an absolute filesystem path, atomically (staged beside the target, then renamed). Takes the same selector as get_lump; an existing target is already_exists unless overwrite: true. Returns path and bytes. Use it when the user needs the real file; get_lump format=url only publishes it."
     )]
     fn extract_lump(
         &self,
@@ -1399,7 +1399,7 @@ impl Cyberdemon {
 
     /// Adds a new lump to the working archive.
     #[tool(
-        description = "Adds a new lump to the working archive as one undoable edit (read-only layers are never touched; save_wad writes the result). name is 1 to 8 printable ASCII characters, uppercased. Payload: at most one of text (UTF-8 written as-is), hex (bytes as hex digits, spaces allowed) or source (absolute path, file:// or http(s):// URL, or an uploaded asset URL, fetched for its bytes); with none the lump is empty - that is how a directory marker is made. Placement: at most one of index (0..=current working length), before/after (relative to the LAST lump with that name in the working archive), namespace (sprites, flats, patches, colormaps, acs, voices, hires, textures: insert just before that region's end marker, creating the region with its canonical start/end markers when the working archive has none); with none the lump is appended at the end. A lump of this name already in the target namespace (global counts as its own) is already_exists unless allow_duplicate is true. Returns {name, index, size, namespace} with index counting positions in the working archive; the undo label is \"add_lump NAME\"."
+        description = "Adds a new lump to the working archive as one undoable edit; read-only layers are never touched. name is 1 to 8 printable ASCII characters; the payload is at most one of text, hex or source (path or URL), or nothing for an empty marker; placement is at most one of index, before, after, namespace or map. Use plain lumps; pictures and sounds have their own import tools."
     )]
     async fn add_lump(
         &self,
@@ -1417,7 +1417,7 @@ impl Cyberdemon {
 
     /// Fetches a source and inserts its bytes as a new lump.
     #[tool(
-        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset/upload URL) and inserts its bytes into the working archive without any conversion, as one undoable edit. Identical to import_file_as_lump; clients may call either name. name defaults to the fetched file name's stem uppercased and trimmed to 8 characters (letters, digits and underscore); when nothing usable remains the call fails with invalid_argument asking for an explicit name. Placement and allow_duplicate work exactly like add_lump. Returns {name, index, size, namespace, source}; the undo label is \"import NAME\"."
+        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset URL) and inserts its bytes into the working archive without conversion, as one undoable edit. name defaults to the fetched file's stem uppercased to 8 characters; placement works as in add_lump. Use it for ready-made lumps; import_image_as_raw checks images first."
     )]
     async fn import_asset(
         &self,
@@ -1428,7 +1428,7 @@ impl Cyberdemon {
 
     /// Fetches a file and inserts its bytes as a new lump.
     #[tool(
-        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset/upload URL) and inserts its bytes into the working archive without any conversion, as one undoable edit. Identical to import_asset; clients may call either name. name defaults to the fetched file name's stem uppercased and trimmed to 8 characters (letters, digits and underscore); when nothing usable remains the call fails with invalid_argument asking for an explicit name. Placement and allow_duplicate work exactly like add_lump. Returns {name, index, size, namespace, source}; the undo label is \"import NAME\"."
+        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset URL) and inserts its bytes into the working archive without conversion, as one undoable edit. name defaults to the fetched file's stem uppercased to 8 characters; placement works as in add_lump. Use it for ready-made lumps; import_image_as_raw checks images first."
     )]
     async fn import_file_as_lump(
         &self,
@@ -1439,7 +1439,7 @@ impl Cyberdemon {
 
     /// Overwrites one lump's payload, overriding a read-only copy when needed.
     #[tool(
-        description = "Overwrites one lump's payload as a single undoable edit labelled \"replace_lump NAME\" (save_wad writes the result), and is how a lump the IWAD or a resource layer owns gets changed: read-only archives are never modified, an override is created in the working archive instead and the result says \"created_override\": true. Selector: name (1 to 8 printable ASCII characters, case-insensitive) plus optional namespace (keep only matches inside that region, e.g. \"flats\") and occurrence (0-based index among the WORKING archive's same-name matches, default the last one; ignored when the name only a read-only layer holds is overridden, where the winning copy is the one taken). Payload: exactly one of text (UTF-8 written as-is), hex (bytes as hex digits, spaces allowed) or source (absolute path, file:// URI, http(s):// URL or uploaded asset URL, fetched for its bytes); none or several is invalid_argument. A lump the working archive holds is rewritten in place, keeping its name and index. A lump only a layer holds is brought in first: map data copies that whole map block (header, members and GL nodes) into the working archive and rewrites the copy, a namespace member is inserted into that region of the working archive (its canonical markers are created when it has none), a loose global is appended. A name no loaded archive holds is not_found - use add_lump to create one. Returns {name, index, size, created_override} with index counting positions in the working archive."
+        description = "Overwrites one lump's payload as a single undoable edit, and it is the way in for a lump the IWAD or a resource layer owns: the bytes land in the working archive as a winning override (created_override true) while the lower archive stays untouched. The payload is exactly one of text, hex or source. For patches prefer replace_patch, which knows PNAMES."
     )]
     async fn replace_lump(
         &self,
@@ -1453,7 +1453,7 @@ impl Cyberdemon {
 
     /// Removes lumps from the working archive, all or nothing.
     #[tool(
-        description = "Removes lumps from the working archive as one undoable edit labelled \"remove_lump A, B, ...\" (save_wad writes the result). names is a list of one or more lump names (1 to 8 printable ASCII characters, case-insensitive); an empty list, an unparsable name or an unknown namespace is invalid_argument. namespace limits the matches to that region and applies to every name. occurrence picks one copy of a single named lump (default the last working match) and is invalid_argument together with more than one name; all_occurrences (default false) removes every working copy of each name instead of the selected one. Only the working archive is touched: if any name is missing from it the call is not_found and NOTHING is removed, because IWAD and resource-layer lumps cannot be deleted, only overridden with replace_lump. Returns {removed: [{name, index}]} in directory order, with the indices the lumps held before the removal."
+        description = "Removes named lumps from the working archive as one undoable edit: names is a list, each resolved with the optional namespace and occurrence. A lump only a read-only layer holds cannot be removed - replace_lump overrides it instead. Reports the removed names and indices; undo brings them back. For patches prefer remove_patch, which maintains PNAMES and texture references."
     )]
     fn remove_lump(
         &self,
@@ -1467,7 +1467,7 @@ impl Cyberdemon {
 
     /// Renames one lump of the working archive.
     #[tool(
-        description = "Renames one lump of the working archive as one undoable edit labelled \"rename_lump OLD -> NEW\" (save_wad writes the result), keeping its position and payload. name selects the lump, plus optional namespace and occurrence as in replace_lump; new_name is 1 to 8 printable ASCII characters and is uppercased - either name failing to parse is invalid_argument. The working archive only: a name it does not hold is not_found (IWAD and layer lumps cannot be renamed - override one with replace_lump, or add_lump a copy and remove_lump the original). Unless allow_duplicate is true, a working lump already named new_name in the same region (no region counts as its own) is already_exists and nothing changes. Returns {old_name, new_name, index} with index counting positions in the working archive."
+        description = "Renames one lump of the working archive as one undoable edit, keeping its position and bytes: old and new names are both 1 to 8 printable ASCII characters. Only working lumps can be renamed; a lower layer's copy with the old name keeps showing through the merged view. For map blocks use rename_map, which moves the markers too."
     )]
     fn rename_lump(
         &self,
@@ -1481,7 +1481,7 @@ impl Cyberdemon {
 
     /// Moves a contiguous run of lumps within the working archive.
     #[tool(
-        description = "Moves one contiguous run of lumps inside the working archive as a single undoable edit labelled \"reorder_lumps NAME\" (save_wad writes the result), where NAME is the run's first lump. What to move, exactly one of: name (1 to 8 printable ASCII characters, case-insensitive, resolved in the WORKING archive only; IWAD and layer lumps cannot be moved) with optional from_namespace (keep only matches inside that region) and occurrence (0-based index among those matches, default the last), or from_index (the directory position the run starts at); plus count (default 1) for a longer run - a whole map block is name \"MAP01\" with count 11. Where to put it, exactly one of the placement fields and never none: index, before or after (the last lump with that name) or namespace (just before that region's end marker, creating the region with its canonical markers when the working archive has none). The destination is resolved AFTER the run has been taken out: index counts positions in the directory without the moved lumps and before/after look up the target name among the remaining lumps; anchoring a run on one of its own lumps is invalid_argument. count 0, both or neither of name and from_index, occurrence or from_namespace beside from_index, two destination fields or no destination is invalid_argument; a run reaching past the end of the working archive is invalid_argument; a name or anchor the working archive lacks is not_found. Returns {moved: [names in directory order], from_index, to_index}, to_index being where the run's first lump now stands; verify with list_lumps scope=working."
+        description = "Moves one contiguous run of lumps inside the working archive as a single undoable edit: the run is a name (with optional namespace and occurrence) or a from_index, plus count (a whole map block is its header with count 11); the destination is exactly one of index, before, after or namespace, resolved after the run is taken out. Returns the moved names and new position."
     )]
     fn reorder_lumps(
         &self,

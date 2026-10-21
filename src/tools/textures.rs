@@ -1448,6 +1448,10 @@ fn remove_texture_run(
         CyberError::NotFound(format!(
             "no TEXTURE1 or TEXTURE2 definition named {name}: list_textures shows the names"
         ))
+        .with_hint(
+            "list_textures / list_flats with a glob pattern; or create one with \
+                    create_texture_from_image / create_flat_from_image",
+        )
     })?;
     let mut rewrites: Vec<LumpRewrite> = Vec::new();
     for which in [WhichLump::Texture1, WhichLump::Texture2] {
@@ -1481,7 +1485,7 @@ fn remove_texture_run(
 impl Cyberdemon {
     /// Lists the composite texture definitions of the session.
     #[tool(
-        description = "Lists the composite textures defined by the merged view's `TEXTURE1` and `TEXTURE2` lumps, in lump order (all TEXTURE1 entries first, then TEXTURE2), each row {name, width, height, patches, lump, source}: the mappatch count and the archive the defining lump came from (list_lumps' source shape). A session without either lump answers {total: 0, textures: []}, not an error; a lump that decodes as neither the Doom nor the Strife texture layout fails with format_error. Optional pattern is a case-insensitive texture-name glob (* and ?); paging is offset (default 0) and limit (default 200, max 2000) over the matched list. Returns {total, textures} where total counts pattern matches before paging. Textures are built from patch lumps named by their PNAMES index: see list_pnames and edit_pnames."
+        description = "Lists the composite textures the merged view's TEXTURE1/TEXTURE2 lumps define, in lump order, with name, dimensions, patch count and source lump; pattern is a case-insensitive glob. Use it before build_texture, remove_texture or any sidedef edit so the name you write exists; get_asset_url publishes one as an image."
     )]
     fn list_textures(
         &self,
@@ -1502,7 +1506,7 @@ impl Cyberdemon {
 
     /// Lists the merged `PNAMES` patch-name index.
     #[tool(
-        description = "Lists the merged view's `PNAMES` entries in index order: {index, name, lump_found}. The index is the number TEXTURE1/TEXTURE2 patch references carry; lump_found says whether a lump with that name exists in the merged view outside the flats and sprites namespaces (a missing lump renders as nothing wherever a texture uses it). No PNAMES lump answers {total: 0, pnames: []}, not an error; a malformed one fails with format_error. Optional pattern is a case-insensitive name glob (* and ?); paging is offset (default 0) and limit (default 200, max 2000). Returns {total, pnames} where total counts pattern matches before paging. Change the list with edit_pnames; create the patch lumps themselves with the lump tools."
+        description = "Lists the merged view's PNAMES entries in index order: {index, name, lump_found} - the index is exactly what TEXTURE1/TEXTURE2 patch references carry, and lump_found false marks a dangling name. Use it when a patch index matters; edit_pnames edits the list and keeps the references truthful."
     )]
     fn list_pnames(
         &self,
@@ -1523,7 +1527,7 @@ impl Cyberdemon {
 
     /// Edits `PNAMES` and renumbers every texture reference.
     #[tool(
-        description = "Edits the merged view's `PNAMES` patch-name list and renumbers the patch references of TEXTURE1/TEXTURE2 so the indices stay truthful. Pass exactly one operation: add (append names; entries already present are skipped), remove (delete names), rename (a list of {from, to} pairs; indices stay put so textures are untouched) or replace_all (the new complete list; an empty list clears PNAMES; duplicate names in the list are invalid_argument). Every name must be 1 to 8 printable ASCII characters, stored uppercased; invalid names fail with invalid_argument. Removing or replacing shifts indices, so changed textures are rewritten into the SAME lump layout they were read in (Doom or Strife; column directory 0, stepdir 1, colormap 0). A name a texture still refers to fails with conflict listing the affected textures unless force=true, which drops those patch references. Only the working archive changes: PNAMES and each changed TEXTUREx lump is copied in as an override and written as ONE undoable edit labelled `edit_pnames <operation>` (save_wad writes the result); a no-op reports the counters and records nothing. A session without PNAMES can be created by add or replace_all; texture lumps without a PNAMES are listed unindexed. Returns {pnames: new entry count, added, skipped, removed, renamed, textures_changed}."
+        description = "Edits the merged view's PNAMES patch-name list as one undoable edit and renumbers the TEXTURE1/TEXTURE2 patch references so the indices stay truthful: exactly one of add, remove, rename ({from, to} pairs that keep their slots) or replace_all (the complete new list). For one patch at a time prefer add_patch, replace_patch and remove_patch."
     )]
     fn edit_pnames(
         &self,
@@ -1544,7 +1548,7 @@ impl Cyberdemon {
 
     /// Defines a composite texture record in `TEXTURE1`/`TEXTURE2`.
     #[tool(
-        description = "Defines a composite texture in the merged view's TEXTURE1/TEXTURE2 as ONE undoable edit labelled `build_texture NAME` (save_wad writes the result; read-only layers are never touched). name is 1 to 8 printable ASCII characters, stored uppercase; width and height are 1..=4096 (invalid_argument outside; a width that is not a power of two builds and reports a warning, since vanilla tiling lines up best at powers of two). patches is a non-empty list of {patch, x, y}: a PNAMES patch name and its pixel origin from the texture's top-left, drawn in the order given (later patches overdraw earlier ones). Each patch name is appended to PNAMES when not listed yet; a patch with no lump in the merged view outside the flats and sprites namespaces fails with not_found unless allow_missing_patches=true (the texture still builds and renders holes where the patch is missing). target is \"TEXTURE1\" or \"TEXTURE2\" (case-insensitive); omitted means the lump that already defines the name, else TEXTURE1. A target lump that already holds the name fails with already_exists unless replace=true, which updates that record in place (its position and raw masked/flags word are kept, the size and patches are replaced). Rewritten lumps keep the layout they were read in (Doom or Strife; column directory 0, stepdir 1, colormap 0); a target lump no archive holds is created with the Doom layout. Only the working archive changes: PNAMES (when names were appended) and the target lump are brought in as overrides. Returns {name, lump, created: whether the working archive gained the target lump, pnames_added: names appended to PNAMES, warnings}. Create the patch lumps with import_image_as_patch or add_lump; check the result with list_textures and render_topdown."
+        description = "Defines a composite texture in the working archive's TEXTURE1/TEXTURE2 as ONE undoable edit: name, width and height, and a non-empty list of {patch, x, y} placements drawn in order, patch names taken from PNAMES (missing ones are added unless declined). Prefer create_texture_from_image when the texture comes from one picture - it processes, stores and defines together; use this to compose existing patches."
     )]
     fn build_texture(
         &self,
@@ -1561,7 +1565,7 @@ impl Cyberdemon {
 
     /// Removes one texture definition from whichever `TEXTUREx` holds it.
     #[tool(
-        description = "Removes a texture definition from whichever TEXTURE1/TEXTURE2 lump of the merged view defines it, as ONE undoable edit labelled `remove_texture NAME` (copy-on-write into the working archive; save_wad writes the result). name is 1 to 8 printable ASCII characters, matched case-insensitively; no lump defines it fails with not_found (list_textures shows the names). The record is stripped from EVERY texture lump that holds it, so a shadowed copy cannot surface afterwards; each rewritten lump keeps the layout it was read in and its other textures are untouched. PNAMES and the patch lumps are not touched: other textures may still use the patches. Maps may still reference the removed texture - sidedef texture fields are plain names, so surfaces that used it come out as holes or errors in ports; use validate_map to find the referencing linedef sides. Returns {name, lump} where lump is the texture lump that held the winning (effective) definition."
+        description = "Removes a texture definition from whichever TEXTURE1/TEXTURE2 lump of the merged view defines it, written into the working archive as ONE undoable edit; the PNAMES list and the patch lumps are left alone. A name no texture lump defines is not_found - list_textures shows the names. validate_map then flags sidedefs still wearing the removed name."
     )]
     fn remove_texture(
         &self,

@@ -954,7 +954,7 @@ fn redo_run(session: &mut Session, steps: usize) -> Result<RedoReport, CyberErro
 impl Cyberdemon {
     /// Loads a file as the session's base game (`IWAD`) layer.
     #[tool(
-        description = "Reads the WAD at an absolute path and makes it the session's read-only base game layer, replacing any previous IWAD while keeping the resource layers and the working archive. Accepts IWAD or PWAD magic. Returns {path, kind, lumps, maps, game}."
+        description = "Reads the WAD at an absolute path and makes it the session's read-only base game layer, replacing any previous IWAD while keeping the resource layers; the game is detected from the archive. Call it first: palettes, flats, definitions and maps all come from the game data. undo does not step over an archive swap."
     )]
     fn open_iwad(
         &self,
@@ -965,7 +965,7 @@ impl Cyberdemon {
 
     /// Opens a file as the editable working archive.
     #[tool(
-        description = "Reads the WAD at an absolute path and adopts it as the editable working archive, forgetting the previous archive's undo history. Refuses with a conflict while the working archive has unsaved changes unless discard_changes is true. Returns {path, kind, lumps, maps, game, dirty}."
+        description = "Reads the WAD at an absolute path and adopts it as the editable working archive, forgetting the previous archive's undo history. Refuses with conflict while the current working archive is dirty unless discard_dirty: true. Use it to continue work on an existing mod; merge_wad stacks extra read-only layers instead."
     )]
     fn open_wad(
         &self,
@@ -980,7 +980,7 @@ impl Cyberdemon {
 
     /// Starts a fresh empty working archive.
     #[tool(
-        description = "Replaces the working archive with an empty PWAD that has no file behind it yet (save_wad gives it one). Refuses with a conflict while the working archive has unsaved changes unless discard_changes is true. Returns {kind, lumps}."
+        description = "Replaces the working archive with an empty PWAD that has no file behind it yet (save_wad gives it one). Refuses with conflict while unsaved edits exist unless discard_dirty: true, and clears the undo history and active map. Use it to start a fresh mod once open_iwad has loaded the game data."
     )]
     fn new_wad(
         &self,
@@ -991,7 +991,7 @@ impl Cyberdemon {
 
     /// Merges a file in as a resource layer or into the working archive.
     #[tool(
-        description = "Reads the WAD at an absolute path and combines it with the session. mode \"layer\" (the default) stacks it as a read-only resource layer below the working archive and returns {mode, layer_index, lumps}; mode \"working\" folds its lumps into the working archive under the merged view's override rules as one undoable edit and returns {mode, replaced, added}. Paths are absolute or the call fails with invalid_argument."
+        description = "Reads the WAD at an absolute path and folds it into the session: mode layer (default) stacks it as a read-only resource layer below the working archive, mode working adopts its content into the working archive under vanilla override rules. Use it to add a texture or sound pack; get_session_info shows the layer stack."
     )]
     fn merge_wad(
         &self,
@@ -1006,7 +1006,7 @@ impl Cyberdemon {
 
     /// Writes the working archive or the whole merged view to a file.
     #[tool(
-        description = "Saves the session to a file. mode \"pwad\" (the default) writes the working archive and marks it saved (the working path becomes the file written); mode \"full\" exports the entire merged view (IWAD layer, resource layers and working archive under the override rules) as one standalone WAD without changing the working path or the dirty flag. path is absolute and defaults to the working archive's own path; kind (\"PWAD\"|\"IWAD\") overrides the header magic. dedupe (default false) writes each distinct non-empty lump payload once, later copies sharing the first one's offset, and reports the bytes saved; engines read such files fine, but a naive byte-comparing tool may not. Refuses with conflict to overwrite a loaded layer's file. Returns {path, mode, kind, lumps, bytes, bytes_saved_by_dedupe, dirty}."
+        description = "Saves the session to a file: mode pwad (default) writes the working archive to path (or the path it was opened from), mode merged flattens the IWAD, resource layers and working overrides into one archive. Paths must be absolute and the write is atomic. Reports path and bytes; undo history survives a pwad save."
     )]
     fn save_wad(
         &self,
@@ -1017,7 +1017,7 @@ impl Cyberdemon {
 
     /// Describes the session's archives, history and state.
     #[tool(
-        description = "Reports the whole session: the base IWAD layer (or null), every read-only layer with its index and role, the working archive with its path and dirty flag, the active map, the detected game, and the undo/redo label stacks oldest first (newest last). Takes no arguments."
+        description = "Reports the whole session: the base IWAD layer (or null), every read-only layer with its index and role, the working archive with its path and dirty flag, the active map and where undo and redo stand. Use it to reload the state after a conflict or to check what is loaded before editing."
     )]
     fn get_session_info(&self) -> Result<CallToolResult, ErrorData> {
         let report = self
@@ -1028,7 +1028,7 @@ impl Cyberdemon {
 
     /// Summarizes the merged view an engine would load.
     #[tool(
-        description = "Reports the merged view of the whole session: detected game, base path, the load-ordered archive list, total lump count, every map with its format and winning source, per-namespace member counts and structural warnings. Takes no arguments."
+        description = "Reports the merged view an engine would see: detected game, load-ordered archive list, total lump count, every map with its format and element counts, and the resource summary (flats, patches, sprites, textures, sounds, music). Use it for the whole-project picture beside get_session_info's editing state."
     )]
     fn get_wad_info(&self) -> Result<CallToolResult, ErrorData> {
         let report = self
@@ -1039,7 +1039,7 @@ impl Cyberdemon {
 
     /// Steps back over recent edits of the working archive.
     #[tool(
-        description = "Undoes the most recent edits to the working archive: steps back over up to steps entries of the undo stack (default 1, 1..=100; the history keeps only the newest 100 edits and open_wad/new_wad clear it). Fewer edits than steps simply undoes what exists; an empty undo stack fails with not_found \"nothing to undo\". Only the working archive changes: layers, the active map and the render settings are not part of the history, and an active map whose block is gone from the merged view is cleared (active_map_cleared true). Returns {undone: [labels, most recent first], remaining_undo, redo_available, dirty, active_map_cleared}."
+        description = "Undoes the most recent edits to the working archive: steps back over up to steps entries of the undo stack (default 1, 1..=100; open_wad and new_wad clear the history). An empty stack fails not_found \"nothing to undo\". Only the working archive changes: layers, the active map and render settings stay. Returns what was undone."
     )]
     fn undo(&self, Parameters(args): Parameters<UndoParams>) -> Result<CallToolResult, ErrorData> {
         let outcome = parse_steps(args.steps).and_then(|steps| {
@@ -1051,7 +1051,7 @@ impl Cyberdemon {
 
     /// Replays recently undone edits onto the working archive.
     #[tool(
-        description = "Re-applies edits that undo stepped back over: replays up to steps entries of the redo stack (default 1, 1..=100). Fewer entries than steps simply replays what exists; an empty redo stack fails with not_found \"nothing to redo\", and steps 0 or past 100 is invalid_argument. A new edit after an undo drops the redo branch. Mirrors undo in every other way: only the working archive changes and a vanished active map is cleared. Returns {redone: [labels, in the order replayed], remaining_redo, undo_available, dirty, active_map_cleared}."
+        description = "Re-applies edits that undo stepped back over: replays up to steps entries of the redo stack (default 1, 1..=100); an empty stack fails not_found \"nothing to redo\", and a new edit after an undo drops the redo branch. Mirrors undo: only the working archive changes. Returns what was replayed."
     )]
     fn redo(&self, Parameters(args): Parameters<RedoParams>) -> Result<CallToolResult, ErrorData> {
         let outcome = parse_steps(args.steps).and_then(|steps| {

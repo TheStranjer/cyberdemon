@@ -86,13 +86,14 @@ mod tests {
     #[tokio::test]
     async fn a_missing_lump_is_not_found_and_a_bad_scope_is_refused() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "get_dehacked", json!({})).await;
+        let (code, message, _) = call_err(&client, "get_dehacked", json!({})).await;
         assert_eq!(code, "not_found", "nothing is loaded code");
         assert!(
             message.contains("edit_dehacked"),
             "the message names the creating tool: {message}"
         );
-        let (scope_code, _) = call_err(&client, "get_dehacked", json!({ "scope": "nope" })).await;
+        let (scope_code, _, _) =
+            call_err(&client, "get_dehacked", json!({ "scope": "nope" })).await;
         assert_eq!(scope_code, "invalid_argument", "bad scope code");
     }
 
@@ -208,7 +209,7 @@ mod tests {
             ] }),
         )
         .await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "remove": [{ "block": "Frame 3" }] }),
@@ -219,7 +220,7 @@ mod tests {
             message.contains("nothing changed"),
             "the promise: {message}"
         );
-        let (key_code, _) = call_err(
+        let (key_code, _, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "remove": [{ "block": "Thing 12", "key": "nope" }] }),
@@ -311,31 +312,31 @@ mod tests {
             json!(["edit_dehacked"]),
             "the label is exactly the tool name"
         );
-        let (code, _) = call_err(&client, "get_dehacked", json!({})).await;
+        let (code, _, _) = call_err(&client, "get_dehacked", json!({})).await;
         assert_eq!(code, "not_found", "the created lump is gone");
     }
 
     #[tokio::test]
     async fn edit_refuses_zero_or_two_modes_and_malformed_arguments() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "edit_dehacked", json!({})).await;
+        let (code, message, _) = call_err(&client, "edit_dehacked", json!({})).await;
         assert_eq!(code, "invalid_argument", "no mode code");
         assert!(message.contains("exactly one"), "the rule: {message}");
-        let (both_code, _) = call_err(
+        let (both_code, _, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "text": "x\n", "set": [{ "block": "Misc", "key": "a", "value": "1" }] }),
         )
         .await;
         assert_eq!(both_code, "invalid_argument", "two modes code");
-        let (block_code, _) = call_err(
+        let (block_code, _, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "set": [{ "block": "Gong 3", "key": "a", "value": "1" }] }),
         )
         .await;
         assert_eq!(block_code, "invalid_argument", "bad block code");
-        let (value_code, value_message) = call_err(
+        let (value_code, value_message, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "set": [{ "block": "Misc", "key": "a", "value": "1\n2" }] }),
@@ -346,14 +347,14 @@ mod tests {
             value_message.contains("newlines"),
             "the rule: {value_message}"
         );
-        let (empty_code, _) = call_err(
+        let (empty_code, _, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "remove": [{ "block": "Misc", "key": " " }] }),
         )
         .await;
         assert_eq!(empty_code, "invalid_argument", "blank key code");
-        let (name_code, _) = call_err(
+        let (name_code, _, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "name": "TOO LONG", "text": "x\n" }),
@@ -369,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn removal_from_an_absent_lump_is_not_found_and_creates_nothing() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "edit_dehacked",
             json!({ "remove": [{ "block": "Thing 12" }] }),
@@ -558,7 +559,7 @@ mod tests {
     #[tokio::test]
     async fn refused_line_ranges_answer_as_invalid_argument() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "edit_decorate",
             json!({ "op": "delete_lines", "start": 1_i64, "end": 1_i64 }),
@@ -575,7 +576,7 @@ mod tests {
             json!({ "op": "replace_all", "text": "a\nb\n" }),
         )
         .await;
-        let (range_code, range_message) = call_err(
+        let (range_code, range_message, _) = call_err(
             &client,
             "edit_zscript",
             json!({ "op": "replace_lines", "start": 2_i64, "end": 1_i64, "text": "x" }),
@@ -586,7 +587,7 @@ mod tests {
             range_message.contains("out of range"),
             "the bounds hint: {range_message}"
         );
-        let (past_code, past_message) = call_err(
+        let (past_code, past_message, _) = call_err(
             &client,
             "edit_zscript",
             json!({ "op": "insert_lines", "line": 4_i64, "text": "x" }),
@@ -608,14 +609,14 @@ mod tests {
             json!({ "op": "replace_all", "text": "a\nb\n" }),
         )
         .await;
-        let (find_code, _) = call_err(
+        let (find_code, _, _) = call_err(
             &client,
             "edit_zscript",
             json!({ "op": "find_replace", "find": "zzz", "replace": "x" }),
         )
         .await;
         assert_eq!(find_code, "not_found", "no match");
-        let (empty_code, _) = call_err(
+        let (empty_code, _, _) = call_err(
             &client,
             "edit_zscript",
             json!({ "op": "find_replace", "find": "", "replace": "x" }),
@@ -633,7 +634,7 @@ mod tests {
             json!("a\nb\n"),
             "the refused edits changed nothing"
         );
-        let (name_code, _) = call_err(
+        let (name_code, _, _) = call_err(
             &client,
             "edit_decorate",
             json!({ "lump": "TOO LONG", "op": "append", "text": "x" }),
@@ -667,7 +668,7 @@ mod tests {
             json!(["edit_zscript ZSCRIPT"]),
             "the label is the tool and the lump"
         );
-        let (code, _) = call_err(&client, "get_lump", json!({ "name": "ZSCRIPT" })).await;
+        let (code, _, _) = call_err(&client, "get_lump", json!({ "name": "ZSCRIPT" })).await;
         assert_eq!(code, "not_found", "the created ZSCRIPT is gone");
         let decorate = call(
             &client,

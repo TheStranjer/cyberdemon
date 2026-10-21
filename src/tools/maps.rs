@@ -540,7 +540,7 @@ where
 impl Cyberdemon {
     /// Lists the map blocks of a scope with formats and sources.
     #[tool(
-        description = "Lists every map block of a scope (\"merged\" default: the directory an engine sees, \"working\", \"layer:N\") in directory order. Returns {maps: [{name, format: \"doom\"|\"hexen\"|\"udmf\", udmf_namespace (the namespace a UDMF TEXTMAP declares; null for binary blocks and undecodable ones), source (\"working\" or {\"layer\": n}: where a merged listing took the block from), lumps (member lump names in directory order, an attached GL node run included, without the map header), has_nodes (a non-empty NODES or a ZNODES lump is present), has_gl_nodes (a GL_ node block is attached)}]}. Unknown scope names are invalid_argument; an unloaded layer is not_found. See skill/reference/maps.md for how maps are stored."
+        description = "Lists every map block of a scope (merged default, working or layer:N) in directory order with its format, member lump names and element counts. Use it to find the map names every map tool takes; a not_found on a map parameter means the name is not in this list."
     )]
     fn list_maps(
         &self,
@@ -558,7 +558,7 @@ impl Cyberdemon {
 
     /// Reports one map block's raw lump set, optionally publishing bytes.
     #[tool(
-        description = "Reports the raw lump set of one map block: THINGS, LINEDEFS, SIDEDEFS, VERTEXES, SECTORS and whatever else the block carries (SEGS, SSECTORS, NODES, REJECT, BLOCKMAP, BEHAVIOR, TEXTMAP, ZNODES, ENDMAP and an attached GL node run), in directory order. map defaults to the active map (set_active_map); with none active it resolves only when the merged view holds exactly one map, else invalid_argument. scope (\"merged\" default, \"working\", \"layer:N\") picks the archive to read; the map default always looks at the merged view. Returns {map, format, lumps: [{name, size, kind}]} with list_lumps' kind values. urls true additionally publishes every non-empty lump's raw bytes as an asset named <MAP>_<LUMP>.lmp and those rows carry \"asset\": {url, filename, mime, size}; zero-size lumps get none. An unknown map is not_found, an unparsable name or scope is invalid_argument."
+        description = "Reports the raw lump set of one map block: the header position, its member lumps with sizes, and the attached GL run when present - the directory view, nothing decoded. Use it to see what a block carries before lump-level surgery; get_map_summary reads the elements themselves."
     )]
     fn get_map_lumps(
         &self,
@@ -580,7 +580,7 @@ impl Cyberdemon {
 
     /// Summarizes one map cheaply: counts, bounds, heights and node state.
     #[tool(
-        description = "A cheap, compact overview of one map, decoded but never measured in detail. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\", \"layer:N\"). Returns {name, format, udmf_namespace, source (\"working\" or {\"layer\": n}: where the scope took the block's header from), counts {things, vertices, linedefs, sidedefs, sectors}, bounds {min_x, min_y, max_x, max_y, width, height} or null with no vertices, lines {one_sided, two_sided (both sides set), with_special (nonzero special)}, heights {floor_min, floor_max, ceiling_min, ceiling_max across the sectors; nulls with no sectors}, things_by_type (at most 50 {type, count} rows, most numerous first, ties by ascending type), player_starts (which of types 1, 2, 3, 4 are present), textures_used and flats_used (sorted, deduplicated, without \"-\"), nodes {present (bytes in NODES or ZNODES), segs, subsectors, nodes (record counts from SEGS/12, SSECTORS/4, NODES/28 while NODES is vanilla; replaced by nodes_format, e.g. \"XNOD\" or \"ZGLN\", when it starts with such a magic), reject_bytes, blockmap_bytes, znodes (a ZNODES lump exists), gl (a GL_ lump exists)}}. Unknown map is not_found, unparsable map or scope or no resolvable default is invalid_argument, an undecodable block is format_error."
+        description = "A cheap, compact overview of one map, decoded but never measured: element counts by kind, format, bounds and the block's lump layout. Use it to decide where to look next; describe_map reads sector facts and check_playability walks the whole map."
     )]
     fn get_map_summary(
         &self,
@@ -598,7 +598,7 @@ impl Cyberdemon {
 
     /// Returns the whole map as one typed graph with resolved references.
     #[tool(
-        description = "Returns a whole map as one typed graph whose references are already resolved, so the map can be reasoned about without chasing indices. map defaults to the active map (set_active_map, else the merged view's only map); scope picks the archive (\"merged\" default, \"working\", \"layer:N\"). include selects the arrays to return - any subset of \"vertices\", \"linedefs\", \"sidedefs\", \"sectors\", \"things\" (default all five); an unknown name is invalid_argument. Inline rows: vertices {index, x, y, linedefs}; linedefs {index, v1: {index,x,y}|null, v2: ..., length (floor-rounded map units)|null, flags, flag_names (named by the map's flag family), special, tag, args, front|back: {sidedef, sector|null, upper, middle, lower, x_offset, y_offset}|null}; sidedefs {index, sector|null, linedef|null, side: \"front\"|\"back\"|null (the first line using it), upper, middle, lower, x_offset, y_offset}; sectors {index, floor_height, ceiling_height, floor_flat, ceiling_flat, light, special, tag, linedefs (boundary line indices), sidedefs, neighbors (sectors across two-sided lines), things (indices of things standing in it, point-in-sector), bbox [min_x,min_y,max_x,max_y]|null}; things {index, type, x, y, z, angle, flags, flag_names, tid, special, args, sector|null}. problems lists every dangling vertex/sidedef/sector reference found; broken references never fail the call, the unresolvable part is null. While the included arrays hold at most inline_limit elements (default 2000, maximum 20000; 0 or above the maximum are invalid_argument) the whole graph is returned; above it the result is instead {map, counts, asset} with the full JSON published as <MAP>_graph.json (application/json). Unknown map is not_found, unparsable map or scope or no resolvable default is invalid_argument, an undecodable block is format_error."
+        description = "Returns one whole map as a typed graph with every reference resolved - things, vertices, linedefs with their sides, sectors - dangling references reported as problems; past the inline size the graph comes back as a JSON asset URL. Use it to reason about a map without chasing indices; for sector-level facts prefer describe_map."
     )]
     fn assemble_map(
         &self,
@@ -629,7 +629,7 @@ impl Cyberdemon {
 
     /// Selects or clears the map the map tools default to.
     #[tool(
-        description = "Chooses the map the map tools use when their optional map parameter is omitted (see skill/reference/maps.md). map must name a map block of the merged view (not_found otherwise, the previous selection standing); pass null or omit it to clear the selection. This is a session setting, not an undoable edit: the undo stack never holds it. Returns {active_map: name|null}."
+        description = "Chooses the map the map tools use when their optional map parameter is omitted: pass a map name from the merged view (list_maps shows them) or null to clear the choice. Without a selection, tools default to the merged view's only map when there is exactly one. Use it once per session to stop repeating map everywhere."
     )]
     fn set_active_map(
         &self,
@@ -643,7 +643,7 @@ impl Cyberdemon {
 
     /// Appends an empty map block to the working archive.
     #[tool(
-        description = "Creates a level: appends an empty map block to the working archive as one undoable edit - the first step of building a map, since every editing tool needs an existing one. name (1 to 8 printable ASCII characters, case-insensitive) becomes the header lump; a name that is neither ExMy nor MAPxx comes back as a warning (\"engines only load ExMy/MAPxx unless MAPINFO defines it\"), not an error. format: \"doom\" (the default: header plus the ten empty vanilla members THINGS..BLOCKMAP), \"hexen\" (the same plus a minimal empty BEHAVIOR) or \"udmf\" (header plus a TEXTMAP that declares only the namespace, plus ENDMAP). namespace (default \"zdoom\"; 1 to 32 ASCII letters, digits or underscores, lowercased) is UDMF-only: passing it with a binary format is invalid_argument. A map block of this name already in the working archive is already_exists unless replace is true, which discards the old block and its GL run first; a map only a read-only layer holds is simply overridden. When no active map is set, the new map becomes it (set_active_map; the adoption is not undone by undo). Returns {map, format, namespace (null for binary formats), warnings, active_map}. The undo label is \"create_map NAME\"."
+        description = "Creates a level: appends an empty map block to the working archive as one undoable edit - the first step of hand-building a map with the element tools. name is 1 to 8 printable ASCII characters; a working name already held is already_exists unless replace: true. Prefer build_map_from_plan to get a playable map in one call."
     )]
     fn create_map(
         &self,
@@ -661,7 +661,7 @@ impl Cyberdemon {
 
     /// Copies a scope's map block into the working archive under a new name.
     #[tool(
-        description = "Copies a whole map block (and its GL node run) from a scope into the working archive under a new header name, as one undoable edit. from is the map to read, to the name the copy gets; scope picks the source archive (\"merged\" default, \"working\", \"layer:N\"). The GL marker is renamed GL_<from> -> GL_<to>; a GL_LEVEL marker stays as-is (it attaches to the copied block above it), and a GL run whose new marker would not fit eight bytes (to longer than 5 characters) is dropped instead of copied. A block named to already in the working archive is already_exists unless replace is true, which discards it (and its GL run) first; from missing from the scope is not_found. Returns {from, to, lumps} with lumps the count appended (header, members, kept GL run). The undo label is \"copy_map FROM -> TO\"."
+        description = "Copies a whole map block (and its GL node run) from any scope into the working archive under a new header name as one undoable edit; the destination name must be free unless replace: true. Use it to clone a level or to bring a read-only map in for editing; undo removes the copy again."
     )]
     fn copy_map(
         &self,
@@ -679,7 +679,7 @@ impl Cyberdemon {
 
     /// Renames a working-archive map block in place.
     #[tool(
-        description = "Renames a map block of the working archive as one undoable edit: the header lump and its attached GL_<from> marker follow the new name (a GL_LEVEL marker needs no rename and stays; a GL run whose new marker would not fit eight bytes is dropped). from must be a block the working archive holds - one only the read-only IWAD or a resource layer holds fails not_found with a hint to use copy_map instead; to already in the working archive is already_exists; renaming a map onto itself is invalid_argument. The active map follows from to to. Returns {from, to}. The undo label is \"rename_map FROM -> TO\"."
+        description = "Renames a map block of the working archive as one undoable edit: the header lump and its attached GL_<map> run follow the new name, and the result reports the block's header index. The new name must be 1 to 8 printable ASCII characters and free. A block only a read-only layer holds cannot be renamed; copy_map brings one in first."
     )]
     fn rename_map(
         &self,
@@ -695,7 +695,7 @@ impl Cyberdemon {
 
     /// Removes a map block (and its GL run) from the working archive.
     #[tool(
-        description = "Removes a map block and its GL node run from the working archive as one undoable edit. name must be a block the working archive holds: a map only the read-only IWAD or a resource layer owns fails not_found (layers never lose maps; keep the override out of your archive instead), and clearing the active map follows when it pointed at the removed map (the clear is not undone by undo). Returns {map, lumps_removed}. The undo label is \"remove_map NAME\"."
+        description = "Removes a map block and its GL node run from the working archive as one undoable edit: name must be a block the working archive holds - a map only a layer owns is not_found. Use it to drop a level you created; undo restores the whole block."
     )]
     fn remove_map(
         &self,

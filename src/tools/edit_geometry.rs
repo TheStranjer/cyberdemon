@@ -175,9 +175,14 @@ fn check_kind(
 ) -> Result<(), CyberError> {
     for index in indices {
         if *index >= count {
-            return Err(CyberError::NotFound(format!(
-                "{kind} {index} does not exist (map has {count} {plural})"
-            )));
+            let range = count.checked_sub(1).map_or_else(
+                || format!("the map has no {plural}"),
+                |last| format!("the map has {count} {plural}, valid indices are 0..={last}"),
+            );
+            return Err(
+                CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
+                    .with_hint("describe_map or find_elements returns indices"),
+            );
         }
     }
     Ok(())
@@ -215,7 +220,7 @@ fn delete_in_place(
 fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
     match common::load_map(session, name, Scope::Working) {
         Ok(map) => Ok(map),
-        Err(CyberError::NotFound(_)) => common::load_map(session, name, Scope::Merged),
+        Err(error) if error.code() == "not_found" => common::load_map(session, name, Scope::Merged),
         Err(error) => Err(error),
     }
 }
@@ -499,7 +504,7 @@ where
 impl Cyberdemon {
     /// Deletes a mixed selection of map elements with full cleanup.
     #[tool(
-        description = "Deletes a mixed selection of a map's elements (vertices, linedefs, sidedefs, sectors, things) in a single undoable edit, with full reference cleanup. map defaults to the active map (set_active_map, else the merged view's only map). Pass any of vertices, linedefs, sidedefs, sectors and things as arrays of 0-based indices into that map's blocks; at least one array must hold an index or the call fails invalid_argument, and an index the map does not hold fails not_found naming the kind and index with nothing changed. The removal always cascades: every sidedef of a removed sector goes; every linedef touching a removed vertex goes; a linedef that loses its front side is flipped (v1/v2 swap, the back becomes the front); a linedef that loses its back becomes one-sided (two-sided bit cleared, blocking bit set, an otherwise invisible lower or upper texture of the surviving side moved to the middle); a linedef that loses both sides goes with them; prune_sidedefs (default true) also drops sidedefs no surviving linedef references and prune_vertices (default true) also drops vertices no surviving linedef references, so a deletion leaves no orphans unless you switch a pruning off. The cascade never adds sectors or things: those go only when you name them. dry_run (default false) computes the whole cascade on a copy and reports it without editing: no undo entry, copied_to_working false, nodes_invalidated false. Deleting anything but things alone is geometry: the node lumps are invalidated (run build_nodes before playing the map in vanilla Doom). Returns {removed: {vertices, linedefs, sidedefs, sectors, things (removed original indices, sorted), flipped_linedefs, one_sided_linedefs (new indices of the normalised linedefs)}, dry_run, map, nodes_invalidated, copied_to_working}. See skill/reference/geometry.md."
+        description = "Deletes a mixed selection of vertices, linedefs, sidedefs, sectors and things in a single undoable edit with full reference cleanup: sidedefs of removed sectors go, linedefs on removed vertices go, losing a front flips a line, losing a back makes it one-sided, and prune_sidedefs/prune_vertices (both default true) leave no orphans. dry_run reports the whole cascade without editing anything."
     )]
     fn delete_geometry(
         &self,
@@ -513,7 +518,7 @@ impl Cyberdemon {
 
     /// Moves a selection of vertices and things with one transform.
     #[tool(
-        description = "Moves a selection of a map's vertices and things through one scale/rotate/translate transform in a single undoable edit; the math is integer-only and rounded to nearest. map defaults to the active map (set_active_map, else the merged view's only map). selection picks what moves: {vertices, linedefs, sectors, things: 0-based index arrays into that map's blocks; all: true selects every vertex and thing; include_things_in_sectors (default true) also selects the things standing in a listed sector, judged before anything moves}. Expansion: a listed linedef drags in its two endpoints; a listed sector drags in every vertex of its boundary linedefs (its things with the include switch). The expanded selection must hold at least one vertex or thing or the call fails invalid_argument; an index the map does not hold fails not_found naming the kind and index; nothing changes in either case. Give at least one operation (else invalid_argument); they all run in this one call, in the order scale, rotate, translate: p' = origin + rotate(scale(p - origin)) then + translate. scale is {num, den}, an exact positive fraction (both above 0; 3/2 grows to 150%, 1/2 shrinks to 50%); positions only. rotate is {degrees} or {millidegrees} (exactly one of the two, or invalid_argument), counter-clockwise; selected things' angle additionally gains the rotation in whole degrees, normalised into 0..=359. translate is {dx, dy} in map units. origin {x, y} is the pivot of scale and rotate; the default is the centre of the selection's bounding box, rounded to nearest. Validation refuses the whole call with nothing changed: a coordinate the map's format cannot store (i16 for the binary Doom/Hexen formats; run convert_map_format to UDMF for bigger maps, or lower scale/translate or move origin) fails invalid_argument, and a linedef that would become zero-length fails conflict naming it. Vertices landing on an unselected vertex are allowed and listed as coincident_vertices pairs [moved, unmoved]; nothing is merged. Moving any vertex invalidates the node lumps (run build_nodes before playing the map in vanilla Doom); moving things alone keeps them. Returns {origin, vertices_selected, things_selected, vertices_moved, things_moved, coincident_vertices, map, nodes_invalidated, copied_to_working}. See skill/reference/geometry.md."
+        description = "Moves a selection of a map's vertices and things through one scale/rotate/translate transform in a single undoable edit; the math is integer-only and rounded. selection lists vertices, linedefs, sectors and things (or all: true - lines bring their endpoints, sectors their boundary), then scale (an exact fraction), rotate (degrees; things turn too) and translate run around origin, the selection's centre by default. Geometry: rebuild nodes after."
     )]
     fn transform_selection(
         &self,
@@ -724,23 +729,23 @@ mod tests {
         let cases = [
             (
                 r#"{"vertices": [99]}"#,
-                "vertex 99 does not exist (map has 6 vertices)",
+                "vertex 99 does not exist (the map has 6 vertices, valid indices are 0..=5)",
             ),
             (
                 r#"{"linedefs": [7]}"#,
-                "linedef 7 does not exist (map has 7 linedefs)",
+                "linedef 7 does not exist (the map has 7 linedefs, valid indices are 0..=6)",
             ),
             (
                 r#"{"sidedefs": [8]}"#,
-                "sidedef 8 does not exist (map has 8 sidedefs)",
+                "sidedef 8 does not exist (the map has 8 sidedefs, valid indices are 0..=7)",
             ),
             (
                 r#"{"sectors": [2]}"#,
-                "sector 2 does not exist (map has 2 sectors)",
+                "sector 2 does not exist (the map has 2 sectors, valid indices are 0..=1)",
             ),
             (
                 r#"{"things": [2]}"#,
-                "thing 2 does not exist (map has 2 things)",
+                "thing 2 does not exist (the map has 2 things, valid indices are 0..=1)",
             ),
         ];
         for (json, phrasing) in cases {

@@ -164,7 +164,7 @@ mod tests {
 
     /// Requires `run_batch` to refuse `args` with `invalid_argument`.
     async fn refuses(client: &Client, args: Value, note: &str) {
-        let (code, _) = call_err(client, "run_batch", args).await;
+        let (code, _, _) = call_err(client, "run_batch", args).await;
         assert_eq!(code, "invalid_argument", "{note} refuses");
     }
 
@@ -261,7 +261,7 @@ mod tests {
             working_names(&client).await.is_empty(),
             "the working archive holds nothing, not even the copied-in block"
         );
-        let (code, _) = call_err(&client, "undo", json!({})).await;
+        let (code, _, _) = call_err(&client, "undo", json!({})).await;
         assert_eq!(
             code, "not_found",
             "the rollback consumed the batch's history"
@@ -399,7 +399,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
         call(&client, "add_lump", json!({"name": "MARK"})).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "run_batch",
             steps(&[
@@ -413,7 +413,7 @@ mod tests {
             message.contains("step 1") && message.contains("undo"),
             "the refusal names the step and tool: {message}"
         );
-        let (unknown_code, unknown_message) = call_err(
+        let (unknown_code, unknown_message, _) = call_err(
             &client,
             "run_batch",
             steps(&[step("no_such_tool", Value::Null)]),
@@ -452,7 +452,7 @@ mod tests {
         let many: Vec<Value> = (0_usize..30_usize)
             .map(|_| step("add_lump", json!({"name": "OVERFLOW"})))
             .collect();
-        let (code, message) = call_err(&client, "run_batch", steps(&many)).await;
+        let (code, message, _) = call_err(&client, "run_batch", steps(&many)).await;
         assert_eq!(code, "invalid_argument", "75 + 30 > 100 refuses");
         assert!(
             message.contains("undo") || message.contains("split"),

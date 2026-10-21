@@ -83,7 +83,8 @@ mod tests {
     /// One `convert_map_format` refusal on `map`, as `(code, message)`.
     async fn refusal(client: &Client, map: &str, mut request: Value) -> (String, String) {
         request["map"] = json!(map);
-        call_err(client, "convert_map_format", request).await
+        let (code, message, _) = call_err(client, "convert_map_format", request).await;
+        (code, message)
     }
 
     /// The `list_maps` row of `name` in `scope`.

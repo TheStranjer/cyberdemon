@@ -68,7 +68,7 @@ mod tests {
     /// message to show the valid `wanted` range or shape.
     async fn refused(client: &RunningService<RoleClient, ()>, args: Value, wanted: &str) {
         let label = args.to_string();
-        let (code, message) = call_err(client, "set_render_options", args).await;
+        let (code, message, _) = call_err(client, "set_render_options", args).await;
         assert_eq!(code, "invalid_argument", "{label} is refused");
         assert!(
             message.contains(wanted),
@@ -121,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn a_resolution_outside_the_range_is_an_invalid_argument() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "set_render_resolution",
             json!({ "width": 8_u64, "height": 400_u64 }),
@@ -132,7 +132,7 @@ mod tests {
             message.contains("width") && message.contains("16..=4096"),
             "the message names the field and the range: {message}"
         );
-        let (tall_code, tall_message) = call_err(
+        let (tall_code, tall_message, _) = call_err(
             &client,
             "set_render_resolution",
             json!({ "width": 640_u64, "height": 4_097_u64 }),
@@ -153,7 +153,7 @@ mod tests {
     #[tokio::test]
     async fn a_resolution_over_the_pixel_cap_is_an_invalid_argument() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "set_render_resolution",
             json!({ "width": 4_096_u64, "height": 4_097_u64 }),
@@ -221,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_enum_value_is_refused_listing_the_names() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "set_render_options",
             json!({ "lighting": "cinematic" }),
@@ -229,7 +229,7 @@ mod tests {
         .await;
         assert_eq!(code, "invalid_argument", "unknown lighting");
         assert_lists(&message, &["\"doom\"", "\"flat\"", "\"fullbright\""]);
-        let (style_code, style_message) = call_err(
+        let (style_code, style_message, _) = call_err(
             &client,
             "set_render_options",
             json!({ "topdown_style": "wireframe" }),
@@ -265,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn one_bad_option_in_a_call_changes_nothing() {
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "set_render_options",
             json!({
@@ -290,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn set_render_options_without_any_field_is_an_invalid_argument() {
         let client = connect().await;
-        let (code, message) = call_err(&client, "set_render_options", json!({})).await;
+        let (code, message, _) = call_err(&client, "set_render_options", json!({})).await;
         assert_eq!(code, "invalid_argument", "an empty call does nothing");
         assert_lists(
             &message,
@@ -581,7 +581,7 @@ mod tests {
     async fn refuse_out_of_range(client: &Client, cases: &[(&'static str, Value)]) {
         let owned = cases.to_vec();
         for (field, args) in owned {
-            let (index_code, _) = call_err(client, "render_topdown", args).await;
+            let (index_code, _, _) = call_err(client, "render_topdown", args).await;
             assert_eq!(index_code, "not_found", "{field} index past the end");
         }
     }
@@ -590,14 +590,14 @@ mod tests {
     async fn render_topdown_refuses_unknown_maps_bad_bounds_and_indexes() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (missing_code, missing_message) =
+        let (missing_code, missing_message, _) =
             call_err(&client, "render_topdown", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "no such map");
         assert!(
             missing_message.contains("MAP99"),
             "the message names it: {missing_message}"
         );
-        let (flat_code, flat_message) = call_err(
+        let (flat_code, flat_message, _) = call_err(
             &client,
             "render_topdown",
             json!({ "bounds": { "min_x": 100_i64, "min_y": 0_i64, "max_x": 100_i64, "max_y": 64_i64 } }),
@@ -609,7 +609,7 @@ mod tests {
             "the message states the rule: {flat_message}"
         );
         refuse_out_of_range(&client, &out_of_range_highlights()).await;
-        let (proj_code, proj_message) = call_err(
+        let (proj_code, proj_message, _) = call_err(
             &client,
             "render_topdown",
             json!({ "projection": "birdseye" }),
@@ -620,7 +620,8 @@ mod tests {
             proj_message.contains("\"isometric\""),
             "the message lists the projections: {proj_message}"
         );
-        let (size_code, _) = call_err(&client, "render_topdown", json!({ "width": 8_u64 })).await;
+        let (size_code, _, _) =
+            call_err(&client, "render_topdown", json!({ "width": 8_u64 })).await;
         assert_eq!(size_code, "invalid_argument", "a width below the floor");
     }
 
@@ -630,7 +631,7 @@ mod tests {
         let client = connect().await;
         let extra = pwad_empty_map(dir.path());
         call(&client, "open_wad", path_arg(&extra)).await;
-        let (code, message) = call_err(&client, "render_topdown", json!({})).await;
+        let (code, message, _) = call_err(&client, "render_topdown", json!({})).await;
         assert_eq!(code, "invalid_argument", "nothing to frame");
         assert!(
             message.contains("bounds"),
@@ -773,7 +774,7 @@ mod tests {
         fs::write(&file, b"definitely not an image").expect("the file writes");
         let client = connect().await;
         call(&client, "create_map", json!({ "name": "MAP01" })).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "render_topdown",
             json!({ "underlay": { "source": file.display().to_string() } }),
@@ -792,7 +793,7 @@ mod tests {
         let client = connect().await;
         call(&client, "create_map", json!({ "name": "MAP01" })).await;
         let file = sketch_png(dir.path());
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "render_topdown",
             json!({ "projection": "isometric", "underlay": sketch_underlay(&file) }),
@@ -803,14 +804,14 @@ mod tests {
             message.contains("overlays need the topdown projection"),
             "the message names the projection: {message}"
         );
-        let (grid_code, _) = call_err(
+        let (grid_code, _, _) = call_err(
             &client,
             "render_topdown",
             json!({ "projection": "isometric", "grid": 64_i64 }),
         )
         .await;
         assert_eq!(grid_code, "invalid_argument", "a grid on isometric");
-        let (label_code, _) = call_err(
+        let (label_code, _, _) = call_err(
             &client,
             "render_topdown",
             json!({ "projection": "isometric", "labels": { "sectors": true } }),
@@ -911,7 +912,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
         let long_text = "X".repeat(33_usize);
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "render_topdown",
             json!({ "annotations": [{ "x": 0_i64, "y": 0_i64, "text": long_text }] }),
@@ -925,14 +926,14 @@ mod tests {
         let many: Vec<Value> = (0_u32..65_u32)
             .map(|index| json!({ "x": 0_i64, "y": 0_i64, "text": format!("N{index}") }))
             .collect();
-        let (count_code, count_message) =
+        let (count_code, count_message, _) =
             call_err(&client, "render_topdown", json!({ "annotations": many })).await;
         assert_eq!(count_code, "invalid_argument", "65 rows");
         assert!(
             count_message.contains("64"),
             "the message names the row limit: {count_message}"
         );
-        let (colour_code, _) = call_err(
+        let (colour_code, _, _) = call_err(
             &client,
             "render_topdown",
             json!({ "annotations": [{ "x": 0_i64, "y": 0_i64, "text": "A", "color": "green" }] }),
@@ -1201,16 +1202,17 @@ mod tests {
     async fn minimap_sizes_and_radii_outside_their_ranges_are_refused() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (small_code, small_message) =
+        let (small_code, small_message, _) =
             call_err(&client, "render_minimap", json!({ "size": 16_u64 })).await;
         assert_eq!(small_code, "invalid_argument", "an edge below the floor");
         assert!(
             small_message.contains("32..=1024") && small_message.contains("16"),
             "the message shows the range and the value: {small_message}"
         );
-        let (big_code, _) = call_err(&client, "render_minimap", json!({ "size": 2_048_u64 })).await;
+        let (big_code, _, _) =
+            call_err(&client, "render_minimap", json!({ "size": 2_048_u64 })).await;
         assert_eq!(big_code, "invalid_argument", "an edge above the ceiling");
-        let (zero_code, zero_message) =
+        let (zero_code, zero_message, _) =
             call_err(&client, "render_minimap", json!({ "radius": 0_u64 })).await;
         assert_eq!(
             zero_code, "invalid_argument",
@@ -1220,7 +1222,7 @@ mod tests {
             zero_message.contains("1..=65536") && zero_message.contains("radius"),
             "the message names the field and the range: {zero_message}"
         );
-        let (far_code, _) =
+        let (far_code, _, _) =
             call_err(&client, "render_minimap", json!({ "radius": 100_000_u64 })).await;
         assert_eq!(far_code, "invalid_argument", "a radius past the ceiling");
     }
@@ -1229,7 +1231,7 @@ mod tests {
     async fn render_minimap_refuses_unknown_maps_and_windowless_empty_maps() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (missing_code, missing_message) =
+        let (missing_code, missing_message, _) =
             call_err(&client, "render_minimap", json!({ "map": "MAP99" })).await;
         assert_eq!(missing_code, "not_found", "no such map");
         assert!(
@@ -1238,7 +1240,7 @@ mod tests {
         );
         let extra = pwad_empty_map(dir.path());
         call(&client, "open_wad", path_arg(&extra)).await;
-        let (empty_code, empty_message) = call_err(&client, "render_minimap", json!({})).await;
+        let (empty_code, empty_message, _) = call_err(&client, "render_minimap", json!({})).await;
         assert_eq!(empty_code, "invalid_argument", "nothing to frame");
         assert!(
             empty_message.contains("center") && empty_message.contains("radius"),
@@ -1282,7 +1284,7 @@ mod tests {
     async fn view_refused(client: &Client, field: &str, value: Value, wanted: &str) {
         let mut args = view_args(&Value::Null);
         args[field] = value;
-        let (code, message) = call_err(client, "render_view", args).await;
+        let (code, message, _) = call_err(client, "render_view", args).await;
         assert_eq!(code, "invalid_argument", "{field} out of range");
         assert!(
             message.contains(wanted),
@@ -1739,7 +1741,7 @@ mod tests {
     async fn render_view_refuses_a_camera_outside_the_map() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "render_view",
             json!({ "map": "MAP01", "x": -100_i64, "y": -100_i64 }),
@@ -1774,7 +1776,7 @@ mod tests {
         let out = wad.to_bytes().expect("the stripped archive serializes");
         fs::write(&stripped, out).expect("the stripped archive writes");
         call(&client, "open_iwad", path_arg(&stripped)).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "render_view",
             json!({ "map": "MAP01", "x": 64_i64, "y": 128_i64 }),

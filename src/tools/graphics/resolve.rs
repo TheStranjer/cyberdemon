@@ -169,12 +169,22 @@ fn locate(rows: &[LumpRow], name: LumpName, places: &[Place]) -> Option<LumpRow>
 }
 
 /// The `not_found` for a missing picture: names what was looked for and
-/// the listing tool that knows what the session holds.
+/// the listing tool that knows what the session holds. Flat and texture
+/// refusals carry the create/list hint: those two kinds are what the
+/// import tools can make.
 fn not_found(kind: &str, lister: &str, name: LumpName) -> CyberError {
-    CyberError::NotFound(format!(
+    let error = CyberError::NotFound(format!(
         "no {kind} named {name} in the merged view; {lister} lists what is there"
-    ))
+    ));
+    match kind {
+        "flat" | "texture" => error.with_hint(SURFACE_HINT),
+        _ => error,
+    }
 }
+
+/// The hint attached to missing-flat and missing-texture refusals.
+const SURFACE_HINT: &str = "list_textures / list_flats with a glob pattern; or create one with \
+                            create_texture_from_image / create_flat_from_image";
 
 /// The indexed pixels of the flat `name`: the last flats-region lump of
 /// that name, else the last lump of that name anywhere, decoded as a raw

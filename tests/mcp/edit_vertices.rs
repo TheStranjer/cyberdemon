@@ -100,14 +100,14 @@ mod tests {
     /// Requires `tool` to reject `args` with `invalid_argument`.
     async fn refuse(client: &Client, tool: &str, args: Value) {
         let note = args.to_string();
-        let (code, _) = call_err(client, tool, args).await;
+        let (code, _, _) = call_err(client, tool, args).await;
         assert_eq!(code, "invalid_argument", "refusal code for {tool} {note}");
     }
 
     /// Requires a call to have left the working archive untouched: no map
     /// block copied in and no undo entry.
     async fn assert_untouched(client: &Client) {
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             client,
             "get_map_summary",
             json!({"map": "MAP01", "scope": "working"}),
@@ -188,7 +188,7 @@ mod tests {
     async fn add_vertex_refuses_coordinates_the_binary_format_cannot_store() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "add_vertex", json!({"x": 40000_i32, "y": 0_i32})).await;
         assert_eq!(code, "invalid_argument", "above i16 refuses");
         assert!(
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(result["index"], json!(6_i32), "appended after the six");
         assert_eq!(result["x"], json!(40000_i32), "UDMF stores the wide point");
         assert_eq!(result["y"], json!(-40000_i32));
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "add_vertex",
             json!({"map": "MAP04", "x": 40000_i32, "y": 0_i32}),
@@ -284,7 +284,7 @@ mod tests {
     async fn move_vertex_refuses_a_move_that_collapses_a_linedef() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "move_vertex",
             json!({"index": 5_i32, "x": 0_i32, "y": 0_i32}),
@@ -346,7 +346,7 @@ mod tests {
     async fn move_vertex_reports_a_missing_index_and_an_unstorable_result() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "move_vertex",
             json!({"index": 99_i32, "dx": 1_i32}),
@@ -354,7 +354,9 @@ mod tests {
         .await;
         assert_eq!(code, "not_found", "the map holds six vertices");
         assert!(
-            message.contains("vertex 99 does not exist (map has 6 vertices)"),
+            message.contains(
+                "vertex 99 does not exist (the map has 6 vertices, valid indices are 0..=5)"
+            ),
             "the message counts the vertices: {message}"
         );
         refuse(
@@ -407,14 +409,14 @@ mod tests {
     async fn remove_vertex_refuses_a_used_point_without_cascade() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(&client, "remove_vertex", json!({"index": 4_i32})).await;
+        let (code, message, _) = call_err(&client, "remove_vertex", json!({"index": 4_i32})).await;
         assert_eq!(code, "conflict", "three lines end at vertex 4");
         assert!(
             message.contains("vertex 4 is used by linedef(s) 1, 2, 4")
                 && message.contains("cascade: true"),
             "the message lists the lines and the fix: {message}"
         );
-        let (list_code, _) = call_err(
+        let (list_code, _, _) = call_err(
             &client,
             "remove_vertex",
             json!({"index": [4_i32], "cascade": false}),
@@ -428,10 +430,12 @@ mod tests {
     async fn remove_vertex_without_cascade_reports_a_missing_index() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message) = call_err(&client, "remove_vertex", json!({"index": 40_i32})).await;
+        let (code, message, _) = call_err(&client, "remove_vertex", json!({"index": 40_i32})).await;
         assert_eq!(code, "not_found", "the map holds six vertices");
         assert!(
-            message.contains("vertex 40 does not exist (map has 6 vertices)"),
+            message.contains(
+                "vertex 40 does not exist (the map has 6 vertices, valid indices are 0..=5)"
+            ),
             "the message counts the vertices: {message}"
         );
         assert_untouched(&client).await;
@@ -566,7 +570,7 @@ mod tests {
             json!(["add vertex at 128, 128"]),
             "and the last one is the add"
         );
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "get_map_summary",
             json!({"map": "MAP01", "scope": "working"}),

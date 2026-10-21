@@ -214,9 +214,12 @@ fn endpoint(map: &Map, index: usize) -> Result<Point, CyberError> {
 
 /// The `NotFound` saying `kind` `index` is past a block of `count`.
 fn missing(kind: &str, index: usize, count: usize) -> CyberError {
-    CyberError::NotFound(format!(
-        "{kind} {index} does not exist (map has {count} {kind}s)"
-    ))
+    let range = count.checked_sub(1).map_or_else(
+        || format!("the map has no {kind}s"),
+        |last| format!("the map has {count} {kind}s, valid indices are 0..={last}"),
+    );
+    CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
+        .with_hint("describe_map or find_elements returns indices")
 }
 
 /// The `InvalidArgument` telling the caller to pass a point on the segment

@@ -220,7 +220,7 @@ mod tests {
     /// Assert that one listing tool refuses `limit` with the documented
     /// range message.
     async fn refuse_limit(client: &Client, tool: &str, limit: u64) {
-        let (code, message) = call_err(client, tool, json!({ "limit": limit })).await;
+        let (code, message, _) = call_err(client, tool, json!({ "limit": limit })).await;
         assert_eq!(code, "invalid_argument", "{tool} limit {limit} code");
         assert!(
             message.contains("between 1 and 2000"),
@@ -600,7 +600,7 @@ mod tests {
 
     /// Assert that `list_sprites` refuses a malformed `prefix`.
     async fn refuse_prefix(client: &Client, bad: &str) {
-        let (code, message) = call_err(client, "list_sprites", json!({ "prefix": bad })).await;
+        let (code, message, _) = call_err(client, "list_sprites", json!({ "prefix": bad })).await;
         assert_eq!(code, "invalid_argument", "prefix {bad:?} code");
         assert!(
             message.contains("four"),
@@ -768,7 +768,7 @@ mod tests {
     /// `hint` in the message.
     async fn refuse(client: &Client, tool: &str, args: Value, expect: (&str, &str)) {
         let (code, hint) = expect;
-        let (got, message) = call_err(client, tool, args).await;
+        let (got, message, _) = call_err(client, tool, args).await;
         assert_eq!(got, code, "{tool} code: {message}");
         assert!(
             message.contains(hint),
@@ -1445,7 +1445,7 @@ mod tests {
         assert_eq!(lamp["lump"], json!("PLSMA1"), "the custom sprite lump");
         check_dims(&lamp, 4_u64, 2_u64);
         check_offsets(&lamp, 1_i64, 2_i64);
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "get_thing_sprite", json!({ "type": 20_013_u64 })).await;
         assert_eq!(code, "not_found", "the classless MAPINFO entry");
         assert!(

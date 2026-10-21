@@ -185,9 +185,14 @@ mod tests {
         let error = check_index("linedef", 12, 7).expect_err("12 is out of range");
         assert_eq!(error.code(), "not_found", "out of range code");
         assert_eq!(
-            error.to_string(),
-            "linedef 12 does not exist (map has 7 linedefs)",
+            error.message(),
+            "linedef 12 does not exist (the map has 7 linedefs, valid indices are 0..=6)",
             "the documented phrasing"
+        );
+        assert_eq!(
+            error.hint(),
+            "describe_map or find_elements returns indices",
+            "the documented hint"
         );
         assert_eq!(
             validate_texture_name("step1", MapFormat::Doom).expect("a vanilla name"),

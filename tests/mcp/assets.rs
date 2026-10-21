@@ -525,7 +525,7 @@ spawnhealth 20
             None,
         )
         .await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "get_asset_url", json!({ "name": "DEHACKED" })).await;
         assert_eq!(code, "unsupported", "a text lump: {message}");
         assert!(
@@ -538,7 +538,8 @@ spawnhealth 20
     async fn a_name_that_is_neither_a_lump_nor_a_texture_is_not_found() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (code, message) = call_err(&client, "get_asset_url", json!({ "name": "NOWAY" })).await;
+        let (code, message, _) =
+            call_err(&client, "get_asset_url", json!({ "name": "NOWAY" })).await;
         assert_eq!(code, "not_found", "nothing behind the name: {message}");
         assert!(
             message.contains("list_textures"),
@@ -550,7 +551,7 @@ spawnhealth 20
     async fn the_selectors_scope_and_bad_choices_are_reported() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;
-        let (scope, scope_text) = call_err(
+        let (scope, scope_text, _) = call_err(
             &client,
             "get_asset_url",
             json!({ "name": "FLOOR1", "scope": "working" }),
@@ -564,28 +565,28 @@ spawnhealth 20
             scope_text.contains("not a composite texture either"),
             "the widened message: {scope_text}"
         );
-        let (word, word_text) = call_err(
+        let (word, word_text, _) = call_err(
             &client,
             "get_asset_url",
             json!({ "name": "FLOOR1", "prefer": "sprites" }),
         )
         .await;
         assert_eq!(word, "invalid_argument", "no such choice: {word_text}");
-        let (entry, entry_text) = call_err(
+        let (entry, entry_text, _) = call_err(
             &client,
             "get_asset_url",
             json!({ "name": "FLOOR1", "palette": 99_usize }),
         )
         .await;
         assert_eq!(entry, "not_found", "past the last palette: {entry_text}");
-        let (namespace, _) = call_err(
+        let (namespace, _, _) = call_err(
             &client,
             "get_asset_url",
             json!({ "name": "FLOOR1", "namespace": "sprites" }),
         )
         .await;
         assert_eq!(namespace, "not_found", "the flat is not a sprite");
-        let (scope_word, scope_message) = call_err(
+        let (scope_word, scope_message, _) = call_err(
             &client,
             "get_asset_url",
             json!({ "name": "FLOOR1", "scope": "sideways" }),

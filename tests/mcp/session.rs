@@ -71,7 +71,7 @@ mod tests {
     async fn open_iwad_on_a_missing_file_is_not_found() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "open_iwad",
             path_arg(&dir.path().join("absent.wad")),
@@ -87,7 +87,7 @@ mod tests {
     #[tokio::test]
     async fn open_iwad_on_a_relative_path_is_invalid_argument() {
         let client = connect().await;
-        let (code, message) =
+        let (code, message, _) =
             call_err(&client, "open_iwad", json!({ "path": "some/doom2.wad" })).await;
         assert_eq!(code, "invalid_argument", "relative path code");
         assert!(
@@ -101,7 +101,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let junk = not_a_wad(dir.path());
         let client = connect().await;
-        let (code, message) = call_err(&client, "open_iwad", path_arg(&junk)).await;
+        let (code, message, _) = call_err(&client, "open_iwad", path_arg(&junk)).await;
         assert_eq!(code, "format_error", "not a WAD code");
         assert!(
             message.contains("magic"),
@@ -144,7 +144,7 @@ mod tests {
             json!({ "path": base.display().to_string(), "mode": "working" }),
         )
         .await;
-        let (code, message) = call_err(&client, "open_wad", path_arg(&extra)).await;
+        let (code, message, _) = call_err(&client, "open_wad", path_arg(&extra)).await;
         assert_eq!(code, "conflict", "dirty working archive code");
         assert!(
             message.contains("discard_changes"),
@@ -174,7 +174,7 @@ mod tests {
             json!({ "path": base.display().to_string(), "mode": "working" }),
         )
         .await;
-        let (code, message) = call_err(&client, "new_wad", json!({})).await;
+        let (code, message, _) = call_err(&client, "new_wad", json!({})).await;
         assert_eq!(code, "conflict", "unsaved work must not vanish silently");
         assert!(
             message.contains("save_wad"),
@@ -280,7 +280,7 @@ mod tests {
         let client = connect().await;
         load_iwad(&client, dir.path()).await;
         let extra = pwad(dir.path());
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "merge_wad",
             json!({ "path": extra.display().to_string(), "mode": "sideways" }),
@@ -297,7 +297,7 @@ mod tests {
             1,
             "the refusal stacked nothing"
         );
-        let (missing_code, _) = call_err(
+        let (missing_code, _, _) = call_err(
             &client,
             "merge_wad",
             path_arg(&dir.path().join("absent.wad")),
@@ -469,7 +469,7 @@ mod tests {
             Vec::<String>::new(),
             "back to empty"
         );
-        let (code, message) = call_err(&client, "undo", json!({})).await;
+        let (code, message, _) = call_err(&client, "undo", json!({})).await;
         assert_eq!(code, "not_found", "nothing left to undo");
         assert_eq!(message, "nothing to undo", "the documented message");
     }
@@ -511,17 +511,17 @@ mod tests {
         letters(&client).await;
         call(&client, "undo", json!({ "steps": 3_usize })).await;
         call(&client, "redo", json!({ "steps": 3_usize })).await;
-        let (code, message) = call_err(&client, "redo", json!({})).await;
+        let (code, message, _) = call_err(&client, "redo", json!({})).await;
         assert_eq!(code, "not_found", "nothing left to redo");
         assert_eq!(message, "nothing to redo", "the documented message");
-        let (zero_code, zero_message) =
+        let (zero_code, zero_message, _) =
             call_err(&client, "redo", json!({ "steps": 0_usize })).await;
         assert_eq!(zero_code, "invalid_argument", "steps 0 is refused");
         assert!(
             zero_message.contains("1..=100"),
             "the message names the accepted range: {zero_message}"
         );
-        let (past_code, past_message) =
+        let (past_code, past_message, _) =
             call_err(&client, "undo", json!({ "steps": 101_usize })).await;
         assert_eq!(
             past_code, "invalid_argument",
@@ -546,7 +546,7 @@ mod tests {
         letters(&client).await;
         call(&client, "undo", json!({ "steps": 2_usize })).await;
         call(&client, "add_lump", add_arg("D")).await;
-        let (code, message) = call_err(&client, "redo", json!({})).await;
+        let (code, message, _) = call_err(&client, "redo", json!({})).await;
         assert_eq!(code, "not_found", "a new edit dropped the redo branch");
         assert_eq!(message, "nothing to redo", "the documented message");
         assert_eq!(
@@ -607,12 +607,12 @@ mod tests {
             json!({ "path": extra.display().to_string(), "discard_changes": true }),
         )
         .await;
-        let (code, message) = call_err(&client, "undo", json!({})).await;
+        let (code, message, _) = call_err(&client, "undo", json!({})).await;
         assert_eq!(code, "not_found", "the open forgot the old archive's past");
         assert_eq!(message, "nothing to undo", "empty undo message");
         call(&client, "add_lump", add_arg("Z")).await;
         call(&client, "new_wad", json!({ "discard_changes": true })).await;
-        let (fresh_code, fresh_message) = call_err(&client, "undo", json!({})).await;
+        let (fresh_code, fresh_message, _) = call_err(&client, "undo", json!({})).await;
         assert_eq!(
             fresh_code, "not_found",
             "the fresh archive has no past either"

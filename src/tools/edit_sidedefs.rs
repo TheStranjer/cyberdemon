@@ -505,7 +505,7 @@ where
 impl Cyberdemon {
     /// Appends one sidedef to a map in a single undoable edit.
     #[tool(
-        description = "Adds one sidedef (one side of a linedef: its textures, texture offsets and the sector it opens into) to a map in a single undoable edit. map defaults to the active map (set_active_map, else the merged view's only map). Required: sector, the index of an existing sector the side faces (a missing one is not_found; assemble_map shows the sectors). Optional: upper, middle and lower texture names (each default \"-\", no texture; names are uppercased and validated - empty, over-long or non-printable names are invalid_argument, binary maps cap them at 8 characters, UDMF at 64) and x_offset/y_offset texture shifts in map units (default 0; on binary maps they must fit i16 -32768..=32767, over-range values are invalid_argument; UDMF is unbounded). The new sidedef starts unreferenced: it is not visible in the game until a linedef uses it (add_linedef or edit_linedef). Adding one changes the sidedef block, so the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {index, sidedef: {sector, upper, middle, lower, x_offset, y_offset}, map, nodes_invalidated, copied_to_working}. Unknown map is not_found."
+        description = "Adds one sidedef (one side of a linedef: its face textures, offsets and the sector it opens into) to a map in a single undoable edit; sector must name an existing sector and the new side starts unreferenced until a linedef points at it. Prefer create_sector_from_loop to draw walls together with their sides, or build_map_from_plan for a whole map."
     )]
     fn add_sidedef(
         &self,
@@ -516,7 +516,7 @@ impl Cyberdemon {
 
     /// Changes one or several sidedefs in a single undoable edit.
     #[tool(
-        description = "Changes one or several sidedefs of a map in a single undoable edit. index is one sidedef index or a list of them (duplicates collapse, sorted first); every change parameter applies to all selected sidedefs. Parameters, all optional: upper, middle, lower (new texture names, validated and uppercased like add_sidedef's), x_offset and y_offset (absolute texture shifts), x_offset_delta and y_offset_delta (shift each selected sidedef's current offset by this much) and sector (point the side at another existing sector). Absolute and delta conflict on the same axis (invalid_argument): x_offset with x_offset_delta, y_offset with y_offset_delta. A call with no change parameter is invalid_argument. Offsets outside i16 on binary maps are invalid_argument. An index the map does not hold is not_found, a sector the map does not hold is not_found, and nothing changes. Texture- and offset-only edits keep the node lumps (nodes_invalidated false); changing sector is a geometry change and invalidates them (true). Returns {sidedefs: [{index, sector, upper, middle, lower, x_offset, y_offset}], map, nodes_invalidated, copied_to_working}."
+        description = "Changes one or several sidedefs of a map in a single undoable edit: upper/middle/lower texture names, x_offset and y_offset (absolute or delta) and the sector the side faces. Prefer bulk_edit to apply texture or offset changes across a whole find_elements selection, and replace_texture to swap one texture name for another everywhere; use this for one side's exact fields."
     )]
     fn edit_sidedef(
         &self,
@@ -530,7 +530,7 @@ impl Cyberdemon {
 
     /// Removes one or several sidedefs in a single undoable edit.
     #[tool(
-        description = "Removes one sidedef or a list of them (index: one integer or an array) from a map in a single undoable edit; the remaining sidedefs renumber down. A sidedef a linedef still uses is refused with conflict naming the referencing linedefs, unless cascade is true: with the cascade, a linedef that loses its front side is flipped (its back becomes the front), a linedef that loses its back side becomes one-sided (its two-sided bit is cleared, the blocking bit set and an invisible lower or upper texture of the surviving side moved to the middle), and a linedef that loses both sides is removed with them; vertices orphaned by those linedef removals are pruned too. Without the cascade nothing is touched at all. Removing sidedefs is a geometry change: the node lumps are invalidated (nodes_invalidated true; run build_nodes before playing the map in vanilla Doom). Returns {removed: {sidedefs, linedefs, vertices, sectors, things (removed original indices, sorted), flipped_linedefs, one_sided_linedefs (new indices of the normalised linedefs)}, map, nodes_invalidated, copied_to_working}. An index the map does not hold is not_found; an empty index list is invalid_argument."
+        description = "Removes one sidedef or a list of them from a map in a single undoable edit; the remaining sidedefs renumber down. A side a linedef still uses is refused with conflict unless cascade: true, which flips lines that lose their front, makes lines that lose their back one-sided and removes lines that lose both sides. Geometry change - rebuild nodes; for mixed selections prefer delete_geometry."
     )]
     fn remove_sidedef(
         &self,

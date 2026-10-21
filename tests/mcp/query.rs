@@ -61,7 +61,7 @@ mod tests {
     /// Assert a query fails with `want_code` and a message carrying `want_text`.
     async fn refuse(client: &Client, args: Value, want_code: &str, want_text: &str) {
         let described = args.to_string();
-        let (code, message) = call_err(client, "find_elements", args).await;
+        let (code, message, _) = call_err(client, "find_elements", args).await;
         assert_eq!(code, want_code, "error code for {described}: {message}");
         assert!(
             message.contains(want_text),
@@ -494,7 +494,7 @@ mod tests {
             FIXTURE_WALL1_MIDDLES,
             "a face-listed miss writes nothing to the other faces"
         );
-        let (face_code, face_message) = call_err(
+        let (face_code, face_message, _) = call_err(
             &client,
             "replace_texture",
             json!({ "from": "WALL1", "to": "STEP1", "parts": ["roof"] }),
@@ -507,7 +507,7 @@ mod tests {
                 && face_message.contains("lower"),
             "the message lists the three faces: {face_message}"
         );
-        let (gone_code, gone_message) = call_err(
+        let (gone_code, gone_message, _) = call_err(
             &client,
             "replace_texture",
             json!({ "from": "WALL1", "to": "NOSUCH" }),
@@ -612,7 +612,7 @@ mod tests {
             json!("FLOOR1"),
             "and only the floor: the room ceiling stands"
         );
-        let (stray_code, stray_message) = call_err(
+        let (stray_code, stray_message, _) = call_err(
             &client,
             "replace_flat",
             json!({ "from": "FLOOR1", "to": "PNGFLAT", "surfaces": ["roof"] }),
@@ -623,7 +623,7 @@ mod tests {
             stray_message.contains("floor") && stray_message.contains("ceiling"),
             "the message lists the two surfaces: {stray_message}"
         );
-        let (gone_code, gone_message) = call_err(
+        let (gone_code, gone_message, _) = call_err(
             &client,
             "replace_flat",
             json!({ "from": "FLOOR1", "to": "NOSUCH" }),
@@ -763,7 +763,7 @@ mod tests {
     async fn replace_thing_type_refuses_undefined_targets_unless_allowed() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (from_code, from_message) = call_err(
+        let (from_code, from_message, _) = call_err(
             &client,
             "replace_thing_type",
             json!({ "from": "not-a-thing", "to": "demon" }),
@@ -774,7 +774,7 @@ mod tests {
             from_message.contains("from:"),
             "the failing parameter is named: {from_message}"
         );
-        let (to_code, to_message) = call_err(
+        let (to_code, to_message, _) = call_err(
             &client,
             "replace_thing_type",
             json!({ "from": "imp", "to": "not-a-thing" }),
@@ -785,7 +785,7 @@ mod tests {
             to_message.contains("to:"),
             "the failing parameter is named: {to_message}"
         );
-        let (number_code, number_message) = call_err(
+        let (number_code, number_message, _) = call_err(
             &client,
             "replace_thing_type",
             json!({ "from": "imp", "to": 99999_i64 }),
@@ -826,7 +826,7 @@ mod tests {
     async fn replace_thing_type_refuses_a_number_the_map_format_cannot_store() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "replace_thing_type",
             json!({ "from": "imp", "to": 99999_i64, "allow_unknown": true }),
@@ -922,7 +922,7 @@ mod tests {
     async fn replace_thing_type_sweeps_all_maps_and_refuses_unknown_ones() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_plus_pwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, hint) = call_err(
             &client,
             "replace_thing_type",
             json!({ "from": 3001_i64, "to": 3002_i64, "maps": ["MAP99"] }),
@@ -930,8 +930,12 @@ mod tests {
         .await;
         assert_eq!(code, "not_found", "unknown map code");
         assert!(
-            message.contains("MAP99") && message.contains("list_maps"),
-            "the message names the map and list_maps: {message}"
+            message.contains("MAP99"),
+            "the message names the map: {message}"
+        );
+        assert!(
+            hint.contains("list_maps") && hint.contains("create_map"),
+            "the hint names the map tools: {hint}"
         );
         let report = call(
             &client,
@@ -1054,7 +1058,7 @@ mod tests {
             json!(192_i64),
             "the map is unchanged"
         );
-        let (code, message) = call_err(&client, "undo", json!({})).await;
+        let (code, message, _) = call_err(&client, "undo", json!({})).await;
         assert_eq!(code, "not_found", "the preview recorded no step");
         assert_eq!(message, "nothing to undo", "the stack stayed empty");
     }
@@ -1063,7 +1067,7 @@ mod tests {
     async fn bulk_edit_never_clamps_and_writes_nothing_on_a_bad_value() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "bulk_edit",
             json!({"map": "MAP01", "kind": "sectors", "add": {"light": -200_i64}}),
@@ -1087,7 +1091,7 @@ mod tests {
     async fn bulk_edit_max_guard_refuses_before_writing() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "bulk_edit",
             json!({"kind": "sectors", "max": 0_i64, "add": {"light": 1_i64}}),
@@ -1110,7 +1114,7 @@ mod tests {
     async fn bulk_edit_moves_vertices_only_by_add_and_invalidates_nodes() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "bulk_edit",
             json!({"kind": "vertices", "set": {"x": 0_i64}}),
@@ -1162,7 +1166,7 @@ mod tests {
             (0..7).collect::<Vec<u64>>(),
             "the bits read back through the query"
         );
-        let (code, message) = call_err(
+        let (code, message, _) = call_err(
             &client,
             "bulk_edit",
             json!({
@@ -1208,7 +1212,7 @@ mod tests {
             vec![1_u64],
             "the imp reads back as a demon"
         );
-        let (stray_code, stray_message) = call_err(
+        let (stray_code, stray_message, _) = call_err(
             &client,
             "bulk_edit",
             json!({"kind": "things", "set": {"type": "platypus"}}),

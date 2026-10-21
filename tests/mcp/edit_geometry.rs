@@ -103,7 +103,7 @@ mod tests {
     /// Requires a call to have left the working archive untouched: no map
     /// block copied in and no undo entry.
     async fn assert_untouched(client: &Client) {
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             client,
             "get_map_summary",
             json!({"map": "MAP01", "scope": "working"}),
@@ -117,7 +117,7 @@ mod tests {
     /// return the message.
     async fn refuse(client: &Client, expected: &str, args: Value) -> String {
         let note = args.to_string();
-        let (code, message) = call_err(client, "delete_geometry", args).await;
+        let (code, message, _) = call_err(client, "delete_geometry", args).await;
         assert_eq!(code, expected, "refusal code for {note}");
         message
     }
@@ -193,7 +193,7 @@ mod tests {
             json!(["delete 1 map elements"]),
             "the label comes back"
         );
-        let (code, _) = call_err(
+        let (code, _, _) = call_err(
             &client,
             "get_map_summary",
             json!({"map": "MAP01", "scope": "working"}),
@@ -291,27 +291,36 @@ mod tests {
         let client = doom_loaded(dir.path()).await;
         let vertex = refuse(&client, "not_found", json!({"vertices": [99_i32]})).await;
         assert!(
-            vertex.contains("vertex 99 does not exist (map has 6 vertices)"),
+            vertex.contains(
+                "vertex 99 does not exist (the map has 6 vertices, valid indices are 0..=5)"
+            ),
             "the message names the kind and counts the vertices: {vertex}"
         );
         let linedef = refuse(&client, "not_found", json!({"linedefs": [7_i32]})).await;
         assert!(
-            linedef.contains("linedef 7 does not exist (map has 7 linedefs)"),
+            linedef.contains(
+                "linedef 7 does not exist (the map has 7 linedefs, valid indices are 0..=6)"
+            ),
             "the message names the kind and counts the linedefs: {linedef}"
         );
         let sidedef = refuse(&client, "not_found", json!({"sidedefs": [8_i32]})).await;
         assert!(
-            sidedef.contains("sidedef 8 does not exist (map has 8 sidedefs)"),
+            sidedef.contains(
+                "sidedef 8 does not exist (the map has 8 sidedefs, valid indices are 0..=7)"
+            ),
             "the message names the kind and counts the sidedefs: {sidedef}"
         );
         let sector = refuse(&client, "not_found", json!({"sectors": [2_i32]})).await;
         assert!(
-            sector.contains("sector 2 does not exist (map has 2 sectors)"),
+            sector.contains(
+                "sector 2 does not exist (the map has 2 sectors, valid indices are 0..=1)"
+            ),
             "the message names the kind and counts the sectors: {sector}"
         );
         let thing = refuse(&client, "not_found", json!({"things": [2_i32]})).await;
         assert!(
-            thing.contains("thing 2 does not exist (map has 2 things)"),
+            thing
+                .contains("thing 2 does not exist (the map has 2 things, valid indices are 0..=1)"),
             "the message names the kind and counts the things: {thing}"
         );
         assert_untouched(&client).await;
@@ -333,7 +342,9 @@ mod tests {
         )
         .await;
         assert!(
-            message.contains("sector 5 does not exist (map has 2 sectors)"),
+            message.contains(
+                "sector 5 does not exist (the map has 2 sectors, valid indices are 0..=1)"
+            ),
             "the message names kind and index: {message}"
         );
         assert_untouched(&client).await;
@@ -501,7 +512,7 @@ mod tests {
     /// return the message.
     async fn refuse_transform(client: &Client, expected: &str, args: Value) -> String {
         let note = args.to_string();
-        let (code, message) = call_err(client, "transform_selection", args).await;
+        let (code, message, _) = call_err(client, "transform_selection", args).await;
         assert_eq!(code, expected, "refusal code for {note}");
         message
     }
@@ -811,7 +822,9 @@ mod tests {
         )
         .await;
         assert!(
-            linedef.contains("linedef 9 does not exist (map has 7 linedefs)"),
+            linedef.contains(
+                "linedef 9 does not exist (the map has 7 linedefs, valid indices are 0..=6)"
+            ),
             "the message names the kind and counts: {linedef}"
         );
         let sector = refuse_transform(
@@ -824,7 +837,9 @@ mod tests {
         )
         .await;
         assert!(
-            sector.contains("sector 2 does not exist (map has 2 sectors)"),
+            sector.contains(
+                "sector 2 does not exist (the map has 2 sectors, valid indices are 0..=1)"
+            ),
             "the sector kind too: {sector}"
         );
         assert_untouched(&client).await;

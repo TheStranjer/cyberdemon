@@ -598,7 +598,11 @@ fn not_touching(target: &Target<'_>) -> CyberError {
         "connection '{}' cannot be placed: rooms {} and {} do not touch; move them together or add a corridor room",
         target.label, target.connection.from, target.connection.to
     ))
+    .with_hint(PLAN_ROOMS_HINT)
 }
+
+/// The hint attached to the plan refusals about rooms that cannot meet.
+const PLAN_ROOMS_HINT: &str = "move the rooms so they share an edge, or add a corridor room";
 
 /// Whether `candidate` beats `best`: nearer to `at`, or longer when `at`
 /// is `None`; ties break by the piece's `(a, b)` order.
@@ -714,7 +718,8 @@ fn fit_width(boundary: &Boundary<'_>, target: &Target<'_>) -> Result<(), CyberEr
     Err(CyberError::InvalidArgument(format!(
         "connection '{}' is {width} units wide but the boundary between rooms {} and {} is {} units long; move the rooms further apart or narrow the connection",
         target.label, target.connection.from, target.connection.to, boundary.length
-    )))
+    ))
+    .with_hint(PLAN_ROOMS_HINT))
 }
 
 /// One connection being placed by a [`Pass`].

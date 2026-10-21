@@ -2,14 +2,19 @@
 //!
 //! Plus a probe server that speaks the structured-result contract
 //! (`ok`/`fail`) so those helpers are exercised end to end, not just
-//! compiled, and small hand-written byte builders for the media files
-//! (`PNG`, `MIDI`, `WAV`) the guide recipes import.
+//! compiled, small hand-written byte builders for the media files
+//! (`PNG`, `MIDI`, `WAV`) the guide recipes import, and the picture
+//! helpers (blank sheets, rectangle fills, `PNG` files and asset
+//! fetches) the image-chain tests draw their fixtures with.
 
 use core::time::Duration;
 use std::io::Write as _;
+use std::path::Path;
 
 use cyberdemon::Cyberdemon;
 use cyberdemon::error::CyberError;
+use cyberdemon::gfx::codec::{decode_image, encode_png};
+use cyberdemon::gfx::image::RgbaImage;
 use cyberdemon::tools::{fail, ok};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -442,4 +447,69 @@ pub fn wav_bytes() -> Vec<u8> {
     out.extend_from_slice(&size.to_le_bytes());
     out.extend_from_slice(&body);
     out
+}
+
+/// A blank `width` x `height` sheet of opaque white paper to draw
+/// picture fixtures on.
+///
+/// # Panics
+///
+/// Panics if the shape does not fit (test sizes always fit).
+#[must_use]
+#[inline]
+pub fn paper_sheet(width: u32, height: u32) -> RgbaImage {
+    let count = usize::try_from(width)
+        .expect("test width fits")
+        .checked_mul(usize::try_from(height).expect("test height fits"))
+        .expect("test pixels fit")
+        .checked_mul(4)
+        .expect("test bytes fit");
+    RgbaImage::new(width, height, vec![255_u8; count]).expect("test shapes are valid")
+}
+
+/// Paints the half-open rectangle `(x0, y0)..(x1, y1)` of `sheet` with
+/// `colour`.
+///
+/// # Panics
+///
+/// Panics if a pixel of the rectangle falls outside `sheet` (test
+/// rectangles always fit).
+#[inline]
+pub fn fill_rect(sheet: &mut RgbaImage, rect: (u32, u32, u32, u32), colour: [u8; 4]) {
+    let (x0, y0, x1, y1) = rect;
+    for row in y0..y1 {
+        for column in x0..x1 {
+            assert!(sheet.set(column, row, colour), "test rect in bounds");
+        }
+    }
+}
+
+/// Encodes `sheet` as a `PNG` file named `name` inside `dir` and returns
+/// the path text for a tool's `source` argument.
+///
+/// # Panics
+///
+/// Panics if the picture does not encode or the file cannot be written.
+#[must_use]
+#[inline]
+pub fn write_png(dir: &Path, name: &str, sheet: &RgbaImage) -> String {
+    let png = encode_png(sheet, None).expect("test PNGs encode");
+    let path = dir.join(name);
+    std::fs::write(&path, png).expect("write the test PNG");
+    path.display().to_string()
+}
+
+/// Fetches the published asset at a report's `url` and decodes it as an
+/// image: the `HTTP` half of looking at what a tool published.
+///
+/// # Panics
+///
+/// Panics if `url` carries no `/assets/` part, the asset does not serve
+/// with status 200, or the bytes are no readable `PNG`.
+#[inline]
+pub async fn asset_png(url: &str) -> RgbaImage {
+    let (base, rest) = url.split_once("/assets/").expect("an asset url");
+    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
+    assert_eq!(status, 200, "the asset serves: {url}");
+    decode_image(&body).expect("the asset is a readable PNG")
 }

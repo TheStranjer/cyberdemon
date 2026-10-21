@@ -7,7 +7,8 @@
 //! the session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
-//! `map_edit`, the maps-group tests in `maps`, the
+//! `map_edit`, the maps-group tests in `maps`, the `images-to-assets`
+//! guide-chain checks in `e2e_assets`, the
 //! `edit_geometry`-group tests in `edit_geometry`, the
 //! `edit_linedefs`-group tests in `edit_linedefs`, the
 //! `edit_sidedefs`-group tests in `edit_sidedefs`, the
@@ -71,6 +72,9 @@ mod defs;
 #[cfg(test)]
 #[path = "mcp/docs.rs"]
 mod docs;
+#[cfg(test)]
+#[path = "mcp/e2e_assets.rs"]
+mod e2e_assets;
 #[cfg(test)]
 #[path = "mcp/edit_geometry.rs"]
 mod edit_geometry;

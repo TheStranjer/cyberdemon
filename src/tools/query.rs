@@ -1,5 +1,5 @@
-//! Query tools: [`Cyberdemon::find_elements`], the set-valued read behind
-//! every plain-English "all the X" request.
+//! Query tools: `find_elements`, the set-valued read behind every
+//! plain-English "all the X" request.
 //!
 //! The filtering is the pure [`crate::wad::map::query`] engine's; this file
 //! resolves the flattened query parameters, reads the map and the session's
@@ -8,7 +8,12 @@
 //! the result: `count` totals every hit, `indices` and `rows` carry one
 //! ascending page of the hits with a compact summary per kind, and
 //! `next_offset` names the `offset` where the rest continues. CD-108's bulk
-//! edits take the same `Query` and act on exactly these indices.
+//! edits take the same `Query` and act on exactly these indices; the
+//! session-facing machinery they share (the `maps` selector, the
+//! one-undo-step-over-many-maps runner and the texture stock check)
+//! lives in the public `replace` submodule.
+
+pub mod replace;
 
 use alloc::format;
 use alloc::string::String;

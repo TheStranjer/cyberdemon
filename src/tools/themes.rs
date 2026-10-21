@@ -48,22 +48,26 @@ const ALIGN_LABEL: &str = "align_textures";
 /// The override value that removes an override.
 const CLEAR: &str = "-";
 
-/// What the merged view provides, precomputed for role resolution.
-struct Inventory {
+/// What the merged view provides, precomputed for role resolution. The
+/// bulk-edit machinery (`crate::tools::query::replace::Stock`) reads
+/// the same two availability sets through [`inventory`].
+pub(in crate::tools) struct Inventory {
     /// Existing wall texture and flat names.
-    available: Available,
+    pub(in crate::tools) available: Available,
     /// Wall texture name to width in pixels, from `TEXTURE1`/`TEXTURE2`.
-    widths: BTreeMap<String, u32>,
+    pub(in crate::tools) widths: BTreeMap<String, u32>,
 }
 
 /// The merged view's texture inventory: `TEXTURE1`/`TEXTURE2` names and
 /// widths, `TX_` lump names, the flats namespace, plus `F_SKY1`.
+/// Shared with the bulk-edit machinery in
+/// `crate::tools::query::replace`.
 ///
 /// # Errors
 ///
 /// [`common::directory`]'s `not_found` and [`TextureSet::load`]'s
 /// [`CyberError::Format`] for a malformed texture lump.
-fn inventory(session: &Session) -> Result<Inventory, CyberError> {
+pub(in crate::tools) fn inventory(session: &Session) -> Result<Inventory, CyberError> {
     let dir = common::directory(session, Scope::Merged)?;
     let mut available = Available::default();
     for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {

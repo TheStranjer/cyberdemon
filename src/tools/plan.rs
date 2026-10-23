@@ -6,7 +6,11 @@
 //! shape and its mapping onto [`crate::plan::model`] live in
 //! [`params`]; the pure [`crate::plan::compile`] engine grows the thick
 //! walls, places every connector band, emits the fresh [`Map`] and
-//! dresses it in the [`ThemeRoles`] this module resolves for the call.
+//! dresses it in the [`ThemeRoles`] this module resolves for the call: a
+//! plain `opening` wide enough to span a whole shared edge takes the wall
+//! down there and owns no sector (the rooms simply join and its result
+//! row reports empty `sectors`), and every other band wears the adjoining
+//! rooms' flats and the dimmer of their lights.
 //! The [`crate::plan::things`] engine then stands the requested things
 //! in: names resolve against the session's game definitions (the same
 //! overlay the validate tools read), pinned points travel with the
@@ -483,7 +487,9 @@ struct ConnectionReport {
     /// The kind class: `opening`, `door`, `window` or `stairs`.
     kind: &'static str,
     /// The sectors this connector owns (one band, or one per stair
-    /// step), in plan order.
+    /// step), in plan order. Empty for an `opening` whose width spans
+    /// the whole shared edge: no wall stands there, so the rooms join on
+    /// their own boundary line and the opening owns no sector.
     sectors: Vec<usize>,
 }
 

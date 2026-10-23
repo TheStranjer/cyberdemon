@@ -70,7 +70,10 @@ pub struct ConnectorInfo {
     /// The kind of connection, from the model through the placement.
     pub kind: ConnectionKind,
     /// The sectors of the connector's layers that survived, in allocator
-    /// (stair step) order.
+    /// (stair step) order. Empty for an opening the plan opened across a
+    /// whole shared edge: [`ConnectorGeometry::joined`] took the wall
+    /// there down, so the rooms share their own boundary line and the
+    /// connection owns no sector.
     pub sectors: Vec<usize>,
     /// The [`Map::linedefs`] indices whose two sides are one of
     /// [`ConnectorInfo::sectors`] and one of the connector's two rooms'
@@ -78,7 +81,8 @@ pub struct ConnectorInfo {
     /// crossing through a wall produces exactly two of them, the jambs
     /// where the band meets each wall face; a stair run or a
     /// zero-thickness band produces more as its outline meets the rooms
-    /// along extra cuts.
+    /// along extra cuts, and a [`joined`](ConnectorGeometry::joined)
+    /// opening produces none.
     pub door_lines: Vec<usize>,
 }
 
@@ -1078,6 +1082,38 @@ mod tests {
             joins,
             vec![(0, 2), (1, 2)],
             "each door line joins the band to one room"
+        );
+    }
+
+    #[test]
+    fn a_joined_opening_books_no_sector_and_no_door_line() {
+        let mut arch = opening("a", "b");
+        arch.id = Some("arch".to_owned());
+        arch.width = 128_i64;
+        let plan = two_rooms(16, vec![arch]);
+        let (emitted, connectors) = compile(&plan);
+        assert_eq!(emitted.map.sectors.len(), 2, "the rooms alone own the map");
+        assert_eq!(
+            emitted
+                .sector_of_label
+                .values()
+                .copied()
+                .collect::<Vec<usize>>(),
+            vec![0_usize, 1],
+            "no connector label is allocated"
+        );
+        let compiled = compiled_plan(&plan, &connectors, emitted);
+        let info = compiled.connector_sectors.first().expect("the arch");
+        assert_eq!(info.id, "arch", "the connection still reports");
+        assert_eq!(info.kind, ConnectionKind::Opening, "as the opening it is");
+        assert!(info.sectors.is_empty(), "and it owns no sector");
+        assert!(
+            info.door_lines.is_empty(),
+            "nor a line to hang a special on"
+        );
+        assert!(
+            geometry_issues(&compiled.map).is_empty(),
+            "the join is clean"
         );
     }
 

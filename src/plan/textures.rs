@@ -13,8 +13,10 @@
 //! [`apply_textures`] is a pure mutation of an already-emitted [`Map`]:
 //! it reads [`Emitted::pieces`] for the region label behind every face
 //! and [`ConnectorGeometry`] for each band's kind, and never arranges
-//! anything again. Nothing here touches archives, sessions or `MCP`
-//! types.
+//! anything again. A non-door band wears the flats of the rooms it stands
+//! between rather than a role of its own, so a passage continues the room
+//! it leads out of instead of standing in bare `"-"` flats. Nothing here
+//! touches archives, sessions or `MCP` types.
 
 use alloc::collections::BTreeMap;
 
@@ -24,7 +26,7 @@ use crate::geom::label::Label;
 use crate::plan::connectors::ConnectorGeometry;
 use crate::plan::emit::Emitted;
 use crate::plan::model::{ConnectionKind, Plan};
-use crate::wad::map::Map;
+use crate::wad::map::{Map, Sector};
 
 /// The `Doom` linedef `blocking` bit: engines stop motion at the line.
 const FLAG_BLOCKING: u32 = 1_u32;
@@ -227,11 +229,13 @@ fn role_name(roles: &dyn TextureRoles, role: TextureRole) -> String {
 /// one-sided jambs); window bands ([`TextureRole::WindowSill`] `lower`
 /// and [`TextureRole::Wall`] `upper` on the room side, blocking and
 /// two-sided flags on the line); stair risers
-/// ([`TextureRole::Step`] `lower` on the lower sector's side); and a
-/// general fill that gives every remaining two-sided face its neighbour
-/// heights demand [`TextureRole::Wall`], leaving `middle` faces of
-/// two-sided lines alone. A stricter rule's name is never overwritten
-/// by the fill, and a role the theme left `None` keeps its face `"-"`.
+/// ([`TextureRole::Step`] `lower` on the lower sector's side); every
+/// other band's flats, inherited from the adjoining rooms it stands
+/// between; and a general fill that gives every remaining two-sided face
+/// its neighbour heights demand [`TextureRole::Wall`], leaving `middle`
+/// faces of two-sided lines alone. A stricter rule's name is never
+/// overwritten by the fill, and a role the theme left `None` keeps its
+/// face `"-"`.
 ///
 /// `map` must be the map `scene.emitted` holds: linedef order is matched
 /// against [`Emitted::pieces`].
@@ -399,7 +403,7 @@ const fn face_labels(piece: &Piece) -> (Label, Option<Label>) {
     }
 }
 
-/// Sector dressings: room flats from the theme, then door bands' flats.
+/// Sector dressings: room flats from the theme, then the bands' flats.
 fn dress_flats(dress: &Dresser<'_>, map: &mut Map) {
     for index in 0..dress.scene.plan.rooms.len() {
         dress_room_flats(dress, map, index);
@@ -412,8 +416,13 @@ fn dress_flats(dress: &Dresser<'_>, map: &mut Map) {
 /// Unset room flats take the `Floor` and `Ceiling` roles; an `outdoor`
 /// room's `F_SKY1` ceiling is set, so it is never touched.
 fn dress_room_flats(dress: &Dresser<'_>, map: &mut Map, index: usize) {
-    let label = Label::Region(u32::try_from(index).unwrap_or(u32::MAX));
-    let Some(sector) = dress.scene.emitted.sector_of_label.get(&label).copied() else {
+    let Some(sector) = dress
+        .scene
+        .emitted
+        .sector_of_label
+        .get(&region_label(index))
+        .copied()
+    else {
         return;
     };
     let Some(space) = map.sectors.get_mut(sector) else {
@@ -427,19 +436,27 @@ fn dress_room_flats(dress: &Dresser<'_>, map: &mut Map, index: usize) {
     }
 }
 
-/// A door band dresses floor and ceiling in the `DoorFloor` role; every
-/// other kind leaves its band flats `"-"`.
-fn dress_band_flats(dress: &Dresser<'_>, map: &mut Map, connector: &ConnectorGeometry) {
-    if !matches!(connector.kind, ConnectionKind::Door { .. }) {
-        return;
-    }
-    for layer in &connector.layers {
-        dress_one_band_flat(dress, map, layer.label);
-    }
+/// The region label of plan index `index`, matching the room numbering of
+/// [`room_layers`](crate::plan::walls::room_layers).
+fn region_label(index: usize) -> Label {
+    Label::Region(u32::try_from(index).unwrap_or(u32::MAX))
 }
 
-/// Both flats of the sector behind a band label, if it survived.
-fn dress_one_band_flat(dress: &Dresser<'_>, map: &mut Map, label: Label) {
+/// A door band dresses floor and ceiling in the `DoorFloor` role: the
+/// track the leaf slides along. Every other kind continues the rooms it
+/// joins, so a passage, a glass box or a step never stands in bare flats.
+fn dress_band_flats(dress: &Dresser<'_>, map: &mut Map, connector: &ConnectorGeometry) {
+    if matches!(connector.kind, ConnectionKind::Door { .. }) {
+        for layer in &connector.layers {
+            dress_door_band(dress, map, layer.label);
+        }
+        return;
+    }
+    dress_joined_bands(dress, map, connector);
+}
+
+/// Both flats of the sector behind a door band label, if it survived.
+fn dress_door_band(dress: &Dresser<'_>, map: &mut Map, label: Label) {
     let Some(sector) = dress.scene.emitted.sector_of_label.get(&label).copied() else {
         return;
     };
@@ -448,6 +465,90 @@ fn dress_one_band_flat(dress: &Dresser<'_>, map: &mut Map, label: Label) {
     };
     space.floor_flat.clone_from(&dress.names.door_floor);
     space.ceiling_flat.clone_from(&dress.names.door_floor);
+}
+
+/// The bands of one non-door connector: each surviving layer's sector
+/// takes its flats from the adjoining rooms it stands between.
+fn dress_joined_bands(dress: &Dresser<'_>, map: &mut Map, connector: &ConnectorGeometry) {
+    let rooms = adjoining_sectors(dress, connector);
+    for layer in &connector.layers {
+        let Some(band) = dress
+            .scene
+            .emitted
+            .sector_of_label
+            .get(&layer.label)
+            .copied()
+        else {
+            continue;
+        };
+        let Some((floor_flat, ceiling_flat)) = continued_flats(map, &rooms, band) else {
+            continue;
+        };
+        if let Some(space) = map.sectors.get_mut(band) {
+            floor_flat.clone_into(&mut space.floor_flat);
+            ceiling_flat.clone_into(&mut space.ceiling_flat);
+        }
+    }
+}
+
+/// The sectors of the two rooms a connector joins, the room it leads from
+/// first, skipping a room the emission kept nothing of.
+fn adjoining_sectors(dress: &Dresser<'_>, connector: &ConnectorGeometry) -> Vec<usize> {
+    [connector.from, connector.to]
+        .into_iter()
+        .filter_map(|index| {
+            dress
+                .scene
+                .emitted
+                .sector_of_label
+                .get(&region_label(index))
+                .copied()
+        })
+        .collect()
+}
+
+/// The flats the band `band` continues from `rooms`: each of the band's
+/// two surfaces wears the flat of the adjoining room standing at the same
+/// height, so a passage flush with a room carries that room's flat and an
+/// `outdoor` room's sky only carries over where the band really reaches
+/// the sky. A band standing between the rooms' heights (a stair step, a
+/// window box) falls back to the first adjoining room; a connector with
+/// no adjoining sector at all keeps what [`emit`] left.
+///
+/// [`emit`]: crate::plan::emit::emit
+fn continued_flats(map: &Map, rooms: &[usize], band: usize) -> Option<(String, String)> {
+    let space = map.sectors.get(band)?;
+    let (floor_height, ceiling_height) = (space.floor_height, space.ceiling_height);
+    let own = *rooms.first()?;
+    let floor_from = level_room(map, rooms, floor_height, floor_of).unwrap_or(own);
+    let ceiling_from = level_room(map, rooms, ceiling_height, ceiling_of).unwrap_or(own);
+    let floor_flat = map.sectors.get(floor_from)?.floor_flat.clone();
+    let ceiling_flat = map.sectors.get(ceiling_from)?.ceiling_flat.clone();
+    Some((floor_flat, ceiling_flat))
+}
+
+/// The first of `rooms` whose `height_of` surface stands at `height`.
+fn level_room(
+    map: &Map,
+    rooms: &[usize],
+    height: i32,
+    height_of: fn(&Sector) -> i32,
+) -> Option<usize> {
+    rooms.iter().copied().find(|&index| {
+        map.sectors
+            .get(index)
+            .is_some_and(|space| height_of(space) == height)
+    })
+}
+
+/// The floor of a sector row.
+const fn floor_of(space: &Sector) -> i32 {
+    space.floor_height
+}
+
+/// The ceiling of a sector row.
+const fn ceiling_of(space: &Sector) -> i32 {
+    space.ceiling_height
 }
 
 /// One-sided lines: a room's walls take its override else the `Wall`
@@ -677,10 +778,10 @@ mod tests {
     use crate::geom::label::Label;
     use crate::plan::connectors::plan_connectors;
     use crate::plan::emit::{Emitted, MapIdentity, emit};
-    use crate::plan::model::{Plan, Room, Shape};
+    use crate::plan::model::{Connection, ConnectionKind, Plan, Room, Shape};
     use crate::plan::walls::build_walls;
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::Map;
+    use crate::wad::map::{Linedef, Map};
     use crate::wad::name::LumpName;
 
     /// A theme answering every role with a lowercase name: the pass must
@@ -811,6 +912,148 @@ mod tests {
         let space = map.sectors.first().expect("one sector");
         assert_eq!(space.ceiling_flat, "F_SKY1", "the sky stays the sky");
         assert_eq!(space.floor_flat, "FLOROLE", "the floor still gets its role");
+    }
+
+    /// Two `64 x 64` rooms sharing the line `x = 64` behind a `16` wall,
+    /// joined by `connections`.
+    fn pair(connections: Vec<Connection>) -> Plan {
+        Plan {
+            rooms: vec![
+                room("west", None),
+                Room {
+                    shape: Shape::Rect {
+                        x: 64,
+                        y: 0,
+                        w: 64,
+                        h: 64,
+                    },
+                    ..room("east", None)
+                },
+            ],
+            connections,
+            features: Vec::new(),
+            wall_thickness: 16_i64,
+        }
+    }
+
+    /// A plain west-to-east opening `width` map units across.
+    fn gap(width: i64) -> Connection {
+        Connection {
+            id: None,
+            from: "west".to_owned(),
+            to: "east".to_owned(),
+            kind: ConnectionKind::Opening,
+            at: None,
+            width,
+        }
+    }
+
+    #[test]
+    fn an_opening_band_inherits_the_adjoining_rooms_flats() {
+        let mut plan = pair(vec![gap(32_i64)]);
+        if let Some(west) = plan.rooms.get_mut(0) {
+            west.floor_flat = Some("floor4_8".to_owned());
+            west.ceiling_flat = Some("CEIL5_1".to_owned());
+        }
+        if let Some(east) = plan.rooms.get_mut(1) {
+            east.floor = 32_i32;
+            east.floor_flat = Some("FLAT10".to_owned());
+        }
+        let map = dress(&plan, &FixedRoles);
+        let band = map.sectors.get(2).expect("the band sector");
+        assert_eq!(band.floor_height, 32_i32, "the higher floor spans the band");
+        assert_eq!(
+            band.floor_flat, "FLAT10",
+            "so the east room's floor continues through it"
+        );
+        assert_eq!(
+            band.ceiling_flat, "CEIL5_1",
+            "and the west room owns the ceiling both stand at"
+        );
+    }
+
+    #[test]
+    fn an_outdoor_band_inherits_the_sky_only_where_it_reaches_the_sky() {
+        let mut plan = pair(vec![gap(32_i64)]);
+        for entry in &mut plan.rooms {
+            entry.outdoor = true;
+        }
+        if let Some(east) = plan.rooms.get_mut(1) {
+            east.ceiling = 256_i32;
+        }
+        let map = dress(&plan, &FixedRoles);
+        let band = map.sectors.get(2).expect("the band sector");
+        assert_eq!(band.ceiling_height, 128_i32, "the lower ceiling spans it");
+        assert_eq!(
+            band.ceiling_flat, "F_SKY1",
+            "the room standing at that ceiling opens to the sky, and so does the band"
+        );
+        assert_eq!(band.floor_flat, "FLOROLE", "its floor takes the role");
+    }
+
+    #[test]
+    fn a_step_band_between_the_rooms_heights_falls_back_to_the_room_it_leads_from() {
+        let mut climb = gap(32_i64);
+        climb.kind = ConnectionKind::Stairs {
+            step_height: 16_i32,
+            step_depth: 16_i32,
+        };
+        let mut plan = pair(vec![climb]);
+        if let Some(west) = plan.rooms.get_mut(0) {
+            west.floor_flat = Some("FLOOR4_8".to_owned());
+        }
+        if let Some(east) = plan.rooms.get_mut(1) {
+            east.floor = 48_i32;
+            east.floor_flat = Some("FLAT10".to_owned());
+        }
+        let map = dress(&plan, &FixedRoles);
+        assert_eq!(map.sectors.len(), 5, "two rooms plus three steps");
+        for index in 2_usize..4_usize {
+            let step = map.sectors.get(index).expect("a step sector");
+            let floor = step.floor_height;
+            assert_eq!(
+                step.floor_flat, "FLOOR4_8",
+                "the step at floor {floor} continues the west room it climbs from"
+            );
+        }
+        let top = map.sectors.get(4).expect("the top step");
+        assert_eq!(
+            top.floor_flat, "FLAT10",
+            "and the step flush with the east room wears that room's floor"
+        );
+    }
+
+    #[test]
+    fn a_full_width_opening_leaves_no_band_to_dress() {
+        let map = dress(&pair(vec![gap(64_i64)]), &FixedRoles);
+        assert_eq!(map.sectors.len(), 2, "the rooms join with no band between");
+        let open: Vec<&Linedef> = map
+            .linedefs
+            .iter()
+            .filter(|line| line.back.is_some())
+            .collect();
+        assert_eq!(
+            open.len(),
+            1,
+            "one open line, the shared run, and nothing else"
+        );
+        for line in open {
+            let front = map
+                .sidedefs
+                .get(line.front.expect("test rows"))
+                .expect("row");
+            let behind = map
+                .sidedefs
+                .get(line.back.expect("test rows"))
+                .expect("row");
+            let faces = (front.sector, behind.sector);
+            assert!(
+                matches!(faces, (0_usize, 1_usize) | (1_usize, 0_usize)),
+                "the shared line faces the two rooms: {line:?}"
+            );
+            assert_eq!(front.lower, "-", "nothing stands exposed across it");
+            assert_eq!(behind.lower, "-", "on either face");
+        }
     }
 
     #[test]

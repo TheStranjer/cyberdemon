@@ -82,7 +82,10 @@ than a second type, and the vanilla-engine warning for that rides in
 
 **The walls**: `wall_thickness` (default `16`) is the map-unit wall
 grown between and around rooms; `0` lets rooms share their walls
-directly. Negative is refused.
+directly. Negative is refused. A wall rectangle spans the shared run it
+fills and no further, so no wall stands where the rooms really have no
+shared edge; where two shared runs meet at a corner the rectangles reach
+half a thickness past it and overlap, leaving no unwalled gap.
 
 **The connections**: each joins two distinct existing rooms. `kind`
 (case-insensitive) picks the intervention; `at: [x, y]` places it on
@@ -93,10 +96,17 @@ the connection and saying they *do not touch*.
 
 | kind       | Extra fields | What lands |
 |------------|--------------|------------|
-| `opening`  | —            | A plain gap: the band sector spans `max(floor)` to `min(ceiling)`. |
+| `opening`  | —            | A plain gap: the band sector spans `max(floor)` to `min(ceiling)`. A `width` that spans the *whole* shared edge takes the wall down along that run instead: the rooms join on their own boundary line, own no band sector (`sectors: []`) and no jamb walls stand at the ends. |
 | `door`     | `style?`     | A **closed** band: floor equals ceiling. `style` is `normal` (default), `fast`, `stay_open`, `locked_red`, `locked_blue`, `locked_yellow` or `remote` — it picks the door's action and dressing. |
 | `window`   | `sill?` = 32, `lintel?` = 24 | A glass band: `sill` lifts its floor, `lintel` drops its ceiling; under 16 units of glass left is `invalid_argument`. |
 | `stairs`   | `step_height?` = 16, `step_depth?` = 24 | A stepped run from the lower room's floor to the higher one's, one sector per step (`step_depth` must be positive). |
+
+> **Bands wear the rooms' flats.** A `door` band's floor and ceiling take
+> the theme's `door_floor`; every other band's two surfaces take the flat
+> of the adjoining room standing at that height (the room the connection
+> leads `from` where neither does, so a stair step or a glass box
+> continues its own room) and its light is the dimmer of the two rooms.
+> So a passage never stands in flats its own rooms do not wear.
 
 > **Doors are wired.** A `door` connector's band sector takes a fresh
 > tag and its two room-facing lines the style's action in the map's
@@ -384,8 +394,11 @@ rows fail the same way, naming `things[i]`, `things[i].room`,
 **The result**: `rooms` maps each room id to the sector indices it
 owns (a fully painted-over room holds no entry and warns about it);
 `connections` reports `{id, kind, sectors}` per connection in plan
-order (`id` is the connection's `id`, or its derived `from->to`
-label); `features` reports one `{kind, room, sectors, lines, tag}` row
+order (`id` is the connection's `id`, or its derived `from->to` label;
+`sectors` holds the band sector, or the steps of a stair run, or nothing
+at all for an `opening` wide enough to span its whole shared edge: that
+one takes the wall down there and the rooms join directly, so it owns no
+sector); `features` reports one `{kind, room, sectors, lines, tag}` row
 per installed game feature in pipeline order — doors first, in
 connection order, each with `kind` `door`, `room` `null`, its band
 `sectors`, the room-facing `lines` carrying the action (a `remote`'s

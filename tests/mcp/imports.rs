@@ -14,7 +14,8 @@
 //! warnings, the duplicate and `replace` rule and its refusal catalogue).
 //! Test pictures are written with the library's own `PNG` encoder. The
 //! preview pipeline `process_image` (ops, quantized and `quantize: false`,
-//! the op-index errors) and the one-shot `create_texture_from_image`
+//! the op-index errors, and the default-dither preview keeping an
+//! asymmetric picture unmirrored) and the one-shot `create_texture_from_image`
 //! (the size rules, the automatic `fit`/`make_tileable` steps, the
 //! `PNAMES`/patch/definition landing together, the layer-patch and
 //! texture-name collisions with and without `replace`, `assign_role`
@@ -1926,6 +1927,78 @@ mod tests {
         )
         .await;
         assert_eq!(imported["width"], json!(100_u64), "the asset URL reimports");
+    }
+
+    /// The source pixel at raster position `p` of [`weighted_png`]:
+    /// bright grey in the left half of a 32-pixel row, dark grey in the
+    /// right.
+    fn weighted_pixel(p: usize) -> [u8; 4] {
+        let x = p.checked_rem(32).expect("test rows");
+        let shade = if x < 16 { 240_u8 } else { 16_u8 };
+        [shade, shade, shade, 255_u8]
+    }
+
+    /// A left-weighted 32x8 opaque PNG: columns 0..16 are bright grey,
+    /// columns 16..32 dark grey.
+    fn weighted_png() -> Vec<u8> {
+        let pixels: Vec<u8> = (0..256_usize).flat_map(weighted_pixel).collect();
+        let img = RgbaImage::new(32, 8, pixels).expect("test shape is valid");
+        encode_png(&img, None).expect("test PNG encodes")
+    }
+
+    /// The red-channel sum of the `RGBA` pixels of `line` in `range`.
+    fn red_sum(line: &[u8], range: core::ops::Range<usize>) -> u32 {
+        line[range]
+            .chunks_exact(4)
+            .map(|pixel| u32::from(pixel[0]))
+            .sum()
+    }
+
+    /// The red-channel sums of the left and right halves of one 32-pixel
+    /// `RGBA` row of the quantized preview.
+    fn half_reds(line: &[u8]) -> (u32, u32) {
+        (red_sum(line, 0..64), red_sum(line, 64..128))
+    }
+
+    /// The raster rows that are not brighter on the left than on the
+    /// right, over 32-pixel `RGBA` rows.
+    fn unweighted_rows(pixels: &[u8]) -> Vec<usize> {
+        pixels
+            .chunks_exact(128)
+            .enumerate()
+            .filter_map(|(row, line)| {
+                let (left, right) = half_reds(line);
+                (left <= right).then_some(row)
+            })
+            .collect()
+    }
+
+    /// The default dither (`floyd_steinberg`) writes every pixel at its
+    /// own position: each row of the quantized preview stays brighter on
+    /// the left than on the right, where the source is, so no serpentine
+    /// row comes out mirrored.
+    #[tokio::test]
+    async fn process_image_dithering_keeps_the_picture_left_weighted() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "WEIGHT.png", &weighted_png());
+        let report = call(&client, "process_image", source_args(&file, Value::Null)).await;
+        assert_eq!(report["width"], json!(32_u64), "the untouched shape");
+        let url = report["quantized"]["url"]
+            .as_str()
+            .expect("a quantized URL");
+        let bytes = fetch_asset(url).await;
+        let image = cyberdemon::gfx::codec::decode_image(&bytes).expect("a PNG");
+        assert_eq!(
+            (image.width, image.height),
+            (32_u32, 8_u32),
+            "the quantized shape stands"
+        );
+        assert_eq!(
+            unweighted_rows(&image.pixels),
+            Vec::<usize>::new(),
+            "every row of the quantized preview stays left-weighted"
+        );
     }
 
     /// One `create_texture_from_image` of `file` with `extra`.

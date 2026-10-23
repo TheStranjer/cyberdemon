@@ -273,9 +273,16 @@ src/
                   `imports/create_sprite.rs` and `imports/processed.rs`
                   (the preview pipeline), `tools/scripts.rs` with
                   `scripts/text_edit.rs` (the shared text-lump editor behind
-                  `edit_decorate`/`edit_zscript`) and `tools/defs.rs` with
+                  `edit_decorate`/`edit_zscript`), `tools/defs.rs` with
                   `defs/collect.rs` (gathering the session's custom
-                  definition texts).
+                  definition texts) and `tools/edit_geometry.rs` with
+                  `edit_geometry/delete.rs` (the `delete_geometry` request,
+                  report and removal steps) and `edit_geometry/transform.rs`
+                  (the `transform_selection` request types and its run); that
+                  group's tests are `edit_geometry/tests.rs` (the shared
+                  fixture builders and the deletion checks) plus
+                  `edit_geometry/tests/transform.rs` (the transform request
+                  checks).
                   `tools/graphics/resolve.rs` holds the shared picture
                   resolvers (flat, patch, composite texture, sprite
                   rotation) that every tool and the renderers decode

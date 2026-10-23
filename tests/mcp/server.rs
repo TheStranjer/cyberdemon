@@ -320,6 +320,20 @@ mod tests {
         assert_nothing_required(&decoded);
     }
 
+    /// `create_flat_from_image`' schema carries its own `size` square-side
+    /// selector beside the flattened `dither`/`ops`/`palette` trio and
+    /// keeps `name` required.
+    fn assert_flat_creator_schema(tool: &Tool) {
+        let created = schema_of(tool);
+        assert_flattens(
+            &created,
+            &[
+                "source", "name", "fit", "size", "tileable", "ops", "dither", "palette",
+            ],
+        );
+        assert_required(&created, "name");
+    }
+
     /// The image imports flatten their parameters into the tool schema, and
     /// each alias carries its tool's schema exactly.
     #[tokio::test]
@@ -348,7 +362,9 @@ mod tests {
         let flat = schema_of(tool_named(&tools, "import_image_as_flat"));
         assert_flattens(
             &flat,
-            &["source", "name", "palette", "resize", "size", "replace"],
+            &[
+                "source", "name", "palette", "resize", "size", "dither", "replace",
+            ],
         );
         assert_required(&flat, "source");
         assert_eq!(
@@ -356,6 +372,7 @@ mod tests {
             flat,
             "the flat alias takes the same arguments"
         );
+        assert_flat_creator_schema(tool_named(&tools, "create_flat_from_image"));
         let sprite = schema_of(tool_named(&tools, "import_image_as_sprite"));
         assert_flattens(
             &sprite,

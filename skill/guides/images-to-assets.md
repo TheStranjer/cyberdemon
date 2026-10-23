@@ -1,6 +1,6 @@
 # Images to assets
 
-Tools: open_iwad, get_asset_server_info, process_image, create_texture_from_image, create_flat_from_image, create_sprite_from_image, import_image_as_patch, import_image_as_raw, import_image_as_sprite, list_sprites, get_sprite, get_thing_sprite, edit_decorate, edit_dehacked, undo, set_texture_theme, auto_texture, replace_texture, bulk_edit, edit_sidedef, edit_sector, describe_map, render_view, render_topdown, set_palette, save_wad
+Tools: open_iwad, get_asset_server_info, process_image, create_texture_from_image, create_flat_from_image, create_sprite_from_image, import_image_as_patch, import_image_as_flat, import_image_as_raw, import_image_as_sprite, list_sprites, get_sprite, get_thing_sprite, edit_decorate, edit_dehacked, undo, set_texture_theme, auto_texture, replace_texture, bulk_edit, edit_sidedef, edit_sector, describe_map, render_view, render_topdown, set_palette, save_wad
 
 Turn a drawn or photographed image into a working Doom resource. The tools
 resize, quantize and file the picture away; what to make, how big, how
@@ -65,6 +65,9 @@ Apply them in this order: clean, correct, tone, tile.
 - **`dither`**: `floyd_steinberg` (the default) for photos and gradients;
   `none` for flat-colour pixel art and line drawings, where error diffusion
   adds noise dots inside solid colours; `ordered` if floyd looks speckled.
+  `process_image`, the three `create_*` calls and `import_image_as_flat`
+  all take it, and the importers and `create_flat_from_image` echo the mode
+  they used in their result.
 
 ## 4. Sizes
 
@@ -72,8 +75,11 @@ Apply them in this order: clean, correct, tone, tile.
   (`16..=1024`); `height` reaches 1024, so a tall wall panel is 128×256.
   128 is the height of a standard wall band — a texture half that height
   tiles twice and shows a repeat seam at eye level.
-- **Flats**: always **64×64** (`create_flat_from_image` fits to the square;
-  vanilla floors and ceilings tile one flat per 64×64 map units).
+- **Flats**: **64×64** for anything vanilla must load — floors and
+  ceilings tile one flat per 64×64 map units. `create_flat_from_image`
+  also takes `size` 128 or 256 for ZDoom-family ports and warns that
+  vanilla cannot read them; `import_image_as_flat` keeps `64×128` too.
+  Both echo the `size` and `dither` they used.
 - **Sprites**: measure in pixels, standing on their origin —
   player-height monsters 40–60 px tall, big monsters 80–110, items 16–32.
   Pass `height` on `create_sprite_from_image` to pin it (it keeps the

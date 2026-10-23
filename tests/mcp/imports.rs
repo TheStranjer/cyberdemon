@@ -5,8 +5,9 @@
 //! `PNAMES` listing and its opt-out, the duplicate and `replace` rule,
 //! undo, and the refusal catalogue), the flat importer `import_image_as_flat`
 //! with its alias `import_png_as_flat` (exact 64x64 round trips, nearest
-//! resizing to 64 and 128, the `IWAD` override, the duplicate and `replace`
-//! rule, ignored-and-counted alpha, and its refusal catalogue), and
+//! resizing to 64 and 128, the echoed dither mode over the three quantizers,
+//! the `IWAD` override, the duplicate and `replace` rule,
+//! ignored-and-counted alpha, and its refusal catalogue), and
 //! `import_image_as_raw` storing validated bytes byte-for-byte and the sprite
 //! importer `import_image_as_sprite` with its alias
 //! `import_png_as_sprite` (both naming forms, the mirror pair, the
@@ -20,11 +21,13 @@
 //! `PNAMES`/patch/definition landing together, the layer-patch and
 //! texture-name collisions with and without `replace`, `assign_role`
 //! against the theme, and the single `undo`) close the picture-in side of
-//! the group. The other two one-shots: `create_flat_from_image` (always
-//! `64x64`, the default `tileable` seam blend, `contain` padding, the
-//! layer-flat collision with the everywhere-used hint and its `replace`
-//! override, `assign_role` for flat roles with the wall-role refusal, and
-//! the single `undo`) and `create_sprite_from_image` (background removal
+//! the group. The other two one-shots: `create_flat_from_image` (the `64x64`
+//! default and the `128`/`256` squares with their vanilla-Doom warning, the
+//! echoed `dither` and `size`, the default `tileable` seam blend, `contain`
+//! padding, the layer-flat collision with the everywhere-used hint and its
+//! `replace` override, `assign_role` for flat roles with the wall-role
+//! refusal, and the single `undo`) and `create_sprite_from_image`
+//! (background removal
 //! and trim with the feet-on-origin default, `remove_background`/`trim`
 //! switches, the `height` fit and the too-tall note, `frames` writing one
 //! lump per letter in one undoable step, the mirror-pair naming, the
@@ -914,6 +917,8 @@ mod tests {
         for field in [
             "width",
             "height",
+            "size",
+            "dither",
             "resized",
             "colors_used",
             "max_color_error",
@@ -945,6 +950,12 @@ mod tests {
             "after the created F_START"
         );
         assert_flat_shape(&report, 64_u64, 64_u64, false);
+        assert_eq!(report["size"], json!(64_u64), "the default side echoes");
+        assert_eq!(
+            report["dither"],
+            json!("floyd_steinberg"),
+            "the default dither echoes and is process_image's"
+        );
         assert_eq!(
             report["colors_used"],
             json!(256_u64),
@@ -1154,6 +1165,93 @@ mod tests {
             flat_rgba(&client, "SEMI").await,
             flat_expected_rgba(FLAT_PIXELS),
             "all pixels stored opaque at their colours"
+        );
+    }
+
+    /// A `size`x`size` opaque picture of one grey, off the fixture ramp.
+    fn grey_png(size: u32, level: u8) -> Vec<u8> {
+        let count = usize::try_from(size)
+            .expect("test size")
+            .checked_mul(usize::try_from(size).expect("test size"))
+            .expect("test pixels fit");
+        let pixels: Vec<u8> = (0..count)
+            .flat_map(|_| [level, level, level, 255_u8])
+            .collect();
+        let img = RgbaImage::new(size, size, pixels).expect("test shapes are valid");
+        encode_png(&img, None).expect("test PNGs encode")
+    }
+
+    /// Whether every pixel of a fetched `RGBA` picture is one colour.
+    fn one_colour(rgba: &[u8]) -> bool {
+        let first = rgba.chunks_exact(4).next().expect("a non-empty picture");
+        rgba.chunks_exact(4).all(|pixel| pixel == first)
+    }
+
+    /// One grey flat imported in dither mode `mode` under `lump`, asserting
+    /// the `dither` and `size` echoes and answering with its stored pixels.
+    async fn grey_flat_in(client: &Client, file: &Path, mode: &str, lump: &str) -> Vec<u8> {
+        let report = flat_import(client, file, json!({ "name": lump, "dither": mode })).await;
+        assert_eq!(report["dither"], json!(mode), "{mode} echoes");
+        assert_eq!(report["size"], json!(64_u64), "{mode} echoes its side too");
+        flat_rgba(client, lump).await
+    }
+
+    /// `dither` decides how an off-palette picture is quantized and the
+    /// result echoes the mode: `none` keeps one flat colour, both dither
+    /// modes spread it, and leaving `dither` out is `process_image`'s
+    /// `floyd_steinberg`.
+    #[tokio::test]
+    async fn a_flat_import_quantizes_in_the_echoed_dither_mode() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "GREY.png", &grey_png(FLAT_SIDE, 90_u8));
+        let plain = grey_flat_in(&client, &file, "none", "DNONE").await;
+        let ordered = grey_flat_in(&client, &file, "ordered", "DORDER").await;
+        let floyd = grey_flat_in(&client, &file, "floyd_steinberg", "DFLOYD").await;
+        assert!(one_colour(&plain), "nearest keeps the flat grey one colour");
+        assert!(!one_colour(&ordered), "ordered spreads the grey");
+        assert!(!one_colour(&floyd), "floyd_steinberg spreads the grey");
+        assert_ne!(plain, floyd, "the mode changes the stored pixels");
+        let echo = flat_import(&client, &file, json!({ "name": "DDEFAULT" })).await;
+        assert_eq!(
+            echo["dither"],
+            json!("floyd_steinberg"),
+            "the default is process_image's"
+        );
+        assert_eq!(
+            flat_rgba(&client, "DDEFAULT").await,
+            floyd,
+            "the default quantizes like an explicit floyd_steinberg"
+        );
+    }
+
+    /// The `size` parameter scales to 256 too, and the result echoes it
+    /// beside the stored shape.
+    #[tokio::test]
+    async fn a_flat_import_scales_to_256_and_echoes_the_size() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "ODD.png", &flat_png(100_u32, 50_u32, |_| false));
+        let report = flat_import(
+            &client,
+            &file,
+            json!({ "name": "HIRES", "resize": "nearest", "size": 256_u64, "dither": "none" }),
+        )
+        .await;
+        assert_flat_shape(&report, 256_u64, 256_u64, true);
+        assert_eq!(report["size"], json!(256_u64), "the requested side echoes");
+        assert_eq!(report["dither"], json!("none"), "the passed mode echoes");
+        let flats = call(&client, "list_flats", json!({ "pattern": "HIRES" })).await;
+        assert_eq!(
+            flats["flats"][0]["size"],
+            json!(0x1_0000_u64),
+            "the raw 256x256 byte count"
+        );
+        let expected = resize_nearest(&flat_raster(100_u32, 50_u32), 256_u32, 256_u32);
+        assert_eq!(
+            flat_rgba(&client, "HIRES").await,
+            expected.pixels,
+            "the nearest samples landed"
         );
     }
 
@@ -2449,6 +2547,12 @@ mod tests {
             vec!["fit", "make_tileable"],
             "the fit always runs and tiling is on by default"
         );
+        assert_eq!(report["size"], json!(64_u64), "the vanilla side by default");
+        assert_eq!(
+            report["dither"],
+            json!("floyd_steinberg"),
+            "the process_image dither default echoes"
+        );
         assert_eq!(report["overrides_existing"], json!(false), "a free name");
         assert!(report["preview"]["url"].is_string(), "a preview asset");
         assert_eq!(
@@ -2499,6 +2603,101 @@ mod tests {
         let kept = flat_rgba(&client, "ASDRAWN").await;
         assert_eq!(blended.len(), kept.len(), "both are 64x64 RGBA");
         assert_ne!(blended, kept, "the 16-pixel band changed the seams");
+    }
+
+    /// One `create_flat_from_image` at square `side` under `lump`: checks
+    /// the `size` and `dither` echoes and the stored shape, and answers
+    /// whether the result warned about the vanilla limit.
+    async fn square_flat(client: &Client, file: &Path, side: u64, lump: &str) -> bool {
+        let report = create_flat(
+            client,
+            file,
+            json!({ "name": lump, "size": side, "tileable": false }),
+        )
+        .await;
+        assert_eq!(report["size"], json!(side), "{side} echoes");
+        assert_eq!(
+            report["dither"],
+            json!("floyd_steinberg"),
+            "the shared default echoes"
+        );
+        let flat = call(client, "get_flat", json!({ "name": lump })).await;
+        assert_eq!(flat["width"], json!(side), "the stored width");
+        assert_eq!(flat["height"], json!(side), "the stored height");
+        report["warnings"]
+            .as_array()
+            .expect("a warning list")
+            .iter()
+            .any(|warning| mentions(warning, &["vanilla Doom loads only 64x64 flats", "ZDoom"]))
+    }
+
+    /// `size` takes the bigger squares a `ZDoom`-family port reads, echoes
+    /// the side in the result and warns past the vanilla `64x64`.
+    #[tokio::test]
+    async fn create_flat_size_picks_the_square_and_warns_past_the_vanilla_side() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "SIZES.png",
+            &flat_png(100_u32, 80_u32, |_| false),
+        );
+        assert!(
+            !square_flat(&client, &file, 64_u64, "SQ64").await,
+            "the vanilla shape is quiet"
+        );
+        assert!(
+            square_flat(&client, &file, 128_u64, "SQ128").await,
+            "128 warns"
+        );
+        assert!(
+            square_flat(&client, &file, 256_u64, "SQ256").await,
+            "256 warns"
+        );
+    }
+
+    /// The acceptance round trip: a `256x256` flat made here reads back
+    /// through `get_flat` with exactly the source's pixels.
+    #[tokio::test]
+    async fn a_256_flat_created_here_reads_back_pixel_perfect() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(
+            dir.path(),
+            "HIRES.png",
+            &flat_png(256_u32, 256_u32, |_| false),
+        );
+        let report = create_flat(
+            &client,
+            &file,
+            json!({
+                "name": "BIGFLOOR",
+                "size": 256_u64,
+                "tileable": false,
+                "dither": "none",
+            }),
+        )
+        .await;
+        assert_eq!(report["dither"], json!("none"), "the mode echoes");
+        let warnings = report["warnings"].as_array().expect("a warning list");
+        assert!(
+            warnings.iter().any(|warning| mentions(
+                warning,
+                &["256x256", "vanilla Doom loads only 64x64 flats"],
+            )),
+            "the warning names the shape and the limit: {warnings:?}"
+        );
+        assert_eq!(
+            flat_rgba(&client, "BIGFLOOR").await,
+            flat_expected_rgba(0x1_0000_usize),
+            "the stored flat is the source picture"
+        );
+        let listed = call(&client, "list_flats", json!({ "pattern": "BIGFLOOR" })).await;
+        assert_eq!(
+            listed["flats"][0]["size"],
+            json!(0x1_0000_u64),
+            "the raw 256x256 byte count"
+        );
     }
 
     /// `contain` letterboxes the whole picture: the padding quantizes to
@@ -2712,7 +2911,7 @@ mod tests {
         let client = iwad_client(dir.path()).await;
         let junk = write_file(dir.path(), "junk.txt", b"this is a text file, not an image");
         let good = write_file(dir.path(), "GOOD.png", &flat_png(64_u32, 64_u32, |_| false));
-        let cases: [Refusal; 4] = [
+        let cases: [Refusal; 5] = [
             (
                 "junk",
                 source_args(&junk, json!({ "name": "X" })),
@@ -2730,6 +2929,12 @@ mod tests {
                 source_args(&good, json!({ "name": "X", "assign_role": "door" })),
                 "invalid_argument",
                 "wall role",
+            ),
+            (
+                "size",
+                source_args(&good, json!({ "name": "X", "size": 96_u64 })),
+                "invalid_argument",
+                "64, 128, 256",
             ),
             (
                 "missing",

@@ -9,8 +9,9 @@ runs image operations over a picture and publishes the result so you can
 look at it before committing, and three one-shot creators commit a whole
 finished resource in a single undoable step:
 `create_texture_from_image` (wall texture: patch + `PNAMES` +
-definition), `create_flat_from_image` (a `64x64` floor/ceiling flat,
-optionally tileable and assigned to a theme flat role) and
+definition), `create_flat_from_image` (a square floor/ceiling flat —
+`64x64` by default, `128` or `256` for ZDoom-family ports — optionally
+tileable and assigned to a theme flat role) and
 `create_sprite_from_image` (background-stripped, trimmed, scaled sprite
 lumps, one call per frame set). Where the graphics tools
 (`reference/graphics.md`) *publish* session pictures outward, these tools
@@ -114,10 +115,11 @@ identical.
 
 ## `import_image_as_flat`
 
-- Purpose: quantizes the picture to the session's `PLAYPAL` and stores it
-  as the raw row-major palette-index plane a flat is, in the working
-  archive's **flats** region (`F_START`/`F_END` markers created there when
-  missing), as one undoable edit labelled `import_flat NAME`.
+- Purpose: quantizes the picture to the session's `PLAYPAL` in your
+  `dither` mode and stores it as the raw row-major palette-index plane a
+  flat is, in the working archive's **flats** region (`F_START`/`F_END`
+  markers created there when missing), as one undoable edit labelled
+  `import_flat NAME`.
 - Arguments: `source`, `name`, `palette` and `replace` as in the shared
   parameters above — plus, instead of `transparency` and `offsets`:
   - `resize` (string, optional, default `"none"`): what to do with a
@@ -126,7 +128,15 @@ identical.
     `64x64`, `64x128`, `128x128` or `256x256` is kept as it is.
   - `size` (integer, optional, default 64): the square side for
     `resize="nearest"`: `64`, `128` or `256`; another value is
-    `invalid_argument`.
+    `invalid_argument`. Only `64x64` loads in vanilla Doom — `128` and
+    `256` need a ZDoom-family port. The result echoes it as `size`.
+  - `dither` (string, optional, default `"floyd_steinberg"`, the same
+    default `process_image` takes): how the quantization handles colours
+    the `PLAYPAL` lacks. `"none"` maps every pixel to its nearest palette
+    entry, `"floyd_steinberg"` diffuses the rounding error over the
+    picture (serpentine), `"ordered"` applies a fixed `4x4` `Bayer`
+    offset. Any other word is refused. The result echoes the mode as
+    `dither`.
 - Returns:
 
   ```json
@@ -135,6 +145,8 @@ identical.
     "lump_index": 1,
     "width": 64,
     "height": 64,
+    "size": 64,
+    "dither": "floyd_steinberg",
     "resized": false,
     "colors_used": 256,
     "max_color_error": 0,
@@ -144,9 +156,13 @@ identical.
 
   `lump_index` is the flat's position in the working archive; `width` and
   `height` are the stored flat's dimensions and `resized` says whether the
-  picture was scaled. Flats store no transparency: every pixel stays
-  opaque and `transparent_pixels_ignored` counts the source pixels that
-  had alpha below 128.
+  picture was scaled. `size` echoes the `size` argument in force (the
+  square side `resize: "nearest"` scales to) and `dither` the mode the
+  quantization used; `colors_used` and `max_color_error` measure the
+  source against the palette whichever mode ran. Flats store no
+  transparency: every pixel stays opaque and
+  `transparent_pixels_ignored` counts the source pixels that had alpha
+  below 128.
 - Errors: `invalid_argument` (bad or underivable name, a non-flat shape
   without `resize`, a bad `resize` word, a `size` outside 64/128/256),
   `format_error` / `unsupported` (bytes that are no readable image),
@@ -482,16 +498,20 @@ canonical operation reference.
 
 - Purpose: **one photo to a working floor/ceiling flat** — it processes
   the picture (the same `ops`/`dither`/`palette` parameters
-  `process_image` takes), fits it to `64x64`, optionally blends opposite
-  edges, quantizes it opaquely and stores the raw index plane in the
-  working archive's **flats** region (`F_START`/`F_END` markers created
-  there when missing), all as **one** undoable edit labelled
-  `create_flat NAME` (`save_wad` writes it; one `undo` removes the flat).
-- Why always `64x64`: vanilla engines tile floors and ceilings at that
-  size, so the processed picture is *always* fit to the square (an
-  oversized source is cropped by `cover`, letterboxed by `contain`,
-  distorted by `stretch`; `import_image_as_flat` keeps other shapes when
-  you need them).
+  `process_image` takes), fits it to the square `size` you pass (`64x64`
+  by default), optionally blends opposite edges, quantizes it opaquely and
+  stores the raw index plane in the working archive's **flats** region
+  (`F_START`/`F_END` markers created there when missing), all as **one**
+  undoable edit labelled `create_flat NAME` (`save_wad` writes it; one
+  `undo` removes the flat).
+- Size: `size` is `64` (default), `128` or `256`; any other value is
+  `invalid_argument` listing the three. Vanilla engines tile floors and
+  ceilings at `64x64` and load nothing bigger, so the picture is fit to
+  that square unless you ask for one of the ZDoom-family shapes — and then
+  `warnings` says so ("vanilla Doom loads only 64x64 flats"). Whichever
+  side you get, an oversized source is cropped by `cover`, letterboxed by
+  `contain`, distorted by `stretch`; `import_image_as_flat` keeps the
+  other flat shapes (including `64x128`) when you need them.
 - Arguments:
   - `source` (string, required): the picture; a `process_image`
     `processed` URL is a valid source.
@@ -500,11 +520,14 @@ canonical operation reference.
   - `fit` (string, optional, default `"cover"`): how the picture maps
     onto the square. `contain` pads with transparency, which quantizes to
     the palette colour nearest to black (flats store no transparency).
+  - `size` (integer, optional, default `64`): the square side of the
+    stored flat — `64`, `128` or `256`. The result echoes it.
   - `tileable` (boolean, optional, default `true`): append a
     `make_tileable` op with a 16-pixel band so neighbouring tiles meet
     without seams. Pass `false` to keep the edges exactly as drawn.
-  - `ops`, `dither`, `palette`: as in `process_image`; your `ops` run
-    before the automatic fit.
+  - `ops`, `dither`, `palette`: as in `process_image` (`dither` defaults
+    to `"floyd_steinberg"`); your `ops` run before the automatic fit. The
+    result echoes the `dither` mode it quantized with.
   - `assign_role` (string, optional): a theme **flat** role (`floor`,
     `ceiling`, `light_ceiling`, `outdoor_ceiling`, `door_floor`,
     `lift_floor`, `teleport_floor`, `liquid_floor`) to point at the new
@@ -527,6 +550,8 @@ canonical operation reference.
   ```json
   {
     "flat": "MYFLOOR",
+    "size": 64,
+    "dither": "floyd_steinberg",
     "steps": [ { "op": "fit", ... }, { "op": "make_tileable", ... } ],
     "colors_used": 210, "max_color_error": 24,
     "overrides_existing": false,
@@ -541,9 +566,10 @@ canonical operation reference.
   automatic `fit` and `make_tileable`); `preview` is the stored flat's
   picture as the flat decoder reads it back; pixels whose alpha is below
   `128` stay opaque and a `warning` counts them.
-- Look at it with `list_flats`/`get_flat`, assign it with `edit_sector`
-  (`floor_flat`/`ceiling_flat`) or dress a whole map with
-  `auto_texture mode=retexture` after `assign_role`.
+- Look at it with `list_flats`/`get_flat` (both read the bigger squares
+  back unchanged), assign it with `edit_sector` (`floor_flat`/
+  `ceiling_flat`) or dress a whole map with `auto_texture mode=retexture`
+  after `assign_role`.
 
 ## `create_sprite_from_image`
 

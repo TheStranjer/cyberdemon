@@ -44,6 +44,20 @@ const PNG_MIME: &str = "image/png";
 /// Asset-name fallback when the fetched file names nothing usable.
 const FALLBACK_STEM: &str = "IMAGE";
 
+/// The dither mode every tool that quantizes settles on when its `dither`
+/// argument is unset: serpentine Floyd-Steinberg error diffusion.
+pub(in crate::tools) const DEFAULT_DITHER: Dither = Dither::FloydSteinberg;
+
+/// The effective mode of one `dither` argument: the given one or
+/// [`DEFAULT_DITHER`], which is also [`ProcessParams::dither_choice`].
+#[must_use]
+pub(in crate::tools) const fn dither_or_default(value: Option<Dither>) -> Dither {
+    match value {
+        Some(mode) => mode,
+        None => DEFAULT_DITHER,
+    }
+}
+
 /// The full documentation of [`crate::server::Cyberdemon::process_image`].
 pub(in crate::tools) const PROCESS_TOOL_DESCRIPTION: &str = "Previews the image pipeline without touching a WAD: decodes source, runs your ordered ops (crop, fit, rotate, flip, auto_levels, adjust, color_key, trim, remove_background, make_tileable, threshold) and publishes the processed PNG plus a PLAYPAL-quantized preview with colors_used and max_color_error measured. Pass the returned URL as source to any import tool; see skill/reference/imports.md.";
 
@@ -67,14 +81,11 @@ pub(in crate::tools) struct ProcessParams {
 }
 
 impl ProcessParams {
-    /// The dither mode this call settles on: the documented default is
-    /// serpentine Floyd-Steinberg error diffusion.
+    /// The dither mode this call settles on: [`DEFAULT_DITHER`] when the
+    /// `dither` argument is unset.
     #[must_use]
     pub(in crate::tools) const fn dither_choice(&self) -> Dither {
-        match self.dither {
-            Some(mode) => mode,
-            None => Dither::FloydSteinberg,
-        }
+        dither_or_default(self.dither)
     }
 
     /// The `PLAYPAL` entry index this call settles on.

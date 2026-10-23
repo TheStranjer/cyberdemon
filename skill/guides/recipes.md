@@ -270,9 +270,10 @@ wearing `WALL1`, so the step line's clear glass face is left alone.
 
 ### Floor from a photo
 
-**"Floor the hall with my photo."** `create_flat_from_image` always
-lands on the 64×64 vanilla tile, seams blended. Apply it to sector 0's
-floor; `ceiling_flat` would dress the ceiling instead.
+**"Floor the hall with my photo."** `create_flat_from_image` lands on the
+64×64 vanilla tile (pass `size` for a 128 or 256 square a ZDoom-family
+port reads), seams blended. Apply it to sector 0's floor; `ceiling_flat`
+would dress the ceiling instead.
 
 ```json recipe
 {"fixture": true, "steps": [{"tool": "create_flat_from_image", "arguments": {"source": "<IMAGE>", "name": "PHOTOFL1", "tileable": true}}, {"tool": "bulk_edit", "arguments": {"kind": "sectors", "within": {"sectors": [0]}, "set": {"floor_flat": "PHOTOFL1"}}}]}

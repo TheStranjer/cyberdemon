@@ -7,15 +7,17 @@
 //! forty-five percent alpha, its simplified ring drawn on top darkened,
 //! the gaps as magenta discs (the radius is half the gap width), the
 //! marks as cyan boxes, and the `R`, `G`, `M` ids with [`draw_text`] at
-//! the centroids. The calling model compares this picture against its own
-//! reading of the sketch: it is measurement made visible, never an
-//! interpretation.
+//! the centroids. Only the lists the caller passes are drawn, so the ids
+//! on the picture are exactly the ids the report answers: a thinned trace
+//! hands over its kept gaps and marks, never the whole analysis. The
+//! calling model compares this picture against its own reading of the
+//! sketch: it is measurement made visible, never an interpretation.
 
 use crate::gfx::image::RgbaImage;
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::render::canvas::{Canvas, Edge, Stroke};
 use crate::render::font::{TextStyle, draw_text};
-use crate::sketch::{Analysis, Vectorized};
+use crate::sketch::{Gap, Mark, Vectorized};
 
 /// Pixels across one label glyph at overlay scale.
 const LABEL_SCALE: u32 = 1_u32;
@@ -62,19 +64,21 @@ const LABEL: TextStyle = TextStyle {
     scale: LABEL_SCALE,
 };
 
-/// The whole overlay for one measured sketch, at analysis scale.
+/// The whole overlay for one measured sketch, at analysis scale: the
+/// regions as vectorised, and only the `gaps` and `marks` the report shows.
 pub(super) fn build(
     picture: &RgbaImage,
-    analysis: &Analysis,
     vectorized: Option<&Vectorized>,
+    gaps: &[Gap],
+    marks: &[Mark],
 ) -> RgbaImage {
     let mut canvas = washed_canvas(picture);
     if let Some(shapes) = vectorized {
         paint_regions(&mut canvas, shapes);
     }
-    paint_gaps(&mut canvas, analysis);
-    paint_marks(&mut canvas, analysis);
-    paint_labels(&mut canvas, analysis, vectorized);
+    paint_gaps(&mut canvas, gaps);
+    paint_marks(&mut canvas, marks);
+    paint_labels(&mut canvas, vectorized, gaps, marks);
     canvas.to_rgba_image()
 }
 
@@ -154,18 +158,18 @@ fn ring_edges(points: &[(i64, i64)]) -> Vec<Edge> {
     edges
 }
 
-/// Every gap as a magenta disc of half its width at its centre.
-fn paint_gaps(canvas: &mut Canvas, analysis: &Analysis) {
-    for gap in &analysis.gaps {
+/// Every reported gap as a magenta disc of half its width at its centre.
+fn paint_gaps(canvas: &mut Canvas, gaps: &[Gap]) {
+    for gap in gaps {
         let (x, y) = i64_pair(gap.centroid);
         let radius = i64::from(gap.width_px).checked_div(2_i64).unwrap_or(1_i64);
         canvas.fill_circle((x, y), radius, MAGENTA);
     }
 }
 
-/// Every mark as a cyan box on its bounding rectangle.
-fn paint_marks(canvas: &mut Canvas, analysis: &Analysis) {
-    for mark in &analysis.marks {
+/// Every reported mark as a cyan box on its bounding rectangle.
+fn paint_marks(canvas: &mut Canvas, marks: &[Mark]) {
+    for mark in marks {
         let (x0, y0, x1, y1) = mark.bbox;
         let corners = [
             (i64::from(x0), i64::from(y0)),
@@ -190,19 +194,24 @@ fn box_edges(corners: &[(i64, i64); 4]) -> Vec<Edge> {
     ]
 }
 
-/// The `R`, `G` and `M` ids at their centroids.
-fn paint_labels(canvas: &mut Canvas, analysis: &Analysis, vectorized: Option<&Vectorized>) {
+/// The `R`, `G` and `M` ids at their centroids, only for what is reported.
+fn paint_labels(
+    canvas: &mut Canvas,
+    vectorized: Option<&Vectorized>,
+    gaps: &[Gap],
+    marks: &[Mark],
+) {
     if let Some(shapes) = vectorized {
         for shape in &shapes.regions {
             let (x, y) = i64_pair(shape.centroid);
             draw_text(canvas, (x, y), &format!("R{}", shape.id), LABEL);
         }
     }
-    for gap in &analysis.gaps {
+    for gap in gaps {
         let (x, y) = i64_pair(gap.centroid);
         draw_text(canvas, (x, y), &format!("G{}", gap.id), LABEL);
     }
-    for mark in &analysis.marks {
+    for mark in marks {
         let (x, y) = i64_pair(mark.centroid);
         draw_text(canvas, (x, y), &format!("M{}", mark.id), LABEL);
     }
@@ -215,7 +224,7 @@ fn i64_pair(point: (u32, u32)) -> (i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{REGION_COLORS, build, darken, region_colour, ring_edges, wash};
+    use super::{CYAN, MAGENTA, REGION_COLORS, build, darken, region_colour, ring_edges, wash};
     use crate::gfx::image::RgbaImage;
     use crate::sketch::vectorize::VectorizeOptions;
     use crate::sketch::{Analysis, AnalyzeOptions, InkMode, Vectorized, analyze, vectorize};
@@ -237,7 +246,8 @@ mod tests {
         }
     }
 
-    /// The two-room fixture: boxes with a 10-px door break at rows 55..64.
+    /// The two-room fixture: boxes with a 10-px door break at rows 55..64
+    /// and a 16x16 blot inside the left room.
     fn rooms() -> RgbaImage {
         let mut img = paper(200, 120);
         paint(&mut img, (30, 30, 99, 32));
@@ -246,6 +256,7 @@ mod tests {
         paint(&mut img, (97, 30, 99, 89));
         paint(&mut img, (63, 30, 65, 54));
         paint(&mut img, (63, 65, 65, 89));
+        paint(&mut img, (40, 50, 55, 65));
         img
     }
 
@@ -298,10 +309,18 @@ mod tests {
         );
     }
 
+    /// Counts the pixels of one exact colour in an overlay.
+    fn count_colour(img: &RgbaImage, colour: [u8; 4]) -> usize {
+        (0..img.height)
+            .flat_map(|row| (0..img.width).map(move |column| (column, row)))
+            .filter(|&(column, row)| img.get(column, row) == Some(colour))
+            .count()
+    }
+
     #[test]
     fn the_overlay_washes_paints_and_labels_the_measured_sketch() {
         let (picture, analysis, shapes) = measured();
-        let overlay = build(&picture, &analysis, shapes.as_ref());
+        let overlay = build(&picture, shapes.as_ref(), &analysis.gaps, &analysis.marks);
         assert_eq!(
             (overlay.width, overlay.height),
             (picture.width, picture.height),
@@ -328,6 +347,27 @@ mod tests {
     }
 
     #[test]
+    fn the_overlay_draws_only_the_lists_it_is_given() {
+        let (picture, analysis, shapes) = measured();
+        let full = build(&picture, shapes.as_ref(), &analysis.gaps, &analysis.marks);
+        let bare = build(&picture, shapes.as_ref(), &[], &[]);
+        assert_eq!(analysis.gaps.len(), 1, "the fixture bridges the door");
+        assert_eq!(analysis.marks.len(), 1, "and splits the blot");
+        assert!(
+            count_colour(&full, MAGENTA) > 0 && count_colour(&full, CYAN) > 0,
+            "the kept rows are drawn as a disc and a box: {} {}",
+            count_colour(&full, MAGENTA),
+            count_colour(&full, CYAN),
+        );
+        assert_eq!(
+            count_colour(&bare, MAGENTA),
+            0,
+            "no gap list means no magenta"
+        );
+        assert_eq!(count_colour(&bare, CYAN), 0, "no mark list means no cyan");
+    }
+
+    #[test]
     fn the_overlay_of_an_empty_analysis_is_the_washed_picture_alone() {
         let picture = paper(40_u32, 30_u32);
         let options = AnalyzeOptions {
@@ -337,7 +377,7 @@ mod tests {
             mark_max_size: None,
         };
         let analysis = analyze(&picture, &options).expect("blank is analysable");
-        let overlay = build(&picture, &analysis, None);
+        let overlay = build(&picture, None, &analysis.gaps, &analysis.marks);
         assert_eq!((overlay.width, overlay.height), (40_u32, 30_u32));
         assert_eq!(
             overlay.get(20_u32, 15_u32),

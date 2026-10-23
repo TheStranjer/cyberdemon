@@ -11,8 +11,18 @@
 //! those ids drawn on, so the calling model can match its own reading of
 //! the sketch against the numbers. The debug overlay itself lives in
 //! [`debug`].
+//!
+//! A noisy scan (ruled paper, uneven light) measures thousands of little
+//! things, so the two long lists are thinned before they are reported:
+//! rows under the noise floor are dropped, the rest are ranked largest
+//! first and cut to `max_gaps` / `max_marks`. The report always carries the
+//! totals it found, a `truncated` flag and warnings naming what stayed out,
+//! and both the debug overlay and the regions' id lists carry exactly the
+//! rows the report shows. `verbose: true` lifts the floor and both caps.
 
 mod debug;
+
+use alloc::collections::BTreeSet;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -54,6 +64,13 @@ const MAX_MAX_SIZE: u32 = MAX_OP_DIMENSION;
 const DEFAULT_TOLERANCE: u8 = 48_u8;
 /// Default snap grid for `map_points`, map units.
 const DEFAULT_GRID: i64 = 8_i64;
+/// Default [`TraceSketchParams::max_gaps`] and
+/// [`TraceSketchParams::max_marks`].
+const DEFAULT_MAX_ROWS: usize = 50_usize;
+/// Smallest accepted row cap.
+const MIN_MAX_ROWS: usize = 1_usize;
+/// Largest accepted row cap.
+const MAX_MAX_ROWS: usize = 500_usize;
 /// Name the debug overlay is published under.
 const DEBUG_FILENAME: &str = "sketch-debug.png";
 /// Media type of the debug overlay.
@@ -66,6 +83,10 @@ const NEXT_STEPS: [&str; 4] = [
     "build_map_from_plan with the same units",
     "render_topdown with this sketch as underlay",
 ];
+
+/// The extra step a thinned report carries.
+const THINNED_STEP: &str =
+    "gaps or marks stayed out: raise max_gaps/max_marks, lower noise_floor_px or pass verbose";
 
 /// Arguments for [`Cyberdemon::trace_sketch`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -121,6 +142,25 @@ struct TraceSketchParams {
     /// `1` switches snapping off, `0` and negatives are refused).
     #[serde(default = "default_grid")]
     grid: i64,
+    /// The most gap rows to report, `1..=500`; default `50`. The widest
+    /// gaps come first, `gaps_total` counts everything the analysis found
+    /// and a warning names how many stayed out.
+    #[serde(default)]
+    max_gaps: Option<usize>,
+    /// The most mark rows to report, `1..=500`; default `50`. The marks
+    /// holding the most ink come first; see `max_gaps`.
+    #[serde(default)]
+    max_marks: Option<usize>,
+    /// Smallest gap width, and smallest mark box edge, worth a row, in
+    /// original pixels. Default: the measured `stroke_px`, which drops the
+    /// speckle noise a photo scan picks up; `0` keeps everything.
+    #[serde(default)]
+    noise_floor_px: Option<u32>,
+    /// Report every gap and mark: the noise floor and both caps are lifted
+    /// (default `false`). On a noisy scan the result can then outgrow the
+    /// client's size limit, which is why the thinning is the default.
+    #[serde(default)]
+    verbose: bool,
 }
 
 /// One `crop` rectangle: an inclusive-start exclusive-end pixel box in
@@ -200,6 +240,15 @@ struct Request {
     weld: Option<u32>,
     /// The map transform, `None` when no `units` object was given.
     units: Option<Units>,
+    /// The resolved gap row cap.
+    max_gaps: usize,
+    /// The resolved mark row cap.
+    max_marks: usize,
+    /// The asked noise floor in original pixels, `None` for "the measured
+    /// stroke".
+    noise_floor_px: Option<u32>,
+    /// Whether the floor and both caps are lifted.
+    verbose: bool,
 }
 
 /// The analysis raster and the exact route back onto the source picture.
@@ -351,13 +400,14 @@ fn out_of_range(what: &str) -> CyberError {
     ))
 }
 
-/// Resolve the parameter texts: sizes, ink, units and grid.
+/// Resolve the parameter texts: sizes, ink, units, grid and the row caps.
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for a `max_size` outside `256..=4096`,
 /// an unknown `ink.mode`, `color` mode without `color`, a malformed
-/// `ink.color`, or a `units`/`grid` value [`Units::check`] refuses.
+/// `ink.color`, a `units`/`grid` value [`Units::check`] refuses or a row
+/// cap outside `1..=500`.
 fn parse_request(args: &TraceSketchParams) -> Result<Request, CyberError> {
     Ok(Request {
         source: args.source.clone(),
@@ -371,7 +421,28 @@ fn parse_request(args: &TraceSketchParams) -> Result<Request, CyberError> {
         orthogonal: args.orthogonal,
         weld: args.weld,
         units: parse_units(args.units, args.grid)?,
+        max_gaps: parse_cap("max_gaps", args.max_gaps)?,
+        max_marks: parse_cap("max_marks", args.max_marks)?,
+        noise_floor_px: args.noise_floor_px,
+        verbose: args.verbose,
     })
+}
+
+/// One row cap: default `50`, accepted `1..=500`.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming `name` for a value outside the
+/// range, pointing at `verbose` for every row.
+fn parse_cap(name: &str, value: Option<usize>) -> Result<usize, CyberError> {
+    let cap = value.unwrap_or(DEFAULT_MAX_ROWS);
+    if (MIN_MAX_ROWS..=MAX_MAX_ROWS).contains(&cap) {
+        return Ok(cap);
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "{name} {cap} is out of range: pass a value between {MIN_MAX_ROWS} and {MAX_MAX_ROWS}, \
+         or verbose: true for every row"
+    )))
 }
 
 /// The `max_size`: default `1024`, accepted `256..=4096`.
@@ -586,6 +657,302 @@ fn run_vectorize(
     vectorize(analysis, &vectorize_options(request, frame)).map(Some)
 }
 
+/// How one measurement list is thinned before it is reported.
+struct Cut {
+    /// Smallest extent, in original pixels, worth a row.
+    floor: u32,
+    /// The most rows to report.
+    cap: usize,
+    /// Whether the floor and the cap are lifted.
+    verbose: bool,
+}
+
+impl Cut {
+    /// The cut of one list capped at `cap` rows under `request`, with the
+    /// floor the reported `stroke_px` implies.
+    fn of(request: &Request, stroke_px: u32, cap: usize) -> Self {
+        Self {
+            floor: effective_floor(request, stroke_px),
+            cap,
+            verbose: request.verbose,
+        }
+    }
+}
+
+/// The noise floor actually applied: `0` under `verbose` (every row is
+/// asked for), else the `noise_floor_px` the caller gave, else the measured
+/// stroke width.
+fn effective_floor(request: &Request, stroke_px: u32) -> u32 {
+    if request.verbose {
+        return 0_u32;
+    }
+    request.noise_floor_px.unwrap_or(stroke_px)
+}
+
+/// One measurement with the two original-pixel numbers the thinning reads.
+struct Candidate<Measurement> {
+    /// Largest box edge: the extent the noise floor tests.
+    extent: u32,
+    /// The measure the ranking sorts by, a width for gaps and an ink area
+    /// for marks.
+    size: u32,
+    /// The measurement itself.
+    item: Measurement,
+}
+
+/// One list after the floor, the ranking and the cap.
+struct Kept<Measurement> {
+    /// The reported measurements, largest first; a tie keeps scan order.
+    items: Vec<Measurement>,
+    /// Measurements the analysis found, before the floor and the cap.
+    total: u32,
+    /// Measurements dropped for sitting under the noise floor.
+    below_floor: u32,
+    /// Measurements the cap left out.
+    past_cap: u32,
+}
+
+/// Drops the candidates under the floor, ranks the rest by size (the sort
+/// is stable, so equal sizes keep scan order) and cuts to the cap.
+fn thin<Measurement>(candidates: Vec<Candidate<Measurement>>, cut: &Cut) -> Kept<Measurement> {
+    let total = candidates.len();
+    let standing = reach_floor(candidates, cut);
+    let below_floor = total.saturating_sub(standing.len());
+    let mut ranked = rank(standing);
+    let past_cap = capped_out(ranked.len(), cut);
+    Kept {
+        items: shown(&mut ranked, cut),
+        total: as_rows(total),
+        below_floor: as_rows(below_floor),
+        past_cap: as_rows(past_cap),
+    }
+}
+
+/// The candidates reaching the floor: all of them under `verbose`.
+fn reach_floor<Measurement>(
+    candidates: Vec<Candidate<Measurement>>,
+    cut: &Cut,
+) -> Vec<Candidate<Measurement>> {
+    if cut.verbose {
+        return candidates;
+    }
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.extent >= cut.floor)
+        .collect()
+}
+
+/// The biggest `size` first, ties in the order they came in.
+fn rank<Measurement>(mut candidates: Vec<Candidate<Measurement>>) -> Vec<Candidate<Measurement>> {
+    candidates.sort_by_key(|candidate| core::cmp::Reverse(candidate.size));
+    candidates
+}
+
+/// How many ranked rows the cap leaves out (`0` under `verbose`).
+const fn capped_out(ranked: usize, cut: &Cut) -> usize {
+    if cut.verbose {
+        return 0_usize;
+    }
+    ranked.saturating_sub(cut.cap)
+}
+
+/// The items of the first `cap` ranked rows (every row under `verbose`).
+fn shown<Measurement>(ranked: &mut Vec<Candidate<Measurement>>, cut: &Cut) -> Vec<Measurement> {
+    if !cut.verbose {
+        ranked.truncate(cut.cap);
+    }
+    core::mem::take(ranked)
+        .into_iter()
+        .map(|candidate| candidate.item)
+        .collect()
+}
+
+/// A list length as the `u32` the report counts rows in.
+fn as_rows(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// One thinned list with the report rows of the measurements it kept.
+struct Listing<Measurement, Row> {
+    /// The measurements that reached the report, with their counts.
+    kept: Kept<Measurement>,
+    /// The rows of `kept.items`, in the same order.
+    rows: Vec<Row>,
+}
+
+/// The gaps the report shows, widest first, with what stayed behind.
+///
+/// # Errors
+///
+/// [`Frame`]'s mapping refusal for a centre or box no crop and scale can
+/// carry.
+fn keep_gaps(frame: &Frame, gaps: &[Gap], cut: &Cut) -> Result<Listing<Gap, GapRow>, CyberError> {
+    let candidates = gaps
+        .iter()
+        .copied()
+        .map(|gap| {
+            let width = frame.length(gap.width_px);
+            Candidate {
+                extent: width,
+                size: width,
+                item: gap,
+            }
+        })
+        .collect();
+    let kept = thin(candidates, cut);
+    let rows = kept
+        .items
+        .iter()
+        .map(|gap| gap_row(frame, gap))
+        .collect::<Result<Vec<GapRow>, CyberError>>()?;
+    Ok(Listing { kept, rows })
+}
+
+/// The marks the report shows, most ink first, with what stayed behind.
+///
+/// # Errors
+///
+/// [`Frame`]'s mapping refusal for a centre or box no crop and scale can
+/// carry.
+fn keep_marks(
+    frame: &Frame,
+    marks: &[Mark],
+    cut: &Cut,
+) -> Result<Listing<Mark, MarkRow>, CyberError> {
+    let candidates = marks
+        .iter()
+        .copied()
+        .map(|mark| Candidate {
+            extent: frame.length(box_edge(mark.bbox)),
+            size: frame.area(mark.area),
+            item: mark,
+        })
+        .collect();
+    let kept = thin(candidates, cut);
+    let rows = kept
+        .items
+        .iter()
+        .map(|mark| mark_row(frame, mark))
+        .collect::<Result<Vec<MarkRow>, CyberError>>()?;
+    Ok(Listing { kept, rows })
+}
+
+/// The larger edge of an inclusive analysis-space box.
+fn box_edge(bbox: (u32, u32, u32, u32)) -> u32 {
+    let (x0, y0, x1, y1) = bbox;
+    let width = x1.saturating_sub(x0).saturating_add(1);
+    let height = y1.saturating_sub(y0).saturating_add(1);
+    width.max(height)
+}
+
+/// How one list's omissions are phrased in a warning.
+struct ListWords {
+    /// The list's plural noun: `gaps` or `marks`.
+    noun: &'static str,
+    /// The parameter that raises the cap.
+    param: &'static str,
+    /// The phrase for sitting under the floor, read before `the N px`.
+    under: &'static str,
+}
+
+/// The words the gap list's omissions are warned in.
+const GAP_WORDS: ListWords = ListWords {
+    noun: "gaps",
+    param: "max_gaps",
+    under: "narrower than",
+};
+
+/// The words the mark list's omissions are warned in.
+const MARK_WORDS: ListWords = ListWords {
+    noun: "marks",
+    param: "max_marks",
+    under: "smaller than",
+};
+
+/// The warnings naming what one thinned list left out, `floor` and `cap`
+/// the values that did the leaving out.
+fn omission_warnings<Measurement, Row>(
+    listing: &Listing<Measurement, Row>,
+    words: &ListWords,
+    floor: u32,
+    cap: usize,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let noun = words.noun;
+    let below = listing.kept.below_floor;
+    let under = words.under;
+    if below > 0 {
+        warnings.push(format!(
+            "{below} {noun} {under} the {floor} px noise floor were dropped: pass \
+             noise_floor_px 0 to report them"
+        ));
+    }
+    let past = listing.kept.past_cap;
+    let total = listing.kept.total;
+    let param = words.param;
+    if past > 0 {
+        warnings.push(format!(
+            "{past} of {total} {noun} stayed out past {param} {cap}: the largest come first, \
+             raise {param} or pass verbose: true for every row"
+        ));
+    }
+    warnings
+}
+
+/// Both lists thinned for the report, with the bookkeeping of what stayed
+/// out and the warnings naming it.
+struct Thinned {
+    /// The reported gaps, widest first.
+    gaps: Listing<Gap, GapRow>,
+    /// The reported marks, most ink first.
+    marks: Listing<Mark, MarkRow>,
+    /// The noise floor applied, original pixels (`0` drops nothing).
+    noise_floor_px: u32,
+    /// Whether either cap left rows out.
+    truncated: bool,
+    /// The warnings naming what stayed out of the two lists.
+    warnings: Vec<String>,
+}
+
+/// Thins both lists over the measured picture and folds the omissions into
+/// warnings.
+///
+/// # Errors
+///
+/// The rows' mapping refusals, see [`keep_gaps`] and [`keep_marks`].
+fn thin_all(frame: &Frame, analysis: &Analysis, request: &Request) -> Result<Thinned, CyberError> {
+    let stroke_px = frame.length(analysis.stroke);
+    let gap_cut = Cut::of(request, stroke_px, request.max_gaps);
+    let mark_cut = Cut::of(request, stroke_px, request.max_marks);
+    let gaps = keep_gaps(frame, &analysis.gaps, &gap_cut)?;
+    let marks = keep_marks(frame, &analysis.marks, &mark_cut)?;
+    let floor = gap_cut.floor;
+    let mut warnings = omission_warnings(&gaps, &GAP_WORDS, floor, request.max_gaps);
+    warnings.extend(omission_warnings(
+        &marks,
+        &MARK_WORDS,
+        floor,
+        request.max_marks,
+    ));
+    Ok(Thinned {
+        truncated: gaps.kept.past_cap > 0 || marks.kept.past_cap > 0,
+        noise_floor_px: floor,
+        gaps,
+        marks,
+        warnings,
+    })
+}
+
+/// The labels of the reported gaps, for the regions' id lists.
+fn gap_labels(gaps: &[Gap]) -> BTreeSet<u32> {
+    gaps.iter().map(|gap| gap.id).collect()
+}
+
+/// The labels of the reported marks, for the regions' id lists.
+fn mark_labels(marks: &[Mark]) -> BTreeSet<u32> {
+    marks.iter().map(|mark| mark.id).collect()
+}
+
 /// The `analysed_scale` report pair.
 #[derive(Serialize)]
 struct ScaleInfo {
@@ -625,9 +992,9 @@ struct RegionRow {
     is_rectangle: bool,
     /// Non-region islands inside the traced piece's box.
     holes: u32,
-    /// Ids of the marks sitting in this region.
+    /// Ids of the reported marks sitting in this region.
     marks: Vec<String>,
-    /// Ids of the gaps bordering this region.
+    /// Ids of the reported gaps bordering this region.
     gaps: Vec<String>,
 }
 
@@ -701,15 +1068,26 @@ struct TraceReport {
     regions: Vec<RegionRow>,
     /// Region pairs that share a wall after growth.
     adjacency: Vec<AdjacencyRow>,
-    /// Breaks the closing bridged in the walls.
+    /// Breaks the closing bridged in the walls, widest first, at most
+    /// `max_gaps` of them.
     gaps: Vec<GapRow>,
-    /// Small ink components (dots, crosses, letters).
+    /// Gaps the analysis found, before the noise floor and the cap.
+    gaps_total: u32,
+    /// Small ink components (dots, crosses, letters), most ink first, at
+    /// most `max_marks` of them.
     marks: Vec<MarkRow>,
+    /// Marks the analysis found, before the noise floor and the cap.
+    marks_total: u32,
+    /// The noise floor applied, original pixels (`0` drops nothing).
+    noise_floor_px: u32,
+    /// Whether either cap left rows out of the two lists.
+    truncated: bool,
     /// The region polygons in plan-room wire shape, original pixels.
     plan_rooms: Vec<PlanRoom>,
-    /// The published debug overlay.
+    /// The published debug overlay, labelled with exactly the reported ids.
     debug: AssetRef,
-    /// Measurement caveats from the analysis and the vectoriser.
+    /// Measurement caveats from the analysis, the vectoriser and the
+    /// thinning.
     warnings: Vec<String>,
     /// What to look at and do next.
     next_steps: Vec<&'static str>,
@@ -720,8 +1098,14 @@ fn tag(prefix: char, id: u32) -> String {
     format!("{prefix}{id}")
 }
 
-/// One vectorised region as a report row.
-fn region_row(frame: &Frame, shape: &RegionShape) -> Result<RegionRow, CyberError> {
+/// One vectorised region as a report row, its `marks` and `gaps` lists
+/// narrowed to the ids `shown_marks` and `shown_gaps` report.
+fn region_row(
+    frame: &Frame,
+    shape: &RegionShape,
+    shown_gaps: &BTreeSet<u32>,
+    shown_marks: &BTreeSet<u32>,
+) -> Result<RegionRow, CyberError> {
     let id = tag('R', shape.id);
     let points = frame.ring(&shape.points, &format!("region {id}"))?;
     let map_points = frame.map_points(&points)?;
@@ -731,14 +1115,22 @@ fn region_row(frame: &Frame, shape: &RegionShape) -> Result<RegionRow, CyberErro
         bbox: frame.bbox(shape.bbox, &format!("region {id}"))?,
         area_px: frame.area(shape.area_px),
         centroid,
-        gaps: shape.gaps.iter().map(|gap| tag('G', *gap)).collect(),
+        gaps: tagged(&shape.gaps, shown_gaps, 'G'),
         holes: shape.holes,
         id,
         is_rectangle: shape.is_rectangle,
         map_points,
-        marks: shape.marks.iter().map(|mark| tag('M', *mark)).collect(),
+        marks: tagged(&shape.marks, shown_marks, 'M'),
         points,
     })
+}
+
+/// The `what` ids that reached the report, tagged with `prefix`, in order.
+fn tagged(what: &[u32], shown: &BTreeSet<u32>, prefix: char) -> Vec<String> {
+    what.iter()
+        .filter(|id| shown.contains(id))
+        .map(|id| tag(prefix, *id))
+        .collect()
 }
 
 /// One bridged wall break as a report row.
@@ -773,86 +1165,163 @@ fn mark_row(frame: &Frame, mark: &Mark) -> Result<MarkRow, CyberError> {
     })
 }
 
-/// Assemble the client-facing report from the measured picture.
-fn build_report(
+/// The pieces the client-facing report is assembled from.
+struct Parts<'measure> {
+    /// The mapping from analysis pixels back onto the source picture.
+    frame: &'measure Frame,
+    /// The raw measurement: threshold, stroke, closing radius, warnings.
+    analysis: &'measure Analysis,
+    /// The region polygons, `None` when nothing enclosed.
+    vectorized: Option<&'measure Vectorized>,
+    /// The two thinned lists with what stayed out of them.
+    thinned: Thinned,
+    /// The published debug overlay.
+    asset: AssetRef,
+}
+
+/// Assembles the client-facing report out of `parts`.
+///
+/// # Errors
+///
+/// [`region_rows`]'s mapping refusals for a region vertex, box or centre
+/// no crop and scale can carry.
+fn assemble(parts: Parts<'_>) -> Result<TraceReport, CyberError> {
+    let Parts {
+        frame,
+        analysis,
+        vectorized,
+        thinned,
+        asset,
+    } = parts;
+    let shown_gaps = gap_labels(&thinned.gaps.kept.items);
+    let shown_marks = mark_labels(&thinned.marks.kept.items);
+    let regions = region_rows(frame, vectorized, &shown_gaps, &shown_marks)?;
+    let room_rows = plan_rooms(&regions);
+    let warnings = all_warnings(analysis, vectorized, &thinned.warnings);
+    let truncated = thinned.truncated;
+    let floor = thinned.noise_floor_px;
+    let gaps_total = thinned.gaps.kept.total;
+    let marks_total = thinned.marks.kept.total;
+    let gap_rows = thinned.gaps.rows;
+    let mark_rows = thinned.marks.rows;
+    Ok(TraceReport {
+        image: image_info(frame),
+        stroke_px: frame.length(analysis.stroke),
+        threshold: analysis.threshold,
+        close_gaps_px: frame.length(analysis.close_radius),
+        plan_rooms: room_rows,
+        gaps: gap_rows,
+        gaps_total,
+        marks: mark_rows,
+        marks_total,
+        noise_floor_px: floor,
+        truncated,
+        regions,
+        adjacency: adjacency_rows(frame, vectorized),
+        debug: asset,
+        warnings,
+        next_steps: next_steps(truncated),
+    })
+}
+
+/// The region rows in scan order, their `marks` and `gaps` lists narrowed
+/// to the ids the report shows.
+///
+/// # Errors
+///
+/// [`region_row`]'s mapping refusals.
+fn region_rows(
     frame: &Frame,
+    vectorized: Option<&Vectorized>,
+    shown_gaps: &BTreeSet<u32>,
+    shown_marks: &BTreeSet<u32>,
+) -> Result<Vec<RegionRow>, CyberError> {
+    let Some(shapes) = vectorized else {
+        return Ok(Vec::new());
+    };
+    shapes
+        .regions
+        .iter()
+        .map(|shape| region_row(frame, shape, shown_gaps, shown_marks))
+        .collect()
+}
+
+/// The adjacency rows, empty without vectorised shapes.
+fn adjacency_rows(frame: &Frame, vectorized: Option<&Vectorized>) -> Vec<AdjacencyRow> {
+    vectorized.map_or_else(Vec::new, |shapes| {
+        shapes
+            .adjacency
+            .iter()
+            .map(|pair| AdjacencyRow {
+                a: tag('R', pair.a),
+                b: tag('R', pair.b),
+                shared_px: frame.length(pair.shared_px),
+            })
+            .collect()
+    })
+}
+
+/// The warnings in report order: the analysis's, the vectoriser's and the
+/// thinning's.
+fn all_warnings(
     analysis: &Analysis,
     vectorized: Option<&Vectorized>,
-    asset: AssetRef,
-) -> Result<TraceReport, CyberError> {
-    let regions: Vec<RegionRow> = match vectorized {
-        None => Vec::new(),
-        Some(shapes) => shapes
-            .regions
-            .iter()
-            .map(|shape| region_row(frame, shape))
-            .collect::<Result<Vec<RegionRow>, CyberError>>()?,
-    };
-    let adjacency: Vec<AdjacencyRow> = vectorized
-        .map(|shapes| {
-            shapes
-                .adjacency
-                .iter()
-                .map(|pair| AdjacencyRow {
-                    a: tag('R', pair.a),
-                    b: tag('R', pair.b),
-                    shared_px: frame.length(pair.shared_px),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    thinned: &[String],
+) -> Vec<String> {
     let mut warnings = analysis.warnings.clone();
     if let Some(shapes) = vectorized {
         warnings.extend(shapes.warnings.iter().cloned());
     }
-    Ok(TraceReport {
-        image: ImageInfo {
-            width: frame.source_width,
-            height: frame.source_height,
-            analysed_scale: ScaleInfo {
-                num: frame.num,
-                den: frame.den,
-            },
+    warnings.extend(thinned.iter().cloned());
+    warnings
+}
+
+/// The report's `image` object.
+const fn image_info(frame: &Frame) -> ImageInfo {
+    ImageInfo {
+        width: frame.source_width,
+        height: frame.source_height,
+        analysed_scale: ScaleInfo {
+            num: frame.num,
+            den: frame.den,
         },
-        stroke_px: frame.length(analysis.stroke),
-        threshold: analysis.threshold,
-        close_gaps_px: frame.length(analysis.close_radius),
-        plan_rooms: regions
-            .iter()
-            .map(|region| PlanRoom {
-                id: region.id.clone(),
-                points: region.points.clone(),
-            })
-            .collect(),
-        gaps: analysis
-            .gaps
-            .iter()
-            .map(|gap| gap_row(frame, gap))
-            .collect::<Result<Vec<GapRow>, CyberError>>()?,
-        marks: analysis
-            .marks
-            .iter()
-            .map(|mark| mark_row(frame, mark))
-            .collect::<Result<Vec<MarkRow>, CyberError>>()?,
-        regions,
-        adjacency,
-        debug: asset,
-        warnings,
-        next_steps: NEXT_STEPS.to_vec(),
-    })
+    }
+}
+
+/// The `plan_rooms` rows: the region footprints in the plan wire shape.
+fn plan_rooms(regions: &[RegionRow]) -> Vec<PlanRoom> {
+    regions
+        .iter()
+        .map(|region| PlanRoom {
+            id: region.id.clone(),
+            points: region.points.clone(),
+        })
+        .collect()
+}
+
+/// The report's next steps: the standing four, plus the thinning's hint
+/// when either cap left rows out.
+fn next_steps(truncated: bool) -> Vec<&'static str> {
+    let mut steps = NEXT_STEPS.to_vec();
+    if truncated {
+        steps.push(THINNED_STEP);
+    }
+    steps
 }
 
 /// `trace_sketch`' work: validate, fetch, decode, crop, downscale,
-/// analyse, vectorise, draw the debug overlay, publish, report.
+/// analyse, vectorise, thin the two long lists, draw the debug overlay of
+/// what is reported, publish, report.
 ///
 /// # Errors
 ///
 /// [`parse_request`]'s refusals, [`AppState::fetch_source`]'s errors for
 /// the `source`, [`decode_image`]'s for bytes that are no readable image,
 /// [`check_crop`]'s and [`analyze`]'s argument errors, [`vectorize`]'s
-/// only when regions exist but none traces, and [`AppState::publish`]'
-/// failures. Zero regions is not an error: the lists come back empty
-/// with the analysis warning and the debug image.
+/// only when regions exist but none traces, [`thin_all`]'s mapping
+/// refusals, and [`AppState::publish`]' failures. Zero regions is not an
+/// error: the lists come back empty with the analysis warning and the
+/// debug image.
 async fn trace_run(state: &AppState, args: &TraceSketchParams) -> Result<TraceReport, CyberError> {
     let request = parse_request(args)?;
     let fetched = state.fetch_source(&request.source).await?;
@@ -861,14 +1330,27 @@ async fn trace_run(state: &AppState, args: &TraceSketchParams) -> Result<TraceRe
     let options = analyze_options(&request, &prepared.frame);
     let analysis = analyze(&prepared.picture, &options)?;
     let vectorized = run_vectorize(&request, &prepared.frame, &analysis)?;
-    let overlay = debug::build(&prepared.picture, &analysis, vectorized.as_ref());
+    let thinned = thin_all(&prepared.frame, &analysis, &request)?;
+    let overlay = debug::build(
+        &prepared.picture,
+        vectorized.as_ref(),
+        &thinned.gaps.kept.items,
+        &thinned.marks.kept.items,
+    );
     let png = encode_png(&overlay, None)?;
     let asset = state.publish(DEBUG_FILENAME, DEBUG_MIME, png)?;
-    build_report(&prepared.frame, &analysis, vectorized.as_ref(), asset)
+    let parts = Parts {
+        frame: &prepared.frame,
+        analysis: &analysis,
+        vectorized: vectorized.as_ref(),
+        thinned,
+        asset,
+    };
+    assemble(parts)
 }
 
 /// The full documentation of [`Cyberdemon::trace_sketch`].
-const TRACE_TOOL_DESCRIPTION: &str = "Measures a hand-drawn floor plan (PNG, JPEG, GIF or BMP from source) and returns exact numbers: enclosed regions as welded, simplified integer polygons, the gaps where wall lines break, the small marks, region adjacency, and a debug PNG labelling everything R1, G1, M1. No session or open WAD is needed, and it only measures - you decide what is a room. plan_rooms feeds build_map_from_plan with the same units; guides/sketch-to-map.md.";
+const TRACE_TOOL_DESCRIPTION: &str = "Measures a hand-drawn floor plan (PNG, JPEG, GIF or BMP from source) and returns exact numbers: enclosed regions as welded, simplified integer polygons, the gaps where wall lines break, the small marks, region adjacency, and a debug PNG labelling everything R1, G1, M1. No session or open WAD is needed, and it only measures - you decide what is a room. Gaps and marks are floored at the measured stroke and capped (max_gaps, max_marks) so a noisy scan stays small; verbose lifts both. plan_rooms feeds build_map_from_plan with the same units; guides/sketch-to-map.md.";
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -892,11 +1374,15 @@ impl Cyberdemon {
 
 #[cfg(test)]
 mod tests {
+    use alloc::collections::BTreeSet;
+
     use super::{
-        CropParams, Frame, InkParams, Request, TraceSketchParams, analyze_options, check_crop,
-        default_grid, default_orthogonal, downscale, fit_edge, gap_row, mark_row, parse_ink,
-        parse_max_size, parse_request, parse_units, region_row, scale_area, scale_for,
-        scale_length, tag, vectorize_options,
+        CropParams, Cut, Frame, GAP_WORDS, GapRow, InkParams, Listing, MARK_WORDS, MarkRow,
+        Request, TraceSketchParams, analyze_options, box_edge, check_crop, default_grid,
+        default_orthogonal, downscale, effective_floor, fit_edge, gap_row, keep_gaps, keep_marks,
+        mark_row, next_steps, omission_warnings, parse_cap, parse_ink, parse_max_size,
+        parse_request, parse_units, region_row, scale_area, scale_for, scale_length, tag,
+        vectorize_options,
     };
     use crate::gfx::image::RgbaImage;
     use crate::plan::Units;
@@ -940,6 +1426,10 @@ mod tests {
             weld: None,
             units: None,
             grid: default_grid(),
+            max_gaps: None,
+            max_marks: None,
+            noise_floor_px: None,
+            verbose: false,
         }
     }
 
@@ -1172,7 +1662,8 @@ mod tests {
     #[test]
     fn region_rows_carry_tags_and_the_scaled_geometry() {
         let shrunk = frame(1_u32, 2_u32);
-        let row = region_row(&shrunk, &shape()).expect("in range");
+        let shown: BTreeSet<u32> = [1_u32, 3_u32].into_iter().collect();
+        let row = region_row(&shrunk, &shape(), &shown, &shown).expect("in range");
         assert_eq!(row.id, "R2", "the label id is prefixed");
         assert_eq!(row.points.first().copied(), Some((20_i64, 20_i64)));
         assert_eq!(
@@ -1185,6 +1676,16 @@ mod tests {
         assert_eq!(row.marks, vec!["M1".to_owned()], "mark ids");
         assert_eq!(row.gaps, vec!["G3".to_owned()], "gap ids");
         assert!(row.is_rectangle && row.holes == 0, "flags ride through");
+    }
+
+    #[test]
+    fn a_region_drops_the_ids_the_report_does_not_show() {
+        let plain = frame(1_u32, 1_u32);
+        let shown: BTreeSet<u32> = core::iter::once(9_u32).collect();
+        let row = region_row(&plain, &shape(), &shown, &shown).expect("in range");
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(row.gaps, empty, "gap 3 stayed out of the report");
+        assert_eq!(row.marks, empty, "and so did mark 1");
     }
 
     #[test]
@@ -1296,6 +1797,10 @@ mod tests {
             orthogonal: true,
             weld: None,
             units: None,
+            max_gaps: 50_usize,
+            max_marks: 50_usize,
+            noise_floor_px: None,
+            verbose: false,
         };
         let options = analyze_options(&request, &frame);
         let result = analyze(&picture, &options).expect("analysable");
@@ -1304,5 +1809,255 @@ mod tests {
         let shapes =
             vectorize(&result, &vectorize_options(&request, &frame)).expect("vectorizable");
         assert_eq!(shapes.regions.len(), 3, "three vectorised rings");
+    }
+
+    /// A cut with the asked cap and floor, thinning on.
+    fn cut(cap: usize, floor: u32) -> Cut {
+        Cut {
+            floor,
+            cap,
+            verbose: false,
+        }
+    }
+
+    /// Three bridges: widths `10`, `4` and `20` in scan order, boxes to
+    /// match.
+    fn gaps() -> Vec<Gap> {
+        [
+            (1_u32, 10_u32, (4_u32, 4_u32, 13_u32, 9_u32)),
+            (2_u32, 4_u32, (20_u32, 4_u32, 23_u32, 7_u32)),
+            (3_u32, 20_u32, (30_u32, 4_u32, 49_u32, 23_u32)),
+        ]
+        .into_iter()
+        .map(|(id, width_px, bbox)| Gap {
+            id,
+            centroid: (5_u32, 6_u32),
+            bbox,
+            width_px,
+            between: Some((1_u32, 2_u32)),
+        })
+        .collect()
+    }
+
+    /// Three specks: areas `9`, `64` and `25` in scan order, box edges
+    /// `3`, `8` and `5`.
+    fn marks() -> Vec<Mark> {
+        [
+            (1_u32, 9_u32, (4_u32, 4_u32, 6_u32, 6_u32)),
+            (2_u32, 64_u32, (10_u32, 10_u32, 17_u32, 17_u32)),
+            (3_u32, 25_u32, (20_u32, 20_u32, 24_u32, 24_u32)),
+        ]
+        .into_iter()
+        .map(|(id, area, bbox)| Mark {
+            id,
+            centroid: (5_u32, 6_u32),
+            bbox,
+            area,
+            color: [0_u8, 0_u8, 0_u8],
+            region: Some(1_u32),
+        })
+        .collect()
+    }
+
+    /// The gap rows' ids, in report order.
+    fn gap_ids(listing: &Listing<Gap, GapRow>) -> Vec<String> {
+        listing.rows.iter().map(|row| row.id.clone()).collect()
+    }
+
+    /// The mark rows' ids, in report order.
+    fn mark_ids(listing: &Listing<Mark, MarkRow>) -> Vec<String> {
+        listing.rows.iter().map(|row| row.id.clone()).collect()
+    }
+
+    #[test]
+    fn caps_default_to_fifty_and_refuse_the_out_of_range() {
+        assert_eq!(parse_cap("max_gaps", None).expect("default"), 50_usize);
+        assert_eq!(
+            parse_cap("max_marks", Some(1_usize)).expect("floor"),
+            1_usize
+        );
+        assert_eq!(
+            parse_cap("max_gaps", Some(500_usize)).expect("ceiling"),
+            500_usize
+        );
+        for bad in [0_usize, 501_usize] {
+            let error = parse_cap("max_marks", Some(bad)).expect_err("out of range");
+            assert_eq!(error.code(), "invalid_argument", "code for {bad}");
+            assert!(
+                error.to_string().contains("max_marks") && error.to_string().contains("verbose"),
+                "the message names the parameter and the way out: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_floor_asks_the_stroke_and_explicit_values_win() {
+        let asked = TraceSketchParams {
+            noise_floor_px: Some(3_u32),
+            ..args("/x.png")
+        };
+        let request = parse_request(&asked).expect("the wire parses");
+        assert_eq!(request.max_gaps, 50_usize, "fifty gaps by default");
+        assert_eq!(request.max_marks, 50_usize, "and fifty marks");
+        assert_eq!(
+            effective_floor(&request, 7_u32),
+            3_u32,
+            "the asked floor beats the stroke"
+        );
+        let plain = parse_request(&args("/x.png")).expect("the bare wire parses");
+        assert_eq!(
+            effective_floor(&plain, 7_u32),
+            7_u32,
+            "unset asks for the measured stroke"
+        );
+        let off = TraceSketchParams {
+            noise_floor_px: Some(0_u32),
+            ..args("/x.png")
+        };
+        let kept = parse_request(&off).expect("an explicit zero");
+        assert_eq!(effective_floor(&kept, 7_u32), 0_u32, "zero keeps every row");
+    }
+
+    #[test]
+    fn verbose_lifts_the_floor_and_both_caps() {
+        let loud = TraceSketchParams {
+            verbose: true,
+            ..args("/x.png")
+        };
+        let request = parse_request(&loud).expect("the verbose wire parses");
+        let plain = frame(1_u32, 1_u32);
+        assert_eq!(
+            effective_floor(&request, 7_u32),
+            0_u32,
+            "verbose drops nothing"
+        );
+        let every = Cut {
+            floor: 40_u32,
+            cap: 1_usize,
+            verbose: true,
+        };
+        assert_eq!(
+            gap_ids(&keep_gaps(&plain, &gaps(), &every).expect("in range")),
+            vec!["G3".to_owned(), "G1".to_owned(), "G2".to_owned()],
+            "every row stands, ranked by width"
+        );
+        assert_eq!(
+            mark_ids(&keep_marks(&plain, &marks(), &every).expect("in range")),
+            vec!["M2".to_owned(), "M3".to_owned(), "M1".to_owned()],
+            "marks too, by ink"
+        );
+    }
+
+    #[test]
+    fn a_capped_gap_list_keeps_the_widest_and_counts_the_rest() {
+        let plain = frame(1_u32, 1_u32);
+        let listing = keep_gaps(&plain, &gaps(), &cut(2_usize, 0_u32)).expect("in range");
+        assert_eq!(
+            gap_ids(&listing),
+            vec!["G3".to_owned(), "G1".to_owned()],
+            "widest first, the 4-px bridge last"
+        );
+        assert_eq!(listing.kept.total, 3_u32, "the analysis found three");
+        assert_eq!(listing.kept.below_floor, 0_u32, "floor 0 drops nothing");
+        assert_eq!(listing.kept.past_cap, 1_u32, "one stayed out");
+    }
+
+    #[test]
+    fn the_noise_floor_drops_the_short_bridge_and_the_tiny_speck() {
+        let plain = frame(1_u32, 1_u32);
+        let listing = keep_gaps(&plain, &gaps(), &cut(5_usize, 5_u32)).expect("in range");
+        assert_eq!(
+            gap_ids(&listing),
+            vec!["G3".to_owned(), "G1".to_owned()],
+            "the 4-px bridge is under the 5-px floor"
+        );
+        assert_eq!(listing.kept.below_floor, 1_u32, "and is counted");
+        assert_eq!(listing.kept.past_cap, 0_u32, "what stands fits the cap");
+        let specks = keep_marks(&plain, &marks(), &cut(5_usize, 4_u32)).expect("in range");
+        assert_eq!(
+            mark_ids(&specks),
+            vec!["M2".to_owned(), "M3".to_owned()],
+            "most ink first, the 3-px speck dropped"
+        );
+        assert_eq!(specks.kept.below_floor, 1_u32, "the speck is counted out");
+        assert_eq!(
+            specks.rows.first().map(|row| row.area_px),
+            Some(64_u32),
+            "the ranking row is the 64-px blot"
+        );
+    }
+
+    #[test]
+    fn the_floor_and_the_ranking_read_original_pixels() {
+        let shrunk = frame(1_u32, 4_u32);
+        let listing = keep_gaps(&shrunk, &gaps(), &cut(5_usize, 50_u32)).expect("in range");
+        assert_eq!(
+            gap_ids(&listing),
+            vec!["G3".to_owned()],
+            "the 20-px bridge is 80 original pixels"
+        );
+        assert_eq!(
+            listing.kept.below_floor, 2_u32,
+            "the other two are under it"
+        );
+    }
+
+    #[test]
+    fn the_omission_warnings_name_the_counts_and_the_parameters() {
+        let plain = frame(1_u32, 1_u32);
+        let gaps_cut = keep_gaps(&plain, &gaps(), &cut(1_usize, 5_u32)).expect("in range");
+        let gap_lines = omission_warnings(&gaps_cut, &GAP_WORDS, 5_u32, 1_usize);
+        assert_eq!(gap_lines.len(), 2_usize, "one line per reason");
+        assert!(
+            gap_lines[0].starts_with("1 gaps narrower than the 5 px noise floor")
+                && gap_lines[0].contains("noise_floor_px 0"),
+            "the floor line: {:?}",
+            gap_lines[0]
+        );
+        assert!(
+            gap_lines[1].starts_with("1 of 3 gaps stayed out past max_gaps 1")
+                && gap_lines[1].contains("verbose: true"),
+            "the cap line: {:?}",
+            gap_lines[1]
+        );
+        let marks_cut = keep_marks(&plain, &marks(), &cut(1_usize, 4_u32)).expect("in range");
+        let mark_lines = omission_warnings(&marks_cut, &MARK_WORDS, 4_u32, 1_usize);
+        assert_eq!(mark_lines.len(), 2_usize, "the 3-px speck and one blot");
+        assert!(
+            mark_lines[0].starts_with("1 marks smaller than the 4 px noise floor"),
+            "the mark floor line: {:?}",
+            mark_lines[0]
+        );
+        assert!(
+            mark_lines[1].starts_with("1 of 3 marks stayed out past max_marks 1"),
+            "the mark line names its own parameter: {:?}",
+            mark_lines[1]
+        );
+        let whole = keep_gaps(&plain, &gaps(), &cut(5_usize, 0_u32)).expect("in range");
+        assert!(
+            omission_warnings(&whole, &GAP_WORDS, 0_u32, 5_usize).is_empty(),
+            "a list that loses nothing warns nothing"
+        );
+    }
+
+    #[test]
+    fn box_edges_measure_the_longer_side() {
+        assert_eq!(box_edge((4_u32, 4_u32, 6_u32, 6_u32)), 3_u32, "a 3x3 box");
+        assert_eq!(
+            box_edge((0_u32, 0_u32, 20_u32, 4_u32)),
+            21_u32,
+            "the wider edge wins"
+        );
+    }
+
+    #[test]
+    fn a_thinned_report_adds_the_step_naming_the_knobs() {
+        assert_eq!(next_steps(false).len(), 4_usize, "the standing four");
+        let steps = next_steps(true);
+        assert_eq!(steps.len(), 5_usize, "the thinning adds one");
+        assert!(
+            steps.last().is_some_and(|text| text.contains("max_gaps")),
+            "the extra step names the knobs: {steps:?}"
+        );
     }
 }

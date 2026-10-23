@@ -31,8 +31,9 @@
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
 //! the plan-group tests in `plan`, the playability-group tests in
 //! `playability`, the query-group tests in `query`, the sketch-group tests in
-//! `sketch`, the textures-group tests in
-//! `textures`, the themes-group tests in
+//! `sketch`, the textures-group shared helpers in
+//! `textures` with its `textures/list`, `textures/pnames` and
+//! `textures/build` topic tests, the themes-group tests in
 //! `themes`, the validate-group tests in `validate`, the usability-pass
 //! checks in `usability`, and the
 //! documentation-layout and guide-content

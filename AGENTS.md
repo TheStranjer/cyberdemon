@@ -624,12 +624,16 @@ tests/
                     session, save, batch, defs, lumps, map_edit,
                     maps, edit_*, features, graphics, imports, inspect,
                     nodes, palette, patches, plan, playability, query,
-                    render, scripts, sketch, textures, themes, validate) with
-                    the `convert` group's shared helpers in `convert.rs` and
+                    render, scripts, sketch, themes, validate) with the
+                    `convert` group's shared helpers in `convert.rs` and
                     its tests in `convert/udmf.rs` (same-family rewrites),
                     `convert/forward.rs` (`Doom` into `Hexen` family records)
                     and `convert/reverse.rs` (the trips back and the
-                    refusals);
+                    refusals); and the `textures` group's shared helpers in
+                    `textures.rs` with its tests in `textures/list.rs` (the
+                    `PNAMES` and `TEXTURE1`/`TEXTURE2` listings),
+                    `textures/pnames.rs` (`edit_pnames`) and
+                    `textures/build.rs` (`build_texture`, `remove_texture`);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

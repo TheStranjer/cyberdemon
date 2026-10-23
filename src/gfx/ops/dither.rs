@@ -5,7 +5,9 @@
 //! pushes each rounding error to the not-yet-processed neighbours in
 //! `7/16`, `3/16`, `5/16` and `1/16` shares; every share is an integer
 //! division and its remainder rides along with the `7/16` share, so the
-//! whole error survives. [`Dither::Ordered`] adds a fixed `4x4` `Bayer`
+//! whole error survives. Each result is written at its own pixel's
+//! position, so the backward-scan rows come out unmirrored.
+//! [`Dither::Ordered`] adds a fixed `4x4` `Bayer`
 //! cell offset to each channel instead of propagating error.
 
 use schemars::JsonSchema;
@@ -205,6 +207,9 @@ fn adjust_pixel(raw: [u8; CHANNELS], error: [i32; CHANNELS]) -> [u8; CHANNELS] {
 }
 
 /// The running state of one `Floyd-Steinberg` diffusion.
+///
+/// The scan is serpentine, but the output is written at each pixel's own
+/// position, so `indices` and `opaque` stay in row-major raster order.
 struct Diffuser<'pal> {
     /// Palette to match against.
     palette: &'pal Palette,
@@ -212,10 +217,12 @@ struct Diffuser<'pal> {
     options: &'pal QuantizeOptions,
     /// Current and next row error buffers.
     errors: ErrorRows,
-    /// Output indices, in scan order.
+    /// Output indices, in raster order.
     indices: Vec<u8>,
-    /// Output opacity flags, in scan order.
+    /// Output opacity flags, in raster order.
     opaque: Vec<bool>,
+    /// `indices` offset of the first pixel of the row being scanned.
+    row_start: usize,
 }
 
 impl Diffuser<'_> {
@@ -234,11 +241,11 @@ impl Diffuser<'_> {
         };
         let [red, green, blue, alpha] = pixel;
         let raw = [red, green, blue];
+        let output = self.row_start.saturating_add(x);
         if is_transparent(raw, alpha, self.options.transparency) {
             self.errors.drop_current(x);
-            self.indices
-                .push(nearest_index(raw, self.palette, &self.options.reserved));
-            self.opaque.push(false);
+            let index = nearest_index(raw, self.palette, &self.options.reserved);
+            self.set_pixel(output, index, false);
             return;
         }
         let adjusted = adjust_pixel(raw, self.errors.take_current(x));
@@ -246,8 +253,17 @@ impl Diffuser<'_> {
         let chosen = self.palette.color(usize::from(index));
         self.errors
             .spread(x, forward, quantization_error(adjusted, chosen));
-        self.indices.push(index);
-        self.opaque.push(true);
+        self.set_pixel(output, index, true);
+    }
+
+    /// Stores one pixel's result at its raster position `output`.
+    fn set_pixel(&mut self, output: usize, index: u8, visible: bool) {
+        if let Some(slot) = self.indices.get_mut(output) {
+            *slot = index;
+        }
+        if let Some(slot) = self.opaque.get_mut(output) {
+            *slot = visible;
+        }
     }
 }
 
@@ -269,10 +285,12 @@ fn floyd_steinberg(img: &RgbaImage, palette: &Palette, options: &QuantizeOptions
         palette,
         options,
         errors: ErrorRows::new(width),
-        indices: Vec::with_capacity(count),
-        opaque: Vec::with_capacity(count),
+        indices: vec![0_u8; count],
+        opaque: vec![false; count],
+        row_start: 0,
     };
     for (row, pixels) in img.pixels.chunks_exact(row_bytes).enumerate() {
+        diffuser.row_start = row.saturating_mul(width);
         let forward = row.checked_rem(2).unwrap_or(0) == 0;
         diffuser.add_row(pixels, width, forward);
         diffuser.errors.advance_row();
@@ -345,7 +363,7 @@ fn ordered(img: &RgbaImage, palette: &Palette, options: &QuantizeOptions) -> Ind
 #[cfg(test)]
 mod tests {
     use super::{Dither, quantize_dithered};
-    use crate::gfx::image::RgbaImage;
+    use crate::gfx::image::{IndexedImage, RgbaImage};
     use crate::gfx::palette::Palette;
     use crate::gfx::quantize::{QuantizeOptions, Transparency};
 
@@ -377,6 +395,92 @@ mod tests {
         let pixels: Vec<u8> = (0..count).flat_map(|_| [128_u8, 128, 128, 255]).collect();
         let width = u32::try_from(count).expect("small");
         RgbaImage::new(width, 1, pixels).expect("row is valid")
+    }
+
+    /// The source pixel at raster position `p` of a `left_weighted`
+    /// picture: `left` in the left `half` of a `2 * half`-wide row, black
+    /// in the right.
+    fn weighted_pixel(p: usize, row_width: usize, half: usize, left: u8) -> [u8; 4] {
+        let x = p.checked_rem(row_width).expect("test rows");
+        let shade = if x < half { left } else { 0_u8 };
+        [shade, shade, shade, 255_u8]
+    }
+
+    /// A `2 * half`-wide, 4-row opaque picture: the left half at the
+    /// uniform grey `left`, the right half pure black.
+    fn left_weighted(half: usize, left: u8) -> RgbaImage {
+        let row_width = half.saturating_mul(2);
+        let pixels: Vec<u8> = (0..row_width.saturating_mul(4))
+            .flat_map(|p| weighted_pixel(p, row_width, half, left))
+            .collect();
+        let width = u32::try_from(row_width).expect("small");
+        RgbaImage::new(width, 4, pixels).expect("picture is valid")
+    }
+
+    /// The number of white-index pixels in `part` of an output row.
+    fn count_whites(part: &[u8]) -> usize {
+        part.iter().fold(0_usize, |total, &value| {
+            total.saturating_add(usize::from(value == 1))
+        })
+    }
+
+    /// The white-pixel counts of the two halves of one output row.
+    fn half_counts(row: &[u8]) -> (usize, usize) {
+        let mid = row.len().checked_div(2).expect("a whole half");
+        let (left, right) = row.split_at(mid);
+        (count_whites(left), count_whites(right))
+    }
+
+    /// The raster rows whose left half is not brighter than the right.
+    fn flipped_rows(indices: &[u8], row_width: usize) -> Vec<usize> {
+        indices
+            .chunks_exact(row_width)
+            .enumerate()
+            .filter_map(|(row, line)| {
+                let (left, right) = half_counts(line);
+                (left <= right).then_some(row)
+            })
+            .collect()
+    }
+
+    /// One mode's placement check: a fully opaque output whose every row
+    /// equals `expected`, in raster order.
+    fn assert_mode_places_each_pixel(indexed: &IndexedImage, mode: Dither, expected: &[u8]) {
+        assert!(
+            indexed.opaque.iter().all(|visible| *visible),
+            "opaque source with {mode:?}"
+        );
+        assert!(
+            indexed
+                .indices
+                .chunks_exact(expected.len())
+                .all(|row| row == expected),
+            "every row must sit where the source is with {mode:?}"
+        );
+    }
+
+    #[test]
+    fn exact_palette_pixels_land_at_their_own_positions_in_every_mode() {
+        let img = left_weighted(4, 255);
+        let expected: [u8; 8] = [1, 1, 1, 1, 0, 0, 0, 0];
+        for mode in [Dither::None, Dither::FloydSteinberg, Dither::Ordered] {
+            let indexed = quantize_dithered(&img, &black_white(), &two_colours(), mode);
+            assert_mode_places_each_pixel(&indexed, mode, &expected);
+        }
+    }
+
+    #[test]
+    fn every_dither_mode_keeps_a_left_weighted_picture_left_weighted() {
+        let img = left_weighted(8, 128);
+        for mode in [Dither::None, Dither::FloydSteinberg, Dither::Ordered] {
+            let indexed = quantize_dithered(&img, &black_white(), &two_colours(), mode);
+            assert_eq!(
+                flipped_rows(&indexed.indices, 16),
+                Vec::<usize>::new(),
+                "no row loses its left weighting with {mode:?}: {:?}",
+                indexed.indices
+            );
+        }
     }
 
     #[test]

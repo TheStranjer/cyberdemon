@@ -251,12 +251,14 @@ a name wins.
 
   A `sprite`/`frame`/`rotation` request resolves the way an engine does:
   the lump named for that rotation wins, then a lump whose eight-character
-  name carries this rotation as its **mirror pair** — published flipped
-  horizontally, with `left_offset` mirrored to `width - left_offset` —
-  then the frame's rotation-`0` all-angles image, so `PLAYA0` answers
-  every rotation of frame `A`. `name` is the rotation you asked for,
-  `lump` the name whose pixels served it, and `mirrored` says whether they
-  were flipped. Rotations are looked for in the sprite regions; a whole
+  name carries this rotation as **its own pair** — `TROOA2A8` is where an
+  `IWAD` keeps frame `A` rotation `2`, published as stored — then one that
+  carries it as its **mirror pair**, published flipped horizontally with
+  `left_offset` mirrored to `width - left_offset` — then the frame's
+  rotation-`0` all-angles image, so `PLAYA0` answers every rotation of
+  frame `A`. `name` is the rotation you asked for, `lump` the name whose
+  pixels served it, and `mirrored` says whether they were flipped.
+  Rotations are looked for in the sprite regions; a whole
   `name` also falls back to the patches region and to loose lumps.
 - Errors: `invalid_argument` for both selectors or neither, a malformed
   `sprite`, `frame` or `rotation`; `not_found` for a sprite nothing serves
@@ -293,7 +295,9 @@ a name wins.
   ```
 
   The rotation resolves exactly as `get_sprite` does: exact lump, then
-  mirror pair flipped, then the frame's rotation-`0` all-angles image.
+  the pair name that carries it as its own rotation, then that name
+  flipped for its mirror rotation, then the frame's rotation-`0`
+  all-angles image.
   `name` is the definition's display name, `lump` the sprite lump whose
   pixels served, `mirrored` whether they were flipped, `hanging` whether
   the thing hangs from the ceiling.

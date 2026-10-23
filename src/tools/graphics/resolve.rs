@@ -315,8 +315,9 @@ fn compose_texture(
 /// The sprite image for one rotation: `sprite` is the four-character
 /// prefix, `frame` its letter and `rotation` a number `0`-`8`. The exact
 /// lump wins; failing that a lump whose eight-character name carries this
-/// rotation as its mirror pair (flipped here, with `left' = width - left`);
-/// failing that the frame's rotation-`0` image.
+/// rotation as its own pair (`TROOA2A8` is where an `IWAD` keeps frame `A`
+/// rotation `2`) or as its mirror pair (flipped here, with
+/// `left' = width - left`); failing that the frame's rotation-`0` image.
 ///
 /// # Errors
 ///
@@ -430,6 +431,7 @@ fn find_rotation<'rows>(
     wanted: &Request,
 ) -> Option<(&'rows LumpRow, Serving)> {
     exact_row(rows, wanted)
+        .or_else(|| pair_row(rows, wanted))
         .or_else(|| mirror_row(rows, wanted))
         .or_else(|| angles_row(rows, wanted))
 }
@@ -440,6 +442,27 @@ fn exact_row<'rows>(rows: &'rows [LumpRow], wanted: &Request) -> Option<(&'rows 
         .rev()
         .find(|row| row.name == wanted.exact)
         .map(|row| (row, Serving::Direct))
+}
+
+/// The last lump whose name carries the rotation as its own, unmirrored
+/// pair: an `IWAD` writes a frame's rotations `2`, `3` and `4` into the
+/// mirror-pair names `TROOA2A8`, `TROOA3A7` and `TROOA4A6` and never into
+/// the three-character ones, so only this reading finds them.
+fn pair_row<'rows>(rows: &'rows [LumpRow], wanted: &Request) -> Option<(&'rows LumpRow, Serving)> {
+    rows.iter()
+        .rev()
+        .find(|row| serves_pair(row, wanted))
+        .map(|row| (row, Serving::Direct))
+}
+
+/// Whether `row`'s name carries the request's frame and rotation as its
+/// first, directly served, pair.
+fn serves_pair(row: &LumpRow, wanted: &Request) -> bool {
+    parse_sprite_name(&row.name.to_string()).is_some_and(|parsed| {
+        parsed.sprite == wanted.sprite
+            && parsed.frame == wanted.frame
+            && parsed.rotation == wanted.rotation
+    })
 }
 
 /// The last lump whose name carries this rotation as its mirror pair.
@@ -859,6 +882,38 @@ mod tests {
         assert_eq!(angles.0.name, name("PLAYA0"), "the all-angles image");
         let none = find_rotation(&directory, &request("PLAY", 'A', 0)).expect("PLAYA0 itself");
         assert_eq!(none.0.name, name("PLAYA0"), "the exact name is rotation 0");
+    }
+
+    /// An `IWAD` writes a frame's rotations `2`, `3` and `4` into its
+    /// mirror-pair lumps only, so those rotations have no three-character
+    /// lump to find: the pair name has to serve them as its own image.
+    #[test]
+    fn a_pair_name_serves_its_first_rotation_without_flipping() {
+        let session = with_extra(vec![
+            Lump::marker(name("S_START")),
+            lump("TROOA3A7", stripe(4, 1, (1, 2))),
+            Lump::marker(name("S_END")),
+        ]);
+        let directory = rows(&session);
+        let two =
+            find_rotation(&directory, &request("TROO", 'A', 2)).expect("A2A8 serves rotation 2");
+        assert_eq!(
+            (two.0.name, two.1),
+            (name("TROOA2A8"), Serving::Direct),
+            "the pair's own rotation is used as stored"
+        );
+        let three =
+            find_rotation(&directory, &request("TROO", 'A', 3)).expect("A3A7 serves rotation 3");
+        assert_eq!((three.0.name, three.1), (name("TROOA3A7"), Serving::Direct));
+        let seven =
+            find_rotation(&directory, &request("TROO", 'A', 7)).expect("A3A7 mirrors rotation 7");
+        assert_eq!(
+            (seven.0.name, seven.1),
+            (name("TROOA3A7"), Serving::Mirrored)
+        );
+        let sprite = load_sprite(&session, "TROO", 'A', 2).expect("rotation 2 loads");
+        assert_eq!(sprite.lump, name("TROOA2A8"), "served by the pair lump");
+        assert!(!sprite.mirrored, "as stored, not flipped");
     }
 
     #[test]

@@ -1115,6 +1115,51 @@ mod tests {
         );
     }
 
+    /// Asserts one pair-named rotation resolves to the lump that carries
+    /// it, flipped only for the second of its two rotations.
+    async fn pair_serves_its_own_rotation(
+        client: &Client,
+        rotation: u64,
+        lump: &str,
+        flipped: bool,
+    ) {
+        let served = call(
+            client,
+            "get_sprite",
+            json!({ "sprite": "TROO", "frame": "A", "rotation": rotation }),
+        )
+        .await;
+        assert_eq!(served["lump"], json!(lump), "rotation {rotation}");
+        assert_eq!(
+            served["mirrored"],
+            json!(flipped),
+            "rotation {rotation} of {lump}"
+        );
+        check_dims(&served, 8_u64, 8_u64);
+    }
+
+    /// An `IWAD` writes a frame's rotations `2`, `3` and `4` into its
+    /// mirror-pair lumps and nowhere else: the same lump that serves the
+    /// high rotation flipped has to serve the low one as stored.
+    #[tokio::test]
+    async fn get_sprite_serves_a_pair_names_own_rotation_unflipped() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        pair_serves_its_own_rotation(&client, 2_u64, "TROOA2A8", false).await;
+        pair_serves_its_own_rotation(&client, 3_u64, "TROOA3A7", false).await;
+        pair_serves_its_own_rotation(&client, 4_u64, "TROOA4A6", false).await;
+        pair_serves_its_own_rotation(&client, 6_u64, "TROOA4A6", true).await;
+        pair_serves_its_own_rotation(&client, 7_u64, "TROOA3A7", true).await;
+        let thing = call(
+            &client,
+            "get_thing_sprite",
+            json!({ "type": 3001_u64, "rotation": 3_u64 }),
+        )
+        .await;
+        assert_eq!(thing["lump"], json!("TROOA3A7"), "by definition too");
+        assert_eq!(thing["mirrored"], json!(false), "as stored");
+    }
+
     #[tokio::test]
     async fn get_sprite_falls_back_to_the_all_angles_image() {
         let dir = tempfile::tempdir().expect("a scratch directory");

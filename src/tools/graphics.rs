@@ -672,8 +672,9 @@ struct GetSpriteParams {
     #[serde(default)]
     frame: Option<String>,
     /// Rotation to read, `0`-`8` (default 1): `0` is the all-angles image,
-    /// `1`..`8` the eight views, served by a mirror-pair lump flipped when
-    /// no lump names the rotation itself. With `sprite`.
+    /// `1`..`8` the eight views, served by the pair name that carries the
+    /// rotation itself or, for its second rotation, flipped, when no lump
+    /// names the rotation on its own. With `sprite`.
     #[serde(default)]
     rotation: Option<u8>,
     /// The shared `palette`, `format` and `scale` options.
@@ -695,7 +696,8 @@ struct GetThingSpriteParams {
     frame: Option<String>,
     /// Rotation to read, `1`-`8` (default 1): the eight views, `1` the
     /// front a head-on viewer sees, `5` the back. Resolved by the engine's
-    /// mirror-pair and rotation-`0` fallback rules.
+    /// pair-name and rotation-`0` fallback rules: a frame's rotation `2`
+    /// lives in the lump named `TROOA2A8`, unflipped.
     #[serde(default)]
     rotation: Option<u8>,
     /// The shared `palette`, `format` and `scale` options.

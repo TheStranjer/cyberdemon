@@ -8,17 +8,23 @@
 //! paints one [`Label::Region`] band (openings, doors, windows) or a
 //! stack of step bands (stairs) that [`final_layers`] puts above the wall
 //! voids, so the next [`arrange`](fn@crate::geom::arrange) cuts the
-//! opening clean through the wall. The region labels it allocates (past
-//! the room labels) are how the map emitter of the next slice recognises
-//! connector faces. Nothing here touches archives, sessions or `MCP`
-//! types; it is integer geometry and measurement only.
+//! opening clean through the wall. A plain [`ConnectionKind::Opening`]
+//! wide enough to span the whole shared run needs no band of its own: it
+//! records that run's [`WallKey`] in [`ConnectorGeometry::joined`]
+//! instead and [`final_layers`] drops the wall there, so the two rooms
+//! simply share their boundary line. The region labels it allocates
+//! (past the room labels) are how the map emitter of the next slice
+//! recognises connector faces. Nothing here touches archives, sessions
+//! or `MCP` types; it is integer geometry and measurement only.
+
+use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
 use crate::fixed::{isqrt, mul_div_round};
 use crate::geom::label::Label;
 use crate::geom::{Layer, Piece, Pt};
 use crate::plan::model::{Connection, ConnectionKind, Plan, Room};
-use crate::plan::walls::{Walls, room_layers};
+use crate::plan::walls::{WallKey, Walls, room_layers};
 
 /// Band depth used for an opening when [`Plan::wall_thickness`] is not
 /// positive: the rectangle then overlaps both rooms by half its depth on
@@ -42,10 +48,9 @@ const MAX_STEPS: usize = 4_096_usize;
 ///
 /// [`ConnectorGeometry::kind`] rides along unchanged: a
 /// [`ConnectionKind::Door`] has exactly the same geometry as a plain
-/// [`ConnectionKind::Opening`] (one band through the wall); which door
-/// special to put on the linedef is
-/// [`DoorStyle`](crate::plan::model::DoorStyle)'s business, not this
-/// module's.
+/// [`ConnectionKind::Opening`] (one band through the wall) unless the
+/// opening is wide enough to span the whole shared run, in which case it
+/// carries no band at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectorGeometry {
     /// Index of the connection in [`Plan::connections`].
@@ -59,8 +64,16 @@ pub struct ConnectorGeometry {
     /// The connection's kind, copied from the model.
     pub kind: ConnectionKind,
     /// The band layers to paint above the room and wall layers, bottom
-    /// step first for stairs, one band otherwise.
+    /// step first for stairs, one band otherwise; empty for a
+    /// [`ConnectorGeometry::joined`] opening, which needs no band because
+    /// no wall stands there.
     pub layers: Vec<Layer>,
+    /// The wall this connection opens end to end: `Some` only for a plain
+    /// [`ConnectionKind::Opening`] whose band reaches past both ends of
+    /// the shared run it sits on. [`final_layers`] drops that wall and
+    /// the two rooms share their boundary line directly, so the opening
+    /// owns no band layer, no sector and no jamb faces.
+    pub joined: Option<WallKey>,
     /// Rounded unit direction along the chosen boundary piece, from its
     /// `a` towards its `b`.
     pub band: Pt,
@@ -114,10 +127,12 @@ const fn region_id(label: Label) -> Option<u32> {
 /// Rooms own the labels `Region(0..rooms.len())`; a `LabelAllocator`
 /// starting just past them hands consecutive labels to each connection's
 /// layers, so a stair run with several steps gets one label per step
-/// ([`ConnectorGeometry::label_of`] reads them back). `plan` should have
-/// passed [`Plan::validate`] first; this pass still refuses connections
-/// that name unknown rooms and boundaries too short for the connection's
-/// [`Connection::width`].
+/// ([`ConnectorGeometry::label_of`] reads them back). A plain opening
+/// that spans the whole shared run takes no label and paints no band: it
+/// only records the [`ConnectorGeometry::joined`] wall. `plan` should
+/// have passed [`Plan::validate`] first; this pass still refuses
+/// connections that name unknown rooms and boundaries too short for the
+/// connection's [`Connection::width`].
 ///
 /// # Errors
 ///
@@ -145,21 +160,40 @@ pub fn plan_connectors(plan: &Plan, walls: &Walls) -> Result<Vec<ConnectorGeomet
 }
 
 /// The complete painter's-algorithm stack: room layers, then the wall
-/// void layers, then every connector layer, bottom first.
+/// void layers a [`Walls`] build did not have to drop, then every
+/// connector layer, bottom first.
 ///
 /// Connectors sit above the wall voids so their regions paint through
 /// them; [`arrange`](fn@crate::geom::arrange) consumes the stack in this
 /// bottom-first order with a
-/// [`LayerLabeler`](crate::geom::LayerLabeler) over it.
+/// [`LayerLabeler`](crate::geom::LayerLabeler) over it. A wall whose key
+/// some connector [`joined`](ConnectorGeometry::joined) is left out of the
+/// stack entirely: that opening spans the whole shared run, so nothing
+/// stands between the rooms there and they meet on their own boundary.
 #[must_use]
 #[inline]
 pub fn final_layers(plan: &Plan, walls: &Walls, connectors: &[ConnectorGeometry]) -> Vec<Layer> {
+    let joined = joined_walls(connectors);
     let mut stack = room_layers(plan);
-    stack.extend(walls.layers.iter().cloned());
+    stack.extend(
+        walls
+            .layers
+            .iter()
+            .filter(|wall| !joined.contains(&wall.key))
+            .map(|wall| wall.layer.clone()),
+    );
     for connector in connectors {
         stack.extend(connector.layers.iter().cloned());
     }
     stack
+}
+
+/// The walls the placed connections open end to end.
+fn joined_walls(connectors: &[ConnectorGeometry]) -> BTreeSet<WallKey> {
+    connectors
+        .iter()
+        .filter_map(|connector| connector.joined)
+        .collect()
 }
 
 /// The next-free-region-label counter, threaded through one
@@ -462,10 +496,9 @@ impl Frame {
         if self.length == 0 {
             return vec![self.centre; 4];
         }
-        let denominator = self.length.saturating_mul(2_i64);
-        let along = scale_offset(width, (self.dx, self.dy), denominator);
-        let near = scale_offset(low, (self.nx, self.ny), denominator);
-        let far = scale_offset(high, (self.nx, self.ny), denominator);
+        let along = self.along(width);
+        let near = scale_offset(low, (self.nx, self.ny), self.denominator());
+        let far = scale_offset(high, (self.nx, self.ny), self.denominator());
         let back = negated(along);
         vec![
             corner(self.centre, along, near),
@@ -474,6 +507,42 @@ impl Frame {
             corner(self.centre, along, far),
         ]
     }
+
+    /// Whether a band of `width` centred on the frame point spans
+    /// `boundary` end to end: the rounded along-extent [`Frame::band`]
+    /// gives its corners reaches past both of the piece's ends.
+    fn spans(&self, boundary: &Boundary<'_>, width: i64) -> bool {
+        if self.length == 0 {
+            return false;
+        }
+        let along = self.along(width);
+        let start = corner(self.centre, negated(along), (0_i64, 0_i64));
+        let stop = corner(self.centre, along, (0_i64, 0_i64));
+        let dx = i128::from(self.dx);
+        let dy = i128::from(self.dy);
+        along_at(start, boundary.piece.a, dx, dy) <= 0
+            && along_at(stop, boundary.piece.a, dx, dy) >= boundary.length_squared
+    }
+
+    /// Twice the piece's length: the denominator every band offset
+    /// divides by.
+    const fn denominator(&self) -> i64 {
+        self.length.saturating_mul(2_i64)
+    }
+
+    /// The band's half-extent vector along the piece for a `width` wide
+    /// opening.
+    fn along(&self, width: i64) -> Pt {
+        scale_offset(width, (self.dx, self.dy), self.denominator())
+    }
+}
+
+/// `(point - from)` dotted with the piece direction: `0` at the piece's
+/// `a` end, its squared length at the `b` end and clamped nowhere.
+fn along_at(point: Pt, from: Pt, dx: i128, dy: i128) -> i128 {
+    delta(from.0, point.0)
+        .saturating_mul(dx)
+        .saturating_add(delta(from.1, point.1).saturating_mul(dy))
 }
 
 /// `value * numerator / denominator` per component, rounded through
@@ -722,6 +791,28 @@ fn fit_width(boundary: &Boundary<'_>, target: &Target<'_>) -> Result<(), CyberEr
     .with_hint(PLAN_ROOMS_HINT))
 }
 
+/// The wall one connection opens end to end: `Some` only for a plain
+/// [`ConnectionKind::Opening`] whose band spans the whole shared run.
+/// Such an opening is not an intervention in a wall, it is the absence of
+/// one: the band, the wall it would cut and the rooms' own boundary all
+/// coincide, so [`final_layers`] drops the wall and the rooms join with a
+/// two-sided line of their own, with no band sector and no jamb faces.
+/// A [`ConnectionKind::Door`], [`ConnectionKind::Window`] or
+/// [`ConnectionKind::Stairs`] always keeps its bands, however wide: each
+/// needs a sector of its own to hold the leaf, the glass or the steps.
+fn joined_opening(target: &Target<'_>, frame: &Frame, boundary: &Boundary<'_>) -> Option<WallKey> {
+    if !matches!(target.connection.kind, ConnectionKind::Opening) {
+        return None;
+    }
+    if !frame.spans(boundary, target.connection.width) {
+        return None;
+    }
+    Some(WallKey {
+        pair: pair_key(target.from, target.to),
+        piece: (boundary.piece.a, boundary.piece.b),
+    })
+}
+
 /// One connection being placed by a [`Pass`].
 struct Pass<'plan, 'walls> {
     /// The plan being compiled.
@@ -749,7 +840,8 @@ impl<'plan, 'walls> Pass<'plan, 'walls> {
             centre,
             u32::try_from(target.from).unwrap_or(u32::MAX),
         );
-        let body = self.body_for(&target, &frame)?;
+        let joined = joined_opening(&target, &frame, &boundary);
+        let body = self.body_for(&target, &frame, joined)?;
         Ok(ConnectorGeometry {
             connection_index: index,
             id: target.label,
@@ -757,6 +849,7 @@ impl<'plan, 'walls> Pass<'plan, 'walls> {
             to: target.to,
             kind: connection.kind,
             layers: body.layers,
+            joined,
             band: rounded_unit(frame.dx, frame.dy, frame.length),
             normal: rounded_unit(frame.nx, frame.ny, frame.length),
             lower_room: body.lower_room,
@@ -776,8 +869,24 @@ impl<'plan, 'walls> Pass<'plan, 'walls> {
             .ok_or_else(|| not_touching(target))
     }
 
-    /// The layers and heights of one placed connection, per kind.
-    fn body_for(&mut self, target: &Target<'plan>, frame: &Frame) -> Result<Body, CyberError> {
+    /// The layers and heights of one placed connection, per kind. A
+    /// `joined` opening contributes no layer: its band would be the wall
+    /// it replaces, so [`final_layers`] leaves the wall out and the two
+    /// rooms meet on their own boundary.
+    fn body_for(
+        &mut self,
+        target: &Target<'plan>,
+        frame: &Frame,
+        joined: Option<WallKey>,
+    ) -> Result<Body, CyberError> {
+        if joined.is_some() {
+            return Ok(Body {
+                layers: Vec::new(),
+                lower_room: None,
+                step_floors: Vec::new(),
+                height: Some(span_height(target)),
+            });
+        }
         match target.connection.kind {
             ConnectionKind::Opening | ConnectionKind::Door { .. } => {
                 let height = span_height(target);
@@ -861,7 +970,7 @@ mod tests {
     use crate::geom::label::{Label, LayerLabeler};
     use crate::geom::{Piece, Pt, arrange};
     use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Plan, Room, Shape};
-    use crate::plan::walls::{Walls, build_walls};
+    use crate::plan::walls::{WallKey, Walls, build_walls};
 
     /// A rectangular room with default sector properties.
     fn rect_room(id: &str, left_bottom: Pt, width_height: Pt) -> Room {
@@ -1139,11 +1248,13 @@ mod tests {
 
     #[test]
     fn without_at_the_longest_shared_piece_and_its_midpoint_win() {
-        let connector = first(&notch_plan(vec![opening("a", "b")]));
+        let mut narrow = opening("a", "b");
+        narrow.width = 32_i64;
+        let connector = first(&notch_plan(vec![narrow]));
         assert_band(
             &connector.layers.first().expect("band").polygon,
             (128, 96),
-            (8, 32),
+            (8, 16),
             "the 64-unit run, centred on its rounded midpoint",
         );
     }
@@ -1387,6 +1498,126 @@ mod tests {
             (Label::Region(2), Label::Region(1)),
             "b's side"
         );
+    }
+
+    #[test]
+    fn a_full_width_opening_paints_no_band_and_drops_its_wall() {
+        let mut wide = opening("a", "b");
+        wide.width = 128_i64;
+        let plan = two_rooms(16, vec![wide]);
+        plan.validate().expect("the plan validates");
+        let (walls, connectors) = compile(&plan);
+        let connector = connectors.first().expect("the opening");
+        assert_eq!(connector.kind, ConnectionKind::Opening, "kind copied");
+        assert!(
+            connector.layers.is_empty(),
+            "no band, so nothing owns a sector"
+        );
+        assert_eq!(connector.label_of(0), None, "no band, so no label taken");
+        assert_eq!(
+            connector.joined,
+            Some(WallKey {
+                pair: (0, 1),
+                piece: ((128, 0), (128, 128)),
+            }),
+            "the key names the wall it opens end to end"
+        );
+        assert_eq!(
+            connector.height,
+            Some((0_i32, 128_i32)),
+            "the span still rides along for the report"
+        );
+        assert_eq!(connector.band, (0, 1), "the run's direction reads back");
+        assert_eq!(walls.layers.len(), 1, "the wall grew before the opening");
+        let stack = final_layers(&plan, &walls, &connectors);
+        assert_eq!(stack.len(), 2, "the rooms alone: wall and band both gone");
+        let pieces = arrange(&stack, &[], &LayerLabeler::new(&stack)).expect("arranges");
+        let shared = find_piece(&pieces, (128, 0), (128, 128)).expect("the shared line");
+        assert_eq!(
+            (shared.left, shared.right),
+            (Label::Region(0), Label::Region(1)),
+            "the rooms meet on their own boundary"
+        );
+        assert!(
+            find_piece(&pieces, (120, 0), (120, 128)).is_none(),
+            "no wall face stands at x=120"
+        );
+        assert!(
+            find_piece(&pieces, (136, 0), (136, 128)).is_none(),
+            "and none at x=136"
+        );
+    }
+
+    #[test]
+    fn a_full_width_opening_at_zero_thickness_joins_without_a_band() {
+        let mut wide = opening("a", "b");
+        wide.width = 128_i64;
+        let (walls, connectors) = compile(&two_rooms(0, vec![wide]));
+        assert!(walls.layers.is_empty(), "nothing to drop");
+        let connector = connectors.first().expect("the opening");
+        assert!(connector.joined.is_some(), "the run is open end to end");
+        assert!(
+            connector.layers.is_empty(),
+            "and the band that used to sit there is gone"
+        );
+    }
+
+    #[test]
+    fn a_full_width_opening_off_the_centre_keeps_its_band() {
+        let mut wide = opening("a", "b");
+        wide.width = 128_i64;
+        wide.at = Some((128, 0));
+        let connector = first(&two_rooms(16, vec![wide]));
+        assert!(
+            connector.joined.is_none(),
+            "the band misses the far end of the run"
+        );
+        assert_eq!(connector.layers.len(), 1, "so it still paints a sector");
+    }
+
+    #[test]
+    fn a_door_over_the_whole_run_keeps_its_band() {
+        let mut gate = opening("a", "b");
+        gate.width = 128_i64;
+        gate.kind = ConnectionKind::Door {
+            style: DoorStyle::Normal,
+        };
+        let connector = first(&two_rooms(16, vec![gate]));
+        assert!(connector.joined.is_none(), "a door needs its band sector");
+        assert_eq!(
+            connector.layers.len(),
+            1,
+            "the closed leaf still spans the wall"
+        );
+        assert_band(
+            &connector.layers.first().expect("band").polygon,
+            (128, 64),
+            (8, 64),
+            "the band covers the whole 128-unit run",
+        );
+    }
+
+    #[test]
+    fn a_full_width_opening_drops_only_the_run_it_spans() {
+        let mut wide = opening("a", "b");
+        wide.width = 64_i64;
+        let plan = notch_plan(vec![wide]);
+        let (walls, connectors) = compile(&plan);
+        let connector = connectors.first().expect("the opening");
+        let joined = connector.joined.expect("the 64-unit run opens fully");
+        assert_eq!(joined.pair, (0, 1), "the key names the room pair");
+        let (from, to) = joined.piece;
+        let length = (to.0.saturating_sub(from.0))
+            .abs()
+            .max((to.1.saturating_sub(from.1)).abs());
+        assert_eq!(length, 64_i64, "the longer of the two runs");
+        let stack = final_layers(&plan, &walls, &connectors);
+        let voids: usize = stack
+            .iter()
+            .filter(|layer| layer.label == Label::Void)
+            .count();
+        assert_eq!(voids, 1, "the 32-unit run keeps its wall");
+        assert_eq!(stack.len(), 3, "two rooms plus the one surviving wall");
     }
 
     #[test]

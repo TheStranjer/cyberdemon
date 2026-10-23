@@ -9,9 +9,11 @@
 //! 2. [`build_walls`] — arrange the rooms and grow the thick shared-wall
 //!    void layers between them ([`plan::walls`](crate::plan::walls)).
 //! 3. [`plan_connectors`] — place every connection on a shared boundary
-//!    and build its band layers ([`plan::connectors`](crate::plan::connectors)).
-//! 4. [`emit`] — one final arrangement of rooms, walls and bands, cut
-//!    into the fresh [`Map`](crate::wad::map::Map)
+//!    and build its band layers; an opening that spans a whole shared run
+//!    takes its wall out of the stack instead of painting a band, so the
+//!    two rooms join directly ([`plan::connectors`](crate::plan::connectors)).
+//! 4. [`emit`] — one final arrangement of rooms, standing walls and bands,
+//!    cut into the fresh [`Map`](crate::wad::map::Map)
 //!    ([`plan::emit`](crate::plan::emit)).
 //! 5. [`apply_textures`] — dress the emission in the theme's
 //!    [`TextureRole`](crate::plan::textures::TextureRole) names
@@ -204,6 +206,7 @@ mod tests {
     use crate::geom::label::{Label, Labeler as _, LayerLabeler, SAMPLE_SCALE};
     use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Plan, Room, Shape};
     use crate::plan::textures::{TextureRole, TextureRoles};
+    use crate::plan::units::{Units, transform_plan};
     use crate::plan::walls::room_layers;
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
@@ -339,6 +342,19 @@ mod tests {
         .collect();
         let issues = run(map, &context, Some(&enabled)).issues;
         assert!(issues.is_empty(), "the compiled map validates: {issues:?}");
+    }
+
+    /// Every sector of the finished map wears both its flats: the rooms
+    /// from the theme and every band from the rooms it stands between.
+    #[track_caller]
+    fn assert_no_bare_flats(map: &Map) {
+        for (index, space) in map.sectors.iter().enumerate() {
+            assert_ne!(space.floor_flat, "-", "sector {index} keeps a floor flat");
+            assert_ne!(
+                space.ceiling_flat, "-",
+                "sector {index} keeps a ceiling flat"
+            );
+        }
     }
 
     /// The two [`Sidedef`] rows of a two-sided line.
@@ -534,7 +550,15 @@ mod tests {
             assert_eq!(space.ceiling_flat, "CEIROLE", "and so do the ceilings");
         }
         let band = map.sectors.get(2).expect("the band sector");
-        assert_eq!(band.floor_flat, "-", "only doors dress their band's flats");
+        assert_eq!(
+            band.floor_flat, "FLOROLE",
+            "an opening's band inherits the room standing at its floor"
+        );
+        assert_eq!(
+            band.ceiling_flat, "CEIROLE",
+            "and the room standing at its ceiling"
+        );
+        assert_no_bare_flats(map);
         assert_no_gaps(map);
         assert!(
             out.warnings.is_empty(),
@@ -557,6 +581,241 @@ mod tests {
             .iter()
             .filter(|line| line.back.is_none() && vertical_x(map, line) == Some(x))
             .count()
+    }
+
+    #[test]
+    fn a_full_width_opening_joins_two_touching_rooms_with_no_extra_sector() {
+        let mut arch = opening("a", "b");
+        arch.id = Some("arch".to_owned());
+        arch.width = 128_i64;
+        let out = compiled(&two_rooms(16, vec![arch]));
+        let map = &out.map;
+        assert_eq!(map.sectors.len(), 2, "the two rooms and nothing between");
+        let info = out.connector_sectors.first().expect("the arch");
+        assert_eq!(info.id, "arch", "the connection still reports under its id");
+        assert!(
+            info.sectors.is_empty(),
+            "an opening across the whole run owns no sector"
+        );
+        assert!(
+            info.door_lines.is_empty(),
+            "and no line to hang a special on"
+        );
+        let shared = lines_between(map, 0, 1);
+        assert_eq!(
+            shared.len(),
+            1,
+            "the rooms share their whole boundary as one line"
+        );
+        assert_eq!(
+            wall_faces(map).len(),
+            6,
+            "the outer walls of the two rooms are all that stands"
+        );
+        assert_eq!(one_sided_at(map, 120), 0, "no stub wall at the inner face");
+        assert_eq!(one_sided_at(map, 136), 0, "and none at the other one");
+        assert_eq!(
+            out.room_sectors.get("a"),
+            Some(&vec![0_usize]),
+            "both rooms keep their own sector"
+        );
+        assert_eq!(out.room_sectors.get("b"), Some(&vec![1_usize]));
+        assert_no_bare_flats(map);
+        assert_no_gaps(map);
+        assert!(
+            out.warnings.is_empty(),
+            "the join needs no note: {:?}",
+            out.warnings
+        );
+        assert_valid(map);
+    }
+
+    #[test]
+    fn a_full_width_opening_at_zero_thickness_joins_the_rooms_too() {
+        let mut arch = opening("a", "b");
+        arch.width = 128_i64;
+        let out = compiled(&two_rooms(0, vec![arch]));
+        let map = &out.map;
+        assert_eq!(
+            map.sectors.len(),
+            2,
+            "the band sector that used to sit here is gone"
+        );
+        assert_eq!(
+            lines_between(map, 0, 1).len(),
+            1,
+            "the rooms share their line whole"
+        );
+        assert_no_bare_flats(map);
+        assert_valid(map);
+    }
+
+    /// The reported repro: an `L`-shaped `north` room and a `south` room
+    /// touching it along one edge, both drawn in image units and carried
+    /// into map units by the caller's scale, vertical mirror and `16`
+    /// snap grid. The shared run lands `304` map units long; `width` is
+    /// the opening the caller asked for.
+    fn repro_plan(width: i64) -> Plan {
+        let north = Room {
+            id: "north".to_owned(),
+            shape: Shape::Polygon {
+                points: vec![
+                    (100, 140),
+                    (725, 140),
+                    (725, 610),
+                    (585, 610),
+                    (585, 335),
+                    (100, 335),
+                ],
+            },
+            floor: 0,
+            ceiling: 128,
+            light: 160,
+            floor_flat: None,
+            ceiling_flat: None,
+            wall_texture: None,
+            outdoor: false,
+            secret: false,
+            light_effect: None,
+        };
+        let mut plan = Plan {
+            rooms: vec![north, rect_room("south", (64, 410), (521, 200))],
+            connections: vec![opening("north", "south")],
+            features: Vec::new(),
+            wall_thickness: 16_i64,
+        };
+        if let Some(connection) = plan.connections.first_mut() {
+            connection.width = width;
+        }
+        let units = Units {
+            scale_num: 3_i64,
+            scale_den: 2_i64,
+            origin_x: 0_i64,
+            origin_y: 0_i64,
+            grid: 16_i64,
+            flip_y: true,
+        };
+        transform_plan(&plan, &units, units.grid).expect("the repro transform runs")
+    }
+
+    #[test]
+    fn a_repro_opening_across_the_whole_snapped_edge_joins_the_rooms() {
+        let out = compiled(&repro_plan(304_i64));
+        assert_eq!(
+            out.map.sectors.len(),
+            2,
+            "no 16x304 sliver stands between the rooms"
+        );
+        assert!(
+            out.connector_sectors
+                .first()
+                .expect("the opening")
+                .sectors
+                .is_empty(),
+            "the full-width opening owns no sector"
+        );
+        assert_eq!(
+            lines_between(&out.map, 0, 1).len(),
+            1,
+            "the rooms share their snapped edge as one open line"
+        );
+        assert_no_bare_flats(&out.map);
+        assert_no_gaps(&out.map);
+        assert!(
+            out.warnings.is_empty(),
+            "the join needs no note: {:?}",
+            out.warnings
+        );
+        assert_valid(&out.map);
+    }
+
+    /// The endpoints of every one-sided vertical line standing on one of
+    /// the `x` coordinates in `faces`.
+    fn wall_face_points(map: &Map, faces: &[i32]) -> Vec<(i32, i32)> {
+        map.linedefs
+            .iter()
+            .filter(|row| row.back.is_none())
+            .filter(|row| vertical_x(map, row).is_some_and(|x| faces.contains(&x)))
+            .flat_map(|row| [row.v1, row.v2])
+            .map(|index| {
+                let vertex = map.vertices.get(index).expect("test indices");
+                (vertex.x, vertex.y)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_repro_opening_short_of_the_edge_keeps_one_dressed_band() {
+        let out = compiled(&repro_plan(288_i64));
+        assert_eq!(
+            out.map.sectors.len(),
+            3,
+            "two rooms plus the one band the wall still needs"
+        );
+        assert_eq!(
+            out.connector_sectors.first().expect("the opening").sectors,
+            vec![2_usize],
+            "the narrower opening keeps its sector"
+        );
+        let band = out.map.sectors.get(2).expect("the band sector");
+        assert_eq!(band.floor_flat, "FLOROLE", "the band inherits the rooms");
+        for (x, y) in wall_face_points(&out.map, &[872_i32, 888_i32]) {
+            assert!(
+                (-912_i32..=(-608_i32)).contains(&y),
+                "the wall face at x={x} reaches past the shared run's ends"
+            );
+        }
+        assert_no_bare_flats(&out.map);
+        assert_no_gaps(&out.map);
+        assert_valid(&out.map);
+    }
+
+    #[test]
+    fn a_narrow_band_inherits_the_room_standing_at_each_of_its_surfaces() {
+        let mut plan = two_rooms(16, vec![opening("a", "b")]);
+        if let Some(room) = plan.rooms.get_mut(0) {
+            room.floor_flat = Some("floor4_8".to_owned());
+            room.ceiling_flat = Some("ceil5_1".to_owned());
+        }
+        if let Some(room) = plan.rooms.get_mut(1) {
+            room.floor = 16_i32;
+            room.floor_flat = Some("FLAT10".to_owned());
+        }
+        let out = compiled(&plan);
+        let band = out.map.sectors.get(2).expect("the band sector");
+        assert_eq!(band.floor_height, 16_i32, "the higher floor spans the band");
+        assert_eq!(
+            band.floor_flat, "FLAT10",
+            "so room b's floor continues through it"
+        );
+        assert_eq!(
+            band.ceiling_flat, "CEIL5_1",
+            "and room a owns the ceiling both rooms stand at"
+        );
+        assert_eq!(band.light, 160_i32, "the dimmer of the two room lights");
+        assert_no_bare_flats(&out.map);
+        assert_no_gaps(&out.map);
+        assert_valid(&out.map);
+    }
+
+    #[test]
+    fn a_band_between_two_outdoor_rooms_keeps_the_sky_it_reaches() {
+        let mut plan = two_rooms(16, vec![opening("a", "b")]);
+        for room in &mut plan.rooms {
+            room.outdoor = true;
+        }
+        if let Some(room) = plan.rooms.get_mut(1) {
+            room.ceiling = 256_i32;
+        }
+        let out = compiled(&plan);
+        let band = out.map.sectors.get(2).expect("the band sector");
+        assert_eq!(band.ceiling_height, 128_i32, "the lower ceiling spans it");
+        assert_eq!(
+            band.ceiling_flat, "F_SKY1",
+            "and the room standing at that ceiling opens to the sky"
+        );
+        assert_no_bare_flats(&out.map);
+        assert_valid(&out.map);
     }
 
     #[test]
@@ -774,9 +1033,11 @@ mod tests {
             light_effect: None,
         };
         let lab = rect_room("lab", (96, 0), (96, 96));
+        let mut passage = opening("court", "lab");
+        passage.width = 32_i64;
         let plan = Plan {
             rooms: vec![court, lab],
-            connections: vec![opening("court", "lab")],
+            connections: vec![passage],
             features: Vec::new(),
             wall_thickness: 16_i64,
         };

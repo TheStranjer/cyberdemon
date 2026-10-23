@@ -180,12 +180,16 @@ src/
                   and structural validation, `plan/units.rs` the integer
                   `Units` scaling, mirroring and grid snapping from plan
                   coordinates to map units, `plan/walls.rs` the thick-wall
-                  build (`room_layers`, `build_walls`, `shared_boundaries`)
-                  on `geom::arrange`, `plan/connectors.rs` the connection
-                  door cut placement on those walls, `plan/emit.rs` the
+                  build (`room_layers`, `build_walls`, `shared_boundaries`,
+                  every rectangle keyed by the `WallKey` of the piece it
+                  fills) on `geom::arrange`, `plan/connectors.rs` the
+                  connection cut placement on those walls (a plain opening
+                  spanning a whole shared run keys that wall `joined` and
+                  paints no band), `plan/emit.rs` the
                   arrangement-to-`Map` emission (regions to sectors, sides
                   to sidedefs), `plan/textures.rs` the eight `TextureRole`
-                  dressings of the emitted map, `plan/features.rs` the
+                  dressings of the emitted map (non-door band flats
+                  inherited from the adjoining rooms), `plan/features.rs` the
                   fixed-order feature pipeline (doors, switches, lifts,
                   teleporters, exits, then room lights and secrets, ending
                   in a door/lift line re-face), `plan/things.rs` the name

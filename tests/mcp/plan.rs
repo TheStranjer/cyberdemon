@@ -29,7 +29,11 @@
 //! fires the remote door's own tag, an `exit` row ends the
 //! level on the room's wall (`switch`) or shared boundaries
 //! (`walk_over`), and rows naming an unknown room or an `opens` id no
-//! connection carries refuse naming `features[i]`.
+//! connection carries refuse naming `features[i]`. And the two opening
+//! widths: an `opening` spanning a whole shared edge joins the rooms
+//! with no band sector of its own (two sectors, one open line, no stub
+//! walls, nothing wearing `"-"` flats), while a narrower one keeps its
+//! band and inherits the adjoining rooms' flats and light.
 //! The door wiring: a blue-key plan's `features` row matches the written
 //! block — its lines carry special `26` and the band's tag with fronts
 //! facing their rooms, validation stays error-free and one `undo` takes
@@ -296,6 +300,133 @@ mod tests {
             .as_array()
             .expect("linedefs is an array")
             .clone()
+    }
+
+    /// The working sector rows of the assembled graph.
+    async fn sector_rows(client: &Client, map: &str) -> Vec<Value> {
+        let report = call(
+            client,
+            "assemble_map",
+            json!({"map": map, "scope": "working", "include": ["sectors"]}),
+        )
+        .await;
+        report["sectors"]
+            .as_array()
+            .expect("sectors is an array")
+            .clone()
+    }
+
+    /// Two `256` wide rooms stacked on the line `y = 128`, each wearing
+    /// the fixture's own `FLOOR1` and `FLAT10`, joined by `connections`
+    /// and finalized so the build reports what validation sees.
+    fn touching_rooms_plan(map: &str, connections: &Value) -> Value {
+        json!({
+            "map": map,
+            "rooms": [
+                {"id": "north",
+                 "rect": {"x": 0_i64, "y": 128_i64, "w": 256_i64, "h": 128_i64},
+                 "floor_flat": "FLOOR1", "ceiling_flat": "FLAT10"},
+                {"id": "south",
+                 "rect": {"x": 0_i64, "y": 0_i64, "w": 256_i64, "h": 128_i64},
+                 "floor_flat": "FLOOR1", "ceiling_flat": "FLAT10"}
+            ],
+            "connections": connections,
+            "player_start": {"room": "south"},
+            "finalize": true
+        })
+    }
+
+    /// Asserts no sector row of `map` stands in bare `"-"` flats.
+    async fn assert_no_bare_flats(client: &Client, map: &str) {
+        for row in sector_rows(client, map).await {
+            let index = row["index"].as_u64().expect("an index");
+            assert_ne!(
+                row["floor_flat"],
+                json!("-"),
+                "sector {index} wears a floor"
+            );
+            assert_ne!(
+                row["ceiling_flat"],
+                json!("-"),
+                "sector {index} wears a ceiling"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_opening_across_the_whole_shared_edge_joins_the_two_rooms() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let plan = touching_rooms_plan(
+            "MAP07",
+            &json!([{"id": "wide", "from": "north", "to": "south",
+                     "kind": "opening", "width": 256_i64}]),
+        );
+        let result = call(&client, "build_map_from_plan", plan).await;
+        assert_eq!(
+            result["rooms"],
+            json!({"north": [0_u64], "south": [1_u64]}),
+            "the two rooms are the whole map",
+        );
+        assert_eq!(
+            result["connections"][0]["sectors"],
+            json!([]),
+            "a full-width opening keeps no band sector of its own",
+        );
+        let summary = call(&client, "get_map_summary", json!({"map": "MAP07"})).await;
+        assert_eq!(
+            summary["counts"]["sectors"],
+            json!(2_u64),
+            "no sliver sector stands between the rooms",
+        );
+        assert_eq!(
+            summary["lines"]["two_sided"],
+            json!(1_u64),
+            "the rooms share their whole boundary as one open line",
+        );
+        assert_eq!(
+            result["validation"]["errors"],
+            json!([]),
+            "the joined map validates clean: {:?}",
+            result["validation"],
+        );
+        assert_no_bare_flats(&client, "MAP07").await;
+    }
+
+    #[tokio::test]
+    async fn a_narrower_opening_keeps_its_band_and_inherits_the_rooms_flats() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = features_loaded(dir.path()).await;
+        let plan = touching_rooms_plan(
+            "MAP08",
+            &json!([{"id": "narrow", "from": "north", "to": "south",
+                     "kind": "opening", "width": 128_i64}]),
+        );
+        let result = call(&client, "build_map_from_plan", plan).await;
+        assert_eq!(
+            result["connections"][0]["sectors"],
+            json!([2_u64]),
+            "a band the standing wall still needs",
+        );
+        assert_eq!(
+            result["validation"]["errors"],
+            json!([]),
+            "the banded map validates clean: {:?}",
+            result["validation"],
+        );
+        let band = working_sector(&client, "MAP08", 2).await;
+        assert_eq!(
+            band["floor_flat"],
+            json!("FLOOR1"),
+            "the passage continues the room's floor",
+        );
+        assert_eq!(
+            band["ceiling_flat"],
+            json!("FLAT10"),
+            "and the room's ceiling",
+        );
+        assert_eq!(band["light"], json!(160_i64), "and the dimmer room light");
+        assert_no_bare_flats(&client, "MAP08").await;
     }
 
     /// The `MAP05` plan's one door reports a `features` row: the door

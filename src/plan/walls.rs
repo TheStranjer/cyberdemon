@@ -5,10 +5,12 @@
 //! rooms share ([`shared_boundaries`]) and grows a [`Label::Void`]
 //! rectangle straddling each one ([`wall_void_layer`]) so the finished
 //! stack paints solid wall of [`Plan::wall_thickness`] between the rooms.
-//! Nothing here touches archives, sessions or `MCP` types; the caller
-//! stacks the layers and arranges again.
+//! Each rectangle is recorded with the [`WallKey`] of the piece it fills,
+//! so a caller that opens a whole shared run can drop exactly that wall
+//! and leave the rest standing. Nothing here touches archives, sessions
+//! or `MCP` types; the caller stacks the layers and arranges again.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::error::CyberError;
 use crate::fixed::{isqrt, mul_div_round};
@@ -75,17 +77,30 @@ const fn shared_pair(piece: &Piece) -> Option<(u32, u32)> {
     })
 }
 
+/// Which ends of a shared piece another wall meets at.
+///
+/// A wall rectangle only reaches past the piece it stands on where a
+/// second wall abuts that end: see [`wall_void_layer`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WallEnds {
+    /// Whether another shared piece ends at the piece's `a`.
+    pub at_a: bool,
+    /// Whether another shared piece ends at the piece's `b`.
+    pub at_b: bool,
+}
+
 /// A [`Label::Void`] rectangle standing for the thick wall along one
 /// shared-boundary `piece`.
 ///
-/// The segment `a`→`b` is extended by `thickness / 2` past both ends and
-/// offset by `± thickness / 2` along the integer unit normal
-/// `(-dy / len, dx / len)`, every component rounded through
-/// [`mul_div_round`] (exact for axis-aligned pieces).
-///
-/// The end extensions make the rectangles of abutting walls overlap at
-/// their shared corner, so the final stack never leaves an unwalled gap
-/// piece between two wall voids.
+/// The segment `a`→`b` is offset by `± thickness / 2` along the integer
+/// unit normal `(-dy / len, dx / len)`, every component rounded through
+/// [`mul_div_round`] (exact for axis-aligned pieces). At each end named
+/// by `ends` the segment is additionally extended by `thickness / 2`
+/// past the piece, so the rectangles of abutting walls overlap at their
+/// shared corner and the final stack never leaves an unwalled gap piece
+/// between two wall voids; at a free end the rectangle stops with the
+/// shared run, because wall there would stand in space no two rooms
+/// share.
 ///
 /// Zero-length pieces cannot come from [`arrange`](fn@crate::geom::arrange),
 /// whose every piece has positive length; should one be passed in, the
@@ -96,7 +111,7 @@ const fn shared_pair(piece: &Piece) -> Option<(u32, u32)> {
 /// least `2`.
 #[must_use]
 #[inline]
-pub fn wall_void_layer(piece: &Piece, thickness: i64) -> Layer {
+pub fn wall_void_layer(piece: &Piece, thickness: i64, ends: WallEnds) -> Layer {
     let dx = clamp_i64(i128::from(piece.b.0).saturating_sub(i128::from(piece.a.0)));
     let dy = clamp_i64(i128::from(piece.b.1).saturating_sub(i128::from(piece.a.1)));
     let length_squared = i128::from(dx)
@@ -120,25 +135,31 @@ pub fn wall_void_layer(piece: &Piece, thickness: i64) -> Layer {
         rounded_offset(half, dy.saturating_neg(), length),
         rounded_offset(half, dx, length),
     );
-    let start = shifted(
-        piece.a,
-        extension.0.saturating_neg(),
-        extension.1.saturating_neg(),
-    );
-    let stop = shifted(piece.b, extension.0, extension.1);
+    let back = reaching(extension, ends.at_a);
+    let forward = reaching(extension, ends.at_b);
+    let start = shifted(piece.a, back.0.saturating_neg(), back.1.saturating_neg());
+    let stop = shifted(piece.b, forward.0, forward.1);
     if normal == (0, 0) {
         return degenerate();
     }
-    let back = negated(normal);
+    let side = negated(normal);
     Layer {
         label: Label::Void,
         polygon: vec![
             shifted(start, normal.0, normal.1),
             shifted(stop, normal.0, normal.1),
-            shifted(stop, back.0, back.1),
-            shifted(start, back.0, back.1),
+            shifted(stop, side.0, side.1),
+            shifted(start, side.0, side.1),
         ],
     }
+}
+
+/// The along-piece extension of one end: the full `extension` where
+/// another wall abuts the end, nothing where the end stands free.
+#[must_use]
+#[inline]
+const fn reaching(extension: Pt, abutted: bool) -> Pt {
+    if abutted { extension } else { (0_i64, 0_i64) }
 }
 
 /// `half * numerator / length`, rounded through [`mul_div_round`],
@@ -172,13 +193,37 @@ const fn negated(offset: Pt) -> Pt {
     (offset.0.saturating_neg(), offset.1.saturating_neg())
 }
 
+/// Which shared-boundary piece one built wall rectangle fills.
+///
+/// The pair and the piece's endpoints name the rectangle exactly: a
+/// caller that opens a whole shared run drops the wall of that key and
+/// leaves every other rectangle standing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WallKey {
+    /// The room pair the wall stands between, lower plan index first, as
+    /// [`shared_boundaries`] keys them.
+    pub pair: (u32, u32),
+    /// The shared piece's endpoints, in the order the arrangement has them.
+    pub piece: (Pt, Pt),
+}
+
+/// One built wall rectangle with the shared boundary it fills.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WallLayer {
+    /// Which shared piece this rectangle stands on.
+    pub key: WallKey,
+    /// The [`Label::Void`] rectangle grown along the piece.
+    pub layer: Layer,
+}
+
 /// The wall layers of a [`Plan`] and the shared room boundaries they
 /// fill, as built by [`build_walls`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Walls {
-    /// One [`Label::Void`] wall rectangle per shared-boundary piece,
-    /// ordered by room pair; empty when the plan's wall thickness is `0`.
-    pub layers: Vec<Layer>,
+    /// One [`WallLayer`] per shared-boundary piece, ordered by room pair;
+    /// empty when the plan's wall thickness is `0`. Each rectangle reaches
+    /// past its piece only at the ends another wall abuts.
+    pub layers: Vec<WallLayer>,
     /// Every piece the rooms share, keyed by the room pair
     /// `(lower, higher)` as in [`shared_boundaries`].
     pub shared: BTreeMap<(u32, u32), Vec<Piece>>,
@@ -188,9 +233,10 @@ pub struct Walls {
 /// along their [`shared_boundaries`].
 ///
 /// When [`Plan::wall_thickness`] is positive, one [`wall_void_layer`]
-/// rectangle is emitted along every shared piece; a thickness of `0`
-/// means the rooms touch: they share their boundary lines directly and
-/// no wall layers are emitted.
+/// rectangle is emitted along every shared piece, each recorded with the
+/// [`WallKey`] of the piece it fills; a thickness of `0` means the rooms
+/// touch: they share their boundary lines directly and no wall layers
+/// are emitted.
 ///
 /// The caller owns the final stacking: put the room layers at the
 /// bottom, then `walls.layers`, then the connector layers, and arrange
@@ -214,22 +260,78 @@ pub fn build_walls(plan: &Plan) -> Result<Walls, CyberError> {
 
 /// One [`wall_void_layer`] rectangle per shared piece, ordered by room
 /// pair; none while the thickness is not positive.
-fn wall_layers(shared: &BTreeMap<(u32, u32), Vec<Piece>>, thickness: i64) -> Vec<Layer> {
+fn wall_layers(shared: &BTreeMap<(u32, u32), Vec<Piece>>, thickness: i64) -> Vec<WallLayer> {
     if thickness <= 0 {
         return Vec::new();
     }
+    let corners = corner_points(shared);
     shared
-        .values()
-        .flatten()
-        .map(|piece| wall_void_layer(piece, thickness))
+        .iter()
+        .flat_map(|(pair, pieces)| {
+            pieces
+                .iter()
+                .map(|piece| wall_layer(*pair, piece, thickness, &corners))
+        })
         .collect()
+}
+
+/// The wall rectangle of one shared `piece` of room `pair`, extended at
+/// the ends `corners` says another wall abuts.
+#[must_use]
+fn wall_layer(
+    pair: (u32, u32),
+    piece: &Piece,
+    thickness: i64,
+    corners: &BTreeSet<Pt>,
+) -> WallLayer {
+    WallLayer {
+        key: WallKey {
+            pair,
+            piece: (piece.a, piece.b),
+        },
+        layer: wall_void_layer(
+            piece,
+            thickness,
+            WallEnds {
+                at_a: corners.contains(&piece.a),
+                at_b: corners.contains(&piece.b),
+            },
+        ),
+    }
+}
+
+/// The piece endpoints at least two shared runs meet at: the corners
+/// whose wall rectangles must overlap so no unwalled gap piece survives
+/// between them. A point only one piece ends at is a free end.
+fn corner_points(shared: &BTreeMap<(u32, u32), Vec<Piece>>) -> BTreeSet<Pt> {
+    let mut counts: BTreeMap<Pt, usize> = BTreeMap::new();
+    for pieces in shared.values() {
+        for piece in pieces {
+            count_at(&mut counts, piece.a);
+            count_at(&mut counts, piece.b);
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(point, count)| (count > 1_usize).then_some(point))
+        .collect()
+}
+
+/// Records one more shared piece ending at `point`.
+fn count_at(counts: &mut BTreeMap<Pt, usize>, point: Pt) {
+    let next = counts
+        .get(&point)
+        .copied()
+        .unwrap_or(0_usize)
+        .saturating_add(1);
+    counts.insert(point, next);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Walls, build_walls, clamp_i64, room_layers, rounded_offset, shared_boundaries,
-        wall_void_layer,
+        WallEnds, WallKey, Walls, build_walls, clamp_i64, room_layers, rounded_offset,
+        shared_boundaries, wall_void_layer,
     };
     use crate::geom::label::{Labeler as _, contains_point};
     use crate::geom::{Label, Layer, LayerLabeler, Piece, Pt, SAMPLE_SCALE, arrange};
@@ -340,17 +442,22 @@ mod tests {
         )
     }
 
+    /// The wall rectangles of a build, in the order they were built.
+    fn void_layers(walls: &Walls) -> Vec<Layer> {
+        walls.layers.iter().map(|wall| wall.layer.clone()).collect()
+    }
+
     /// Stack the room layers, then the wall layers, and arrange.
     fn stack_pieces(plan: &Plan, walls: &Walls) -> Vec<Piece> {
         let mut stack = room_layers(plan);
-        stack.extend(walls.layers.iter().cloned());
+        stack.extend(void_layers(walls));
         arrange(&stack, &[], &LayerLabeler::new(&stack)).expect("the stack arranges")
     }
 
     /// The stack layer labels plus wall labels in the caller's order.
     fn stacked_layers(plan: &Plan, walls: &Walls) -> Vec<Layer> {
         let mut stack = room_layers(plan);
-        stack.extend(walls.layers.iter().cloned());
+        stack.extend(void_layers(walls));
         stack
     }
 
@@ -375,11 +482,19 @@ mod tests {
         assert_eq!(group[0].right, Label::Region(1), "east side is room 1");
         assert_eq!(walls.layers.len(), 1, "one wall void layer");
         assert_eq!(
-            walls.layers[0].polygon,
-            vec![(120, -8), (120, 136), (136, 136), (136, -8)],
-            "16 wide, centred on x=128, both ends extended by 8"
+            walls.layers[0].layer.polygon,
+            vec![(120, 0), (120, 128), (136, 128), (136, 0)],
+            "16 wide, centred on x=128 and stopping with the shared run: both ends stand free"
         );
-        assert_eq!(walls.layers[0].label, Label::Void, "walls are void");
+        assert_eq!(
+            walls.layers[0].key,
+            WallKey {
+                pair: (0, 1),
+                piece: ((128, 0), (128, 128)),
+            },
+            "the layer carries the key of the piece it fills"
+        );
+        assert_eq!(walls.layers[0].layer.label, Label::Void, "walls are void");
         let stack = stacked_layers(&plan, &walls);
         assert_eq!(label_at(&stack, 124, 64), Label::Void, "west of x=128");
         assert_eq!(label_at(&stack, 128, 64), Label::Void, "the shared line");
@@ -437,7 +552,11 @@ mod tests {
     #[test]
     fn rotated_shared_piece_gets_symmetric_rounded_corners() {
         let piece = edge_piece((0, 128), (64, 64), Label::Region(1), Label::Region(0));
-        let wall = wall_void_layer(&piece, 20);
+        let abuts = WallEnds {
+            at_a: true,
+            at_b: true,
+        };
+        let wall = wall_void_layer(&piece, 20, abuts);
         assert_eq!(
             wall.polygon,
             vec![(0, 142), (78, 64), (64, 50), (-14, 128)],
@@ -467,6 +586,27 @@ mod tests {
     }
 
     #[test]
+    fn a_wall_with_free_ends_stops_with_its_shared_run() {
+        let piece = edge_piece((0, 128), (64, 64), Label::Region(1), Label::Region(0));
+        let wall = wall_void_layer(&piece, 20, WallEnds::default());
+        assert_eq!(
+            wall.polygon,
+            vec![(7, 135), (71, 71), (57, 57), (-7, 121)],
+            "the band still straddles the piece, but neither end reaches past it"
+        );
+        let sums: Vec<i64> = wall
+            .polygon
+            .iter()
+            .map(|point| point.0.saturating_add(point.1))
+            .collect();
+        assert_eq!(
+            sums,
+            vec![142, 142, 114, 114],
+            "the free-ended rectangle still sits 14 units each side of x+y=128"
+        );
+    }
+
+    #[test]
     fn diamond_rooms_share_a_diagonal_boundary_and_wall() {
         let plan = plan_with(
             vec![
@@ -481,10 +621,19 @@ mod tests {
         assert_eq!(group.len(), 1, "one shared diagonal");
         assert_eq!(group[0].a, (0, 128), "diagonal start");
         assert_eq!(group[0].b, (64, 64), "diagonal end");
+        let wall = walls.layers.first().expect("one wall layer");
         assert_eq!(
-            walls.layers,
-            vec![wall_void_layer(&group[0], 20)],
-            "the emitted layer is the helper's rectangle"
+            wall.key,
+            WallKey {
+                pair: (0, 1),
+                piece: ((0, 128), (64, 64)),
+            },
+            "the key names the shared diagonal"
+        );
+        assert_eq!(
+            wall.layer,
+            wall_void_layer(&group[0], 20, WallEnds::default()),
+            "the emitted layer is the helper's rectangle, free at both ends of the one run"
         );
         let stack = stacked_layers(&plan, &walls);
         assert_eq!(
@@ -523,12 +672,17 @@ mod tests {
         assert_eq!(walls.layers.len(), 2, "one wall per run");
         let corner = at(132, 132);
         assert!(
-            contains_point(&walls.layers[0].polygon, corner),
+            contains_point(&walls.layers[0].layer.polygon, corner),
             "the x=128 wall reaches y=136 past the corner"
         );
         assert!(
-            contains_point(&walls.layers[1].polygon, corner),
+            contains_point(&walls.layers[1].layer.polygon, corner),
             "the y=128 wall reaches x=120 before the corner"
+        );
+        assert_eq!(
+            walls.layers[0].layer.polygon,
+            vec![(120, 0), (120, 136), (136, 136), (136, 0)],
+            "the wall reaches y=136 past its abutted end and stops at y=0 at its free one"
         );
         let pieces = stack_pieces(&plan, &walls);
         assert!(
@@ -611,6 +765,7 @@ mod tests {
         let zero_length = wall_void_layer(
             &edge_piece((5, 5), (5, 5), Label::Region(0), Label::Region(1)),
             16,
+            WallEnds::default(),
         );
         assert_eq!(
             zero_length.polygon,
@@ -620,6 +775,7 @@ mod tests {
         let one_thick = wall_void_layer(
             &edge_piece((0, 0), (128, 0), Label::Region(0), Label::Region(1)),
             1,
+            WallEnds::default(),
         );
         assert_eq!(
             one_thick.polygon,
@@ -634,6 +790,10 @@ mod tests {
                 Label::Region(1),
             ),
             16,
+            WallEnds {
+                at_a: true,
+                at_b: true,
+            },
         );
         assert_eq!(
             huge.polygon.len(),

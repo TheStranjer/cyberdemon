@@ -10,8 +10,8 @@ use core::iter;
 use crate::error::CyberError;
 use crate::gfx::palette::Palette;
 use crate::gfx::{
-    BYTES_PER_PIXEL, MAX_DIMENSION, check_dimension, clamp_dimension, pixel_count, pixel_index,
-    rgba_byte_count, to_pixel,
+    BYTES_PER_PIXEL, MAX_DIMENSION, check_dimension, clamp_dimension, in_shape, pixel_count,
+    pixel_index, rgba_byte_count, to_pixel,
 };
 
 /// An `RGBA8` image, row-major.
@@ -53,18 +53,27 @@ impl RgbaImage {
         })
     }
 
-    /// The pixel at `(x, y)`, or `None` when out of bounds.
+    /// The pixel at `(x, y)`, or `None` when out of bounds. A column past
+    /// the right edge is out of bounds: it never reads on into the next
+    /// row.
     #[must_use]
     #[inline]
     pub fn get(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        if !in_shape(self.width, self.height, x, y) {
+            return None;
+        }
         let index = pixel_index(self.width, x, y)?;
         let chunk = self.pixels.chunks_exact(BYTES_PER_PIXEL).nth(index)?;
         Some(to_pixel(chunk))
     }
 
-    /// Writes `pixel` at `(x, y)`; returns `false` when out of bounds.
+    /// Writes `pixel` at `(x, y)`; returns `false` when out of bounds,
+    /// including a column past the right edge.
     #[inline]
     pub fn set(&mut self, x: u32, y: u32, pixel: [u8; 4]) -> bool {
+        if !in_shape(self.width, self.height, x, y) {
+            return false;
+        }
         let Some(index) = pixel_index(self.width, x, y) else {
             return false;
         };
@@ -121,19 +130,28 @@ impl IndexedImage {
         })
     }
 
-    /// The `(index, opaque)` pair at `(x, y)`, or `None` when out of bounds.
+    /// The `(index, opaque)` pair at `(x, y)`, or `None` when out of
+    /// bounds. A column past the right edge is out of bounds: it never
+    /// reads on into the next row.
     #[must_use]
     #[inline]
     pub fn get(&self, x: u32, y: u32) -> Option<(u8, bool)> {
+        if !in_shape(self.width, self.height, x, y) {
+            return None;
+        }
         let position = pixel_index(self.width, x, y)?;
         let index = *self.indices.get(position)?;
         let visible = *self.opaque.get(position)?;
         Some((index, visible))
     }
 
-    /// Writes the `(index, opaque)` pair at `(x, y)`; `false` when out of bounds.
+    /// Writes the `(index, opaque)` pair at `(x, y)`; `false` when out of
+    /// bounds, including a column past the right edge.
     #[inline]
     pub fn set(&mut self, x: u32, y: u32, pixel: (u8, bool)) -> bool {
+        if !in_shape(self.width, self.height, x, y) {
+            return false;
+        }
         let Some(position) = pixel_index(self.width, x, y) else {
             return false;
         };
@@ -331,6 +349,50 @@ mod tests {
             !img.set(5, 0, [0, 0, 0, 0]),
             "out-of-bounds set reports false"
         );
+    }
+
+    /// A 2x2 image: each row red then blue, so a column past the right
+    /// edge would land on the next row's red unless the shape is checked.
+    fn square() -> RgbaImage {
+        RgbaImage::new(
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 0, 255, 255, // row 0
+                255, 0, 0, 255, 0, 0, 255, 255, // row 1
+            ],
+        )
+        .expect("2x2 RGBA8 is valid")
+    }
+
+    #[test]
+    fn rgba_accessors_do_not_wrap_a_column_into_the_next_row() {
+        let mut img = square();
+        assert_eq!(img.get(2, 0), None, "the column after the first row");
+        assert_eq!(img.get(2, 1), None, "the column after the last row");
+        assert_eq!(img.get(3, 0), None, "two columns past the edge");
+        assert_eq!(img.get(0, 2), None, "the row after the picture");
+        assert!(
+            !img.set(2, 0, [9, 9, 9, 9]),
+            "a wrapping write is refused, not painted on row 1"
+        );
+        assert_eq!(img.get(0, 1), Some([255, 0, 0, 255]), "row 1 is untouched");
+        assert_eq!(img.get(1, 1), Some([0, 0, 255, 255]), "row 1 is untouched");
+    }
+
+    #[test]
+    fn indexed_accessors_do_not_wrap_a_column_into_the_next_row() {
+        let mut img = IndexedImage::new(2, 2, vec![3, 4, 5, 6], vec![true, false, true, true])
+            .expect("2x2 indexed image is valid");
+        assert_eq!(img.get(0, 1), Some((5, true)), "in-bounds read");
+        assert_eq!(img.get(2, 0), None, "the column after the first row");
+        assert_eq!(img.get(4, 0), None, "two columns past the edge");
+        assert_eq!(img.get(0, 2), None, "the row after the picture");
+        assert!(
+            !img.set(2, 0, (0, false)),
+            "a wrapping write is refused, not painted on row 1"
+        );
+        assert_eq!(img.get(0, 1), Some((5, true)), "row 1 is untouched");
     }
 
     #[test]

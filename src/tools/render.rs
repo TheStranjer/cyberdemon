@@ -308,7 +308,9 @@ struct RenderTopdownParams {
 }
 
 /// Arguments for `render_topdown`' `underlay` parameter: the reference
-/// picture to draw under the map.
+/// picture to draw under the map. It is sampled only within its own edges,
+/// so it is drawn once and never repeated past one: output pixels clear of
+/// its map rectangle keep the background.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct UnderlayParams {
     /// File to draw: absolute path, `file://` URI, `http(s)://` `URL` or
@@ -1232,8 +1234,11 @@ fn draw_topdown(scene: &mut Scene<'_>, request: &Request) {
 /// Draws the `underlay`: every output pixel is inverted through the
 /// fitted [`View`] to a world point, mapped back into image pixels by
 /// [`Units::to_image`] and nearest-neighbour sampled; the texel blends
-/// over the background at `opacity` percent of its own alpha. Pixels
-/// outside the image keep what was painted there.
+/// over the background at `opacity` percent of its own alpha. A world point
+/// answers with a texel only while it lies within the picture's own columns
+/// and rows, so the image is drawn once and never repeated past an edge:
+/// every other output pixel, in either direction and whatever the origin,
+/// keeps what was painted there.
 fn paint_underlay(scene: &mut Scene<'_>, underlay: &Underlay) {
     let percent = i64::from(underlay.opacity.min(MAX_OPACITY));
     for row in 0..i64::from(scene.canvas.height()) {

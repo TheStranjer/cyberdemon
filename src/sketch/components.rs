@@ -9,7 +9,7 @@
 //! sums (for centroids) and a border-touch flag (used to tell enclosed
 //! regions from background).
 
-use crate::gfx::{pixel_count, pixel_index};
+use crate::gfx::{in_shape, pixel_count, pixel_index};
 use crate::sketch::mask::Mask;
 
 /// Pixel neighbourhood used by [`label_components`].
@@ -70,7 +70,7 @@ impl Labels {
     #[must_use]
     #[inline]
     fn index_of(&self, x: u32, y: u32) -> Option<usize> {
-        if x >= self.width || y >= self.height {
+        if !in_shape(self.width, self.height, x, y) {
             return None;
         }
         pixel_index(self.width, x, y)

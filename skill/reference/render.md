@@ -161,9 +161,12 @@ renders with `problems: []`.
     `y = origin_y - py*scale_num/scale_den` (`+` when `flip_y` is false),
     so the sketch lines up with the built map exactly. `opacity` is a
     percent, `0..=100` (default `50`); every texel blends over the
-    background scaled by its own alpha. With `bounds` unset the frame is
-    the union of the map bounds and the underlay's map rectangle, padded
-    by 32 units — an empty map with an underlay needs no explicit bounds.
+    background scaled by its own alpha. Sampling stops at the picture's own
+    edges: it is drawn once, never repeated past one, and output pixels
+    clear of its map rectangle keep the background. With `bounds` unset the
+    frame is the union of the map bounds and the underlay's map rectangle,
+    padded by 32 units — an empty map with an underlay needs no explicit
+    bounds.
   - `grid`: spacing in map units, `8..=1024`, drawn under the map: minor
     lines `#2A2A2A`, every 8th line `#3C3C3C`. A spacing that measures
     under 4 pixels at the current zoom is skipped and reported in `notes`.

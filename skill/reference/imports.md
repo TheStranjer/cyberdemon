@@ -345,6 +345,19 @@ canonical operation reference.
   luminance. `level` is `0..=255` or omitted for the Otsu-picked cut;
   `invert` swaps the two classes (default `false`).
   `{ "op": "threshold", "level": 128 }`.
+- `adaptive_threshold` — the uneven-light variant of `threshold`: binarize
+  each pixel against its own flattened background instead of one global
+  cut. The background of a pixel is the mean luminance of the
+  `(2r + 1) x (2r + 1)` window around it (borders clipped); it is ink when
+  it sits `offset` or more below that local mean, and — with `invert` —
+  `offset` or more above it. `radius` is the background window radius,
+  `1..=128` (small for line art, a large value, around `80`, for photos);
+  `offset` is `0..=255` (default `15`); `invert` defaults `false`.
+  Transparent pixels count as paper. Every output pixel ends opaque black
+  or white. Reports `radius`, `offset`, `background_min`/`background_max`
+  (the local-mean extremes: the measurable proof the gradient was
+  flattened) and `ink_pixels`.
+  `{ "op": "adaptive_threshold", "radius": 80, "offset": 15 }`.
 - `thin_stroke_filter` — drop hairline ruling. Binarize the picture the same
   way as `threshold` (`level` omitted means Otsu; `invert` swaps the two
   classes), then keep only the ink wide enough to contain the square

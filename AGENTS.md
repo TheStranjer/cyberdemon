@@ -54,7 +54,10 @@ src/
                   removal, `gfx/ops/threshold.rs` binarization plus the
                   `thin_stroke` hairline opener, over the
                   `otsu_level`/`luminance_histogram`/`binary_mask` helpers
-                  the sketch tools reuse, `gfx/ops/dither.rs` the
+                  the sketch tools reuse, `gfx/ops/adaptive.rs` the
+                  background-flattening binarizer (local means from
+                  separable integer running sums) behind
+                  `adaptive_threshold`, `gfx/ops/dither.rs` the
                   `Dither`-knopped quantization (Floyd–Steinberg serpentine),
                   and `gfx/ops/tile.rs` the seam-blend behind
                   `make_tileable`.

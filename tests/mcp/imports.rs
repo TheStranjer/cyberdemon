@@ -15,6 +15,7 @@
 //! Test pictures are written with the library's own `PNG` encoder. The
 //! preview pipeline `process_image` (ops, the `grayscale`/`blur`
 //! building blocks, the `threshold`-then-`thin_stroke_filter` hairline pass,
+//! the `adaptive_threshold` uneven-light binarization,
 //! quantized and `quantize: false`,
 //! the op-index errors, and the default-dither preview keeping an
 //! asymmetric picture unmirrored) and the one-shot `create_texture_from_image`
@@ -2038,6 +2039,119 @@ mod tests {
             Some([255_u8, 255, 255, 255]),
             "paper stays paper"
         );
+    }
+
+    /// The fixture's grey at `(x, y)`: the square's `20` inside
+    /// `13..=17 x 8..=12`, the `3`-per-column white-to-grey ramp elsewhere.
+    fn gradient_level(x: u32, y: u32) -> u8 {
+        let inside = (13..=17_u32).contains(&x) && (8..=12_u32).contains(&y);
+        let stepped = x.checked_mul(3).expect("fixture fits");
+        let ramp = 255_u32.saturating_sub(stepped);
+        let value = if inside { 20_u32 } else { ramp };
+        u8::try_from(value).expect("ramp fits u8")
+    }
+
+    /// A `40` x `24` opaque `PNG`: a horizontal white-to-grey luminance
+    /// ramp (`255` at the left edge, `138` at the right) carrying a
+    /// `5` x `5` dark square (luminance `20`) at columns `13..=17`,
+    /// rows `8..=12`.
+    fn gradient_rect_png() -> Vec<u8> {
+        let mut img = RgbaImage::new(40_u32, 24_u32, vec![255_u8; 3_840_usize])
+            .expect("a 40x24 RGBA8 is valid");
+        let points = (0..24_u32).flat_map(|y| (0..40_u32).map(move |x| (x, y)));
+        for (x, y) in points {
+            let shade = gradient_level(x, y);
+            assert!(
+                img.set(x, y, [shade, shade, shade, 255_u8]),
+                "fixture in bounds"
+            );
+        }
+        encode_png(&img, None).expect("test PNG encodes")
+    }
+
+    /// Asserts on the processed gradient picture: the `5 x 5` square is
+    /// opaque black ink everywhere, from the gradient's bright end to its
+    /// dark one, and the sampled background pixels are opaque white paper.
+    fn assert_adaptive_ink_and_paper(image: &RgbaImage) {
+        let square = (8..=12_u32).flat_map(|y| (13..=17_u32).map(move |x| (x, y)));
+        let unpicked: Vec<(u32, u32)> = square
+            .filter(|&(x, y)| image.get(x, y) != Some([0_u8, 0, 0, 255]))
+            .collect();
+        assert!(
+            unpicked.is_empty(),
+            "the whole square is ink, at the bright and the dark end alike: {unpicked:?}"
+        );
+        let sampled = [
+            (0_u32, 0_u32),
+            (39, 0),
+            (0, 23),
+            (39, 23),
+            (12, 10),
+            (18, 12),
+            (15, 7),
+        ];
+        let inked: Vec<(u32, u32)> = sampled
+            .iter()
+            .copied()
+            .filter(|&(x, y)| image.get(x, y) != Some([255_u8, 255, 255, 255]))
+            .collect();
+        assert!(
+            inked.is_empty(),
+            "the sampled gradient pixels stay opaque paper: {inked:?}"
+        );
+    }
+
+    /// `process_image` with the uneven-light binarizer: `adaptive_threshold`
+    /// at radius `4`, offset `10` inks the whole `5 x 5` square even where
+    /// the gradient darkens beneath it, reports the flattened background's
+    /// extremes (`144..=249` against the raw `138..=255`), and leaves every
+    /// gradient pixel opaque white paper.
+    #[tokio::test]
+    async fn process_image_adaptive_threshold_inks_a_square_on_a_gradient() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "GRADIENT.png", &gradient_rect_png());
+        let report = call(
+            &client,
+            "process_image",
+            source_args(
+                &file,
+                json!({
+                    "ops": [
+                        { "op": "adaptive_threshold", "radius": 4_u64, "offset": 10_u64 },
+                    ],
+                }),
+            ),
+        )
+        .await;
+        let steps = report["steps"].as_array().expect("a step list");
+        assert_eq!(steps.len(), 1_usize, "one op ran");
+        let step = &steps[0];
+        assert_eq!(step["op"], json!("adaptive_threshold"), "the op name");
+        assert_eq!(step["radius"], json!(4_u64), "the radius echoes");
+        assert_eq!(step["offset"], json!(10_u64), "the offset echoes");
+        assert_eq!(step["otsu"], json!(false), "the test is local, never Otsu");
+        assert_eq!(step["ink_pixels"], json!(25_u64), "exactly the 5x5 square");
+        assert_eq!(
+            step["background_min"],
+            json!(144_u64),
+            "the flattened dark end: mean(150, 147, 144, 141, 138)"
+        );
+        assert_eq!(
+            step["background_max"],
+            json!(249_u64),
+            "the flattened bright end: mean(255, 252, 249, 246, 243)"
+        );
+        let url = report["processed"]["url"]
+            .as_str()
+            .expect("a processed URL");
+        let image = asset_png(url).await;
+        assert_eq!(
+            (image.width, image.height),
+            (40_u32, 24_u32),
+            "no shape change"
+        );
+        assert_adaptive_ink_and_paper(&image);
     }
 
     /// A bad op parameter fails with `invalid_argument` naming the op

@@ -6,10 +6,12 @@
 //! Geometry (crop/fit/rotate/flip) lives in [`geometry`], size-changing
 //! sampling in [`resample`], tonal corrections (including grayscale) in
 //! [`tone`], alpha handling in [`alpha`] and [`background`], seamless
-//! tiling in [`tile`], binarization in [`threshold`], box blur in [`blur`]
-//! and dithered quantization in [`dither`].
+//! tiling in [`tile`], binarization in [`threshold`] (with the
+//! background-flattening uneven-light variant in [`adaptive`]), box blur in
+//! [`blur`] and dithered quantization in [`dither`].
 //! Everything here is pure: no MCP, no filesystem, no floats.
 
+pub mod adaptive;
 pub mod alpha;
 pub mod background;
 pub mod blur;
@@ -174,6 +176,24 @@ pub enum ImageOp {
         #[serde(default)]
         invert: bool,
     },
+    /// Binarize against a flattened local background: the uneven-light
+    /// variant of [`ImageOp::Threshold`]. A pixel is ink when its
+    /// [`luminance`] sits `offset` or more below the mean of the
+    /// `(2r + 1) x (2r + 1)` window around it (clipped at the borders);
+    /// transparent pixels are paper.
+    AdaptiveThreshold {
+        /// Background window radius, `1..=128`; small for line art, a large
+        /// value (about `80`) for photographs.
+        radius: u32,
+        /// How far below the local mean counts as ink, `0..=255`;
+        /// default `15`.
+        #[serde(default = "default_adaptive_offset")]
+        offset: u8,
+        /// Swap the ink and paper classes: then pixels `offset` or more
+        /// above the local mean are the ink.
+        #[serde(default)]
+        invert: bool,
+    },
     /// Replace the colour channels of every opaque pixel with its
     /// [`luminance`], leaving every alpha untouched.
     Grayscale,
@@ -225,6 +245,11 @@ const fn default_true() -> bool {
     true
 }
 
+/// Default [`ImageOp::AdaptiveThreshold::offset`].
+const fn default_adaptive_offset() -> u8 {
+    15_u8
+}
+
 /// Measurements collected by [`apply_ops`]: one `JSON` object per op.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct OpsReport {
@@ -267,6 +292,7 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         | ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
         | ImageOp::Threshold { .. }
+        | ImageOp::AdaptiveThreshold { .. }
         | ImageOp::Grayscale
         | ImageOp::Blur { .. }
         | ImageOp::ThinStrokeFilter { .. } => pixel_op(img, index, op)?,
@@ -332,15 +358,22 @@ fn geometry_op(
         | ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
         | ImageOp::Threshold { .. }
+        | ImageOp::AdaptiveThreshold { .. }
         | ImageOp::Grayscale
         | ImageOp::Blur { .. }
         | ImageOp::ThinStrokeFilter { .. } => {
-            return Err(CyberError::Internal(format!(
-                "ops[{index}]: pixel op reached the geometric dispatcher"
-            )));
+            return Err(geometry_mispatch(index));
         }
     };
     Ok((out, step))
+}
+
+/// The dispatch-bug error for a pixel op reaching [`geometry_op`]; any
+/// variant not routed to [`geometry`] is reported by name of the fault.
+fn geometry_mispatch(index: usize) -> CyberError {
+    CyberError::Internal(format!(
+        "ops[{index}]: pixel op reached the geometric dispatcher"
+    ))
 }
 
 /// Runs the ops that never change the image shape.
@@ -382,6 +415,18 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         ),
         ImageOp::Grayscale => Ok(tone::grayscale(img)),
         ImageOp::Blur { radius } => blur::blur(img, index, radius),
+        ImageOp::AdaptiveThreshold {
+            radius,
+            offset,
+            invert,
+        } => {
+            let spec = adaptive::AdaptiveThresholdSpec {
+                radius,
+                offset,
+                invert,
+            };
+            adaptive::adaptive_threshold(img, index, &spec)
+        }
         ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
         | ImageOp::Threshold { .. }
@@ -445,6 +490,7 @@ fn restoration_op(
         | ImageOp::Trim { .. }
         | ImageOp::Grayscale
         | ImageOp::Blur { .. }
+        | ImageOp::AdaptiveThreshold { .. }
         | ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
@@ -1132,5 +1178,118 @@ mod tests {
             message.contains("ops[1].radius") && message.contains("1..=16"),
             "the parameter error names the field and range: {message}"
         );
+    }
+
+    #[test]
+    fn adaptive_threshold_deserializes_with_documented_defaults() {
+        let text = r#"[
+            {"op":"adaptive_threshold","radius":4},
+            {"op":"adaptive_threshold","radius":128,"offset":200,"invert":true}
+        ]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(
+            adaptive_fields(&ops[0]),
+            (4_u32, 15_u8, false),
+            "offset defaults to 15 and invert to false"
+        );
+        assert_eq!(
+            adaptive_fields(&ops[1]),
+            (128_u32, 200_u8, true),
+            "every explicit field carries through"
+        );
+    }
+
+    /// The `AdaptiveThreshold` fields of an op that must be one.
+    fn adaptive_fields(op: &ImageOp) -> (u32, u8, bool) {
+        let ImageOp::AdaptiveThreshold {
+            radius,
+            offset,
+            invert,
+        } = op.clone()
+        else {
+            panic!("expected an AdaptiveThreshold op");
+        };
+        (radius, offset, invert)
+    }
+
+    #[test]
+    fn adaptive_threshold_runs_through_the_pixel_dispatcher() {
+        let ops = [
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+            ImageOp::AdaptiveThreshold {
+                radius: 1,
+                offset: 0,
+                invert: false,
+            },
+        ];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report.steps[1]["op"], "adaptive_threshold",
+            "the documented step name"
+        );
+        assert_eq!(report.steps[1]["radius"], 1_i32, "the radius echoes");
+        assert_eq!(report.steps[1]["offset"], 0_i32, "the offset echoes");
+        assert_eq!(
+            report.steps[1]["otsu"], false,
+            "the local test never uses Otsu"
+        );
+        assert_eq!(
+            report.steps[1]["background_min"], 127_i32,
+            "every window is the whole 2x2 of the binarized corners: mean(0, 255, 0, 255) floors to 127"
+        );
+        assert_eq!(report.steps[1]["background_max"], 127_i32, "one mean");
+        assert_eq!(
+            report.steps[1]["ink_pixels"], 2_i32,
+            "the two black corners sit at or below the mean, the two white ones above"
+        );
+        assert_eq!(
+            out.get(0, 0),
+            Some([0, 0, 0, 255]),
+            "the black corner re-inks to opaque black"
+        );
+        assert_eq!(
+            out.get(1, 1),
+            Some([255, 255, 255, 255]),
+            "the white corner stays opaque paper"
+        );
+        assert_eq!(
+            (out.width, out.height),
+            (2, 2),
+            "the op never changes the shape"
+        );
+    }
+
+    #[test]
+    fn adaptive_radius_errors_name_the_op_index_and_field() {
+        for radius in [0_u32, 129_u32] {
+            let error = apply_ops(
+                quad(),
+                &[
+                    ImageOp::Flip {
+                        horizontal: true,
+                        vertical: false,
+                    },
+                    ImageOp::AdaptiveThreshold {
+                        radius,
+                        offset: 15,
+                        invert: false,
+                    },
+                ],
+            )
+            .expect_err("a radius outside 1..=128 must fail");
+            assert_eq!(
+                error.code(),
+                "invalid_argument",
+                "radius {radius} refuses by code"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("ops[1].radius") && message.contains("1..=128"),
+                "the parameter error names the field and range: {message}"
+            );
+        }
     }
 }

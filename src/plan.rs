@@ -35,7 +35,7 @@ pub mod walls;
 
 pub use compile::compile;
 pub use emit::{CompiledPlan, ConnectorInfo};
-pub use features::{FeatureDress, FeatureRow, apply_features, playable_checks};
+pub use features::{FeatureDress, FeatureLineEnds, FeatureRow, apply_features, playable_checks};
 pub use model::*;
 pub use textures::{TextureRole, TextureRoles};
 pub use things::{

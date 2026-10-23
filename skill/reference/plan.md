@@ -36,7 +36,7 @@ player_start?: {x, y, angle?} | {room, angle?}, theme?, units?
 {scale_num? = 1, scale_den? = 1, origin_x? = 0, origin_y? = 0, flip_y?
 = false}, grid? = 8, finalize? = false}` → `{map, format, rooms:
 {id: [sectors]}, connections: [{id, kind, sectors}], features:
-[{kind, room, sectors, lines, tag}], things_placed,
+[{kind, room, sectors, lines, tag, line_ends}], things_placed,
 bounds: {x1, y1, x2, y2} | null, warnings, nodes: {...} | null,
 validation: {errors, counts} | null, next_steps}`
 
@@ -120,7 +120,8 @@ the connection and saying they *do not touch*.
 > and take the `playeruse` activation bits. `remote` stamps the sector
 > tag and writes nothing on the lines: the tagged band is the handle a
 > later `switch` row (or your own trigger line) fires on. Every door
-> lands in the result's `features` list with its sector, lines and tag.
+> lands in the result's `features` list with its sector, its lines and
+> their endpoints, and its tag.
 
 **The features**, one plain-English line each, across the whole set a
 plan can carry:
@@ -148,17 +149,34 @@ with the connections. Each `features` row gives a `kind`
 
 | kind         | Fields | Installs |
 |--------------|--------|----------|
-| `exit`       | `room`, `style?` = `switch` or `walk_over` (default `switch`), `secret?` = false, `wall?` | The level end standing in `room`. `switch` mounts the 32-unit exit panel on a wall of `room` (`Doom` specials `11`/`51`, Hexen portal `243`/`244`); `walk_over` dresses every two-sided boundary of the room's sectors with the family's walk-over exit (`W1` `52`/`124`, tag kept as the destination map number — a plan-built room's bare `0` ends the game). `secret: true` picks the secret form. `wall` is `north`, `south`, `east` or `west`; unset takes the room's longest one-sided wall. |
-| `switch`     | `room`, `opens`, `wall?`, `repeatable?` = false | A 32-unit switch panel centred on the chosen wall of `room`, opening the remote door whose connection `id` is `opens` (`Doom` `S1` `103`, or `SR` `61` with `repeatable: true`; `Hexen` `Door_Open`). The switch fires exactly the tag the door's band sector carries. `opens` must name a `remote` door: any other connection fails `invalid_argument`. |
+| `exit`       | `room`, `style?` = `switch` or `walk_over` (default `switch`), `secret?` = false, `wall?`, `at?` | The level end standing in `room`. `switch` mounts the 32-unit exit panel on a wall of `room` (`Doom` specials `11`/`51`, Hexen portal `243`/`244`); `walk_over` dresses every two-sided boundary of the room's sectors with the family's walk-over exit (`W1` `52`/`124`, tag kept as the destination map number — a plan-built room's bare `0` ends the game). `secret: true` picks the secret form. `wall` is `north`, `south`, `east` or `west` and `at` the plan point that picks among several matching walls; both apply to the `switch` style only — a `walk_over` exit dresses every boundary. See the callout below. |
+| `switch`     | `room`, `opens`, `wall?`, `at?`, `repeatable?` = false | A 32-unit switch panel on the chosen wall of `room`, centred on its own `at` point (or the wall midpoint without one), opening the remote door whose connection `id` is `opens` (`Doom` `S1` `103`, or `SR` `61` with `repeatable: true`; `Hexen` `Door_Open`). The switch fires exactly the tag the door's band sector carries. `opens` must name a `remote` door: any other connection fails `invalid_argument`. |
 | `lift`       | `room`, `low_floor?`, `style?` = `use_wall` or `walk_trigger` (default `use_wall`), `repeatable?` = true | The room's own sector becomes the platform: it takes a fresh tag, its edges facing lower sectors turn front-down onto the player below and carry the family's down-wait-up action (`Doom` `SR` `62` / `S1` `21` for `use_wall`, `WR` `88` / `W1` `10` for `walk_trigger`, `repeatable` picking the pair; `Hexen` `Plat_DownWaitUpStayLip` `206` with tag, speed and wait args), and those faces wear the theme's `step` texture. `low_floor` is the ride's bottom (default: the lowest neighbouring floor). Every connection from the lift room to a room with a lower floor must be an `opening` — anything else fails `invalid_argument` (*a lift needs openings to the lower rooms*, naming the rooms and the connection) — and a drop under 64 units notes that stairs will do. |
 | `teleporter` | `from_room`, `to_room`, `pad?`, `destination?`, `angle?` = 0, `two_way?` = false | A 64-unit pad square in `from_room` and a destination square in `to_room`, centred on `pad`/`destination` (plan points carried through the same transform as the rooms; the room sectors' bounding-box centres by default). Every square corner inset 8 units must resolve into its room, else `invalid_argument` names that room. The pad's borders carry the family's walk-on teleport (`Doom` `WR` `97` answering the destination's fresh sector tag, `Hexen` `Teleport` `70` with the destination thing's TID); a type-14 destination thing stands at the destination facing `angle`, and the pad keeps the room's own floor flat. `two_way` runs the return leg — its own tag, and a thing at the pad facing back. |
 
-> **The wall a panel mounts on.** Among the room's one-sided walls
-> whose outward normal points at `wall` (`north` is `+y`, `south` `-y`,
-> `east` `+x`, `west` `-x`), the longest wins and ties fall to the
-> lowest linedef index; with `wall` unset any one-sided wall competes.
+> **The wall a panel mounts on.** The candidates are the room's
+> one-sided walls whose outward normal points at `wall` (`north` is
+> `+y`, `south` `-y`, `east` `+x`, `west` `-x`); with `wall` unset every
+> one-sided wall of the room competes. A diagonal wall answers two sides
+> at once, and a wall a notch or a connector band cuts counts as one
+> wall per piece, so a room often has several walls matching one side.
+>
+> - **With `at`** the panel goes to the wall standing *nearest* that
+>   point — the exact point-to-segment distance, so a point inside the
+>   room measures to the wall face that faces it. The panel then centres
+>   on `at` projected onto that wall (clamped to its ends).
+> - **Without `at`** the *longest* matching wall wins.
+> - Either way an exact tie falls to the longer wall and then to the
+>   **lowest linedef index**, the order the compiled map holds its lines.
+>
 > A room with no wall on the asked side (or none at all) fails
-> `invalid_argument` naming the room and the side.
+> `invalid_argument` naming the room and the side; an `at` the map
+> cannot hold fails naming the point; and an `at` whose projected spot
+> leaves the 32-unit panel no room on that stretch of wall fails naming
+> the line and its length, with a hint to move `at` toward the middle of
+> the wall (or to leave it out). Read the result's `line_ends` (see
+> **The result** below) to check the wall you asked for is the wall you
+> got, instead of guessing from a bare line index.
 
 The rows reference-check like connections: a feature naming a room the
 plan does not hold, a `switch` whose `opens` matches no connection `id`
@@ -261,11 +279,14 @@ the teleporter's destination `5` — then the exit and the two painted
 room rows. The zero-thickness door bands meet their rooms along several
 cuts and a later teleporter rebuild re-sorts the lines, so the doors'
 and lift's lines are more than the two use faces and every row reports
-the finished indices, facing the player as wired.
+the finished indices, facing the player as wired. The rows' `line_ends`
+are left out of the abbreviated output above: each is the row's `lines`
+again as `{index, x1, y1, x2, y2}` endpoint pairs in map units.
 
-**Units and the grid**: room footprints, connection `at` positions and
-teleporter `pad`/`destination` squares are plan coordinates, drawn in
-whatever units you think in (sketch
+**Units and the grid**: room footprints, connection `at` positions,
+teleporter `pad`/`destination` squares and the `at` point of an `exit`
+or `switch` row are plan coordinates, drawn in whatever units you think
+in (sketch
 pixels, half-tiles, centimetres). `units` turns them into map units
 before compiling: `x` maps to `origin_x + x * scale_num / scale_den`,
 `y` to `origin_y + y * scale_num / scale_den` — or `origin_y` minus the
@@ -398,8 +419,8 @@ order (`id` is the connection's `id`, or its derived `from->to` label;
 `sectors` holds the band sector, or the steps of a stair run, or nothing
 at all for an `opening` wide enough to span its whole shared edge: that
 one takes the wall down there and the rooms join directly, so it owns no
-sector); `features` reports one `{kind, room, sectors, lines, tag}` row
-per installed game feature in pipeline order — doors first, in
+sector); `features` reports one `{kind, room, sectors, lines, tag,
+line_ends}` row per installed game feature in pipeline order — doors first, in
 connection order, each with `kind` `door`, `room` `null`, its band
 `sectors`, the room-facing `lines` carrying the action (a `remote`'s
 stay bare) and the shared `tag`; then switches (`kind` `switch`, the
@@ -412,7 +433,13 @@ the pad's border lines and the destination's tag); then exits (`kind`
 the light and secret rows (`kind` `light` / `secret`, the room, the
 sectors painted, no lines and no tag) — a later teleporter rebuild
 renumbers the map's lines, and every earlier row reports the finished
-indices. `things_placed` counts the
+indices. `line_ends` repeats `lines` as
+`{index, x1, y1, x2, y2}`: each reported linedef with the map-unit
+coordinates of its two vertices **as the finished block holds them**,
+read after every rebuild and re-facing the pipeline did, so a
+wall-mounted panel's endpoints say which wall it took and where along it
+it stands (a line whose vertices the map does not resolve is simply
+left out). `things_placed` counts the
 `THINGS` rows the plan asked for written, room fills
 and the player start included (a teleporter's own type-14 destination
 things ride along in the block beside them). `bounds` is the vertex box
@@ -457,7 +484,9 @@ call build_map_from_plan {
       {"id": "gate", "kind": "door", "sectors": [3]},
       {"id": "hall->crypt", "kind": "stairs", "sectors": [4, 5, 6, 7]}],
     "features": [
-      {"kind": "door", "room": null, "sectors": [3], "lines": [5, 17], "tag": 1}],
+      {"kind": "door", "room": null, "sectors": [3], "lines": [5, 17], "tag": 1,
+       "line_ends": [{"index": 5, "x1": 232, "y1": -72, "x2": 232, "y2": -120},
+                     {"index": 17, "x1": 248, "y1": -120, "x2": 248, "y2": -72}]}],
     "things_placed": 5,
     "bounds": {"x1": 0, "y1": -336, "x2": 432, "y2": 0},
     "warnings": ["red door at gate but no red key in the plan", "the map has no exit"],

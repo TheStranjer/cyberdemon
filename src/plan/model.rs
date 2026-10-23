@@ -249,7 +249,10 @@ pub enum KeyColor {
 /// `exit` and `switch` rows, dresses `lift` rooms as platforms and
 /// stands `teleporter` pads and destinations once the map is compiled;
 /// [`compile`](fn@crate::plan::compile) itself validates every row and
-/// draws no geometry for it.
+/// draws no geometry for it. The two wall-mounted kinds carry an
+/// optional plan `at` point, transformed with the rooms like a
+/// [`Connection::at`], that picks the wall among several matching
+/// `wall` sides and centres the panel there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Feature {
@@ -264,6 +267,11 @@ pub enum Feature {
         secret: bool,
         /// Which wall of the room carries it, if any.
         wall: Option<Side>,
+        /// Plan point that picks the wall (and centres the panel on it)
+        /// when several match `wall`; the longest matching wall wins
+        /// without it. The `switch` style only: a `walk_over` exit
+        /// dresses every boundary of the room and mounts no panel.
+        at: Option<Pt>,
     },
     /// A wall switch in a room that operates a remote connection.
     Switch {
@@ -276,6 +284,10 @@ pub enum Feature {
         /// Whether the switch keeps working after use. Default `false`.
         #[serde(default)]
         repeatable: bool,
+        /// Plan point that picks the wall (and centres the panel on it)
+        /// when several match `wall`; the longest matching wall wins
+        /// without it.
+        at: Option<Pt>,
     },
     /// A lift platform lowering to the ground of a room.
     Lift {
@@ -706,6 +718,7 @@ mod tests {
             style: ExitStyle::Switch,
             secret: false,
             wall: None,
+            at: None,
         }
     }
 
@@ -716,6 +729,7 @@ mod tests {
             opens: opens.to_owned(),
             wall: None,
             repeatable: false,
+            at: None,
         }
     }
 
@@ -813,8 +827,8 @@ mod tests {
             "rooms": [{"id": "a", "shape": {"rect": {"x": 0, "y": 0, "w": 64, "h": 64}}}],
             "connections": [],
             "features": [
-                {"kind": "exit", "room": "a", "style": "walk_over", "secret": true, "wall": "north"},
-                {"kind": "switch", "room": "a", "opens": "d1", "wall": "west", "repeatable": true},
+                {"kind": "exit", "room": "a", "style": "walk_over", "secret": true, "wall": "north", "at": [32, 96]},
+                {"kind": "switch", "room": "a", "opens": "d1", "wall": "west", "repeatable": true, "at": [0, 32]},
                 {"kind": "lift", "room": "a", "low_floor": -64, "style": "walk_trigger", "repeatable": false},
                 {"kind": "teleporter", "from_room": "a", "to_room": "a", "pad": [64, 64], "destination": [200, 64], "angle": 90, "two_way": true}
             ]
@@ -827,6 +841,7 @@ mod tests {
                 style: ExitStyle::WalkOver,
                 secret: true,
                 wall: Some(Side::North),
+                at: Some((32_i64, 96_i64)),
             },
             "the exit row is tagged by kind"
         );
@@ -837,6 +852,7 @@ mod tests {
                 opens: "d1".to_owned(),
                 wall: Some(Side::West),
                 repeatable: true,
+                at: Some((0_i64, 32_i64)),
             },
             "the switch row"
         );
@@ -887,8 +903,9 @@ mod tests {
                 style: ExitStyle::Switch,
                 secret: false,
                 wall: None,
+                at: None,
             },
-            "default exit secret and wall"
+            "default exit secret, wall and point"
         );
         assert_eq!(
             parsed.features.get(1).expect("four features"),
@@ -897,8 +914,9 @@ mod tests {
                 opens: "d1".to_owned(),
                 wall: None,
                 repeatable: false,
+                at: None,
             },
-            "default switch repeatable and wall"
+            "default switch repeatable, wall and point"
         );
         assert_eq!(
             parsed.features.get(2).expect("four features"),

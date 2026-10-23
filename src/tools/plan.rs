@@ -22,13 +22,17 @@
 //! connectors take a fresh tag on their band sector and the style's
 //! linedef specials on their room-facing lines (locked doors re-dress
 //! their jambs in the theme's coloured track), `switch` rows mount
-//! panels firing a remote door's tag, `lift` rows dress the room's own
-//! sector as a tagged platform whose lower-facing edges carry the ride,
+//! panels firing a remote door's tag — on the wall `wall` names and,
+//! among several matching ones, the one nearest the row's plan `at`
+//! point, which also centres the panel there — `lift` rows dress the
+//! room's own sector as a tagged platform whose lower-facing edges carry
+//! the ride,
 //! `teleporter` rows stand the pad and destination squares (with their
 //! own type-14 things), `exit` rows end the level, and the room
 //! `light_effect` and `secret` flags paint the family's sector
 //! specials — lights before secrets, so a lit secret keeps both. Every
-//! installed feature is reported as a `features` row. After the things
+//! installed feature is reported as a `features` row, each line it names
+//! beside the map-unit coordinates of its two endpoints. After the things
 //! stand in, [`crate::plan::playable_checks`] adds its advisory warnings
 //! — a locked door whose key colour stands nowhere among the placed
 //! things, a plan with no `exit` feature and a remote door no `switch`
@@ -513,7 +517,10 @@ struct PlanReport {
     /// the fresh tag), teleporter rows (pad and destination sectors,
     /// the pad's border lines and the destination tag), exit rows, and
     /// the light and secret rows naming the room sectors they painted
-    /// (no lines, no tag).
+    /// (no lines, no tag). Each row's `line_ends` repeats its `lines`
+    /// with the map-unit endpoints the finished map holds them at, so a
+    /// wall-mounted panel can be checked against the plan that asked for
+    /// it.
     features: Vec<FeatureRow>,
     /// The thing rows standing in the written map, player start
     /// included.
@@ -666,11 +673,11 @@ mod tests {
 
     use crate::defs::definitions_for;
     use crate::error::CyberError;
-    use crate::plan::FeatureRow;
     use crate::plan::compile;
     use crate::plan::features::FeatureDress;
     use crate::plan::textures::TextureRoles as _;
     use crate::plan::things::{PlannedThing, Skill, ThingSpot};
+    use crate::plan::{FeatureLineEnds, FeatureRow};
     use crate::themes::Role;
     use crate::tools::plan::params::{KindSource, ThingRequest};
     use crate::wad::classify::MapFormat;
@@ -1155,6 +1162,13 @@ mod tests {
             sectors: vec![2_usize],
             lines: vec![3_usize, 4_usize],
             tag: Some(1_i32),
+            line_ends: vec![FeatureLineEnds {
+                index: 3_usize,
+                x1: 0_i32,
+                y1: 8_i32,
+                x2: 0_i32,
+                y2: 40_i32,
+            }],
         }];
         let value =
             serde_json::to_value(reporting(&compiled, 1_usize, rows, None)).expect("it serializes");
@@ -1162,7 +1176,8 @@ mod tests {
             value["features"],
             serde_json::json!([
                 {"kind": "door", "room": null, "sectors": [2_u64], "lines": [3_u64, 4_u64],
-                 "tag": 1_u64}
+                 "tag": 1_u64,
+                 "line_ends": [{"index": 3_u64, "x1": 0_i64, "y1": 8_i64, "x2": 0_i64, "y2": 40_i64}]}
             ]),
             "the documented row shape"
         );

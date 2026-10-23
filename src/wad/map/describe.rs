@@ -2043,6 +2043,7 @@ mod tests {
                 style: ExitStyle::WalkOver,
                 secret: false,
                 wall: None,
+                at: None,
             }],
             16_i64,
         );
@@ -2333,6 +2334,7 @@ mod tests {
                 style: ExitStyle::WalkOver,
                 secret: false,
                 wall: None,
+                at: None,
             }],
             16_i64,
         )

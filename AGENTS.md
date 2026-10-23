@@ -38,7 +38,11 @@ src/
                   `gfx/colormap.rs` the COLORMAP reader and palette
                   generator (34 tables), `gfx/composite.rs` texture
                   patch-stack folding (`compose`, `Composite`),
-                  `gfx/patch.rs` the Doom patch codec (incl. tall patches),
+                  `gfx/patch.rs` the Doom patch codec's header and decoder
+                  (incl. tall patches) with `gfx/patch/encode.rs` the
+                  column/post encoder and `gfx/patch/tests.rs` plus
+                  `gfx/patch/tests/codec.rs` and `gfx/patch/tests/header.rs`
+                  its tests,
                   `gfx/flat.rs` the flat codec,
                   `gfx/sprite_name.rs` the sprite lump name grammar,
                   `gfx/sprite_rotation.rs` the engine's viewer-angle to

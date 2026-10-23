@@ -3,8 +3,9 @@
 //! The harness helpers live in `support`, the WAD builders in `fixtures`,
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! audio-group tests in `audio`, the batch-group tests in `batch`, the
-//! convert-group tests in `convert`,
-//! the session-group tests in `session`, the
+//! convert-group helpers in `convert` with its `convert/udmf`,
+//! `convert/forward` and `convert/reverse` topic tests, the
+//! session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group tests in `defs`, the
 //! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
 //! `map_edit`, the maps-group tests in `maps`, the capstone low-level

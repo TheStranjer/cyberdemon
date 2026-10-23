@@ -40,7 +40,7 @@ The server is the reflex — deterministic tools carrying out formulaic operatio
 - `edit_geometry` — `delete_geometry` and `transform_selection` over index selections.
 - `features` — working structures in one call: `add_door`, `add_window`, `add_stairs`, `add_lift`, `add_teleporter`, `add_switch`, `add_exit`, `place_things`, `mark_secret`, `set_light_effect`.
 - `plan` — `build_map_from_plan`: a whole playable map (rooms, walls, dressing, features, things) from one JSON plan.
-- `sketch` — `trace_sketch`: measure a hand-drawn floor plan into region polygons, gaps, marks and map-unit points.
+- `sketch` — `trace_sketch`: measure a hand-drawn floor plan into region polygons, gaps, marks and map-unit points, with the gap and mark lists floored at the stroke and capped so a noisy scan still answers small.
 - `query` — `find_elements`, `bulk_edit` and the `replace_*` swaps over query-selected sets.
 - `validate` — `validate_map`: map health as severity-ranked, code-tagged issues.
 - `playability` — `check_playability` (can a player finish, and what blocks them) and `describe_map` fact rows.

@@ -116,6 +116,17 @@ Zero regions is not an error: read `warnings`, adjust, trace again. The
 regions' `points` come back in original-image pixels and, with `units`, in
 `map_points` too; `plan_rooms` is ready-made for the next step.
 
+**A noisy scan is bounded, not broken.** A photo of ruled paper measures
+hundreds of bridges and speckles, so `gaps` and `marks` arrive largest first,
+at most 50 rows each: `gaps_total` and `marks_total` say what the analysis
+found, `truncated` says a cap left rows out, and `warnings` names every
+omitted count with the parameter that lifts it. Plan from the rows you get.
+When you need the long tail raise `max_gaps`/`max_marks`, and when the tail
+is only dust raise `noise_floor_px` (default the measured `stroke_px`) past
+it; `verbose: true` returns every row and can outgrow your client's result
+limit. The `debug` image labels only the reported rows, so the picture and
+the lists never disagree.
+
 ## 6. Write the plan
 
 Start from `plan_rooms`: keep each room's `points` as they are, rename the

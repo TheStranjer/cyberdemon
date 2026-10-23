@@ -344,7 +344,9 @@ exit) and with `finalize: true` builds its node data and reports an
 errors-only validation in the same call (`reference/plan.md`). A hand-drawn
 floor plan comes in through `trace_sketch`, which needs no open WAD: it
 measures the drawing's regions, gaps, marks and adjacency in original-image
-pixels and publishes a debug image labelled `R1`, `G1`, `M1` — you decide
+pixels and publishes a debug image labelled `R1`, `G1`, `M1` — only the rows
+it reports are labelled, and the gap and mark lists are floored at the
+measured stroke and capped so a noisy scan still answers small — you decide
 what those are, rename `plan_rooms` into rooms, add connections at the gap
 centers and build with the same `units` (`reference/sketch.md`). Draw whole
 rooms in one call with `create_sector_from_loop`, and carve solid rock out

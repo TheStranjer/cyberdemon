@@ -364,16 +364,22 @@ src/
                   report);
                   `tools/sketch.rs` is the `sketch` group: `trace_sketch`
                   needs no session at all — it parses `crop`/`max_size`/
-                  `ink`/the analysis and vectorize knobs and the plan
-                  `units` outside any lock, fetches, decodes, crops,
+                  `ink`/the analysis and vectorize knobs, the plan `units`
+                  and the `max_gaps`/`max_marks`/`noise_floor_px`/`verbose`
+                  size knobs outside any lock, fetches, decodes, crops,
                   area-downscales to `max_size`, runs the `sketch::analyze`
                   and `sketch::vectorize` engines, scales every coordinate
                   back onto original-image pixels (and through `Units` into
-                  grid-snapped `map_points`), reports the `R`/`G`/`M` ids,
-                  adjacency and the `plan_rooms` fragments, and publishes
-                  the overlay of `tools/sketch/debug.rs` (washed sketch,
-                  filled region polygons, gap circles, mark boxes,
-                  bitmap-font ids) as a `PNG` asset;
+                  grid-snapped `map_points`), thins the two long lists
+                  (`thin_all`: the stroke-wide floor drops the sub-stroke
+                  rows, the rest rank largest first and cut to their caps,
+                  each omission counted in `gaps_total`/`marks_total`,
+                  `truncated` and the warnings), reports the `R`/`G`/`M`
+                  ids, adjacency and the `plan_rooms` fragments with each
+                  region's id lists narrowed to the rows it carries, and
+                  publishes the overlay of `tools/sketch/debug.rs` (washed
+                  sketch, filled region polygons, the reported gap circles
+                  and mark boxes, bitmap-font ids) as a `PNG` asset;
                   `tools/palette.rs`' `load_palette` is its palette side;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,

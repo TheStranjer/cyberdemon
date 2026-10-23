@@ -183,10 +183,13 @@ src/
                   `plan/model.rs` the `Plan`/`Room`/`Connection` data model
                   and structural validation, `plan/units.rs` the integer
                   `Units` scaling, mirroring and grid snapping from plan
-                  coordinates to map units, `plan/walls.rs` the thick-wall
-                  build (`room_layers`, `build_walls`, `shared_boundaries`,
-                  every rectangle keyed by the `WallKey` of the piece it
-                  fills) on `geom::arrange`, `plan/connectors.rs` the
+                  coordinates to map units with `plan/units/tests.rs` plus
+                  `plan/units/tests/mapping.rs` and
+                  `plan/units/tests/refusals.rs` its tests, `plan/walls.rs`
+                  the thick-wall build (`room_layers`, `build_walls`,
+                  `shared_boundaries`, every rectangle keyed by the
+                  `WallKey` of the piece it fills) on `geom::arrange`,
+                  `plan/connectors.rs` the
                   connection cut placement on those walls (a plain opening
                   spanning a whole shared run keys that wall `joined` and
                   paints no band), `plan/emit.rs` the

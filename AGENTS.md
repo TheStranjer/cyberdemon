@@ -275,7 +275,10 @@ src/
                   `scripts/text_edit.rs` (the shared text-lump editor behind
                   `edit_decorate`/`edit_zscript`), `tools/defs.rs` with
                   `defs/collect.rs` (gathering the session's custom
-                  definition texts) and `tools/edit_geometry.rs` with
+                  definition texts), `tools/edit_things.rs` with
+                  `edit_things/edit.rs` (the `edit_thing` request, report,
+                  flag plan and edit steps, whose unit tests are
+                  `edit_things/tests.rs`) and `tools/edit_geometry.rs` with
                   `edit_geometry/delete.rs` (the `delete_geometry` request,
                   report and removal steps) and `edit_geometry/transform.rs`
                   (the `transform_selection` request types and its run); that

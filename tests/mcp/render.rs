@@ -18,12 +18,16 @@ mod tests {
     use cyberdemon::gfx::codec::{decode_image, encode_png};
     use cyberdemon::gfx::image::RgbaImage;
     use cyberdemon::render::{Lighting, RenderSettings};
+    use cyberdemon::wad::map::doom::write_doom_map;
     use cyberdemon::wad::{Lump, LumpName, Wad};
     use rmcp::RoleClient;
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, iwad_heretic, iwad_view_textures, pwad, pwad_empty_map};
+    use crate::fixtures::{
+        iwad, iwad_heretic, iwad_stock, iwad_view_textures, pwad, pwad_empty_map,
+        two_room_textured_map,
+    };
     use crate::support::{call, call_err, connect, http_get};
 
     /// The settings a fresh connection starts on.
@@ -1327,12 +1331,11 @@ mod tests {
             json!("MAP01_view.png"),
             "the published name"
         );
-        assert!(
-            report["problems"]
-                .as_array()
-                .expect("problems is a list")
-                .contains(&json!("missing sky SKY1")),
-            "the missing sky is reported: {}",
+        assert_eq!(
+            report["problems"],
+            json!([]),
+            "an indoor map whose flats, textures and sprites the session has reports \
+             nothing: {}",
             report["problems"]
         );
         let image = rendered_image(&report).await;
@@ -1702,6 +1705,109 @@ mod tests {
             .expect("masked_columns is a number")
     }
 
+    /// A fullbright client on the `DOOM II`-shaped fixture `IWAD`.
+    async fn stock_client(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad_stock(dir);
+        call(&client, "open_iwad", path_arg(&base)).await;
+        fullbright(&client).await;
+        client
+    }
+
+    /// The stock fixture's hall camera: the middle of its `512x512` room,
+    /// facing `angle` degrees, over `map`.
+    fn hall_view(map: &str, angle: i64) -> Value {
+        json!({
+            "map": map, "x": 256_i64, "y": 256_i64, "angle": angle,
+            "width": 160_u64, "height": 100_u64,
+        })
+    }
+
+    /// Every compass view from the middle of a stock-fixture hall is quiet:
+    /// one of the eight ringed imps stands at each of the engine's rotation
+    /// buckets, and each bucket resolves against the fixture's pair-named
+    /// lumps, so nothing is reported and the imp dead ahead paints.
+    async fn every_ring_angle_is_quiet(client: &Client, map: &str) {
+        for angle in [0_i64, 45, 90, 135, 180, 225, 270, 315] {
+            let report = call(client, "render_view", hall_view(map, angle)).await;
+            assert_eq!(
+                report["problems"],
+                json!([]),
+                "the {angle}-degree view of the indoor ring reports nothing"
+            );
+            let drawn = report["sprites_drawn"]
+                .as_u64()
+                .expect("sprites_drawn is a number");
+            assert!(
+                drawn >= 1,
+                "the imp straight ahead paints at {angle} degrees: {drawn}"
+            );
+        }
+    }
+
+    /// The stock fixture stores the sky as a `TEXTURE1` record and the
+    /// `TROO` frame over the mirror-pair names a real `IWAD` writes, so an
+    /// indoor hall ringed by eight imps — one per engine rotation — has
+    /// nothing to report from any of the eight compass views.
+    #[tokio::test]
+    async fn render_view_reports_nothing_for_a_stock_iwads_indoor_map() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = stock_client(dir.path()).await;
+        every_ring_angle_is_quiet(&client, "MAP01").await;
+    }
+
+    /// Asserts the frame top of a stock-fixture sky-room view reads the
+    /// `RSKY1` patch's colour: the hall's whole ceiling is `F_SKY1` and its
+    /// sky rows start at the frame top, well above the horizon.
+    fn assert_stock_sky_band(image: &RgbaImage) {
+        for column in [40_u32, 80_u32, 120_u32] {
+            assert_eq!(
+                image.get(column, 0).expect("a pixel"),
+                [200_u8, 55, 200, 255],
+                "the F_SKY1 ceiling draws the RSKY1 patch at column {column}"
+            );
+        }
+    }
+
+    /// The stock fixture has no lump named `SKY1`: its sky is a texture
+    /// definition, which is where the check has to look once a map actually
+    /// shows a sky plane.
+    #[tokio::test]
+    async fn render_view_draws_a_sky_it_found_in_the_texture_definitions() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = stock_client(dir.path()).await;
+        let report = call(&client, "render_view", hall_view("MAP02", 0)).await;
+        assert_eq!(
+            report["problems"],
+            json!([]),
+            "the SKY1 record is no missing sky"
+        );
+        let image = rendered_image(&report).await;
+        assert_stock_sky_band(&image);
+    }
+
+    /// The other half of the same fix: a sprite the session really does not
+    /// carry still costs exactly one line, and nothing else in the frame of
+    /// the stock-fixture hall does.
+    #[tokio::test]
+    async fn render_view_reports_a_genuinely_missing_sprite_once() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = stock_client(dir.path()).await;
+        let report = call(&client, "render_view", hall_view("MAP03", 0)).await;
+        assert_eq!(
+            report["problems"],
+            json!(["missing sprite POSS"]),
+            "the two POSS things are one line and the ring of imps is no line at all"
+        );
+        let drawn = report["sprites_drawn"]
+            .as_u64()
+            .expect("sprites_drawn is a number");
+        assert!(
+            drawn >= 1,
+            "the imps the session has dress and draw: {drawn}"
+        );
+    }
+
     #[tokio::test]
     async fn masked_columns_stay_independent_of_the_sprite_switch() {
         let dir = tempfile::tempdir().expect("a scratch directory");
@@ -1865,7 +1971,8 @@ mod tests {
         );
     }
 
-    /// The fallback sky the fixture (which has no `SKY1`) gets.
+    /// The fallback sky a map that names no sky plane carries: it is never
+    /// sampled, and it is reported as no problem.
     fn assert_fallback_sky(scene: &cyberdemon::render::Scene) {
         assert_eq!(scene.sky_flat, "F_SKY1", "the sky ceiling marker");
         assert_eq!(
@@ -1910,10 +2017,22 @@ mod tests {
         assert_eq!(scene.colormaps.len(), 34, "the 34 lighting tables");
         assert_eq!(scene.colormaps[0], identity_table(), "the fixture's map");
         assert_fallback_sky(&scene);
+        assert_eq!(scene.problems, Vec::<String>::new(), "nothing is missing");
+    }
+
+    #[test]
+    fn build_scene_reports_a_sky_the_map_shows_and_the_session_lacks() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let session = fixture_session(&iwad_view_textures(dir.path()), &["SKY1"], Vec::new());
+        let scene = scene_of(&session, "MAP01").expect("the sky room builds");
+        assert!(
+            scene.problems.contains(&"missing sky SKY1".to_owned()),
+            "room 1's F_SKY1 ceiling asks for the sky the session has not: {:?}",
+            scene.problems
+        );
         assert_eq!(
-            scene.problems,
-            ["missing sky SKY1".to_owned()],
-            "only the sky is missing"
+            scene.sky.width, 64,
+            "the sky falls back to the checkerboard"
         );
     }
 
@@ -2001,13 +2120,19 @@ mod tests {
     #[test]
     fn a_heretic_session_picks_its_episode_sky_and_reports_missing_pictures() {
         let dir = tempfile::tempdir().expect("a scratch directory");
-        let sky = Lump::new(parsed_name("SKY2"), vec![7_u8; 4_096]);
-        let session = fixture_session(&iwad_heretic(dir.path()), &[], vec![sky]);
+        let mut outdoors = two_room_textured_map();
+        outdoors.name = parsed_name("E2M1");
+        let mut extra = write_doom_map(&outdoors).expect("the sky map serializes");
+        extra.push(Lump::new(parsed_name("SKY2"), vec![7_u8; 4_096]));
+        let session = fixture_session(&iwad_heretic(dir.path()), &[], extra);
         let scene = scene_of(&session, "E2M1").expect("the Heretic scene builds");
         assert_eq!(scene.sky.get(0, 0), Some((7, true)), "E2M1 skies over SKY2");
         assert!(
-            !scene.problems.iter().any(|problem| problem.contains("sky")),
-            "the sky loaded: {:?}",
+            !scene
+                .problems
+                .iter()
+                .any(|problem| problem.starts_with("missing sky")),
+            "the episode sky loaded: {:?}",
             scene.problems
         );
         assert!(

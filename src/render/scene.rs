@@ -4,11 +4,13 @@
 //! [`build_scene`] folds the merged view into a [`Scene`]: the map model,
 //! the `PLAYPAL` palette, the 34 `COLORMAP` lighting tables, the composed
 //! image of every wall texture and flat the map actually uses, the sky
-//! image its name and game select, and the settings to draw with. What
-//! cannot be found is not an error: a missing texture, flat or sky gets a
-//! 64x64 checkerboard fallback built from the palette's brightest and
-//! darkest colours and a line in [`Scene::problems`], so the view still
-//! renders. Only a missing map block or `PLAYPAL` fails the call. The
+//! image its name and game select when the map shows a sky plane, and the
+//! settings to draw with. What cannot be found is not an error: a texture,
+//! flat or sky the map names and the session lacks gets a 64x64
+//! checkerboard fallback built from the palette's brightest and darkest
+//! colours and a line in [`Scene::problems`], so the view still renders.
+//! A picture no part of the map draws is never looked for and never
+//! reported. Only a missing map block or `PLAYPAL` fails the call. The
 //! camera helpers locate the viewer's sector and its default eye height.
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -83,25 +85,27 @@ pub struct Scene {
     /// The image of every flat the map's sectors name, keyed by name.
     pub flats: BTreeMap<String, IndexedImage>,
     /// The sky image the map's name and the session's game select, drawn
-    /// where a ceiling or floor carries [`Scene::sky_flat`].
+    /// where a ceiling or floor carries [`Scene::sky_flat`]; the silent
+    /// fallback for a map no plane of which asks for a sky.
     pub sky: IndexedImage,
     /// The flat name that means "sky": [`SKY_FLAT`].
     pub sky_flat: String,
     /// The settings this scene was built with.
     pub settings: RenderSettings,
     /// What could not be loaded, one line per item: missing textures,
-    /// flats and sky, missing texture components, and a generated
-    /// `COLORMAP`.
+    /// flats and sky (only where the map actually shows one), missing
+    /// texture components, and a generated `COLORMAP`.
     pub problems: Vec<String>,
 }
 
 /// Prepare the [`Scene`] of map `map` from the session's merged view.
 ///
 /// Textures come through the shared texture compositor
-/// (`tools/graphics/resolve.rs`), flats and the sky through the flat
-/// resolver, the palette from `PLAYPAL` entry 0 and the lighting tables
-/// from the merged `COLORMAP` when it holds at least 34 full tables,
-/// generated from the palette otherwise.
+/// (`tools/graphics/resolve.rs`), flats through the flat resolver, and the
+/// sky of a map that shows one through the texture definitions first and
+/// the flat resolver after them; the palette from `PLAYPAL` entry 0 and
+/// the lighting tables from the merged `COLORMAP` when it holds at least
+/// 34 full tables, generated from the palette otherwise.
 ///
 /// # Errors
 ///
@@ -219,19 +223,60 @@ fn sector_flats(
     flats
 }
 
-/// The sky image the map's name and the session's game select; a sky the
-/// session lacks falls back, with a problem line.
+/// The sky image the map's name and the session's game select; a sky a map
+/// shows and the session lacks falls back, with a problem line. A map no
+/// sector of which names [`SKY_FLAT`] shows no sky at all, so its picture
+/// is neither looked for nor missed: the silent fallback stands in for an
+/// image the renderer never samples.
 fn sky_image(
     session: &Session,
     map: &Map,
     fallback: &IndexedImage,
     problems: &mut Vec<String>,
 ) -> IndexedImage {
+    if !shows_sky(map) {
+        return fallback.clone();
+    }
     let name = sky_name(session.game(), &map.name.to_string());
-    load_flat_image(session, &name).unwrap_or_else(|| {
+    load_sky_image(session, &name, problems).unwrap_or_else(|| {
         problems.push(format!("missing sky {name}"));
         fallback.clone()
     })
+}
+
+/// Whether any plane of `map` shows the sky: `Doom` draws the sky texture
+/// on every ceiling *and* every floor named [`SKY_FLAT`].
+fn shows_sky(map: &Map) -> bool {
+    map.sectors
+        .iter()
+        .any(|sector| is_sky_plane(&sector.ceiling_flat) || is_sky_plane(&sector.floor_flat))
+}
+
+/// Whether a plane name is the sky marker, read the way scene keys read
+/// picture names.
+fn is_sky_plane(name: &str) -> bool {
+    picture_name(name).is_some_and(|key| key == SKY_FLAT)
+}
+
+/// The picture a sky plane draws with: the texture definition named `name`
+/// first, which is where a `Doom` `IWAD` keeps its skies (`SKY1` is a
+/// `TEXTURE1` record over the `RSKY1` patch and no lump of the sky's own
+/// name exists), then the flat of that name, the shape the import tools
+/// and some ports write. A definition whose components the session lacks
+/// reports them; `None` when it serves neither picture.
+fn load_sky_image(
+    session: &Session,
+    name: &str,
+    problems: &mut Vec<String>,
+) -> Option<IndexedImage> {
+    let lump = LumpName::parse(name).ok()?;
+    match load_texture(session, lump) {
+        Ok(composite) => {
+            problems.extend(composite.problems);
+            Some(composite.image)
+        }
+        Err(_) => load_flat(session, lump).ok(),
+    }
 }
 
 /// The flat named `name`, `None` when no lump of that name decodes.
@@ -379,7 +424,7 @@ mod tests {
 
     use super::{
         FALLBACK_CELL, FALLBACK_CELLS, FALLBACK_SIDE, Scene, camera_sector, default_eye_z,
-        extreme_index, fallback_image, flat_names, sky_name, texture_names,
+        extreme_index, fallback_image, flat_names, shows_sky, sky_name, texture_names,
     };
     use crate::gfx::image::IndexedImage;
     use crate::gfx::palette::Palette;
@@ -622,6 +667,38 @@ mod tests {
         assert_eq!(textures, ["STEP1", "WALL1", "WALL2"], "keys normalize");
         let flats: Vec<String> = flat_names(&map).into_iter().collect();
         assert_eq!(flats, ["FLOOR1"], "dashes and empties vanish");
+    }
+
+    #[test]
+    fn only_a_map_that_names_the_sky_flat_shows_sky() {
+        let indoor = two_room_map();
+        assert!(
+            !shows_sky(&indoor),
+            "the fixture map's planes are all plain flats"
+        );
+        let mut outdoors = indoor.clone();
+        if let Some(room) = outdoors.sectors.get_mut(1) {
+            room.ceiling_flat = "f_sky1".to_owned();
+        }
+        assert!(shows_sky(&outdoors), "a lowercase ceiling marker counts");
+        let mut pit = indoor.clone();
+        if let Some(room) = pit.sectors.get_mut(0) {
+            room.floor_flat = "F_SKY1 ".to_owned();
+        }
+        assert!(shows_sky(&pit), "and so does a padded floor one");
+        let mut blank = indoor;
+        if let Some(room) = blank.sectors.get_mut(0) {
+            room.floor_flat = String::new();
+            room.ceiling_flat = "-".to_owned();
+        }
+        if let Some(room) = blank.sectors.get_mut(1) {
+            room.floor_flat = String::new();
+            room.ceiling_flat = "-".to_owned();
+        }
+        assert!(
+            !shows_sky(&blank),
+            "an empty plane and the none-marker are not the sky"
+        );
     }
 
     #[test]

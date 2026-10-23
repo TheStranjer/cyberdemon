@@ -246,8 +246,9 @@ name from the file stem:
 - Check the result with `list_sprites` (the frame appears under its
   prefix, malformed region names are listed separately in `invalid`) and
   publish it back with `get_sprite`, which resolves a rotation through the
-  engine's rules: the exact lump, then a mirror-pair lump flipped, then
-  the frame's rotation-`0` image.
+  engine's rules: the exact lump, then the pair lump that carries the
+  rotation as its own or as its mirror (flipped), then the frame's
+  rotation-`0` image.
 
 ## `import_png_as_sprite`
 

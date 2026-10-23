@@ -73,15 +73,21 @@ not selected by this formula.
 How the view gets its pictures: the scene loads every wall texture the
 map names (composited from `TEXTURE1`/`TEXTURE2` definitions, `TEXTURE2`
 winning, or a `TX_`-region patch of that name), every flat the sectors
-name, and a sky chosen by map name — `E#M#` episodes take `SKY1..4`
-(`Heretic`: 1,2,3,1,3), `MAP01`–`MAP11` take `SKY1`, `MAP12`–`MAP20`
-`SKY2`, `MAP21` up `SKY3`, anything else `SKY1`. A merged `COLORMAP` of
-at least 34 full tables is used as-is; otherwise the tables are generated
-from `PLAYPAL` palette 0. Missing textures, flats and skies, and a
-generated `COLORMAP`, are reported as `problems` while the view still
-renders: missing pictures become a 64x64 checkerboard of the palette's
-brightest and darkest colours. `render_view` reports all of this in its
-`problems` list.
+name, and — only where some sector's ceiling or floor is `F_SKY1` — a sky
+chosen by map name: `E#M#` episodes take `SKY1..4` (`Heretic`:
+1,2,3,1,3), `MAP01`–`MAP11` take `SKY1`, `MAP12`–`MAP20` `SKY2`, `MAP21`
+up `SKY3`, anything else `SKY1`. That sky picture is the
+`TEXTURE1`/`TEXTURE2` record of the chosen name, which is how the games
+store skies (`SKY1` is a texture, not a lump), or the flat of that name
+for a session that carries one instead. A merged `COLORMAP` of at least 34
+full tables is used as-is; otherwise the tables are generated from
+`PLAYPAL` palette 0. What the session cannot serve — a texture, a flat,
+the sky a map actually shows, one of a sky's components — becomes a 64x64
+checkerboard of the palette's brightest and darkest colours and a line in
+`render_view`'s `problems` list, and a generated `COLORMAP` is reported
+the same way. Nothing else is: a picture no part of the map draws is
+never looked for, so an indoor map under an archive with no sky at all
+renders with `problems: []`.
 
 ## `get_render_settings`
 
@@ -350,7 +356,7 @@ do not apply, `show_things` does, and the overlay parameters (`underlay`,
               "fov": 90, "sector": 0},
    "width": 160, "height": 100,
    "sprites_drawn": 1, "masked_columns": 0,
-   "problems": ["missing sky SKY1"],
+   "problems": [],
    "asset": {"url": "http://localhost:PORT/assets/ID/MAP01_view.png", ...}}
   ```
 
@@ -391,15 +397,19 @@ do not apply, `show_things` does, and the overlay parameters (`underlay`,
     game or custom definition carries a sprite draw their patch, scaled
     by distance and centred on `W/2 + tx·k`. The vanilla eight-rotation
     bucketing picks the frame from the viewing angle and the thing's
-    facing, and mirror-pair lumps (`TROOA2A8`) flip automatically, so
-    walking around a monster turns it. A sprite stands on the floor of
-    the sector holding the thing plus its spawn `z`; hanging things
-    (dead corpses, chandeliers) hang from the ceiling instead. Things
-    outside every sector, or within 4 units of the camera, are skipped.
-    A sprite lump the session lacks adds one `missing sprite NAME` line
-    to `problems` (a lump that is no readable picture adds one
+    facing, and the eight-character pair names carry both of their
+    rotations: `TROOA2A8` serves rotation `2` as stored and rotation `8`
+    flipped, so walking around a monster turns it. A sprite stands on the
+    floor of the sector holding the thing plus its spawn `z`; hanging
+    things (dead corpses, chandeliers) hang from the ceiling instead.
+    Things outside every sector, or within 4 units of the camera, are
+    skipped. A sprite lump the session lacks adds one `missing sprite NAME`
+    line to `problems` (a lump that is no readable picture adds one
     `unreadable sprite NAME` line), and the rest of the frame still
-    renders.
+    renders. Every `problems` line names a picture this render actually
+    asked for: a sky is looked for in the texture definitions, where a
+    stock archive keeps it, and a map with no `F_SKY1` plane asks for no
+    sky and reports none missing.
 - Current limitations: sprites and masked textures paint opaque (no
   translucency), fullbright sprite frames are not swapped in, and there
   are no 3D floors, slopes or portals.

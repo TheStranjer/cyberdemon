@@ -8,8 +8,9 @@
 //! edit, optionally listing the name in `PNAMES` (copy-on-write).
 //! [`Cyberdemon::import_image_as_flat`] (and its alias
 //! [`Cyberdemon::import_png_as_flat`]) reuses the same pieces on the flat
-//! side: decode, opaque quantization, nearest scaling to a supported flat
-//! shape, `encode_flat`, and insertion into the working `flats` region.
+//! side: decode, opaque quantization in the call's [`Dither`] mode,
+//! nearest scaling to a supported flat shape, `encode_flat`, and insertion
+//! into the working `flats` region.
 //! [`Cyberdemon::import_image_as_raw`] validates that the bytes are a
 //! readable image and stores them unchanged, for `ZDoom`-family ports
 //! that read `PNG` lumps directly.
@@ -33,10 +34,12 @@
 //! through the [`crate::tools::textures`] internals, optionally pointing a
 //! theme wall role at the result. [`Cyberdemon::create_flat_from_image`]
 //! is its floor/ceiling twin: [`create_flat`] fits the processed picture
-//! to the vanilla `64x64`, tiles and quantizes it opaquely, and places
-//! the raw flat in the working `flats` region with the stricter
-//! everywhere-used collision rule, optionally assigning a theme flat
-//! role. [`Cyberdemon::create_sprite_from_image`] is the sprite twin:
+//! to the square `size` you ask for (`64x64` by default), tiles and
+//! quantizes it opaquely, and places the raw flat in the working `flats`
+//! region with the stricter everywhere-used collision rule, optionally
+//! assigning a theme flat role; a side above 64 adds a warning that
+//! vanilla Doom cannot load the flat. [`Cyberdemon::create_sprite_from_image`]
+//! is the sprite twin:
 //! [`create_sprite`] removes the border background, trims, scales to a
 //! sprite height, quantizes with alpha holes and places the named lump
 //! (or one per `frames` letter) in the working `sprites` region,
@@ -59,8 +62,9 @@ use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, format_name};
 use crate::gfx::flat::{encode_flat, is_flat_shape};
 use crate::gfx::image::{RgbaImage, resize_nearest};
+use crate::gfx::ops::dither::{Dither, quantize_dithered};
 use crate::gfx::quantize::{
-    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize, quantize_stats,
+    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize_stats,
 };
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::server::Cyberdemon;
@@ -78,7 +82,7 @@ use crate::tools::imports::image_pipeline::{
     build_patch, chosen_name, parse_import, put_lump,
 };
 use crate::tools::imports::processed::{
-    PROCESS_TOOL_DESCRIPTION, ProcessImageParams, process_image_run,
+    PROCESS_TOOL_DESCRIPTION, ProcessImageParams, dither_or_default, process_image_run,
 };
 use crate::tools::imports::sprite::{
     ALIASED_SPRITE_TOOL_DESCRIPTION, ImportSpriteParams, SPRITE_TOOL_DESCRIPTION, sprite_imported,
@@ -95,10 +99,11 @@ use crate::wad::textures::{parse_pnames, write_pnames};
 
 /// Raw directory bytes of the patch-name lump.
 const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
-/// Square flat side the import resizes to when `size` is unset.
-const DEFAULT_FLAT_SIZE: u32 = 64_u32;
-/// The square sides `resize: "nearest"` may scale a picture to.
-const FLAT_SIZES: [u32; 3] = [64_u32, 128_u32, 256_u32];
+/// Square flat side both flat tools settle on when their `size` argument
+/// is unset: the vanilla edge.
+pub(in crate::tools) const DEFAULT_FLAT_SIZE: u32 = 64_u32;
+/// The square sides a `size` parameter may name.
+pub(in crate::tools) const FLAT_SIZES: [u32; 3] = [64_u32, 128_u32, 256_u32];
 
 /// Arguments for [`Cyberdemon::import_image_as_patch`] and its alias
 /// [`Cyberdemon::import_png_as_patch`].
@@ -139,9 +144,16 @@ struct ImportFlatParams {
     #[serde(default)]
     resize: Option<String>,
     /// Square side for `resize`: 64 (default), 128 or 256; anything else
-    /// is `invalid_argument`.
+    /// is `invalid_argument`. Only 64x64 loads in vanilla Doom; 128 and
+    /// 256 need a ZDoom-family port. The result echoes this as `size`.
     #[serde(default)]
     size: Option<u32>,
+    /// Palette dithering of the quantization: `"none"` (plain nearest
+    /// colour), `"floyd_steinberg"` (serpentine error diffusion, the
+    /// default, same as `process_image`) or `"ordered"` (a fixed `4x4`
+    /// `Bayer` offset). The result echoes the mode used as `dither`.
+    #[serde(default)]
+    dither: Option<Dither>,
     /// Overwrite a working flat of this name in place (default `false`;
     /// without it such a lump is `already_exists`).
     #[serde(default)]
@@ -234,6 +246,8 @@ struct ParsedFlat {
     resize: ResizeChoice,
     /// The square side a resized picture takes.
     size: u32,
+    /// The dither mode the quantization spreads its error with.
+    dither: Dither,
     /// Whether a same-name working flat may be overwritten.
     replace: bool,
 }
@@ -249,6 +263,10 @@ struct FlatImported {
     width: u32,
     /// The stored height in pixels.
     height: u32,
+    /// The `size` argument in force.
+    size: u32,
+    /// The dither mode the quantization used.
+    dither: Dither,
     /// Whether the picture was nearest-neighbour scaled.
     resized: bool,
     /// Distinct source colours.
@@ -270,6 +288,10 @@ struct FlatReport {
     width: u32,
     /// The stored height in pixels.
     height: u32,
+    /// The `size` argument in force: the square side `resize` scales to.
+    size: u32,
+    /// The dither mode the quantization used.
+    dither: Dither,
     /// Whether the picture was nearest-neighbour scaled.
     resized: bool,
     /// Distinct source colours among the (fully opaque) pixels.
@@ -466,7 +488,8 @@ fn commit_raw(session: &mut Session, write: &LumpWrite<'_>) -> Result<usize, Cyb
     session.edit(&label, |wad| put_lump(wad, write))
 }
 
-/// Validate the flat-import arguments: name, `resize` word and `size`.
+/// Validate the flat-import arguments: name, `resize` word, `size` and
+/// `dither`.
 ///
 /// # Errors
 ///
@@ -479,6 +502,7 @@ fn parse_flat(args: &ImportFlatParams) -> Result<ParsedFlat, CyberError> {
         palette: args.palette.unwrap_or(DEFAULT_PALETTE),
         resize: parse_resize(args.resize.as_deref())?,
         size: parse_flat_size(args.size)?,
+        dither: dither_or_default(args.dither),
         replace: args.replace,
     })
 }
@@ -504,7 +528,7 @@ fn parse_resize(text: Option<&str>) -> Result<ResizeChoice, CyberError> {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] listing the accepted sides.
-fn parse_flat_size(value: Option<u32>) -> Result<u32, CyberError> {
+pub(in crate::tools) fn parse_flat_size(value: Option<u32>) -> Result<u32, CyberError> {
     let size = value.unwrap_or(DEFAULT_FLAT_SIZE);
     if FLAT_SIZES.contains(&size) {
         return Ok(size);
@@ -573,7 +597,8 @@ async fn import_flat_run(
 }
 
 /// Fetch, decode, scale, quantize and encode one flat: the shared pipeline
-/// with [`Transparency::None`], because flats have no holes.
+/// with [`Transparency::None`], because flats have no holes, and the
+/// call's [`Dither`] mode.
 ///
 /// # Errors
 ///
@@ -593,7 +618,7 @@ async fn build_flat(state: &AppState, import: &ParsedFlat) -> Result<FlatImporte
         reserved: Vec::new(),
     };
     let palette = state.with_session(|session| load_palette(session, import.palette))?;
-    let indexed = quantize(&picture, &palette, &options);
+    let indexed = quantize_dithered(&picture, &palette, &options, import.dither);
     let (colors_used, max_color_error) = quantize_stats(&picture, &palette, &options);
     let (data, _) = encode_flat(&indexed)?;
     Ok(FlatImported {
@@ -601,6 +626,8 @@ async fn build_flat(state: &AppState, import: &ParsedFlat) -> Result<FlatImporte
         data,
         width: picture.width,
         height: picture.height,
+        size: import.size,
+        dither: import.dither,
         resized,
         colors_used,
         max_color_error,
@@ -633,6 +660,8 @@ fn commit_flat(
             lump_index,
             width: built.width,
             height: built.height,
+            size: built.size,
+            dither: built.dither,
             resized: built.resized,
             colors_used: built.colors_used,
             max_color_error: built.max_color_error,
@@ -674,10 +703,10 @@ const ALIASED_PATCH_TOOL_DESCRIPTION: &str = "Alias of import_image_as_patch for
 
 /// The full documentation of the flat import, shared by the tool and its
 /// alias; [`ALIASED_FLAT_TOOL_DESCRIPTION`] is the alias's variant.
-const FLAT_TOOL_DESCRIPTION: &str = "Imports an image file (PNG, JPEG, GIF or BMP) as a Doom flat lump: the picture is quantized to the session PLAYPAL and stored as the raw index plane in the working archive's flats region as one undoable edit, name defaulting to the file stem; other shapes resize to the nearest vanilla size. Prefer create_flat_from_image - it fits 64x64, blends the edges to tile and can assign a theme role.";
+const FLAT_TOOL_DESCRIPTION: &str = "Imports an image file (PNG, JPEG, GIF or BMP) as a Doom flat lump: the picture is quantized to the session PLAYPAL in your dither mode (none, ordered or floyd_steinberg - default floyd_steinberg, as in process_image) and stored as the raw index plane in the working archive's flats region as one undoable edit, name defaulting to the file stem; other shapes resize to the square size you pass (64, 128 or 256). The result echoes the dither and size used. Prefer create_flat_from_image - it fits a size you choose, blends the edges to tile and can assign a theme role.";
 
 /// [`FLAT_TOOL_DESCRIPTION`] with the alias note on the front.
-const ALIASED_FLAT_TOOL_DESCRIPTION: &str = "Alias of import_image_as_flat for clients that think in PNG: it accepts any supported image and is otherwise identical - same parameters, flats-region placement, undoable edit and result. See import_image_as_flat (prefer create_flat_from_image for a finished 64x64 tiling flat).";
+const ALIASED_FLAT_TOOL_DESCRIPTION: &str = "Alias of import_image_as_flat for clients that think in PNG: it accepts any supported image and is otherwise identical - same parameters including dither and size, flats-region placement, undoable edit and result. See import_image_as_flat (prefer create_flat_from_image for a finished tiling flat).";
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -793,9 +822,9 @@ impl Cyberdemon {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImportFlatParams, ImportRawParams, ResizeChoice, chosen, current_pnames, fit_flat_shape,
-        namespace_names, parse_flat, parse_flat_size, parse_namespace, parse_resize, pnames_plan,
-        position_of, transparent_alpha_pixels,
+        Dither, ImportFlatParams, ImportRawParams, ResizeChoice, chosen, current_pnames,
+        fit_flat_shape, namespace_names, parse_flat, parse_flat_size, parse_namespace,
+        parse_resize, pnames_plan, position_of, transparent_alpha_pixels,
     };
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
@@ -951,6 +980,7 @@ mod tests {
             palette: None,
             resize: None,
             size: None,
+            dither: None,
             replace: false,
         }
     }
@@ -976,6 +1006,11 @@ mod tests {
         assert_eq!(parsed.palette, 0_usize, "the normal palette by default");
         assert_eq!(parsed.resize, ResizeChoice::Keep, "no resizing by default");
         assert_eq!(parsed.size, 64_u32, "the vanilla side by default");
+        assert_eq!(
+            parsed.dither,
+            Dither::FloydSteinberg,
+            "the same dither default process_image documents"
+        );
         assert!(!parsed.replace, "no silent overwrite");
         let mut args = flat_params("/x/y.png");
         args.name = Some("too long for wad".to_owned());
@@ -983,6 +1018,19 @@ mod tests {
             code(&parse_flat(&args).expect_err("bad name")),
             "invalid_argument"
         );
+    }
+
+    #[test]
+    fn parse_flat_keeps_an_explicit_dither_mode() {
+        for mode in [Dither::None, Dither::Ordered, Dither::FloydSteinberg] {
+            let mut args = flat_params("/x/y.png");
+            args.dither = Some(mode);
+            assert_eq!(
+                parse_flat(&args).expect("a parsed mode carries").dither,
+                mode,
+                "the mode passes through untouched"
+            );
+        }
     }
 
     #[test]
@@ -1067,6 +1115,7 @@ mod tests {
             "palette": 3_u64,
             "resize": "nearest",
             "size": 128_u64,
+            "dither": "ordered",
             "replace": true,
         }))
         .expect("the wire form");
@@ -1074,6 +1123,7 @@ mod tests {
         assert_eq!(args.palette, Some(3_usize));
         assert_eq!(args.resize.as_deref(), Some("nearest"));
         assert_eq!(args.size, Some(128_u32));
+        assert_eq!(args.dither, Some(Dither::Ordered));
         assert!(args.replace, "the flag carries");
     }
 }

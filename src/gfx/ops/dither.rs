@@ -11,7 +11,7 @@
 //! cell offset to each channel instead of propagating error.
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::gfx::image::{IndexedImage, RgbaImage};
 use crate::gfx::ops::clamp_u8;
@@ -31,7 +31,7 @@ const BAYER_CENTER: i32 = 8;
 const BAYER_STEP: i32 = 4;
 
 /// The error-diffusion mode of [`quantize_dithered`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Dither {
     /// Plain nearest-colour quantization, no error handling.
@@ -581,6 +581,16 @@ mod tests {
             modes,
             vec![Dither::None, Dither::FloydSteinberg, Dither::Ordered],
             "one name per variant"
+        );
+    }
+
+    #[test]
+    fn dither_modes_serialize_back_to_their_names() {
+        let modes: Vec<Dither> = vec![Dither::None, Dither::FloydSteinberg, Dither::Ordered];
+        let text = serde_json::to_string(&modes).expect("the modes serialize");
+        assert_eq!(
+            text, r#"["none","floyd_steinberg","ordered"]"#,
+            "a result echoes the word the argument took"
         );
     }
 }

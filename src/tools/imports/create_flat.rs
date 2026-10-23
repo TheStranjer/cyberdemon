@@ -1,20 +1,22 @@
-//! The one-shot floor/ceiling flat: one picture in, one `64x64` flat
-//! lump out, in one undoable edit.
+//! The one-shot floor/ceiling flat: one picture in, one square flat lump
+//! out, in one undoable edit.
 //!
 //! [`create_flat_run`] flattens [`ProcessParams`] into its arguments:
 //! [`process`] runs the user's ops, an automatic `Fit` brings the picture
-//! to the vanilla flat shape (`64x64` - every flat this tool writes has
-//! that size), a `MakeTileable` op blends opposite edges when `tileable`
-//! (the default), [`to_indexed`] quantizes the result opaquely against
-//! the session palette, [`encode_flat`] writes the raw index plane and
-//! [`decode_flat`] reads it back for the preview. The collision rules
-//! ([`check_flat_clash`]) run before anything is written - flats are
-//! referenced by name everywhere, so a layer-held name refuses until
-//! `replace` - and [`commit_flat`] places the lump as one
+//! to the requested `size` square (`64x64` unless the caller asks for
+//! `128x128` or `256x256`, the sides the flat codec stores), a
+//! `MakeTileable` op blends opposite edges when `tileable` (the default),
+//! [`to_indexed`] quantizes the result opaquely against the session
+//! palette in the call's [`Dither`] mode, [`encode_flat`] writes the raw
+//! index plane and [`decode_flat`] reads it back for the preview. The
+//! collision rules ([`check_flat_clash`]) run before anything is written -
+//! flats are referenced by name everywhere, so a layer-held name refuses
+//! until `replace` - and [`commit_flat`] places the lump as one
 //! [`crate::session::Session::edit`] labelled `create_flat NAME`. An
 //! `assign_role` request afterwards points a theme flat role at the new
 //! flat; theme state is session state and is not part of the undo
-//! history, which the result warnings say.
+//! history, which the result warnings say. A side above the vanilla `64`
+//! adds its own warning: only a `ZDoom`-family port loads such a flat.
 
 use rmcp::ErrorData;
 use rmcp::model::CallToolResult;
@@ -27,6 +29,7 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::flat::{decode_flat, encode_flat};
+use crate::gfx::ops::dither::Dither;
 use crate::gfx::ops::{Filter, FitMode, ImageOp, OpsReport, apply_ops};
 use crate::gfx::quantize::Transparency;
 use crate::session::{Session, Source};
@@ -36,14 +39,15 @@ use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{LumpWrite, put_lump};
 use crate::tools::imports::processed::{ProcessParams, Processed, process, to_indexed};
 use crate::tools::imports::texture::layer_label;
-use crate::tools::imports::transparent_alpha_pixels;
+use crate::tools::imports::{DEFAULT_FLAT_SIZE, parse_flat_size, transparent_alpha_pixels};
 use crate::tools::ok;
 use crate::tools::palette::load_palette;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
-/// The vanilla flat edge: every flat this tool writes is this square.
-const FLAT_SIDE: u32 = 64_u32;
+/// The vanilla flat edge: the default square side this tool writes, and
+/// the largest one vanilla Doom loads.
+const FLAT_SIDE: u32 = DEFAULT_FLAT_SIZE;
 /// The blend band (pixels) of the automatic `make_tileable` step.
 const TILE_BAND: u32 = 16_u32;
 /// Media type of the published preview.
@@ -56,7 +60,7 @@ const NEXT_STEPS: [&str; 2] = [
 ];
 
 /// The full documentation of [`crate::server::Cyberdemon::create_flat_from_image`].
-pub(in crate::tools) const CREATE_FLAT_TOOL_DESCRIPTION: &str = "One call from a picture file to a working Doom flat: it runs your image ops, fits the picture to 64x64 (vanilla floors tile at that size), blends opposite edges so it tiles seamlessly (tileable, default true), quantizes opaquely to the session PLAYPAL and stores the raw index plane in the working flats region - ONE undoable edit with a preview. assign_role points a theme floor or ceiling role at it.";
+pub(in crate::tools) const CREATE_FLAT_TOOL_DESCRIPTION: &str = "One call from a picture file to a working Doom flat: it runs your image ops, fits the picture to the square size you pass (64 by default, 128 or 256 for ZDoom-family ports; vanilla Doom loads only 64x64 and the result warns past it), blends opposite edges so it tiles seamlessly (tileable, default true), quantizes opaquely to the session PLAYPAL in your dither mode and stores the raw index plane in the working flats region - ONE undoable edit with a preview echoing dither and size. assign_role points a theme floor or ceiling role at it.";
 
 /// Arguments for [`crate::server::Cyberdemon::create_flat_from_image`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -66,10 +70,16 @@ pub(in crate::tools) struct CreateFlatParams {
     pub(in crate::tools) source: String,
     /// Flat lump name: 1 to 8 printable `ASCII` characters, uppercased.
     pub(in crate::tools) name: String,
-    /// How the picture maps onto the `64x64` square: `"cover"` (default),
+    /// How the picture maps onto the square: `"cover"` (default),
     /// `"contain"` or `"stretch"`.
     #[serde(default)]
     pub(in crate::tools) fit: Option<FitMode>,
+    /// Square side of the stored flat: 64 (default), 128 or 256; another
+    /// value is `invalid_argument`. Vanilla Doom loads only a `64x64`
+    /// flat, so a bigger side warns that the flat needs a `ZDoom`-family
+    /// port.
+    #[serde(default)]
+    pub(in crate::tools) size: Option<u32>,
     /// Append a `make_tileable` op (band 16) blending opposite edges so
     /// the flat tiles seamlessly (default `true`).
     #[serde(default = "default_tileable")]
@@ -102,6 +112,8 @@ struct FlatRequest {
     name: LumpName,
     /// How the picture maps onto the square.
     fit: FitMode,
+    /// The square side of the stored flat.
+    size: u32,
     /// Whether a `make_tileable` op follows the fit.
     tileable: bool,
     /// The theme flat role to assign afterwards, if any.
@@ -112,18 +124,20 @@ struct FlatRequest {
     shared: ProcessParams,
 }
 
-/// Validate the create-flat arguments: the name and the theme role. Every
-/// refusal here happens before the `source` is fetched.
+/// Validate the create-flat arguments: the name, the square `size` and the
+/// theme role. Every refusal here happens before the `source` is fetched.
 ///
 /// # Errors
 ///
-/// [`LumpName::parse`]' [`CyberError::InvalidArgument`] for a bad name and
+/// [`LumpName::parse`]' [`CyberError::InvalidArgument`] for a bad name,
+/// [`parse_flat_size`]' error for a side outside the three, and
 /// [`parse_flat_role`]' error for a wall or unknown `assign_role`.
 fn parse_create_flat(args: &CreateFlatParams) -> Result<FlatRequest, CyberError> {
     Ok(FlatRequest {
         source: args.source.clone(),
         name: LumpName::parse(&args.name)?,
         fit: args.fit.unwrap_or(FitMode::Cover),
+        size: parse_flat_size(args.size)?,
         tileable: args.tileable,
         role: parse_flat_role(args.assign_role.as_deref())?,
         replace: args.replace,
@@ -153,17 +167,22 @@ fn parse_flat_role(text: Option<&str>) -> Result<Option<Role>, CyberError> {
     Ok(Some(role))
 }
 
-/// The automatic `Fit` to the vanilla square and `MakeTileable` (when
+/// The automatic `Fit` to the `size` square and `MakeTileable` (when
 /// asked) ops, appended to the processed picture and its report.
 ///
 /// # Errors
 ///
 /// [`apply_ops`]' [`CyberError::InvalidArgument`] widened to say the
 /// failure came from the automatic step, not the user's ops.
-fn shape_flat(processed: Processed, fit: FitMode, tileable: bool) -> Result<Processed, CyberError> {
+fn shape_flat(
+    processed: Processed,
+    fit: FitMode,
+    tileable: bool,
+    size: u32,
+) -> Result<Processed, CyberError> {
     let mut extra: Vec<ImageOp> = vec![ImageOp::Fit {
-        width: FLAT_SIDE,
-        height: FLAT_SIDE,
+        width: size,
+        height: size,
         mode: fit,
         filter: Filter::Area,
         background: None,
@@ -177,7 +196,8 @@ fn shape_flat(processed: Processed, fit: FitMode, tileable: bool) -> Result<Proc
     }
     let (rgba, second) = apply_ops(processed.rgba, &extra).map_err(|error| {
         CyberError::InvalidArgument(format!(
-            "the automatic flat sizing step failed: {error}: adjust fit or pass tileable=false"
+            "the automatic flat sizing step failed: {error}: adjust fit or size, or pass \
+             tileable=false"
         ))
     })?;
     let mut steps = processed.report.steps;
@@ -205,8 +225,8 @@ struct BuiltFlat {
 }
 
 /// Run the whole picture side: user ops, the automatic square fit and
-/// tiling, opaque quantization, flat encoding and the decoded preview.
-/// The palette read is the only session access here.
+/// tiling, opaque dithered quantization, flat encoding and the decoded
+/// preview. The palette read is the only session access here.
 ///
 /// # Errors
 ///
@@ -219,7 +239,7 @@ fn build_flat(
     fetched: &Fetched,
 ) -> Result<BuiltFlat, CyberError> {
     let processed = process(&fetched.bytes, &request.shared)?;
-    let shaped = shape_flat(processed, request.fit, request.tileable)?;
+    let shaped = shape_flat(processed, request.fit, request.tileable, request.size)?;
     let ignored = transparent_alpha_pixels(&shaped.rgba);
     let palette =
         state.with_session(|session| load_palette(session, request.shared.palette_index()))?;
@@ -238,8 +258,28 @@ fn build_flat(
         steps: shaped.report.steps,
         colors_used: indexed.colors_used,
         max_color_error: indexed.max_color_error,
-        warnings: opaque_warning(ignored),
+        warnings: flat_warnings(ignored, request.size),
     })
+}
+
+/// The non-fatal facts of one built flat: kept-opaque holes and, past the
+/// vanilla side, the port requirement of the stored shape.
+fn flat_warnings(ignored: usize, size: u32) -> Vec<String> {
+    let mut warnings = opaque_warning(ignored);
+    warnings.extend(vanilla_size_warning(size));
+    warnings
+}
+
+/// The warning for a side past the `64x64` a vanilla engine reads, `None`
+/// for the vanilla square.
+fn vanilla_size_warning(size: u32) -> Option<String> {
+    if size <= FLAT_SIDE {
+        return None;
+    }
+    Some(format!(
+        "{size}x{size} is past the vanilla shape: vanilla Doom loads only 64x64 flats, so this \
+         flat needs a ZDoom-family port (GZDoom, ZDoom)"
+    ))
 }
 
 /// The warning for kept-opaque holes, empty for a fully opaque picture.
@@ -324,6 +364,10 @@ fn apply_role(state: &AppState, request: &FlatRequest) -> Result<Option<&'static
 struct CreatedFlatReport {
     /// The flat name, uppercased.
     flat: String,
+    /// The square side of the stored flat, in pixels.
+    size: u32,
+    /// The dither mode the quantization used.
+    dither: Dither,
     /// One measurement object per applied op, in order.
     steps: Vec<Value>,
     /// Distinct source colours.
@@ -365,6 +409,8 @@ fn report_of(request: &FlatRequest, built: &BuiltFlat, landed: Landed) -> Create
     }
     CreatedFlatReport {
         flat: request.name.to_string(),
+        size: request.size,
+        dither: request.shared.dither_choice(),
         steps: built.steps.clone(),
         colors_used: built.colors_used,
         max_color_error: built.max_color_error,
@@ -427,9 +473,9 @@ async fn create_flat_build(
 #[cfg(test)]
 mod tests {
     use super::{
-        CREATE_FLAT_TOOL_DESCRIPTION, CreateFlatParams, apply_role, build_flat, check_flat_clash,
-        commit_flat, create_flat_build, opaque_warning, parse_create_flat, parse_flat_role,
-        shape_flat,
+        CREATE_FLAT_TOOL_DESCRIPTION, CreateFlatParams, Dither, apply_role, build_flat,
+        check_flat_clash, commit_flat, create_flat_build, flat_warnings, opaque_warning,
+        parse_create_flat, parse_flat_role, shape_flat, vanilla_size_warning,
     };
     use crate::assets::fetch::Fetched;
     use crate::error::CyberError;
@@ -460,6 +506,7 @@ mod tests {
             source: "/x/y.png".to_owned(),
             name: "MYFLAT".to_owned(),
             fit: None,
+            size: None,
             tileable: true,
             assign_role: None,
             replace: false,
@@ -492,6 +539,7 @@ mod tests {
         let request = parse_create_flat(&args()).expect("a source and name are enough");
         assert_eq!(request.name, name("MYFLAT"), "the name carries");
         assert_eq!(request.fit, FitMode::Cover, "cover by default");
+        assert_eq!(request.size, 64_u32, "the vanilla square by default");
         assert!(request.tileable, "tileable is on unless passed false");
         assert!(request.role.is_none(), "no role asked for");
         assert!(!request.replace, "no silent overwrite");
@@ -507,6 +555,58 @@ mod tests {
         assert_eq!(
             code(&parse_create_flat(&bad).expect_err("no lump name")),
             "invalid_argument"
+        );
+    }
+
+    #[test]
+    fn parse_takes_the_three_square_sides_and_refuses_else() {
+        for side in [64_u32, 128, 256] {
+            let mut call = args();
+            call.size = Some(side);
+            assert_eq!(
+                parse_create_flat(&call).expect("a square side").size,
+                side,
+                "the size carries"
+            );
+        }
+        let mut odd = args();
+        odd.size = Some(96_u32);
+        let error = parse_create_flat(&odd).expect_err("no 96 side");
+        assert_eq!(code(&error), "invalid_argument");
+        assert!(
+            error.to_string().contains("64, 128, 256"),
+            "the message lists the sides: {error}"
+        );
+    }
+
+    #[test]
+    fn only_a_side_past_the_vanilla_square_warns() {
+        assert!(
+            vanilla_size_warning(64_u32).is_none(),
+            "the vanilla shape is quiet"
+        );
+        for side in [128_u32, 256] {
+            let warning = vanilla_size_warning(side).expect("a past-vanilla side warns");
+            assert!(
+                warning.contains(&format!("{side}x{side}"))
+                    && warning.contains("vanilla Doom loads only 64x64 flats")
+                    && warning.contains("ZDoom"),
+                "the warning names the shape, the limit and the way out: {warning}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_warnings_carry_the_size_note_after_the_opaque_one() {
+        assert!(
+            flat_warnings(0_usize, 64_u32).is_empty(),
+            "quiet and vanilla"
+        );
+        let both = flat_warnings(5_usize, 256_u32);
+        assert_eq!(both.len(), 2_usize, "the hole count and the size note");
+        assert!(
+            both[0].contains("5 pixels") && both[1].contains("256x256"),
+            "the opaque warning comes first: {both:?}"
         );
     }
 
@@ -561,19 +661,34 @@ mod tests {
 
     #[test]
     fn shape_fits_to_the_square_and_appends_the_tileable_step() {
-        let shaped = shape_flat(processed(100, 80), FitMode::Cover, true).expect("both ops run");
+        let shaped =
+            shape_flat(processed(100, 80), FitMode::Cover, true, 64_u32).expect("both ops run");
         assert_eq!((shaped.rgba.width, shaped.rgba.height), (64_u32, 64_u32));
         assert_eq!(
             step_kinds(&shaped),
             vec!["fit".to_owned(), "make_tileable".to_owned()],
             "fit then tileable"
         );
-        let flat = shape_flat(processed(64, 64), FitMode::Stretch, false).expect("fit runs");
+        let flat =
+            shape_flat(processed(64, 64), FitMode::Stretch, false, 64_u32).expect("fit runs");
         assert_eq!(
             step_kinds(&flat),
             vec!["fit".to_owned()],
             "the fit always runs"
         );
+    }
+
+    #[test]
+    fn shape_fits_to_the_bigger_squares_a_zdoom_port_reads() {
+        for side in [128_u32, 256] {
+            let shaped =
+                shape_flat(processed(100, 80), FitMode::Cover, true, side).expect("both ops run");
+            assert_eq!(
+                (shaped.rgba.width, shaped.rgba.height),
+                (side, side),
+                "the requested square lands"
+            );
+        }
     }
 
     #[test]
@@ -758,6 +873,66 @@ mod tests {
         assert!(built.warnings.is_empty(), "the picture is opaque");
     }
 
+    #[tokio::test]
+    async fn build_at_a_bigger_side_stores_that_square_and_warns() {
+        let state = state();
+        let mut call = args();
+        call.size = Some(256_u32);
+        let request = parse_create_flat(&call).expect("a hi-res side is valid");
+        let png = encode_png(&picture(100, 80), None).expect("test PNG encodes");
+        let fetched = Fetched {
+            bytes: png,
+            filename: "art.png".to_owned(),
+            mime: Some("image/png".to_owned()),
+        };
+        let built = build_flat(&state, &request, &fetched).expect("the build runs");
+        assert_eq!(built.data.len(), 0x1_0000_usize, "a 256x256 flat");
+        assert_eq!(
+            super::decode_flat(&built.data)
+                .expect("the bytes decode")
+                .width,
+            256_u32,
+            "at the requested square"
+        );
+        assert!(
+            built
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("256x256") && warning.contains("vanilla")),
+            "the size warns: {:?}",
+            built.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn the_run_echoes_the_dither_and_size_it_used() {
+        let state = state();
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let file = dir.path().join("art.png");
+        std::fs::write(
+            &file,
+            encode_png(&picture(100, 80), None).expect("test PNG encodes"),
+        )
+        .expect("test file writes");
+        let mut call = args();
+        call.source = file.display().to_string();
+        call.size = Some(128_u32);
+        call.shared.dither = Some(Dither::Ordered);
+        let report = create_flat_build(&state, &call)
+            .await
+            .expect("the run lands");
+        assert_eq!(report.size, 128_u32, "the echo carries the side");
+        assert_eq!(report.dither, Dither::Ordered, "the echo carries the mode");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("128x128")),
+            "the bigger side warns: {:?}",
+            report.warnings
+        );
+    }
+
     /// The session's `Floor` override and its undo depth.
     fn floor_theme(state: &AppState) -> (Option<String>, usize) {
         state
@@ -844,6 +1019,7 @@ mod tests {
             "source": "/x/y.png",
             "name": "MYFLAT",
             "fit": "contain",
+            "size": 256_u64,
             "tileable": false,
             "ops": [{"op": "flip", "horizontal": true, "vertical": false}],
             "dither": "ordered",
@@ -853,8 +1029,10 @@ mod tests {
         }))
         .expect("the documented wire form");
         assert_eq!(call.fit, Some(FitMode::Contain));
+        assert_eq!(call.size, Some(256_u32), "the square side carries");
         assert!(!call.tileable, "the flag carries");
         assert_eq!(call.shared.ops.len(), 1_usize, "the op list carries");
+        assert_eq!(call.shared.dither, Some(Dither::Ordered));
         assert_eq!(call.shared.palette, Some(2_usize));
         assert_eq!(call.assign_role.as_deref(), Some("ceiling"));
         assert!(call.replace);

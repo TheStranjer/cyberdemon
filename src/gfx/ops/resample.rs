@@ -199,7 +199,12 @@ fn blend_pixel(img: &RgbaImage, rows: &Taps, columns: &Taps) -> [u8; 4] {
 
 /// Adds one source pixel: colours weighted by alpha and footprint weight,
 /// alpha weighted by the footprint weight alone.
-fn accumulate(channels: &mut [u64; 3], premultiplied: &mut u64, pixel: [u8; 4], weight: u64) {
+pub(crate) fn accumulate(
+    channels: &mut [u64; 3],
+    premultiplied: &mut u64,
+    pixel: [u8; 4],
+    weight: u64,
+) {
     let [red, green, blue, alpha] = pixel;
     let scaled = weight.saturating_mul(u64::from(alpha));
     for (channel, value) in channels.iter_mut().zip([red, green, blue]) {
@@ -210,7 +215,7 @@ fn accumulate(channels: &mut [u64; 3], premultiplied: &mut u64, pixel: [u8; 4], 
 
 /// Turns the accumulators into a pixel: alpha over the whole footprint,
 /// colour over the covered alpha; a fully transparent result gets colour 0.
-fn finish_pixel(channels: [u64; 3], premultiplied: u64, footprint: u64) -> [u8; 4] {
+pub(crate) fn finish_pixel(channels: [u64; 3], premultiplied: u64, footprint: u64) -> [u8; 4] {
     let alpha = u8::try_from(rounded_div(premultiplied, footprint)).unwrap_or(255_u8);
     let color: [u8; 3] = if premultiplied == 0 {
         [0_u8; 3]

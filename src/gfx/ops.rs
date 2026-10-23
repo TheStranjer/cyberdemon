@@ -3,7 +3,8 @@
 //!
 //! Operations run in order over one [`RgbaImage`]; each returns its result
 //! plus a `JSON` object of measurements, collected into an [`OpsReport`].
-//! Geometry (crop/fit/rotate/flip) lives in [`geometry`], size-changing
+//! Geometry (crop/fit/rotate/flip) lives in [`geometry`], the
+//! corner-quad-to-rectangle warp in [`perspective`], size-changing
 //! sampling in [`resample`], tonal corrections (including grayscale) in
 //! [`tone`], alpha handling in [`alpha`] and [`background`], seamless
 //! tiling in [`tile`], binarization in [`threshold`] (with the
@@ -17,6 +18,7 @@ pub mod background;
 pub mod blur;
 pub mod dither;
 pub mod geometry;
+pub mod perspective;
 pub mod resample;
 pub mod threshold;
 pub mod tile;
@@ -28,6 +30,7 @@ use serde_json::Value;
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
+use crate::gfx::ops::perspective::Corner;
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
 /// Largest edge (pixels) an operation parameter may request and an
@@ -101,6 +104,19 @@ pub enum ImageOp {
         horizontal: bool,
         /// Mirror top-to-bottom.
         vertical: bool,
+    },
+    /// Warp a four-corner source quad onto a straight rectangle: the
+    /// destination's corner pixels sample exactly the given positions and
+    /// the projective map between is solved in `16.16` fixed point.
+    PerspectiveCorrect {
+        /// The quad's corners in source pixel coordinates, ordered
+        /// top-left, top-right, bottom-right, bottom-left; they may be
+        /// negative, but must stay distinct with no three on one line.
+        corners: [Corner; 4],
+        /// Destination width, `1..=4096`.
+        width: u32,
+        /// Destination height, `1..=4096`.
+        height: u32,
     },
     /// Stretch the [`luminance`] range of opaque pixels to full scale.
     AutoLevels {
@@ -284,7 +300,8 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
-        | ImageOp::Flip { .. } => geometry_op(&img, index, op)?,
+        | ImageOp::Flip { .. }
+        | ImageOp::PerspectiveCorrect { .. } => geometry_op(&img, index, op)?,
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
@@ -313,44 +330,27 @@ fn geometry_op(
             y,
             width,
             height,
-        } => geometry::crop(
-            img,
-            index,
-            &geometry::CropSpec {
-                x,
-                y,
-                width,
-                height,
-            },
-        )?,
+        } => crop_arm(img, index, (x, y, width, height))?,
         ImageOp::Fit {
             width,
             height,
             mode,
             filter,
             background,
-        } => geometry::fit(
-            img,
-            index,
-            &geometry::FitSpec {
-                width,
-                height,
-                mode,
-                filter,
-                background: background.as_deref(),
-            },
-        )?,
+        } => {
+            let rect = (width, height, mode, filter);
+            fit_arm(img, index, rect, background.as_deref())?
+        }
         ImageOp::Rotate { quarter_turns } => geometry::rotate(img, index, quarter_turns)?,
         ImageOp::Flip {
             horizontal,
             vertical,
-        } => geometry::flip(
-            img,
-            &geometry::FlipSpec {
-                horizontal,
-                vertical,
-            },
-        ),
+        } => flip_arm(img, (horizontal, vertical)),
+        ImageOp::PerspectiveCorrect {
+            corners,
+            width,
+            height,
+        } => perspective_arm(img, index, (corners, width, height))?,
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
@@ -366,6 +366,71 @@ fn geometry_op(
         }
     };
     Ok((out, step))
+}
+
+/// The `Crop` arm: spec assembled, run through [`geometry`].
+fn crop_arm(
+    img: &RgbaImage,
+    index: usize,
+    rect: (u32, u32, u32, u32),
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (x, y, width, height) = rect;
+    geometry::crop(
+        img,
+        index,
+        &geometry::CropSpec {
+            x,
+            y,
+            width,
+            height,
+        },
+    )
+}
+
+/// The `Fit` arm: spec assembled, run through [`geometry`].
+fn fit_arm(
+    img: &RgbaImage,
+    index: usize,
+    rect: (u32, u32, FitMode, Filter),
+    background: Option<&str>,
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (width, height, mode, filter) = rect;
+    let spec = geometry::FitSpec {
+        width,
+        height,
+        mode,
+        filter,
+        background,
+    };
+    geometry::fit(img, index, &spec)
+}
+
+/// The `Flip` arm: spec assembled, run through [`geometry`].
+fn flip_arm(img: &RgbaImage, axes: (bool, bool)) -> (RgbaImage, Value) {
+    let (horizontal, vertical) = axes;
+    geometry::flip(
+        img,
+        &geometry::FlipSpec {
+            horizontal,
+            vertical,
+        },
+    )
+}
+
+/// The `PerspectiveCorrect` arm: spec assembled, run through
+/// [`perspective`].
+fn perspective_arm(
+    img: &RgbaImage,
+    index: usize,
+    quad: ([Corner; 4], u32, u32),
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (corners, width, height) = quad;
+    let spec = perspective::PerspectiveSpec {
+        corners,
+        width,
+        height,
+    };
+    perspective::correct(img, index, &spec)
 }
 
 /// The dispatch-bug error for a pixel op reaching [`geometry_op`]; any
@@ -434,7 +499,8 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
-        | ImageOp::Flip { .. } => Err(CyberError::Internal(format!(
+        | ImageOp::Flip { .. }
+        | ImageOp::PerspectiveCorrect { .. } => Err(CyberError::Internal(format!(
             "ops[{index}]: geometric op reached the pixel dispatcher"
         ))),
     }
@@ -494,7 +560,8 @@ fn restoration_op(
         | ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
-        | ImageOp::Flip { .. } => Err(CyberError::Internal(format!(
+        | ImageOp::Flip { .. }
+        | ImageOp::PerspectiveCorrect { .. } => Err(CyberError::Internal(format!(
             "ops[{index}]: op reached the wrong pixel dispatcher"
         ))),
     }
@@ -639,8 +706,8 @@ pub(crate) fn clamp_u8(value: i32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Filter, FitMode, ImageOp, MAX_OP_DIMENSION, OpsReport, apply_ops, clamp_u8, div_ceil,
-        luminance, parse_hex_color, rounded_div,
+        Corner, Filter, FitMode, ImageOp, MAX_OP_DIMENSION, OpsReport, apply_ops, clamp_u8,
+        div_ceil, luminance, parse_hex_color, rounded_div,
     };
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
@@ -846,6 +913,54 @@ mod tests {
         )
         .expect_err("a threshold never belongs to the geometric dispatcher");
         assert_eq!(error.code(), "internal", "dispatch bugs are internal");
+    }
+
+    /// The perspective warp's own square over the 2x2 test image.
+    fn straighten() -> ImageOp {
+        ImageOp::PerspectiveCorrect {
+            corners: [
+                Corner { x: 0, y: 0 },
+                Corner { x: 1, y: 0 },
+                Corner { x: 1, y: 1 },
+                Corner { x: 0, y: 1 },
+            ],
+            width: 2,
+            height: 2,
+        }
+    }
+
+    #[test]
+    fn perspective_correct_deserializes_and_runs_through_apply_ops() {
+        let text = r#"[{"op":"perspective_correct",
+            "corners":[{"x":0,"y":0},{"x":1,"y":0},{"x":1,"y":1},{"x":0,"y":1}],
+            "width":2,"height":2}]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(ops[0], straighten(), "the tag, corners and size parse");
+        let (out, report) = apply_ops(quad(), &ops).expect("the warp runs");
+        assert_eq!(
+            report.steps[0]["op"], "perspective_correct",
+            "the documented step name"
+        );
+        assert_eq!((out.width, out.height), (2, 2), "the target shape");
+        assert_eq!(
+            out.get(1, 0),
+            Some([0, 255, 0, 255]),
+            "the identity warp keeps pixels"
+        );
+    }
+
+    #[test]
+    fn the_pixel_dispatchers_reject_perspective_correct() {
+        let to_pixel = super::pixel_op(quad(), 2, straighten())
+            .expect_err("a warp never belongs to the pixel dispatcher");
+        assert_eq!(to_pixel.code(), "internal", "dispatch bugs are internal");
+        let to_restoration = super::restoration_op(quad(), 3, straighten())
+            .expect_err("a warp never belongs to the restoration dispatcher");
+        assert_eq!(
+            to_restoration.code(),
+            "internal",
+            "dispatch bugs are internal"
+        );
     }
 
     #[test]

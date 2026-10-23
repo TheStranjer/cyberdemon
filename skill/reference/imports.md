@@ -315,6 +315,15 @@ canonical operation reference.
   `{ "op": "rotate", "quarter_turns": 1 }` (`1..=3`).
 - `flip` — mirror horizontally and/or vertically.
   `{ "op": "flip", "horizontal": true, "vertical": false }`.
+- `perspective_correct` — warp a four-corner source quad onto a straight
+  rectangle: `corners` are the quad's `{"x": .., "y": ..}` source pixel
+  positions ordered top-left, top-right, bottom-right, bottom-left (they
+  may be negative); each destination corner pixel samples exactly its
+  corner position and the projective map between is solved in fixed
+  point. `width`/`height` are `1..=4096`; repeated or collinear corners
+  are `invalid_argument`, and destination pixels whose source position
+  falls outside the picture come back transparent black.
+  `{ "op": "perspective_correct", "width": 256, "height": 256, "corners": [{"x": 20, "y": 10}, {"x": 230, "y": 4}, {"x": 250, "y": 240}, {"x": 12, "y": 232}] }`.
 - `auto_levels` — stretch the luminance range of opaque pixels to full
   scale. `clip_percent` (`0..=10`, default `1`) is the share of pixels
   allowed below the low and above the high cut.

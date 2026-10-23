@@ -60,7 +60,10 @@ src/
                   `adaptive_threshold`, `gfx/ops/dither.rs` the
                   `Dither`-knopped quantization (Floyd–Steinberg serpentine),
                   and `gfx/ops/tile.rs` the seam-blend behind
-                  `make_tileable`.
+                  `make_tileable`, and `gfx/ops/perspective.rs` the
+                  corner-quad-to-rectangle homography warp (16.16 DLT
+                  Gaussian solve, bilinear alpha-weighted sampling) behind
+                  `perspective_correct`.
   audio.rs        Audio core module root: sample-rate limits and the shared
                   unsigned-8-bit conversions.
   audio/          Audio building blocks (no MCP concerns): `audio/pcm.rs`

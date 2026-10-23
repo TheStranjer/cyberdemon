@@ -15,7 +15,8 @@
 //! Test pictures are written with the library's own `PNG` encoder. The
 //! preview pipeline `process_image` (ops, the `grayscale`/`blur`
 //! building blocks, the `threshold`-then-`thin_stroke_filter` hairline pass,
-//! the `adaptive_threshold` uneven-light binarization,
+//! the `adaptive_threshold` uneven-light binarization, the
+//! `perspective_correct` quad straightening,
 //! quantized and `quantize: false`,
 //! the op-index errors, and the default-dither preview keeping an
 //! asymmetric picture unmirrored) and the one-shot `create_texture_from_image`
@@ -46,7 +47,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::iwad;
-    use crate::support::{asset_png, call, call_err, connect, http_get, http_put};
+    use crate::support::{
+        asset_png, call, call_err, connect, fill_rect, http_get, http_put, paper_sheet,
+    };
 
     /// A connected MCP client.
     type Client = RunningService<RoleClient, ()>;
@@ -2265,6 +2268,87 @@ mod tests {
             unweighted_rows(&image.pixels),
             Vec::<usize>::new(),
             "every row of the quantized preview stays left-weighted"
+        );
+    }
+
+    /// An `8x8` picture of four solid colour blocks: red top-left, lime
+    /// top-right, blue bottom-right, black bottom-left.
+    fn quadrant_png() -> Vec<u8> {
+        let mut sheet = paper_sheet(SIDE, SIDE);
+        fill_rect(&mut sheet, (0, 0, 4, 4), [255_u8, 0, 0, 255]);
+        fill_rect(&mut sheet, (4, 0, SIDE, 4), [0_u8, 255, 0, 255]);
+        fill_rect(&mut sheet, (4, 4, SIDE, SIDE), [0_u8, 0, 255, 255]);
+        fill_rect(&mut sheet, (0, 4, 4, SIDE), [0_u8, 0, 0, 255]);
+        encode_png(&sheet, None).expect("test PNG encodes")
+    }
+
+    /// Arguments straightening the corner quad of [`quadrant_png`] into an
+    /// `8x8` rectangle.
+    fn straighten_args(file: &Path) -> Value {
+        source_args(
+            file,
+            json!({
+                "ops": [{
+                    "op": "perspective_correct",
+                    "corners": [
+                        { "x": 1_i64, "y": 1_i64 },
+                        { "x": 6_i64, "y": 1_i64 },
+                        { "x": 6_i64, "y": 6_i64 },
+                        { "x": 1_i64, "y": 5_i64 },
+                    ],
+                    "width": 8_u64,
+                    "height": 8_u64,
+                }],
+            }),
+        )
+    }
+
+    /// `process_image` with `perspective_correct`: the skewed quad of
+    /// four corner colours is straightened to `8x8` and each corner
+    /// colour lands exactly on its rectangle corner.
+    #[tokio::test]
+    async fn process_image_perspective_corrects_a_skewed_quad_to_a_rectangle() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "SKEW.png", &quadrant_png());
+        let report = call(&client, "process_image", straighten_args(&file)).await;
+        assert_eq!(report["width"], json!(8_u64), "the rectangle's width");
+        assert_eq!(report["height"], json!(8_u64), "the rectangle's height");
+        let step = &report["steps"][0];
+        assert_eq!(step["op"], json!("perspective_correct"), "the step name");
+        assert_eq!(
+            step["corners"],
+            json!([
+                [1_i64, 1_i64],
+                [6_i64, 1_i64],
+                [6_i64, 6_i64],
+                [1_i64, 5_i64]
+            ]),
+            "the corner pairs echo"
+        );
+        let url = report["processed"]["url"]
+            .as_str()
+            .expect("a processed URL");
+        let image = asset_png(url).await;
+        assert_eq!(
+            image.get(0, 0),
+            Some([255_u8, 0, 0, 255]),
+            "the top-left corner straightens to red"
+        );
+        assert_eq!(
+            image.get(7, 0),
+            Some([0_u8, 255, 0, 255]),
+            "the top-right corner straightens to lime"
+        );
+        assert_eq!(
+            image.get(7, 7),
+            Some([0_u8, 0, 255, 255]),
+            "the bottom-right corner straightens to blue"
+        );
+        assert_eq!(
+            image.get(0, 7),
+            Some([0_u8, 0, 0, 255]),
+            "the bottom-left corner straightens to black"
         );
     }
 

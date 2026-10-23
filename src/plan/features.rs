@@ -18,11 +18,13 @@
 //! the style's [`track_role_name`]; plain styles keep what
 //! [`apply_textures`](crate::plan::textures::apply_textures) dressed
 //! there. The switch step then mounts each `switch` row's panel on its
-//! room's wall (`choose_switch_wall`: the longest one-sided room wall
-//! facing the row's `wall`, or the longest outright when `wall` is
-//! unset), centred with the [`build_switch`] core at the default 32
-//! units, and fires the `opens` door's own tag — refused unless the
-//! row names a wired [`DoorStyle::Remote`] door. The lift step runs the
+//! room's wall (`choose_switch_wall`: among the one-sided room walls
+//! facing the row's `wall`, the row's plan `at` point picks the nearest
+//! one and centres the panel there, and without it the longest wall
+//! wins — the longest outright when `wall` is unset), mounted with the
+//! [`build_switch`] core at the default 32 units, and fires the `opens`
+//! door's own tag — refused unless the row names a wired
+//! [`DoorStyle::Remote`] door. The lift step runs the
 //! [`build_lift`] core on each `lift` row's room sector — refused unless
 //! every connection from the lift room to a room with a lower floor is
 //! a plain opening — stamping a fresh tag, turning the platform's
@@ -35,16 +37,19 @@
 //! carry the family's walk-on teleport to the fresh-tagged destination
 //! and the builder appends its own type-14 destination things straight
 //! into the map before the plan's things are placed. The exit step ends
-//! the level: its `switch` style mounts the panel the same way carrying
-//! the exit action, and its `walk_over` style dresses every two-sided
-//! boundary of the room's sectors with [`build_walk_over_exit`]. The
+//! the level: its `switch` style mounts the panel the same way, reading
+//! the row's `wall` and `at` and carrying the exit action, and its
+//! `walk_over` style dresses every two-sided boundary of the room's
+//! sectors with [`build_walk_over_exit`]. The
 //! lights step paints every room's `light_effect` [`LightEffect`] onto
 //! all its sectors with [`light_special`] (keeping the light level and
 //! every bit above the family's basic-type field), and the secret step
 //! — always after the lights, so a lit secret keeps both — flags every
 //! `secret` room's sectors with [`secret_edit`], passing each
 //! [`SecretEdit::boom_warning`] through [`boom_note`] into the compiled
-//! plan's warnings. Every installed feature reports one [`FeatureRow`].
+//! plan's warnings. Every installed feature reports one [`FeatureRow`],
+//! whose `lines` the run's last pass pairs with the finished map's
+//! vertex coordinates so a caller sees where each line actually stands.
 //! After the pipeline, [`playable_checks`] turns the judgment gaps the
 //! wiring cannot see into advisory warnings — never errors: every locked
 //! door whose key colour stands nowhere among the finished map's things
@@ -66,6 +71,7 @@
 //! [`track_role_name`]: crate::wad::map::features::DoorStyle::track_role_name
 
 use alloc::collections::{BTreeMap, BTreeSet};
+use core::cmp::Ordering;
 
 use serde::Serialize;
 
@@ -78,6 +84,7 @@ use crate::plan::model::{
 };
 use crate::wad::map::Map;
 use crate::wad::map::features::DoorStyle as WadDoorStyle;
+use crate::wad::map::features::place::distance_fraction;
 use crate::wad::map::features::{
     DEFAULT_PAD_SIZE, DEFAULT_SWITCH_WIDTH, LiftPlatform, LiftSpec, LightEffect, PlacedSwitch,
     SecretEdit, SwitchAction, SwitchSpec, TeleportSpec, boom_note, build_lift, build_switch,
@@ -183,6 +190,31 @@ pub struct FeatureRow {
     pub lines: Vec<usize>,
     /// The tag the feature's sector and lines share, when it has one.
     pub tag: Option<i32>,
+    /// Every [`lines`](Self::lines) entry beside the map-unit
+    /// coordinates of its two endpoints, in the same order: where the
+    /// feature stands in the finished map, so a wall-mounted panel can
+    /// be checked against the drawing that asked for it. Read after the
+    /// whole pipeline, so a teleporter rebuild's renumbering and the
+    /// re-facing pass's swapped vertices are both already the numbers
+    /// `lines` names; a line whose vertices the map does not resolve is
+    /// left out.
+    pub line_ends: Vec<FeatureLineEnds>,
+}
+
+/// One reported [`FeatureRow::lines`] entry as the finished map holds
+/// it: the linedef index beside the coordinates of its two vertices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct FeatureLineEnds {
+    /// The index into the finished map's `LINEDEFS`.
+    pub index: usize,
+    /// The `x` of the line's `v1` vertex, map units.
+    pub x1: i32,
+    /// The `y` of the line's `v1` vertex, map units.
+    pub y1: i32,
+    /// The `x` of the line's `v2` vertex, map units.
+    pub x2: i32,
+    /// The `y` of the line's `v2` vertex, map units.
+    pub y2: i32,
 }
 
 /// Install `plan`'s game features onto the `compiled` map and report
@@ -207,8 +239,9 @@ pub struct FeatureRow {
 /// [`CyberError::Internal`] when a door connector names a band sector
 /// the compiled map does not hold — the signature of a `compiled` from
 /// a different plan. The switch step refuses a row whose `opens` names
-/// no wired [`DoorStyle::Remote`] door and a room with no wall to mount
-/// on; the lift step refuses a room that owns no sector (painted over),
+/// no wired [`DoorStyle::Remote`] door, a room with no wall to mount
+/// on, and a row whose `at` point leaves the map coordinate range; the
+/// lift step refuses a room that owns no sector (painted over),
 /// a room that owns several, and one whose lower-neighbour connections
 /// are not plain openings, and passes through [`build_lift`]'s refusals
 /// for a platform that stands no higher than its low floor or edges no
@@ -233,6 +266,7 @@ pub fn apply_features(
     lights(plan, compiled, &mut run);
     secrets(plan, compiled, &mut run);
     reface_action_lines(&mut compiled.map, &run.rows);
+    report_line_ends(&mut run.rows, &compiled.map);
     Ok(run.rows)
 }
 
@@ -278,6 +312,36 @@ fn reface_row(map: &mut Map, row: &FeatureRow) {
     }
 }
 
+/// Pair every reported line of `rows` with the endpoints `map` holds for
+/// it: the run's last pass, after the rebuilds that renumbered lines and
+/// the re-facing that swapped vertices, so the coordinates a caller reads
+/// are the ones the finished map carries.
+fn report_line_ends(rows: &mut [FeatureRow], map: &Map) {
+    for row in rows {
+        row.line_ends = row
+            .lines
+            .iter()
+            .copied()
+            .filter_map(|index| line_end_of(map, index))
+            .collect();
+    }
+}
+
+/// The reported endpoints of linedef `index`, `None` when the map holds
+/// no such line or no such vertex.
+fn line_end_of(map: &Map, index: usize) -> Option<FeatureLineEnds> {
+    let line = map.linedefs.get(index)?;
+    let first = map.vertices.get(line.v1)?;
+    let second = map.vertices.get(line.v2)?;
+    Some(FeatureLineEnds {
+        index,
+        x1: first.x,
+        y1: first.y,
+        x2: second.x,
+        y2: second.y,
+    })
+}
+
 /// Whether `line` is two-sided with sector `sector` on its front side.
 fn has_sector_in_front(map: &Map, line: usize, sector: usize) -> bool {
     map.linedefs.get(line).is_some_and(|def| {
@@ -317,7 +381,8 @@ fn doors(
 }
 
 /// The switch step: mount every `switch` row's panel on its room's wall
-/// firing the remote door's tag, in plan order.
+/// — the one its `wall` side and `at` point pick — firing the remote
+/// door's tag, in plan order.
 fn switches(
     plan: &Plan,
     compiled: &mut CompiledPlan,
@@ -330,6 +395,7 @@ fn switches(
             opens,
             wall,
             repeatable,
+            at,
         } = feature
         else {
             continue;
@@ -342,22 +408,39 @@ fn switches(
             target: Some(door.band),
             repeatable,
             dress,
-            room: &room,
+            choice: WallChoice {
+                side: wall,
+                at: wall_at(at, "switch")?,
+                room: &room,
+            },
         };
-        let placed = mount_panel(&mut compiled.map, &sectors, wall, &mount)?;
+        let placed = mount_panel(&mut compiled.map, &sectors, &mount)?;
         run.rows.push(FeatureRow {
             kind: "switch",
             room: Some(room),
             sectors: vec![door.band],
             lines: vec![placed.linedef],
             tag: Some(placed.tag),
+            line_ends: Vec::new(),
         });
     }
     Ok(())
 }
 
+/// Which wall of a room carries a mounted panel and where on it.
+#[derive(Clone, Copy)]
+struct WallChoice<'room> {
+    /// The compass side the wall must face, `None` for any one-sided wall.
+    side: Option<Side>,
+    /// The map-unit point that picks among several matching walls,
+    /// `None` for the longest one; the panel centres on it too.
+    at: Option<Point>,
+    /// The room the panel is mounted in, for the wall-refusal wording.
+    room: &'room str,
+}
+
 /// One wall-mounted panel to place: what it does, which dressed role it
-/// wears, and the room it stands in for the refusal wording.
+/// wears, where it stands and the room it stands in.
 struct SwitchMount<'mount> {
     /// The action the [`build_switch`] core installs.
     action: SwitchAction,
@@ -369,24 +452,24 @@ struct SwitchMount<'mount> {
     repeatable: bool,
     /// The theme-resolved names the run dresses with.
     dress: &'mount FeatureDress,
-    /// The room the panel is mounted in, for the wall-refusal wording.
-    room: &'mount str,
+    /// The wall the panel goes on and the point on it.
+    choice: WallChoice<'mount>,
 }
 
 /// Choose the room's switch wall and mount `mount`'s panel centred on
-/// it.
+/// the chosen point.
 fn mount_panel(
     map: &mut Map,
     sectors: &[usize],
-    wall: Option<Side>,
     mount: &SwitchMount<'_>,
 ) -> Result<PlacedSwitch, CyberError> {
-    let linedef = choose_switch_wall(map, sectors, wall, mount.room)?;
+    let linedef = choose_switch_wall(map, sectors, mount.choice)?;
     place_switch(map, linedef, mount)
 }
 
 /// Run the [`build_switch`] core for one mount: the default-width panel
-/// centred on `linedef`'s midpoint, carrying the door's own tag.
+/// centred on the row's point projected onto `linedef` (its midpoint
+/// when the row named none), carrying the door's own tag.
 fn place_switch(
     map: &mut Map,
     linedef: usize,
@@ -395,14 +478,32 @@ fn place_switch(
     let texture = panel_texture(map, linedef, mount);
     let spec = SwitchSpec {
         linedef,
-        at: None,
+        at: mount.choice.at,
         width: DEFAULT_SWITCH_WIDTH,
         action: mount.action,
         target_sector: mount.target,
         repeatable: mount.repeatable,
         texture,
     };
-    build_switch(map, &spec)
+    build_switch(map, &spec).map_err(|error| panel_hint(error, mount.choice.room))
+}
+
+/// The plan-side reading of a panel the core refused to fit: the message
+/// names `room` (the core speaks only of the linedef and its length) and
+/// the hint names the knob — the row cannot retune the fixed 32-unit
+/// width, so its own `at` is what moves the panel onto a stretch of wall
+/// that holds it. A refusal that is not an argument problem (a contract
+/// break) keeps its own code, message and hint.
+fn panel_hint(error: CyberError, room: &str) -> CyberError {
+    if error.code() != "invalid_argument" {
+        return error;
+    }
+    error
+        .map_message(|old| format!("room '{room}': {old}"))
+        .with_hint(
+            "move the row's at nearer the middle of the wall, or leave at out to centre \
+             the panel on the wall",
+        )
 }
 
 /// The panel texture: the theme's answer for the mount's role, or the
@@ -462,6 +563,7 @@ fn lifts(
             sectors: vec![built.platform_sector],
             lines: built.lines,
             tag: Some(built.tag),
+            line_ends: Vec::new(),
         });
     }
     Ok(())
@@ -603,6 +705,7 @@ fn teleporters(
             sectors: vec![built.pad_sector, built.destination_sector],
             lines: built.pad_lines,
             tag: Some(built.tag),
+            line_ends: Vec::new(),
         });
     }
     Ok(())
@@ -790,12 +893,17 @@ fn mid_axis(low: i32, high: i32) -> i32 {
 /// The map-unit [`Point`] of a transformed plan coordinate, refused
 /// when an axis does not fit the map's `i32` grid.
 fn map_point(point: Pt, role: &str) -> Result<Point, CyberError> {
+    to_map_point(point).ok_or_else(|| centre_out_of_range(point, role))
+}
+
+/// The map-unit [`Point`] of a plan coordinate, `None` when an axis does
+/// not fit the map's `i32` grid.
+fn to_map_point(point: Pt) -> Option<Point> {
     let (x, y) = point;
-    let fitted = i32::try_from(x).ok().zip(i32::try_from(y).ok());
-    fitted.map_or_else(
-        || Err(centre_out_of_range(point, role)),
-        |(fx, fy)| Ok(Point { x: fx, y: fy }),
-    )
+    i32::try_from(x)
+        .ok()
+        .zip(i32::try_from(y).ok())
+        .map(|(fx, fy)| Point { x: fx, y: fy })
 }
 
 /// The refusal for a wire centre past the map coordinate range.
@@ -819,8 +927,9 @@ fn square_too_big(square: &TeleportSquare<'_>, x: i32, y: i32) -> CyberError {
 
 /// The exit step: end the level where every `exit` row stands, in plan
 /// order — its `switch` style through the same wall-mounted panel as
-/// the switch step, its `walk_over` style on every two-sided boundary
-/// of the room's sectors.
+/// the switch step, reading the row's `wall` and `at`, its `walk_over`
+/// style on every two-sided boundary of the room's sectors (that style
+/// mounts no panel, so it reads neither).
 fn exits(
     plan: &Plan,
     compiled: &mut CompiledPlan,
@@ -833,6 +942,7 @@ fn exits(
             style,
             secret,
             wall,
+            at,
         } = feature
         else {
             continue;
@@ -840,8 +950,13 @@ fn exits(
         let sectors = room_sectors_of(compiled, &room)?;
         let lines = match style {
             ExitStyle::Switch => {
-                let mount = exit_mount(dress, &room, secret);
-                vec![mount_panel(&mut compiled.map, &sectors, wall, &mount)?.linedef]
+                let choice = WallChoice {
+                    side: wall,
+                    at: wall_at(at, "exit")?,
+                    room: &room,
+                };
+                let mount = exit_mount(dress, choice, secret);
+                vec![mount_panel(&mut compiled.map, &sectors, &mount)?.linedef]
             }
             ExitStyle::WalkOver => walk_over_exit(&mut compiled.map, &sectors, secret)?,
         };
@@ -851,6 +966,7 @@ fn exits(
             sectors,
             lines,
             tag: None,
+            line_ends: Vec::new(),
         });
     }
     Ok(())
@@ -860,7 +976,7 @@ fn exits(
 /// room's chosen wall, wearing the theme's `exit_switch` panel.
 const fn exit_mount<'mount>(
     dress: &'mount FeatureDress,
-    room: &'mount str,
+    choice: WallChoice<'mount>,
     secret: bool,
 ) -> SwitchMount<'mount> {
     let action = if secret {
@@ -874,7 +990,7 @@ const fn exit_mount<'mount>(
         target: None,
         repeatable: false,
         dress,
-        room,
+        choice,
     }
 }
 
@@ -937,6 +1053,7 @@ fn light_room(compiled: &mut CompiledPlan, room: &str, effect: LightEffect, run:
             sectors,
             lines: Vec::new(),
             tag: None,
+            line_ends: Vec::new(),
         });
     }
 }
@@ -987,6 +1104,7 @@ fn secret_room(compiled: &mut CompiledPlan, room: &str, run: &mut FeatureRun) {
             sectors,
             lines: Vec::new(),
             tag: None,
+            line_ends: Vec::new(),
         });
     }
 }
@@ -1159,6 +1277,22 @@ fn not_remote(opens: &str) -> CyberError {
     ))
 }
 
+/// The map-unit point of a wall-mounted row's plan `at`, refused when an
+/// axis leaves the map's `i32` grid (`kind` words the refusal: `exit` or
+/// `switch`).
+fn wall_at(at: Option<Pt>, kind: &str) -> Result<Option<Point>, CyberError> {
+    at.map(|point| {
+        to_map_point(point).ok_or_else(|| {
+            invalid(&format!(
+                "the {kind} at point {}, {} is outside the map coordinate range: keep \
+                 plan points and the units transform inside the map grid",
+                point.0, point.1
+            ))
+        })
+    })
+    .transpose()
+}
+
 /// The sectors `room` owns in the compiled map, refusing a room the
 /// emission kept none of (fully painted over by a later one).
 fn room_sectors_of(compiled: &CompiledPlan, room: &str) -> Result<Vec<usize>, CyberError> {
@@ -1185,45 +1319,83 @@ fn invalid(message: &str) -> CyberError {
 }
 
 /// The linedef a wall-mounted feature takes in the room owning
-/// `room_sectors`: the longest of the room's one-sided walls — no back,
-/// front side in one of those sectors — whose outward normal points at
-/// `wall` ([`Side`]'s compass axis), or, with `wall: None`, the room's
-/// longest one-sided wall outright. Ties go to the lowest linedef
-/// index, and lines whose vertices do not resolve never win. All
-/// integer: the facing test is the sign of the outward normal's
-/// (`-dy`, `dx`) dot product with the side's axis vector, the length
-/// comparison that of the squared run.
+/// `room_sectors`, read off `choice`: the candidates are the room's
+/// one-sided walls — no back, front side in one of those sectors — whose
+/// outward normal points at `choice.side` (with `None`, every one-sided
+/// wall competes), and lines whose vertices do not resolve never win.
+/// With `choice.at` the nearest candidate wins, measured by the exact
+/// point-to-segment [`distance_fraction`] from the wall's endpoints to
+/// the point; without it the longest wall wins. Either way a tie falls to the longer
+/// wall and then to the lowest linedef index, the order
+/// [`matching_walls`] returns. All integer: the facing test is the sign
+/// of the outward normal's (`-dy`, `dx`) dot product with the side's
+/// axis vector, the length comparison that of the squared run and the
+/// distance comparison a cross-multiplication of two `i128` fractions.
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] naming `room` and, when given, the
-/// side, when the room holds no such wall.
+/// [`CyberError::InvalidArgument`] naming `choice.room` and, when given,
+/// the side, when the room holds no such wall.
 fn choose_switch_wall(
     map: &Map,
     room_sectors: &[usize],
-    wall: Option<Side>,
-    room: &str,
+    choice: WallChoice<'_>,
 ) -> Result<usize, CyberError> {
-    let mut best: Option<(i128, usize)> = None;
-    for (index, line) in map.linedefs.iter().enumerate() {
-        let Some((dx, dy)) = wall_vector(map, line, room_sectors) else {
-            continue;
-        };
-        if wall.is_some_and(|side| !faces_toward(side, dx, dy)) {
-            continue;
-        }
-        let squared = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
-        if best.is_none_or(|(known, _)| squared > known) {
-            best = Some((squared, index));
-        }
-    }
-    best.map(|(_, index)| index)
-        .ok_or_else(|| no_switch_wall(room, wall))
+    let walls = matching_walls(map, room_sectors, choice.side);
+    let ranked = choice
+        .at
+        .map_or_else(|| longest_wall(&walls), |at| nearest_wall(&walls, at));
+    ranked.ok_or_else(|| no_switch_wall(choice.room, choice.side))
 }
 
-/// The `v1` to `v2` vector of `line` when it is one-sided, its front
-/// side belongs to one of `room_sectors`, and both vertices resolve.
-fn wall_vector(map: &Map, line: &Linedef, room_sectors: &[usize]) -> Option<(i128, i128)> {
+/// The room's candidate walls facing `side` (`None`: all of them), in
+/// linedef order.
+fn matching_walls(map: &Map, room_sectors: &[usize], side: Option<Side>) -> Vec<Wall> {
+    map.linedefs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| wall_of(map, index, line, room_sectors))
+        .filter(|wall| side.is_none_or(|asked| wall.faces_toward(asked)))
+        .collect()
+}
+
+/// One wall a panel can mount on: its linedef `index`, its endpoints,
+/// its `v1` to `v2` vector and the squared run length.
+#[derive(Clone, Copy, Debug)]
+struct Wall {
+    /// The index into [`Map::linedefs`] the wall was read at.
+    index: usize,
+    /// The `v1` vertex.
+    from: Point,
+    /// The `v2` vertex.
+    to: Point,
+    /// `v2`'s `x` minus `v1`'s.
+    dx: i128,
+    /// `v2`'s `y` minus `v1`'s.
+    dy: i128,
+    /// The squared run length: the integer `longest` measure.
+    squared: i128,
+}
+
+impl Wall {
+    /// Whether this wall's outward normal (`-dy`, `dx`) points toward
+    /// `side`: a positive dot product with the side's axis. The room
+    /// sits on the front (right) side of a one-sided wall, so the void
+    /// behind it is to the line's left.
+    const fn faces_toward(&self, side: Side) -> bool {
+        match side {
+            Side::North => self.dx > 0_i128,
+            Side::South => self.dx < 0_i128,
+            Side::East => self.dy < 0_i128,
+            Side::West => self.dy > 0_i128,
+        }
+    }
+}
+
+/// The [`Wall`] behind `line` at `index`: `None` when the line is
+/// two-sided, its front side belongs to a sector outside
+/// `room_sectors`, or either vertex does not resolve.
+fn wall_of(map: &Map, index: usize, line: &Linedef, room_sectors: &[usize]) -> Option<Wall> {
     if line.back.is_some() {
         return None;
     }
@@ -1233,23 +1405,87 @@ fn wall_vector(map: &Map, line: &Linedef, room_sectors: &[usize]) -> Option<(i12
     }
     let first = map.vertices.get(line.v1)?;
     let second = map.vertices.get(line.v2)?;
-    Some((
-        i128::from(second.x).saturating_sub(i128::from(first.x)),
-        i128::from(second.y).saturating_sub(i128::from(first.y)),
-    ))
+    let from = Point {
+        x: first.x,
+        y: first.y,
+    };
+    let to = Point {
+        x: second.x,
+        y: second.y,
+    };
+    let dx = i128::from(second.x).saturating_sub(i128::from(first.x));
+    let dy = i128::from(second.y).saturating_sub(i128::from(first.y));
+    Some(Wall {
+        index,
+        from,
+        to,
+        dx,
+        dy,
+        squared: dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)),
+    })
 }
 
-/// Whether the outward normal (`-dy`, `dx`) of a line running `(dx, dy)`
-/// points toward `side`: a positive dot product with the side's axis.
-/// The room sits on the front (right) side of a one-sided wall, so the
-/// void behind it is to the line's left.
-const fn faces_toward(side: Side, dx: i128, dy: i128) -> bool {
-    match side {
-        Side::North => dx > 0_i128,
-        Side::South => dx < 0_i128,
-        Side::East => dy < 0_i128,
-        Side::West => dy > 0_i128,
+/// The longest of `walls`, which stands in linedef order: an exact tie
+/// falls to the earlier wall.
+fn longest_wall(walls: &[Wall]) -> Option<usize> {
+    let mut best: Option<(i128, usize)> = None;
+    for wall in walls {
+        if best.is_none_or(|(known, _)| wall.squared > known) {
+            best = Some((wall.squared, wall.index));
+        }
     }
+    best.map(|(_, index)| index)
+}
+
+/// The wall of `walls` standing nearest `at`: an exact tie falls to the
+/// longer wall and then to the earlier one.
+fn nearest_wall(walls: &[Wall], at: Point) -> Option<usize> {
+    let mut best: Option<Ranked<'_>> = None;
+    for wall in walls {
+        let ranked = Ranked {
+            wall,
+            distance: distance_fraction(at, wall.from, wall.to),
+        };
+        if best.is_none_or(|known| ranked.beats(known)) {
+            best = Some(ranked);
+        }
+    }
+    best.map(|known| known.wall.index)
+}
+
+/// An exact `num / den` distance with a positive `den`, the shape
+/// [`distance_fraction`] answers with.
+type Fraction = (i128, i128);
+
+/// One wall measured against the point a row named, ready to compare
+/// with the incumbent best.
+#[derive(Clone, Copy)]
+struct Ranked<'wall> {
+    /// The wall under measurement.
+    wall: &'wall Wall,
+    /// Its exact distance from the point.
+    distance: Fraction,
+}
+
+impl Ranked<'_> {
+    /// Whether this wall is the better mount: standing nearer than
+    /// `known`, or equally near and longer.
+    fn beats(self, known: Self) -> bool {
+        match compare(self.distance, known.distance) {
+            Ordering::Less => true,
+            Ordering::Equal => self.wall.squared > known.wall.squared,
+            Ordering::Greater => false,
+        }
+    }
+}
+
+/// The ordering of two [`Fraction`] distances, compared by exact `i128`
+/// cross-multiplication (both axes of a distance are non-negative).
+fn compare(first: Fraction, second: Fraction) -> Ordering {
+    first
+        .0
+        .saturating_mul(second.1)
+        .cmp(&second.0.saturating_mul(first.1))
 }
 
 /// The refusal for a room with no wall to mount on, naming the asked
@@ -1320,6 +1556,7 @@ fn wire_door(
         sectors: vec![band],
         lines: info.door_lines.clone(),
         tag: Some(tag),
+        line_ends: Vec::new(),
     });
     Ok(())
 }
@@ -1399,9 +1636,10 @@ const fn wad_style(style: DoorStyle) -> WadDoorStyle {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompiledPlan, Definitions, FeatureDress, FeatureRow, FeatureRun, Plan, Thing, WadDoorStyle,
-        apply_features, choose_switch_wall, doors, lift_join_rule, lift_side, playable_checks,
-        remap_rows, remote_door, teleport_wall, wad_style,
+        CompiledPlan, Definitions, FeatureDress, FeatureLineEnds, FeatureRow, FeatureRun, Plan,
+        Thing, WadDoorStyle, WallChoice, apply_features, choose_switch_wall, doors, lift_join_rule,
+        lift_side, panel_hint, playable_checks, remap_rows, remote_door, report_line_ends,
+        teleport_wall, wad_style,
     };
     use crate::defs::definitions_for;
     use crate::geom::Pt;
@@ -1414,6 +1652,7 @@ mod tests {
     use crate::wad::game::Game;
     use crate::wad::map::features::{LiftStyle, LightEffect, TELEPORT_DESTINATION_THING};
     use crate::wad::map::geometry::point_in_sector;
+    use crate::wad::map::ops::Point;
     use crate::wad::map::{Linedef, Map, Sidedef};
     use crate::wad::name::LumpName;
 
@@ -1938,6 +2177,7 @@ mod tests {
             opens: opens.to_owned(),
             wall,
             repeatable,
+            at: None,
         }
     }
 
@@ -1948,6 +2188,29 @@ mod tests {
             style,
             secret,
             wall,
+            at: None,
+        }
+    }
+
+    /// A `switch` feature row standing at the plan point `at`.
+    fn switch_at(room: &str, opens: &str, wall: Option<Side>, at: Pt) -> Feature {
+        Feature::Switch {
+            room: room.to_owned(),
+            opens: opens.to_owned(),
+            wall,
+            repeatable: false,
+            at: Some(at),
+        }
+    }
+
+    /// A `switch`-style `exit` feature row standing at the plan point `at`.
+    fn exit_at(room: &str, wall: Option<Side>, at: Option<Pt>) -> Feature {
+        Feature::Exit {
+            room: room.to_owned(),
+            style: ExitStyle::Switch,
+            secret: false,
+            wall,
+            at,
         }
     }
 
@@ -2026,9 +2289,25 @@ mod tests {
         (line.special, line.tag)
     }
 
+    /// The wall choice of room `room`: `side` facing walls, nearest to
+    /// `at` when one is given.
+    fn choice_in(side: Option<Side>, at: Option<Point>, room: &str) -> WallChoice<'_> {
+        WallChoice { side, at, room }
+    }
+
+    /// The same choice inside room `a`, the fixture's first room.
+    fn choice(side: Option<Side>, at: Option<Point>) -> WallChoice<'static> {
+        choice_in(side, at, "a")
+    }
+
+    /// The point at map coordinates `x`, `y`.
+    const fn point(x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
     /// Room `a`'s chosen wall in the two-room remote-door fixture.
     fn a_wall(map: &Map, side: Option<Side>) -> usize {
-        choose_switch_wall(map, &[0], side, "a").expect("a wall on the asked side")
+        choose_switch_wall(map, &[0], choice(side, None)).expect("a wall on the asked side")
     }
 
     #[test]
@@ -2058,7 +2337,8 @@ mod tests {
         let plan = two_rooms(vec![door("d1", DoorStyle::Remote, (128_i64, 32_i64))]);
         let (compiled, _) = wired(&plan);
         let map = &compiled.map;
-        let east = choose_switch_wall(map, &[0], Some(Side::East), "a").expect("an east wall");
+        let east =
+            choose_switch_wall(map, &[0], choice(Some(Side::East), None)).expect("an east wall");
         let ((x1, y1), (x2, y2)) = ends(map, east);
         assert_eq!((x1, x2), (120_i32, 120_i32), "the band-cut east wall");
         assert_eq!(
@@ -2091,7 +2371,7 @@ mod tests {
             })
             .collect();
         assert_eq!(tied.len(), 2, "the centred band leaves two equal segments");
-        let chosen = choose_switch_wall(map, &[0], Some(Side::North), "a")
+        let chosen = choose_switch_wall(map, &[0], choice(Some(Side::North), None))
             .expect("two equal north segments");
         assert_eq!(
             chosen,
@@ -2103,7 +2383,7 @@ mod tests {
     #[test]
     fn a_side_without_a_wall_names_the_room_and_the_side() {
         let (compiled, _) = wired(&three_in_row());
-        let error = choose_switch_wall(&compiled.map, &[1], Some(Side::East), "b")
+        let error = choose_switch_wall(&compiled.map, &[1], choice_in(Some(Side::East), None, "b"))
             .expect_err("room b meets room c on its east side");
         assert_eq!(error.code(), "invalid_argument", "a wall-less side");
         let message = error.to_string();
@@ -2282,6 +2562,274 @@ mod tests {
             action_of_line(&compiled.map, line).0,
             51_i32,
             "the S1 secret exit"
+        );
+    }
+
+    /// A C-shaped 128 x 128 room whose west edge is bitten between
+    /// `y = 48` and `y = 80`: two equal 48-unit west walls, a lower one
+    /// running `y = 0..48` and an upper one `y = 80..128`.
+    fn c_room() -> Plan {
+        Plan {
+            rooms: vec![Room {
+                id: "c".to_owned(),
+                shape: Shape::Polygon {
+                    points: vec![
+                        (0_i64, 0_i64),
+                        (128, 0),
+                        (128, 128),
+                        (0, 128),
+                        (0, 80),
+                        (48, 80),
+                        (48, 48),
+                        (0, 48),
+                    ],
+                },
+                floor: 0_i32,
+                ceiling: 128_i32,
+                light: 160_i32,
+                floor_flat: None,
+                ceiling_flat: None,
+                wall_texture: None,
+                outdoor: false,
+                secret: false,
+                light_effect: None,
+            }],
+            connections: Vec::new(),
+            features: Vec::new(),
+            wall_thickness: 16_i64,
+        }
+    }
+
+    /// The two west runs of the C fixture, each 48 units, and the choice
+    /// `at` decides between them.
+    #[test]
+    fn equal_walls_on_one_side_answer_a_point_not_their_order() {
+        let (compiled, _) = wired(&c_room());
+        let map = &compiled.map;
+        let lower = choose_switch_wall(map, &[0], choice(Some(Side::West), Some(point(0, 24))))
+            .expect("the lower west wall");
+        let upper = choose_switch_wall(map, &[0], choice(Some(Side::West), Some(point(0, 104))))
+            .expect("the upper west wall");
+        assert_eq!(
+            ends(map, lower),
+            ((0_i32, 0_i32), (0_i32, 48_i32)),
+            "the point near the lower run answers it"
+        );
+        assert_eq!(
+            ends(map, upper),
+            ((0_i32, 80_i32), (0_i32, 128_i32)),
+            "the point near the upper run answers that one"
+        );
+        assert_eq!(
+            choose_switch_wall(map, &[0], choice(Some(Side::West), None)).expect("a west wall"),
+            lower.min(upper),
+            "without a point the longest tie still falls to the lowest index"
+        );
+    }
+
+    /// A point measures to the wall, not into it: the asked side still
+    /// bounds the candidates (the notch's own inner face counts as a west
+    /// wall: its void lies to the west), and with no side any one-sided
+    /// wall competes.
+    #[test]
+    fn a_point_ranks_only_the_walls_it_was_asked_about() {
+        let (compiled, _) = wired(&c_room());
+        let map = &compiled.map;
+        let chosen = choose_switch_wall(map, &[0], choice(Some(Side::West), Some(point(64, 64))))
+            .expect("a west-facing wall answers a point inside the room");
+        assert_eq!(
+            ends(map, chosen),
+            ((48_i32, 48_i32), (48_i32, 80_i32)),
+            "the notch's inner face looks west and stands nearest the room's middle"
+        );
+        let any = choose_switch_wall(map, &[0], choice(None, Some(point(120, 64))))
+            .expect("no side, so the nearest one-sided wall of any");
+        let ((x1, y1), (x2, y2)) = ends(map, any);
+        assert_eq!(
+            (x1, x2, y1.min(y2), y1.max(y2)),
+            (128_i32, 128_i32, 0_i32, 128_i32),
+            "the untouched east wall is the nearest to that point"
+        );
+    }
+
+    /// The row's point mounts the panel where the drawing put it and the
+    /// row reports the chosen line's endpoints beside its index.
+    #[test]
+    fn an_exit_at_a_point_mounts_there_and_reports_its_coordinates() {
+        let mut plan = c_room();
+        plan.features = vec![exit_at("c", Some(Side::West), Some((0_i64, 24_i64)))];
+        let (compiled, rows) = wired(&plan);
+        let row = rows.iter().find(|r| r.kind == "exit").expect("an exit row");
+        let line = row.lines.first().copied().expect("one line");
+        assert_eq!(
+            ends(&compiled.map, line),
+            ((0_i32, 8_i32), (0_i32, 40_i32)),
+            "the 32-unit panel centred on the point, on the lower west wall"
+        );
+        assert_eq!(
+            row.line_ends,
+            vec![FeatureLineEnds {
+                index: line,
+                x1: 0_i32,
+                y1: 8_i32,
+                x2: 0_i32,
+                y2: 40_i32,
+            }],
+            "the reported endpoints beside the index"
+        );
+        assert_eq!(
+            action_of_line(&compiled.map, line).0,
+            11_i32,
+            "the panel ends the level"
+        );
+    }
+
+    /// The same row with its point by the upper wall: the other run takes
+    /// the panel and the reported coordinates say so.
+    #[test]
+    fn the_same_exit_row_follows_its_point_to_the_other_wall() {
+        let mut plan = c_room();
+        plan.features = vec![exit_at("c", Some(Side::West), Some((4_i64, 100_i64)))];
+        let (compiled, rows) = wired(&plan);
+        let row = rows.iter().find(|r| r.kind == "exit").expect("an exit row");
+        let end = row.line_ends.first().expect("one reported line");
+        assert_eq!(
+            (end.y1.min(end.y2), end.y1.max(end.y2)),
+            (84_i32, 116_i32),
+            "the panel stands on the upper run: {end:?}"
+        );
+        assert_eq!(end.x1, end.x2, "still the vertical west wall");
+        assert_eq!(
+            ends(&compiled.map, end.index),
+            ((0_i32, 84_i32), (0_i32, 116_i32)),
+            "the index names the line the coordinates describe"
+        );
+    }
+
+    /// A `switch` row reads its point the same way: the tied north segments
+    /// of the stacked fixture each answer the point nearest them.
+    #[test]
+    fn a_switch_at_a_point_mounts_on_the_nearest_of_the_tied_walls() {
+        for (x, want) in [(20_i64, (4_i32, 36_i32)), (108_i64, (92_i32, 124_i32))] {
+            let mut plan = stacked_doors();
+            plan.features = vec![switch_at("a", "d1", Some(Side::North), (x, 120_i64))];
+            let (compiled, rows) = wired(&plan);
+            let row = rows
+                .iter()
+                .find(|r| r.kind == "switch")
+                .expect("a switch row");
+            let end = row.line_ends.first().expect("one reported line");
+            assert_eq!(
+                (end.x1.min(end.x2), end.x1.max(end.x2)),
+                want,
+                "the panel stands at the point's own segment"
+            );
+            assert_eq!(end.y1, end.y2, "a horizontal north wall");
+            assert_eq!(
+                action_of_line(&compiled.map, end.index),
+                (103_i32, TAG_ONE),
+                "the switch still fires the door's tag"
+            );
+        }
+    }
+
+    /// A point too near the wall's own end for the 32-unit panel refuses
+    /// the row, keeping the core's words and naming the knob that moves it.
+    #[test]
+    fn a_panel_that_does_not_fit_where_its_point_sits_names_the_knob() {
+        let mut plan = c_room();
+        plan.features = vec![exit_at("c", Some(Side::West), Some((0_i64, 4_i64)))];
+        let mut compiled = compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles)
+            .expect("the fixture compiles");
+        let error =
+            apply_features(&plan, &mut compiled, &dress()).expect_err("the panel cannot fit");
+        assert_eq!(error.code(), "invalid_argument", "a fit refusal");
+        let message = error.to_string();
+        assert!(
+            message.contains("room 'c'") && message.contains("does not fit linedef"),
+            "the room is named beside the core's words: {message}"
+        );
+        let hint = error.hint();
+        assert!(
+            hint.contains("move the row's at nearer the middle of the wall"),
+            "the hint names the knob: {hint}"
+        );
+    }
+
+    /// Only an argument refusal is the row's doing: anything else keeps
+    /// its own code, message and default hint.
+    #[test]
+    fn the_panel_hint_rides_on_argument_refusals_alone() {
+        let argued = panel_hint(
+            crate::error::CyberError::InvalidArgument("the wall is too short".to_owned()),
+            "cell",
+        );
+        assert_eq!(argued.code(), "invalid_argument", "the code stands");
+        assert_eq!(
+            argued.to_string(),
+            "room 'cell': the wall is too short",
+            "the room leads"
+        );
+        assert!(
+            argued.hint().starts_with("move the row's at"),
+            "the hint answers: {}",
+            argued.hint()
+        );
+        let broken = panel_hint(
+            crate::error::CyberError::Internal("a contract break".to_owned()),
+            "cell",
+        );
+        assert_eq!(
+            broken.code(),
+            "internal",
+            "an internal error is not the row's"
+        );
+        assert_eq!(
+            broken.to_string(),
+            "a contract break",
+            "and reads unchanged"
+        );
+    }
+
+    /// A row point the map cannot hold refuses, naming it.
+    #[test]
+    fn an_exit_point_past_the_map_range_is_refused_by_name() {
+        let mut plan = c_room();
+        plan.features = vec![exit_at(
+            "c",
+            Some(Side::West),
+            Some((0x0001_0000_0000_i64, 24_i64)),
+        )];
+        let message = refuse_features(&plan).to_string();
+        assert!(
+            message
+                .contains("the exit at point 4294967296, 24 is outside the map coordinate range"),
+            "the refusal names the point: {message}"
+        );
+    }
+
+    /// The run's last pass pairs every reported line with the endpoints the
+    /// finished map holds; an index it does not hold reports nothing.
+    #[test]
+    fn the_reporting_pass_pairs_each_line_with_its_endpoints() {
+        let (compiled, _) = wired(&c_room());
+        let mut rows = vec![FeatureRow {
+            kind: "exit",
+            room: Some("c".to_owned()),
+            sectors: vec![0_usize],
+            lines: vec![0_usize, 9_999_usize],
+            tag: None,
+            line_ends: Vec::new(),
+        }];
+        report_line_ends(&mut rows, &compiled.map);
+        let row = rows.first().expect("one row");
+        assert_eq!(row.line_ends.len(), 1, "the dangling index reports nothing");
+        let end = row.line_ends.first().expect("one pair");
+        let ((x1, y1), (x2, y2)) = ends(&compiled.map, 0_usize);
+        assert_eq!(
+            (end.index, end.x1, end.y1, end.x2, end.y2),
+            (0_usize, x1, y1, x2, y2),
+            "the pair is the map's own line"
         );
     }
 
@@ -2775,6 +3323,7 @@ mod tests {
                 sectors: vec![2_usize],
                 lines: vec![0_usize, 1_usize, 2_usize],
                 tag: Some(1_i32),
+                line_ends: Vec::new(),
             },
             FeatureRow {
                 kind: "lift",
@@ -2782,6 +3331,7 @@ mod tests {
                 sectors: vec![1_usize],
                 lines: vec![3_usize],
                 tag: Some(2_i32),
+                line_ends: Vec::new(),
             },
         ];
         remap_rows(

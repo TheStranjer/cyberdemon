@@ -157,7 +157,14 @@ Start from `plan_rooms`: keep each room's `points` as they are, rename the
   0 east, 90 north, 180 west, 270 south).
 - **Exit.** A `features` row:
   `{"kind": "exit", "room": "loft", "style": "walk_over"}` for an E boxed
-  on a room, or the default `switch` panel.
+  on a room, or the default `switch` panel — which takes a `wall` side and
+  the plan `at` point where your mark stands, so the panel lands on the
+  wall you drew it on: `{"kind": "exit", "room": "loft", "wall": "west",
+  "at": [104, 12]}`. `at` also centres the panel; without it the longest
+  matching wall wins, and an exact tie falls to the lowest line index,
+  which is where several equal walls on one side become a coin flip you
+  cannot see. Read the row's `line_ends` back: they are the panel's own
+  endpoints, and they should bracket your mark.
 - **Keys before locks.** Every `locked_*` door needs a thing of that
   colour standing in a room the player reaches first:
   `{"name": "Red Keycard", "x": 32, "y": 48}`. The build warns about a
@@ -175,7 +182,9 @@ walls, connections, features, things and node data as one undoable edit.
 Read the result, not your memory of the input:
 
 - `rooms` maps your ids to sector indices; `features` lists every door,
-  switch, lift, teleporter and exit with its sectors, lines and tag.
+  switch, lift, teleporter and exit with its sectors, lines and tag, and
+  each line's `line_ends` coordinates beside its index — the check that a
+  wall-mounted panel landed where the drawing put it.
 - `warnings` are judgment gaps: "red door at X but no red key in the
   plan", "the map has no exit", "room 'y' fits only N of M things",
   "step taller than 24 between a and b; use stairs". Each names its fix;

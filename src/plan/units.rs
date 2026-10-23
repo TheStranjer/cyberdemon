@@ -17,8 +17,10 @@
 //! exposes the same transform for a single point; [`Units::to_map`] and
 //! [`Units::to_image`] are its unsnapped leg and its exact inverse, the
 //! pair a reference image is placed and sampled with. The transformed
-//! fields are the room shapes, each [`Connection::at`] placement and each
-//! [`Feature::Teleporter`]'s `pad` and `destination` squares.
+//! fields are the room shapes, each [`Connection::at`] placement, each
+//! [`Feature::Teleporter`]'s `pad` and `destination` squares and the
+//! `at` wall point of each wall-mounted [`Feature::Exit`] and
+//! [`Feature::Switch`] row.
 //!
 //! Sizes are **not** transformed. [`Plan::wall_thickness`],
 //! [`Connection::width`], the heights and depths inside
@@ -224,12 +226,14 @@ impl Units {
 ///
 /// Rectangles have both corners transformed and their `w`/`h` re-derived
 /// from the snapped corners, so they stay grid-aligned; polygon rings,
-/// the [`at`](Connection::at) position of each connection and the `pad`
-/// and `destination` squares of each [`Feature::Teleporter`] are
-/// transformed point by point. Sector properties, [`Plan::wall_thickness`]
-/// and every size (`width`, `sill`, `lintel`, `step_height`,
-/// `step_depth`, a lift's `low_floor`) are map units already and pass
-/// through unchanged, as this module's documentation explains. The plan's
+/// the [`at`](Connection::at) position of each connection, the `pad`
+/// and `destination` squares of each [`Feature::Teleporter`] and the
+/// `at` wall point of each wall-mounted [`Feature::Exit`] and
+/// [`Feature::Switch`] row are transformed point by point. Sector
+/// properties, [`Plan::wall_thickness`] and every size (`width`, `sill`,
+/// `lintel`, `step_height`, `step_depth`, a lift's `low_floor`) are map
+/// units already and pass through unchanged, as this module's
+/// documentation explains. The plan's
 /// structure is not re-checked here; [`Plan::validate`] still runs on the
 /// result.
 ///
@@ -320,27 +324,29 @@ fn transform_connections(
         .map(|(index, connection)| {
             let path = format!("connections[{index}]");
             Ok(Connection {
-                at: transform_at(units, grid, &path, connection.at)?,
+                at: transform_placement(units, grid, &format!("{path}.at"), connection.at)?,
                 ..connection.clone()
             })
         })
         .collect()
 }
 
-/// One connection's placement, `None` centring staying `None`.
+/// One optional placement point already named by `path`: `None` (the
+/// kind's own default spot: a centred opening, a room's middle) staying
+/// `None`.
 #[inline]
-fn transform_at(
+fn transform_placement(
     units: &Units,
     grid: i64,
     path: &str,
     at: Option<Pt>,
 ) -> Result<Option<Pt>, CyberError> {
-    at.map(|point| units.mapped(grid, &format!("{path}.at"), point))
-        .transpose()
+    at.map(|point| units.mapped(grid, path, point)).transpose()
 }
 
-/// Every feature with its teleporter squares transformed; the other
-/// kinds carry no coordinates and clone through.
+/// Every feature with its coordinates transformed: a teleporter's two
+/// squares and the `at` wall point of a panel-mounting `exit` or
+/// `switch` row. The other kinds carry no coordinates and clone through.
 #[inline]
 fn transform_features(plan: &Plan, units: &Units, grid: i64) -> Result<Vec<Feature>, CyberError> {
     plan.features
@@ -350,9 +356,9 @@ fn transform_features(plan: &Plan, units: &Units, grid: i64) -> Result<Vec<Featu
         .collect()
 }
 
-/// One feature: a teleporter's `pad` and `destination` travel the same
-/// transform as a connection's `at`, reported under the
-/// `features[index]` path.
+/// One feature: a teleporter's `pad` and `destination` and an `exit`'s
+/// or `switch`'s `at` travel the same transform as a connection's `at`,
+/// reported under the `features[index]` path.
 fn transform_feature(
     units: &Units,
     grid: i64,
@@ -371,16 +377,53 @@ fn transform_feature(
         } => Feature::Teleporter {
             from_room,
             to_room,
-            pad: pad
-                .map(|point| units.mapped(grid, &format!("{path}.pad"), point))
-                .transpose()?,
-            destination: destination
-                .map(|point| units.mapped(grid, &format!("{path}.destination"), point))
-                .transpose()?,
+            pad: transform_placement(units, grid, &format!("{path}.pad"), pad)?,
+            destination: transform_placement(
+                units,
+                grid,
+                &format!("{path}.destination"),
+                destination,
+            )?,
             angle,
             two_way,
         },
-        other @ (Feature::Exit { .. } | Feature::Switch { .. } | Feature::Lift { .. }) => other,
+        Feature::Exit {
+            room,
+            style,
+            secret,
+            wall,
+            at,
+        } => Feature::Exit {
+            room,
+            style,
+            secret,
+            wall,
+            at: transform_placement(units, grid, &format!("{path}.at"), at)?,
+        },
+        Feature::Switch {
+            room,
+            opens,
+            wall,
+            repeatable,
+            at,
+        } => Feature::Switch {
+            room,
+            opens,
+            wall,
+            repeatable,
+            at: transform_placement(units, grid, &format!("{path}.at"), at)?,
+        },
+        Feature::Lift {
+            room,
+            low_floor,
+            style,
+            repeatable,
+        } => Feature::Lift {
+            room,
+            low_floor,
+            style,
+            repeatable,
+        },
     })
 }
 
@@ -472,7 +515,9 @@ mod tests {
     use super::{Units, snap, transform_plan};
     use crate::error::CyberError;
     use crate::geom::Pt;
-    use crate::plan::model::{Connection, ConnectionKind, Feature, Plan, Room, Shape};
+    use crate::plan::model::{
+        Connection, ConnectionKind, ExitStyle, Feature, Plan, Room, Shape, Side,
+    };
     use crate::wad::map::features::LiftStyle;
 
     /// A rectangular room with default sector properties, based at `at`
@@ -554,6 +599,37 @@ mod tests {
             destination,
             angle: 90_i32,
             two_way: true,
+        }
+    }
+
+    /// A west-wall `exit` in room `a` standing at `at`.
+    fn exit_at(at: Option<Pt>) -> Feature {
+        Feature::Exit {
+            room: "a".to_owned(),
+            style: ExitStyle::Switch,
+            secret: false,
+            wall: Some(Side::West),
+            at,
+        }
+    }
+
+    /// A west-wall `switch` in room `a` opening `d1`, standing at `at`.
+    fn switch_at(at: Option<Pt>) -> Feature {
+        Feature::Switch {
+            room: "a".to_owned(),
+            opens: "d1".to_owned(),
+            wall: Some(Side::West),
+            repeatable: false,
+            at,
+        }
+    }
+
+    /// The plan point a wall-mounted row carries: the `at` of an `exit`
+    /// or a `switch`, nothing for the rows that mount no panel.
+    const fn wall_point(feature: &Feature) -> Option<Pt> {
+        match *feature {
+            Feature::Exit { at, .. } | Feature::Switch { at, .. } => at,
+            Feature::Lift { .. } | Feature::Teleporter { .. } => None,
         }
     }
 
@@ -890,6 +966,36 @@ mod tests {
             &teleporter(Some((8_i64, 80_i64)), Some((-32_i64, 40_i64))),
             "10 goes to 80 below the origin, -28 snaps away from zero to -32"
         );
+    }
+
+    #[test]
+    fn a_wall_point_travels_with_the_rooms() {
+        let units = Units {
+            scale_num: 4_i64,
+            ..Units::default()
+        };
+        let rows = [
+            (exit_at(Some((10, 12))), Some((40_i64, 48_i64))),
+            (switch_at(Some((6, 8))), Some((24_i64, 32_i64))),
+            (exit_at(None), None),
+        ];
+        for (row, want) in rows {
+            let moved =
+                transform_plan(&plan_features(vec![row]), &units, 8_i64).expect("scale 4 runs");
+            let got = wall_point(moved.features.first().expect("one feature"));
+            assert_eq!(got, want, "the point travels like a placement");
+        }
+    }
+
+    #[test]
+    fn a_wall_point_the_transform_cannot_carry_names_its_path() {
+        let units = Units {
+            origin_x: i64::MAX - 1_000_i64,
+            ..Units::default()
+        };
+        for row in [exit_at(Some((5_000, 32))), switch_at(Some((5_000, 32)))] {
+            assert_plan_refused(&plan_features(vec![row]), &units, 1_i64, "features[0].at");
+        }
     }
 
     #[test]

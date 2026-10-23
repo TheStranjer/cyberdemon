@@ -160,9 +160,16 @@ fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
 }
 
 /// The squared distance from `at` to segment `from`-`to` as an exact
-/// fraction `num / den` with `den` positive: clamped endpoint distances
-/// use `1`, the perpendicular interior distance the squared run length.
-fn distance_fraction(at: Point, from: Point, to: Point) -> (i128, i128) {
+/// fraction `num / den` with `den` positive.
+///
+/// Clamped endpoint distances use `1`, the perpendicular interior
+/// distance the squared run length. Two of them compare by
+/// cross-multiplication, which is how [`nearest_boundary`] and the
+/// [`crate::plan`] feature engine's wall choice rank their candidates
+/// without a float.
+#[must_use]
+#[inline]
+pub fn distance_fraction(at: Point, from: Point, to: Point) -> (i128, i128) {
     let run = delta(wide(from), wide(to));
     let offset = delta(wide(from), wide(at));
     let squared = dot(run, run);

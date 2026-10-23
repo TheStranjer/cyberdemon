@@ -192,7 +192,9 @@ src/
                   inherited from the adjoining rooms), `plan/features.rs` the
                   fixed-order feature pipeline (doors, switches, lifts,
                   teleporters, exits, then room lights and secrets, ending
-                  in a door/lift line re-face), `plan/things.rs` the name
+                  in a door/lift line re-face and the rows' line-endpoint
+                  report; a mounted panel picks its wall by side, length and
+                  an optional plan `at` point), `plan/things.rs` the name
                   resolution, in-room grid placement and presence flags,
                   and `plan/compile.rs` the `compile` pipeline folding it
                   all into a `CompiledPlan`.
@@ -403,7 +405,8 @@ src/
                   feature pipeline in `crate::plan::features` — doors,
                   switches, lifts, teleporters, exits, then the rooms' lights
                   and secrets, ending in a re-face of the wired door and lift
-                  lines a teleporter rebuild turned — runs between the
+                  lines a teleporter rebuild turned and a pass pairing every
+                  reported line with its map-unit endpoints — runs between the
                   compile and the things, and `plan::playable_checks` appends
                   its never-error key/exit/remote warnings after the
                   things);

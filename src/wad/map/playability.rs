@@ -1302,6 +1302,7 @@ mod tests {
                 opens: "d1".to_owned(),
                 wall: Some(Side::West),
                 repeatable: true,
+                at: None,
             }],
         );
         let (wired_map, rows) = built(&wired, MapFormat::Doom);

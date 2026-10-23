@@ -332,6 +332,13 @@ pub(super) struct FeatureParam {
     /// the room's longest one-sided wall).
     #[serde(default)]
     pub(super) wall: Option<String>,
+    /// Exit and switch only: the plan point `[x, y]` that picks the wall
+    /// when several match `wall` (transformed and snapped with the rooms;
+    /// the nearest matching wall wins and the panel centres on the point).
+    /// Unset takes the longest matching wall. A `walk_over` exit dresses
+    /// every boundary and reads neither `wall` nor `at`.
+    #[serde(default)]
+    pub(super) at: Option<[i64; 2]>,
     /// Switch only: the `id` of the connection this switch operates.
     #[serde(default)]
     pub(super) opens: Option<String>,
@@ -883,7 +890,7 @@ impl FeatureParam {
         }
     }
 
-    /// The `exit` row: its room, style, secret flag and wall.
+    /// The `exit` row: its room, style, secret flag, wall and wall point.
     fn exit_feature(&self, path: &str) -> Result<Feature, CyberError> {
         Ok(Feature::Exit {
             room: required(
@@ -894,11 +901,12 @@ impl FeatureParam {
             style: self.exit_style(path)?,
             secret: self.secret,
             wall: self.side(path)?,
+            at: self.at.map(<(i64, i64)>::from),
         })
     }
 
     /// The `switch` row: its room, the connection it opens, its wall
-    /// and whether it repeats.
+    /// with the point that picks it, and whether it repeats.
     fn switch_feature(&self, path: &str) -> Result<Feature, CyberError> {
         Ok(Feature::Switch {
             room: required(
@@ -913,6 +921,7 @@ impl FeatureParam {
             )?,
             wall: self.side(path)?,
             repeatable: self.repeatable.unwrap_or(DEFAULT_SWITCH_REPEATABLE),
+            at: self.at.map(<(i64, i64)>::from),
         })
     }
 
@@ -1262,8 +1271,10 @@ mod tests {
     fn every_feature_variant_lands_in_the_model_with_its_explicit_fields() {
         let args = features_request(
             r#"[
-                {"kind": "exit", "room": "a", "style": "WALK_OVER", "secret": true, "wall": "North"},
-                {"kind": "switch", "room": "a", "opens": "d1", "wall": "west", "repeatable": true},
+                {"kind": "exit", "room": "a", "style": "WALK_OVER", "secret": true, "wall": "North",
+                 "at": [8, 56]},
+                {"kind": "switch", "room": "a", "opens": "d1", "wall": "west", "repeatable": true,
+                 "at": [0, 8]},
                 {"kind": "lift", "room": "a", "low_floor": -64, "style": "walk_trigger", "repeatable": false},
                 {"kind": "teleporter", "from_room": "a", "to_room": "a", "pad": [40, 40],
                  "destination": [120, 8], "angle": 90, "two_way": true}
@@ -1277,6 +1288,7 @@ mod tests {
                 style: ExitStyle::WalkOver,
                 secret: true,
                 wall: Some(Side::North),
+                at: Some((8_i64, 56_i64)),
             },
             "kind, style and wall names are case-insensitive"
         );
@@ -1287,6 +1299,7 @@ mod tests {
                 opens: "d1".to_owned(),
                 wall: Some(Side::West),
                 repeatable: true,
+                at: Some((0_i64, 8_i64)),
             },
             "the switch row"
         );
@@ -1332,6 +1345,7 @@ mod tests {
                 style: ExitStyle::Switch,
                 secret: false,
                 wall: None,
+                at: None,
             },
             "the exit defaults"
         );
@@ -1342,6 +1356,7 @@ mod tests {
                 opens: "d1".to_owned(),
                 wall: None,
                 repeatable: false,
+                at: None,
             },
             "a switch defaults to one use"
         );

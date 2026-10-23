@@ -47,7 +47,9 @@ src/
                   reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
                   bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
-                  adjust, `gfx/ops/alpha.rs` colour key and trim,
+                  adjust/grayscale, `gfx/ops/blur.rs` the separable alpha-weighted
+                  box blur behind `ImageOp::Blur`,
+                  `gfx/ops/alpha.rs` colour key and trim,
                   `gfx/ops/background.rs` the border-driven background
                   removal, `gfx/ops/threshold.rs` binarization plus the
                   `otsu_level`/`luminance_histogram`/`binary_mask` helpers

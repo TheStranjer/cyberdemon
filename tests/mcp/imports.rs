@@ -13,7 +13,8 @@
 //! feet-on-origin default offsets, the sprites region, the rotation
 //! warnings, the duplicate and `replace` rule and its refusal catalogue).
 //! Test pictures are written with the library's own `PNG` encoder. The
-//! preview pipeline `process_image` (ops, quantized and `quantize: false`,
+//! preview pipeline `process_image` (ops, the `grayscale`/`blur`
+//! building blocks, quantized and `quantize: false`,
 //! the op-index errors, and the default-dither preview keeping an
 //! asymmetric picture unmirrored) and the one-shot `create_texture_from_image`
 //! (the size rules, the automatic `fit`/`make_tileable` steps, the
@@ -1884,6 +1885,81 @@ mod tests {
         assert!(
             report["steps"].as_array().expect("steps").is_empty(),
             "no ops"
+        );
+    }
+
+    /// A `SIDE` x `SIDE` opaque PNG of one colour.
+    fn solid_png(color: [u8; 4]) -> Vec<u8> {
+        let pixels: Vec<u8> = (0..PIXELS).flat_map(|_| color).collect();
+        let img = RgbaImage::new(SIDE, SIDE, pixels).expect("test shape is valid");
+        encode_png(&img, None).expect("test PNG encodes")
+    }
+
+    /// `process_image` with `grayscale` then `blur`: both steps report
+    /// their measures, and a single-colour opaque picture — the red,
+    /// luminance `124` — stays that exact grey through both.
+    #[tokio::test]
+    async fn process_image_grayscale_and_blur_keep_a_flat_picture_flat() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FLATRED.png", &solid_png([200, 100, 50, 255]));
+        let report = call(
+            &client,
+            "process_image",
+            source_args(
+                &file,
+                json!({
+                    "ops": [
+                        { "op": "grayscale" },
+                        { "op": "blur", "radius": 2_u64 },
+                    ],
+                }),
+            ),
+        )
+        .await;
+        let steps = report["steps"].as_array().expect("a step list");
+        assert_eq!(steps.len(), 2_usize, "grayscale then blur reported");
+        assert_eq!(steps[0]["op"], json!("grayscale"), "in order");
+        assert_eq!(
+            steps[0]["distinct_colors_before"],
+            json!(1_u64),
+            "one colour"
+        );
+        assert_eq!(steps[0]["distinct_colors_after"], json!(1_u64), "one grey");
+        assert_eq!(steps[1]["op"], json!("blur"), "the blur step");
+        assert_eq!(steps[1]["radius"], json!(2_u64), "the radius echoes");
+        let url = report["processed"]["url"]
+            .as_str()
+            .expect("a processed URL");
+        let bytes = fetch_asset(url).await;
+        let image = cyberdemon::gfx::codec::decode_image(&bytes).expect("the asset is a PNG");
+        assert_eq!((image.width, image.height), (SIDE, SIDE), "no shape change");
+        assert!(
+            image
+                .pixels
+                .chunks_exact(4)
+                .all(|pixel| pixel == [124_u8, 124, 124, 255]),
+            "the uniform luminance-124 grey stays exact through both ops",
+        );
+    }
+
+    /// A `blur` radius outside `1..=256` refuses through `process_image`,
+    /// naming `ops[0].radius`.
+    #[tokio::test]
+    async fn process_image_names_the_field_of_a_blur_out_of_range() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "FLATRED.png", &solid_png([200, 100, 50, 255]));
+        let (code, message, _) = call_err(
+            &client,
+            "process_image",
+            source_args(&file, json!({ "ops": [{ "op": "blur", "radius": 0_u64 }] })),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "radius 0 refuses");
+        assert!(
+            message.contains("ops[0].radius") && message.contains("1..=256"),
+            "the message names the field and range: {message}"
         );
     }
 

@@ -4,13 +4,15 @@
 //! Operations run in order over one [`RgbaImage`]; each returns its result
 //! plus a `JSON` object of measurements, collected into an [`OpsReport`].
 //! Geometry (crop/fit/rotate/flip) lives in [`geometry`], size-changing
-//! sampling in [`resample`], tonal corrections in [`tone`], alpha handling
-//! in [`alpha`] and [`background`], seamless tiling in [`tile`],
-//! binarization in [`threshold`] and dithered quantization in [`dither`].
+//! sampling in [`resample`], tonal corrections (including grayscale) in
+//! [`tone`], alpha handling in [`alpha`] and [`background`], seamless
+//! tiling in [`tile`], binarization in [`threshold`], box blur in [`blur`]
+//! and dithered quantization in [`dither`].
 //! Everything here is pure: no MCP, no filesystem, no floats.
 
 pub mod alpha;
 pub mod background;
+pub mod blur;
 pub mod dither;
 pub mod geometry;
 pub mod resample;
@@ -172,6 +174,15 @@ pub enum ImageOp {
         #[serde(default)]
         invert: bool,
     },
+    /// Replace the colour channels of every opaque pixel with its
+    /// [`luminance`], leaving every alpha untouched.
+    Grayscale,
+    /// Average every pixel over the `(2r + 1) x (2r + 1)` window around it,
+    /// colours weighted by alpha so transparent pixels never darken edges.
+    Blur {
+        /// Blur radius, `1..=256`.
+        radius: u32,
+    },
 }
 
 /// Default [`ImageOp::AutoLevels::clip_percent`].
@@ -240,7 +251,9 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         | ImageOp::Trim { .. }
         | ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
-        | ImageOp::Threshold { .. } => pixel_op(img, index, op)?,
+        | ImageOp::Threshold { .. }
+        | ImageOp::Grayscale
+        | ImageOp::Blur { .. } => pixel_op(img, index, op)?,
     };
     check_output_size(index, &out)?;
     Ok((out, step))
@@ -302,7 +315,9 @@ fn geometry_op(
         | ImageOp::Trim { .. }
         | ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
-        | ImageOp::Threshold { .. } => {
+        | ImageOp::Threshold { .. }
+        | ImageOp::Grayscale
+        | ImageOp::Blur { .. } => {
             return Err(CyberError::Internal(format!(
                 "ops[{index}]: pixel op reached the geometric dispatcher"
             )));
@@ -348,6 +363,8 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
                 padding,
             },
         ),
+        ImageOp::Grayscale => Ok(tone::grayscale(img)),
+        ImageOp::Blur { radius } => blur::blur(img, index, radius),
         ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
         | ImageOp::Threshold { .. } => restoration_op(img, index, op),
@@ -395,6 +412,8 @@ fn restoration_op(
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
         | ImageOp::Trim { .. }
+        | ImageOp::Grayscale
+        | ImageOp::Blur { .. }
         | ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
@@ -927,5 +946,71 @@ mod tests {
             panic!("expected a Threshold op");
         };
         (level, invert)
+    }
+
+    #[test]
+    fn grayscale_and_blur_deserialize_from_their_documented_json() {
+        let text = r#"[
+            {"op":"grayscale"},
+            {"op":"blur","radius":2}
+        ]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(ops.len(), 2, "both new ops parse");
+        assert_eq!(
+            ops[0],
+            ImageOp::Grayscale,
+            "grayscale carries no parameters"
+        );
+        let ImageOp::Blur { radius } = ops[1].clone() else {
+            panic!("expected Blur at index 1");
+        };
+        assert_eq!(radius, 2_u32, "the blur radius carries through");
+    }
+
+    #[test]
+    fn grayscale_and_blur_run_through_the_pixel_dispatcher() {
+        let ops = [ImageOp::Grayscale, ImageOp::Blur { radius: 1 }];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report
+                .steps
+                .iter()
+                .map(|step| step["op"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["grayscale", "blur"],
+            "one named entry per op, in order"
+        );
+        assert_eq!(
+            report.steps[0]["distinct_colors_before"], 4_i32,
+            "the quad's four opaque colours"
+        );
+        assert_eq!(
+            report.steps[0]["distinct_colors_after"], 4_i32,
+            "76, 149, 29 and 255 greys stay distinct"
+        );
+        assert_eq!(report.steps[1]["radius"], 1_i32, "the radius echoes");
+        let uniform = out.get(0, 0).expect("in bounds");
+        for (x, y) in [(0_u32, 0_u32), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(out.get(x, y), Some(uniform), "({x},{y}) joins the blur");
+        }
+        assert_eq!(
+            [uniform[0], uniform[1], uniform[2]],
+            [128_u8, 128, 128],
+            "the whole 2x2 window is every pixel's window: the grey mean rounds to 128"
+        );
+        assert_eq!(uniform[3], 255, "opaque stays opaque");
+    }
+
+    #[test]
+    fn blur_radius_errors_name_the_op_index_and_field() {
+        let error = apply_ops(quad(), &[ImageOp::Grayscale, ImageOp::Blur { radius: 0 }])
+            .expect_err("radius 0 must fail");
+        let CyberError::InvalidArgument(message) = error else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(
+            message.contains("ops[1].radius") && message.contains("1..=256"),
+            "the parameter error names the field and range: {message}"
+        );
     }
 }

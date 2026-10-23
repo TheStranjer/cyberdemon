@@ -345,6 +345,15 @@ canonical operation reference.
   luminance. `level` is `0..=255` or omitted for the Otsu-picked cut;
   `invert` swaps the two classes (default `false`).
   `{ "op": "threshold", "level": 128 }`.
+- `grayscale` — replace the colour channels of every opaque pixel (alpha
+  `128` or above) with its luminance; every alpha stays untouched. Reports
+  `distinct_colors_before` and `distinct_colors_after` counted over unique
+  opaque `RGBA` triples, so you can see how much colour the step collapsed.
+  `{ "op": "grayscale" }`.
+- `blur` — box-blur the picture: every pixel becomes the average of the
+  `(2r + 1) x (2r + 1)` window around it, clipped at the borders; colours
+  are weighted by alpha, so transparent pixels never darken an edge.
+  `radius` is `1..=256`. `{ "op": "blur", "radius": 2 }`.
 
 ## `process_image`
 

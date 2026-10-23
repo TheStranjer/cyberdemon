@@ -1,25 +1,58 @@
-//! Binarization for [`crate::gfx::ops::ImageOp::Threshold`], plus the pure
-//! helpers the sketch-tracing tools reuse: [`luminance_histogram`],
-//! [`otsu_level`] and [`binary_mask`].
+//! Binarization and hairline opening for the ink-and-paper image ops.
+//!
+//! `binarize` implements [`crate::gfx::ops::ImageOp::Threshold`] and
+//! `thin_stroke` implements [`crate::gfx::ops::ImageOp::ThinStrokeFilter`];
+//! [`luminance_histogram`], [`otsu_level`] and [`binary_mask`] are the pure
+//! helpers the sketch-tracing tools reuse.
 //!
 //! The cutoff is either an explicit level or Otsu's, which maximises the
 //! between-class variance `w0 * w1 * (mu0 - mu1)^2` of the luminance
 //! histogram; that quotient is evaluated in `u128` as
 //! `(sum_total * w0 - sum0 * total)^2 / (w0 * total)` so no float appears.
+//!
+//! `thin_stroke` opens the [`binary_mask`] ink with the square
+//! `(2r + 1) x (2r + 1)` element ([`erode`] then [`dilate`] from
+//! [`crate::sketch::morph`]). An opening keeps exactly the ink that can hold
+//! the element, which is why it drops hairline ruling and keeps walls: a
+//! stroke thinner than the element erodes to nothing and the later dilation
+//! has no core left to grow back, while a stroke `2r + 1` pixels or more
+//! thick erodes to its inside line and dilates to its full original extent.
+//! [`erode`] counts pixels outside the image as ink, so ink touching the
+//! frame only needs its in-image neighbours to survive: a band pressed
+//! against the border keeps the `r` pixel rows the element cannot reach
+//! beyond the image, where the same band floating free inside the paper
+//! would be too thin and vanish.
 
 use serde_json::{Value, json};
 
+use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::luminance;
+use crate::gfx::ops::{arg_error, luminance};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
+use crate::sketch::mask::Mask;
+use crate::sketch::morph::{dilate, erode};
 
 /// Alpha at or above which a pixel counts toward the histogram.
 pub(crate) const OPAQUE_ALPHA: u8 = 128;
 /// One luminance bin per channel value.
 pub const BINS: usize = 256;
+/// Smallest accepted [`thin_stroke`] opening radius.
+const MIN_THIN_RADIUS: u32 = 1;
+/// Largest accepted [`thin_stroke`] opening radius.
+const MAX_THIN_RADIUS: u32 = 16;
 
 /// Parameters of [`crate::gfx::ops::ImageOp::Threshold`].
 pub(crate) struct ThresholdSpec {
+    /// Fixed cut-off; `None` picks the Otsu level.
+    pub(crate) level: Option<u8>,
+    /// Whether to swap the black and white classes.
+    pub(crate) invert: bool,
+}
+
+/// Parameters of [`crate::gfx::ops::ImageOp::ThinStrokeFilter`].
+pub(crate) struct ThinStrokeSpec {
+    /// Opening radius, `1..=16`.
+    pub(crate) radius: u32,
     /// Fixed cut-off; `None` picks the Otsu level.
     pub(crate) level: Option<u8>,
     /// Whether to swap the black and white classes.
@@ -128,6 +161,84 @@ fn binary_pixel(pixel: [u8; 4], level: u8, invert: bool) -> [u8; 4] {
     [shade, shade, shade, 255_u8]
 }
 
+/// Drops hairline strokes: classifies the ink of `img` exactly as
+/// [`binarize`] would, opens it with the square `(2r + 1) x (2r + 1)`
+/// element and paints the surviving ink back as opaque black on opaque
+/// white paper.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when `spec.radius` is outside `1..=16`.
+pub(crate) fn thin_stroke(
+    img: RgbaImage,
+    index: usize,
+    spec: &ThinStrokeSpec,
+) -> Result<(RgbaImage, Value), CyberError> {
+    check_thin_radius(index, spec.radius)?;
+    let detected = || (otsu_level(&luminance_histogram(&img)), true);
+    let (level, otsu) = spec
+        .level
+        .map_or_else(detected, |explicit| (explicit, false));
+    let ink = Mask {
+        width: img.width,
+        height: img.height,
+        bits: binary_mask(&img, level, spec.invert),
+    };
+    let opened = dilate(&erode(&ink, spec.radius), spec.radius);
+    let (removed, kept) = count_opening(&ink, &opened);
+    let out = paint_ink(img, &opened);
+    Ok((
+        out,
+        json!({
+            "op": "thin_stroke_filter",
+            "radius": spec.radius,
+            "level": level,
+            "otsu": otsu,
+            "removed_ink_pixels": removed,
+            "kept_ink_pixels": kept,
+        }),
+    ))
+}
+
+/// Rejects a [`thin_stroke`] radius outside `1..=16`, naming the op field.
+fn check_thin_radius(index: usize, radius: u32) -> Result<(), CyberError> {
+    if (MIN_THIN_RADIUS..=MAX_THIN_RADIUS).contains(&radius) {
+        return Ok(());
+    }
+    Err(arg_error(
+        index,
+        "radius",
+        &format!("be within {MIN_THIN_RADIUS}..={MAX_THIN_RADIUS}, got {radius}"),
+    ))
+}
+
+/// Ink pixels [`thin_stroke`]'s opening dropped, and ink pixels it kept.
+fn count_opening(before: &Mask, after: &Mask) -> (usize, usize) {
+    let kept = after.bits.iter().copied().filter(|set| *set).count();
+    let removed = before
+        .bits
+        .iter()
+        .zip(after.bits.iter())
+        .filter(|&(was, kept_now)| *was && !*kept_now)
+        .count();
+    (removed, kept)
+}
+
+/// Paints `opened` as opaque black ink on opaque white paper, every alpha
+/// normalised to `255` the way [`binarize`] does.
+fn paint_ink(img: RgbaImage, opened: &Mask) -> RgbaImage {
+    let mut out = img;
+    for (chunk, &set) in out
+        .pixels
+        .chunks_exact_mut(BYTES_PER_PIXEL)
+        .zip(opened.bits.iter())
+    {
+        let shade = if set { 0_u8 } else { 255_u8 };
+        chunk.copy_from_slice(&[shade, shade, shade, 255_u8]);
+    }
+    out
+}
+
 /// The luminance class of pixels at or below the current level.
 #[derive(Default)]
 struct Class {
@@ -170,14 +281,58 @@ impl Class {
 
 #[cfg(test)]
 mod tests {
-    use super::{BINS, ThresholdSpec, binarize, binary_mask, luminance_histogram, otsu_level};
+    use super::{
+        BINS, ThinStrokeSpec, ThresholdSpec, binarize, binary_mask, luminance_histogram,
+        otsu_level, thin_stroke,
+    };
     use crate::gfx::image::RgbaImage;
+    use serde_json::Value;
 
     /// A 1-row image of the given grey values, all opaque.
     fn greys(values: &[u8]) -> RgbaImage {
         let pixels: Vec<u8> = values.iter().flat_map(|&v| [v, v, v, 255_u8]).collect();
         let width = u32::try_from(values.len()).expect("fixture fits u32");
         RgbaImage::new(width, 1, pixels).expect("fixture is valid")
+    }
+
+    /// A `width` x `height` image of opaque white paper.
+    fn paper(width: u32, height: u32) -> RgbaImage {
+        let count = usize::try_from(width)
+            .expect("test width")
+            .checked_mul(usize::try_from(height).expect("test height"))
+            .expect("test pixels fit");
+        RgbaImage::new(width, height, vec![255_u8; count.saturating_mul(4)]).expect("valid fixture")
+    }
+
+    /// Paints the inclusive rectangle `(x0, y0)..=(x1, y1)` of grey `shade`.
+    fn paint(img: &mut RgbaImage, shade: u8, (x0, y0, x1, y1): (u32, u32, u32, u32)) {
+        let points = (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| (x, y)));
+        for (x, y) in points {
+            assert!(
+                img.set(x, y, [shade, shade, shade, 255_u8]),
+                "fixture in bounds"
+            );
+        }
+    }
+
+    /// Runs [`thin_stroke`] at radius `1` with the given classification.
+    fn opened(img: RgbaImage, level: Option<u8>, invert: bool) -> (RgbaImage, Value) {
+        let spec = ThinStrokeSpec {
+            radius: 1,
+            level,
+            invert,
+        };
+        thin_stroke(img, 0, &spec).expect("fixture radius is valid")
+    }
+
+    /// Whether the pixel at `(x, y)` is opaque black ink.
+    fn is_black(out: &RgbaImage, x: u32, y: u32) -> bool {
+        out.get(x, y) == Some([0_u8, 0, 0, 255])
+    }
+
+    /// Whether the pixel at `(x, y)` is opaque white paper.
+    fn is_white(out: &RgbaImage, x: u32, y: u32) -> bool {
+        out.get(x, y) == Some([255_u8, 255, 255, 255])
     }
 
     /// A histogram of `count` pixels at each of the given levels.
@@ -331,5 +486,94 @@ mod tests {
             vec![false, true, false],
             "inverted picks the bright class"
         );
+    }
+
+    #[test]
+    fn thin_stroke_drops_a_hairline_row_and_column() {
+        let mut img = paper(9, 9);
+        paint(&mut img, 100, (1, 4, 7, 4));
+        paint(&mut img, 100, (4, 1, 4, 7));
+        let (out, step) = opened(img, Some(128), false);
+        assert_eq!(step["op"], "thin_stroke_filter", "the op name");
+        assert_eq!(step["radius"], 1_i32, "the radius echoes");
+        assert_eq!(step["level"], 128_i32, "explicit level");
+        assert_eq!(step["otsu"], false, "an explicit level is not Otsu");
+        assert_eq!(step["removed_ink_pixels"], 13_i32, "the whole 1-px cross");
+        assert_eq!(step["kept_ink_pixels"], 0_i32, "nothing survived");
+        let hairline_gone = (0..9_u32)
+            .flat_map(|y| (0..9_u32).map(move |x| (x, y)))
+            .all(|(x, y)| is_white(&out, x, y));
+        assert!(hairline_gone, "every pixel is paper again");
+    }
+
+    #[test]
+    fn thin_stroke_keeps_a_three_pixel_band_and_reports_the_otsu_default() {
+        let mut img = paper(9, 9);
+        paint(&mut img, 100, (3, 2, 5, 6));
+        let (out, step) = opened(img, None, false);
+        assert_eq!(step["otsu"], true, "level None is Otsu's");
+        assert_eq!(step["level"], 100_i32, "Otsu splits at the grey spike");
+        assert_eq!(step["removed_ink_pixels"], 0_i32, "the band keeps all ink");
+        assert_eq!(step["kept_ink_pixels"], 15_i32, "3 x 5 pixels");
+        let band_solid = (2..7_u32)
+            .flat_map(|y| (3..6_u32).map(move |x| (x, y)))
+            .all(|(x, y)| is_black(&out, x, y));
+        assert!(band_solid, "the whole band stays ink");
+        for (x, y) in [(2_u32, 4_u32), (6, 4), (3, 1), (5, 7), (0, 0), (8, 8)] {
+            assert!(is_white(&out, x, y), "({x},{y}) stays paper");
+        }
+    }
+
+    #[test]
+    fn thin_stroke_keeps_frame_touching_ink_and_drops_the_free_band() {
+        let mut img = paper(9, 9);
+        paint(&mut img, 100, (1, 0, 7, 1));
+        paint(&mut img, 100, (1, 4, 7, 5));
+        let (out, step) = opened(img, Some(128), false);
+        assert_eq!(step["removed_ink_pixels"], 14_i32, "the 2-px free band");
+        assert_eq!(step["kept_ink_pixels"], 14_i32, "the frame band survives");
+        for (x, y) in [(1_u32, 0_u32), (4, 0), (7, 0), (1, 1), (7, 1)] {
+            assert!(is_black(&out, x, y), "({x},{y}) frame band keeps ink");
+        }
+        for (x, y) in [(1_u32, 4_u32), (4, 4), (7, 5)] {
+            assert!(is_white(&out, x, y), "({x},{y}) free band is gone");
+        }
+    }
+
+    #[test]
+    fn thin_stroke_invert_flips_the_ink_class() {
+        let mut img = paper(9, 9);
+        paint(&mut img, 0, (0, 0, 8, 8));
+        paint(&mut img, 255, (3, 0, 5, 8));
+        let (as_band, step) = opened(img.clone(), Some(128), true);
+        assert_eq!(step["level"], 128_i32, "explicit level carries through");
+        assert_eq!(step["kept_ink_pixels"], 27_i32, "the bright band is ink");
+        assert_eq!(
+            step["removed_ink_pixels"], 0_i32,
+            "a full-height band holds"
+        );
+        assert!(is_black(&as_band, 4, 4), "the ink class paints black");
+        assert!(is_white(&as_band, 0, 4), "the paper class paints white");
+        let (as_field, _step) = opened(img, Some(128), false);
+        assert!(is_white(&as_field, 4, 4), "the bright band is paper now");
+        assert!(is_black(&as_field, 0, 0), "the dark field is the ink");
+    }
+
+    #[test]
+    fn thin_stroke_rejects_radii_outside_the_documented_range() {
+        for radius in [0_u32, 17_u32] {
+            let spec = ThinStrokeSpec {
+                radius,
+                level: Some(128),
+                invert: false,
+            };
+            let error = thin_stroke(paper(3, 3), 3, &spec).expect_err("out of range radius");
+            assert_eq!(error.code(), "invalid_argument", "radius {radius} refuses");
+            let message = error.to_string();
+            assert!(
+                message.contains("ops[3].radius") && message.contains("1..=16"),
+                "the error names the field and range: {message}"
+            );
+        }
     }
 }

@@ -183,6 +183,21 @@ pub enum ImageOp {
         /// Blur radius, `1..=256`.
         radius: u32,
     },
+    /// Drop hairline strokes: classify ink exactly like [`ImageOp::Threshold`]
+    /// and keep only ink that can hold the `(2r + 1) x (2r + 1)` square
+    /// (morphological opening), painted back as opaque black on opaque white.
+    ThinStrokeFilter {
+        /// Opening radius, `1..=16`; the result drops every stroke thinner
+        /// than the `2r + 1` square element.
+        radius: u32,
+        /// Cut-off `0..=255`; `None` (the default) picks the Otsu level,
+        /// the same convention as [`ImageOp::Threshold`].
+        #[serde(default)]
+        level: Option<u8>,
+        /// Swap the black and white classes.
+        #[serde(default)]
+        invert: bool,
+    },
 }
 
 /// Default [`ImageOp::AutoLevels::clip_percent`].
@@ -253,7 +268,8 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         | ImageOp::MakeTileable { .. }
         | ImageOp::Threshold { .. }
         | ImageOp::Grayscale
-        | ImageOp::Blur { .. } => pixel_op(img, index, op)?,
+        | ImageOp::Blur { .. }
+        | ImageOp::ThinStrokeFilter { .. } => pixel_op(img, index, op)?,
     };
     check_output_size(index, &out)?;
     Ok((out, step))
@@ -317,7 +333,8 @@ fn geometry_op(
         | ImageOp::MakeTileable { .. }
         | ImageOp::Threshold { .. }
         | ImageOp::Grayscale
-        | ImageOp::Blur { .. } => {
+        | ImageOp::Blur { .. }
+        | ImageOp::ThinStrokeFilter { .. } => {
             return Err(CyberError::Internal(format!(
                 "ops[{index}]: pixel op reached the geometric dispatcher"
             )));
@@ -367,7 +384,8 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         ImageOp::Blur { radius } => blur::blur(img, index, radius),
         ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
-        | ImageOp::Threshold { .. } => restoration_op(img, index, op),
+        | ImageOp::Threshold { .. }
+        | ImageOp::ThinStrokeFilter { .. } => restoration_op(img, index, op),
         ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
@@ -377,8 +395,9 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
     }
 }
 
-/// Runs the restoration group: border background removal, seamless tiling
-/// and binarization; any other variant reaching it is a dispatch bug.
+/// Runs the restoration group: border background removal, seamless tiling,
+/// binarization and the hairline-opening filter; any other variant reaching
+/// it is a dispatch bug.
 fn restoration_op(
     img: RgbaImage,
     index: usize,
@@ -407,6 +426,18 @@ fn restoration_op(
         ImageOp::Threshold { level, invert } => {
             let spec = threshold::ThresholdSpec { level, invert };
             Ok(threshold::binarize(img, &spec))
+        }
+        ImageOp::ThinStrokeFilter {
+            radius,
+            level,
+            invert,
+        } => {
+            let spec = threshold::ThinStrokeSpec {
+                radius,
+                level,
+                invert,
+            };
+            threshold::thin_stroke(img, index, &spec)
         }
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
@@ -1010,6 +1041,95 @@ mod tests {
         };
         assert!(
             message.contains("ops[1].radius") && message.contains("1..=256"),
+            "the parameter error names the field and range: {message}"
+        );
+    }
+
+    #[test]
+    fn thin_stroke_filter_deserializes_with_documented_defaults() {
+        let text = r#"[
+            {"op":"thin_stroke_filter","radius":1},
+            {"op":"thin_stroke_filter","radius":16,"level":128,"invert":true}
+        ]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(
+            thin_stroke_fields(&ops[0]),
+            (1_u32, None, false),
+            "level defaults to Otsu and invert to false"
+        );
+        assert_eq!(
+            thin_stroke_fields(&ops[1]),
+            (16_u32, Some(128), true),
+            "every explicit field carries through"
+        );
+    }
+
+    /// The `ThinStrokeFilter` fields of an op that must be one.
+    fn thin_stroke_fields(op: &ImageOp) -> (u32, Option<u8>, bool) {
+        let ImageOp::ThinStrokeFilter {
+            radius,
+            level,
+            invert,
+        } = op.clone()
+        else {
+            panic!("expected a ThinStrokeFilter op");
+        };
+        (radius, level, invert)
+    }
+
+    #[test]
+    fn thin_stroke_filter_runs_through_the_restoration_dispatcher() {
+        let ops = [
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+            ImageOp::ThinStrokeFilter {
+                radius: 1,
+                level: None,
+                invert: false,
+            },
+        ];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report.steps[1]["op"], "thin_stroke_filter",
+            "the documented step name"
+        );
+        assert_eq!(report.steps[1]["radius"], 1_i32, "the radius echoes");
+        assert_eq!(report.steps[1]["otsu"], true, "level None is Otsu's");
+        assert!(report.steps[1]["level"].is_number(), "the level reports");
+        assert_eq!(out.width, 2, "the op never changes the shape");
+    }
+
+    #[test]
+    fn thin_stroke_radius_errors_name_the_op_index_and_field() {
+        assert_thin_radius_rejected(0_u32);
+        assert_thin_radius_rejected(17_u32);
+    }
+
+    /// Applies a `thin_stroke_filter` with the out-of-range `radius` after a
+    /// leading op and checks the error names `ops[1].radius` and `1..=16`.
+    fn assert_thin_radius_rejected(radius: u32) {
+        let error = apply_ops(
+            quad(),
+            &[
+                ImageOp::Flip {
+                    horizontal: true,
+                    vertical: false,
+                },
+                ImageOp::ThinStrokeFilter {
+                    radius,
+                    level: Some(128),
+                    invert: false,
+                },
+            ],
+        )
+        .expect_err("a radius outside 1..=16 must fail");
+        let CyberError::InvalidArgument(message) = error else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(
+            message.contains("ops[1].radius") && message.contains("1..=16"),
             "the parameter error names the field and range: {message}"
         );
     }

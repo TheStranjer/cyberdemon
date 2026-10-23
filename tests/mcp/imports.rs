@@ -14,7 +14,8 @@
 //! warnings, the duplicate and `replace` rule and its refusal catalogue).
 //! Test pictures are written with the library's own `PNG` encoder. The
 //! preview pipeline `process_image` (ops, the `grayscale`/`blur`
-//! building blocks, quantized and `quantize: false`,
+//! building blocks, the `threshold`-then-`thin_stroke_filter` hairline pass,
+//! quantized and `quantize: false`,
 //! the op-index errors, and the default-dither preview keeping an
 //! asymmetric picture unmirrored) and the one-shot `create_texture_from_image`
 //! (the size rules, the automatic `fit`/`make_tileable` steps, the
@@ -44,7 +45,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::iwad;
-    use crate::support::{call, call_err, connect, http_get, http_put};
+    use crate::support::{asset_png, call, call_err, connect, http_get, http_put};
 
     /// A connected MCP client.
     type Client = RunningService<RoleClient, ()>;
@@ -1960,6 +1961,82 @@ mod tests {
         assert!(
             message.contains("ops[0].radius") && message.contains("1..=256"),
             "the message names the field and range: {message}"
+        );
+    }
+
+    /// A `12` x `12` opaque `PNG`: white paper carrying a `1` px grey row
+    /// (row `2`) and a `4` px grey band (rows `5..=8`).
+    fn ruling_png() -> Vec<u8> {
+        let mut img = RgbaImage::new(12_u32, 12_u32, vec![255_u8; 576_usize])
+            .expect("a 12x12 RGBA8 is valid");
+        let hairline = (0..12_u32).map(|x| (x, 2_u32));
+        let band = (0..12_u32).flat_map(|x| (5..9_u32).map(move |y| (x, y)));
+        for (x, y) in hairline.chain(band) {
+            assert!(img.set(x, y, [100_u8, 100, 100, 255]), "fixture in bounds");
+        }
+        encode_png(&img, None).expect("test PNG encodes")
+    }
+
+    /// `process_image` with `threshold` then `thin_stroke_filter` at radius
+    /// `1`: the hairline row comes back white paper, the `4` px band black
+    /// ink, and the step carries the two ink counts.
+    #[tokio::test]
+    async fn process_image_thin_stroke_filter_drops_the_hairline_row() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        let file = write_file(dir.path(), "RULING.png", &ruling_png());
+        let report = call(
+            &client,
+            "process_image",
+            source_args(
+                &file,
+                json!({
+                    "ops": [
+                        { "op": "threshold" },
+                        { "op": "thin_stroke_filter", "radius": 1_u64 },
+                    ],
+                }),
+            ),
+        )
+        .await;
+        let steps = report["steps"].as_array().expect("a step list");
+        assert_eq!(steps.len(), 2_usize, "threshold then the filter");
+        assert_eq!(steps[1]["op"], json!("thin_stroke_filter"), "the op name");
+        assert_eq!(steps[1]["radius"], json!(1_u64), "the radius echoes");
+        assert_eq!(steps[1]["otsu"], json!(true), "level omitted is Otsu");
+        assert_eq!(
+            steps[1]["removed_ink_pixels"],
+            json!(12_u64),
+            "the 12-pixel hairline was dropped"
+        );
+        assert_eq!(
+            steps[1]["kept_ink_pixels"],
+            json!(48_u64),
+            "the 4 px band kept its 48 ink pixels"
+        );
+        let url = report["processed"]["url"]
+            .as_str()
+            .expect("a processed URL");
+        let image = asset_png(url).await;
+        assert_eq!(
+            (image.width, image.height),
+            (12_u32, 12_u32),
+            "no shape change"
+        );
+        assert!(
+            (0..12_u32).all(|x| image.get(x, 2) == Some([255_u8, 255, 255, 255])),
+            "the hairline row is white paper now"
+        );
+        assert!(
+            (0..12_u32)
+                .flat_map(|x| (5..9_u32).map(move |y| (x, y)))
+                .all(|(x, y)| image.get(x, y) == Some([0_u8, 0, 0, 255])),
+            "the 4 px band is black ink still"
+        );
+        assert_eq!(
+            image.get(0, 0),
+            Some([255_u8, 255, 255, 255]),
+            "paper stays paper"
         );
     }
 

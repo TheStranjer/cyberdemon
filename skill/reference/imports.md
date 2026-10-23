@@ -345,6 +345,14 @@ canonical operation reference.
   luminance. `level` is `0..=255` or omitted for the Otsu-picked cut;
   `invert` swaps the two classes (default `false`).
   `{ "op": "threshold", "level": 128 }`.
+- `thin_stroke_filter` — drop hairline ruling. Binarize the picture the same
+  way as `threshold` (`level` omitted means Otsu; `invert` swaps the two
+  classes), then keep only the ink wide enough to contain the square
+  `(2r + 1) x (2r + 1)` element: strokes thinner than that element
+  (1 px rules, stray specks) are erased while walls `2r + 1` pixels or thicker
+  survive intact, and `erode`'s border convention keeps frame-touching ink.
+  `radius` is `1..=16`. Reports `level`, `otsu`, `removed_ink_pixels` and
+  `kept_ink_pixels`. `{ "op": "thin_stroke_filter", "radius": 1 }`.
 - `grayscale` — replace the colour channels of every opaque pixel (alpha
   `128` or above) with its luminance; every alpha stays untouched. Reports
   `distinct_colors_before` and `distinct_colors_after` counted over unique

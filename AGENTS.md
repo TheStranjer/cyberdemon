@@ -52,6 +52,7 @@ src/
                   `gfx/ops/alpha.rs` colour key and trim,
                   `gfx/ops/background.rs` the border-driven background
                   removal, `gfx/ops/threshold.rs` binarization plus the
+                  `thin_stroke` hairline opener, over the
                   `otsu_level`/`luminance_histogram`/`binary_mask` helpers
                   the sketch tools reuse, `gfx/ops/dither.rs` the
                   `Dither`-knopped quantization (Floyd–Steinberg serpentine),

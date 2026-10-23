@@ -618,10 +618,15 @@ tests/
                     helpers (PNG/MIDI/WAV builders, paper sheets);
                     fixtures.rs: WAD builders writing archives with the
                     library; one test module per tool group (server, assets,
-                    session, save, batch, convert, defs, lumps, map_edit,
+                    session, save, batch, defs, lumps, map_edit,
                     maps, edit_*, features, graphics, imports, inspect,
                     nodes, palette, patches, plan, playability, query,
-                    render, scripts, sketch, textures, themes, validate);
+                    render, scripts, sketch, textures, themes, validate) with
+                    the `convert` group's shared helpers in `convert.rs` and
+                    its tests in `convert/udmf.rs` (same-family rewrites),
+                    `convert/forward.rs` (`Doom` into `Hexen` family records)
+                    and `convert/reverse.rs` (the trips back and the
+                    refusals);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

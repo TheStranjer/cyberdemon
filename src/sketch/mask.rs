@@ -12,7 +12,7 @@ use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::parse_hex_color;
 use crate::gfx::ops::threshold::{OPAQUE_ALPHA, binary_mask, luminance_histogram, otsu_level};
-use crate::gfx::{BYTES_PER_PIXEL, pixel_count, pixel_index, to_pixel};
+use crate::gfx::{BYTES_PER_PIXEL, in_shape, pixel_count, pixel_index, to_pixel};
 
 /// Longest straight run (pixels) [`stroke_width`] counts as a pen sample;
 /// walls longer than this are extents, not thicknesses.
@@ -75,7 +75,7 @@ impl Mask {
     #[must_use]
     #[inline]
     pub(crate) fn index_of(&self, x: u32, y: u32) -> Option<usize> {
-        if x >= self.width || y >= self.height {
+        if !in_shape(self.width, self.height, x, y) {
             return None;
         }
         pixel_index(self.width, x, y)

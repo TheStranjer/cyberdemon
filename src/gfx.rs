@@ -53,6 +53,13 @@ pub(crate) const fn clamp_dimension(value: u32) -> u32 {
     }
 }
 
+/// Whether `(x, y)` is a pixel of a `width` by `height` picture: every
+/// axis stays below its extent, so a column past the right edge is outside
+/// rather than the next row's start.
+pub(crate) const fn in_shape(width: u32, height: u32, x: u32, y: u32) -> bool {
+    x < width && y < height
+}
+
 /// `width * height` as a `usize`, or `None` if the product does not fit.
 pub(crate) fn pixel_count(width: u32, height: u32) -> Option<usize> {
     let columns = usize::try_from(width).ok()?;
@@ -67,7 +74,10 @@ pub(crate) fn rgba_byte_count(width: u32, height: u32) -> Option<usize> {
 }
 
 /// The row-major pixel number of `(x, y)` in an image `width` wide, or
-/// `None` if the coordinates or the product do not fit.
+/// `None` if the coordinates or the product do not fit. It bounds neither
+/// axis: this is the offset arithmetic a row span is built from. A caller
+/// addressing one pixel checks the shape first, through [`in_shape`] or an
+/// accessor that does.
 pub(crate) fn pixel_index(width: u32, x: u32, y: u32) -> Option<usize> {
     let row_start = pixel_count(width, y)?;
     row_start.checked_add(usize::try_from(x).ok()?)

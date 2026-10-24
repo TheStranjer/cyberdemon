@@ -475,13 +475,20 @@ src/
                   guard and a `dry_run` preview; the `replace_texture`/
                   `replace_flat`/`replace_thing_type` tools are one
                   `Session::edit` step over the `wad::map::bulk`
-                  replacements, and `tools/query/
-                  replace.rs` holds their shared machinery (the
-                  `MapsSelector` resolution, the multi-map runner, the
-                  `Stock` existence checks, the `ThingRef` doomednum-or-
-                  name resolution behind `replace_thing_type` and the
+                  replacements, and `tools/query/replace.rs` +
+                  `replace/` hold their shared machinery: the root keeps
+                  the `MapsSelector` wire shape and its `resolve`d name
+                  list, `replace/apply.rs` the multi-map runner and the
                   folded `{maps, total, copied_maps, dry_run, next_steps}`
-                  report);
+                  report (`ApplyOptions`, `apply_to_maps`,
+                  `run_replacement`), and `replace/stock.rs` the `Stock`
+                  existence checks with `parse_terms`, `require_target`
+                  and the `ThingRef` doomednum-or-name resolution behind
+                  `replace_thing_type`; that module's tests are
+                  `replace/tests.rs` (the shared fixtures) plus
+                  `replace/tests/maps.rs` (the selections and the
+                  multi-map steps) and `replace/tests/stock.rs` (the
+                  stock and the parameter checks);
                   `tools/sketch.rs` is the `sketch` group: `trace_sketch`
                   needs no session at all — it parses `crop`/`max_size`/
                   `ink`/the analysis and vectorize knobs, the plan `units`

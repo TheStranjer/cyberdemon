@@ -302,6 +302,15 @@ src/
                   `palette/set.rs` (`set_palette`'s parameter, payload and
                   request types beside its source resolution and commit
                   steps) and `palette/tests.rs` (that group's unit tests),
+                  `tools/edit_vertices.rs` (the parameter and report shapes,
+                  the append and removal paths and the router) with
+                  `edit_vertices/moves.rs` (the move's request-to-points
+                  math, the collapsed-line refusal and `move_vertex`'s run);
+                  that group's tests are `edit_vertices/tests.rs` (the
+                  shared fixture builders) plus
+                  `edit_vertices/tests/add_move.rs` (the append and move
+                  checks) and `edit_vertices/tests/remove.rs` (the removal
+                  checks),
                   and `tools/edit_geometry.rs` with
                   `edit_geometry/delete.rs` (the `delete_geometry` request,
                   report and removal steps) and `edit_geometry/transform.rs`

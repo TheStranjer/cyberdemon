@@ -327,7 +327,15 @@ src/
                   imports), `imports/flat.rs` (the flat import with its size
                   and shape parsing), `imports/image_pipeline.rs` (the shared
                   patch-import run), `imports/sprite.rs`,
-                  `imports/texture.rs`, `imports/create_flat.rs`,
+                  `imports/texture.rs` (the limits, the parameters, the
+                  validated request and the run) with `texture/size.rs` (the
+                  tiling size rule), `texture/build.rs` (the automatic shape
+                  ops, the built patch and the composited preview) and
+                  `texture/commit.rs` (the plan, the collision rules, the
+                  one-edit commit, the theme role and the report), and that
+                  tool's tests in `texture/tests.rs` plus
+                  `texture/tests/size.rs` and `texture/tests/plan.rs`,
+                  `imports/create_flat.rs`,
                   `imports/create_sprite.rs` (the constants, the parameters,
                   the validated request and the three naming forms) with
                   `create_sprite/build.rs` (the cleanup ops, the height

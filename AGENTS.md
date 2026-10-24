@@ -672,9 +672,20 @@ src/
                   path errors `write_file_atomic` reports), with that
                   module's tests in `wad/archive/tests.rs` plus
                   `wad/archive/tests/bytes.rs` and
-                  `wad/archive/tests/parse_io.rs`, `wad/classify.rs`
-                  the pure lump-directory analysis pass: `Namespace`s,
-                  `MapBlock`s and `LumpKind` type hints, `wad/diff.rs` the
+                  `wad/archive/tests/parse_io.rs`, `wad/classify.rs` the
+                  pure lump-directory analysis pass's root: the `Namespace`,
+                  `MapFormat` and `LumpKind` enums, the `LumpInfo`,
+                  `MapBlock` and `Analysis` shapes, the size constants and
+                  `analyze`, over `classify/namespaces.rs` (the marker
+                  names and the open-namespace tracker), `classify/maps.rs`
+                  (the binary, `UDMF` and `GL` block finding) and
+                  `classify/kinds.rs` (the type hints and the `is_doom_patch`
+                  header check), with that module's tests in
+                  `classify/tests.rs` (the shared builders and readers) plus
+                  `classify/tests/namespaces.rs` (the marker pairs, aliases
+                  and warnings), `classify/tests/maps.rs` (the map blocks and
+                  their formats) and `classify/tests/kinds.rs` (every name,
+                  magic and fallback hint), `wad/diff.rs` the
                   pure two-directory comparison: map blocks as units, lumps
                   keyed by namespace, name and occurrence and the
                   length/`FNV`-1a/bytes content rule, `wad/optimize.rs` the

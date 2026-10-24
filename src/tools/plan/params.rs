@@ -7,7 +7,7 @@
 //! model it becomes. `to_model` only maps names and fills defaults
 //! ([`crate::plan::model`]'s); every structural judgment — positive
 //! edges, unique ids, touching rooms — stays with [`Plan::validate`] and
-//! the compiler, whose refusals [`super::with_plan_path`] then prefixes
+//! the compiler, whose refusals [`super::build::with_plan_path`] then prefixes
 //! with the plan path.
 //!
 //! The `units` object and the `grid` are not model fields: [`BuildPlanParams::to_units`]

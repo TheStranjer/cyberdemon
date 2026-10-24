@@ -396,7 +396,27 @@ src/
                   definition texts), `tools/edit_things.rs` with
                   `edit_things/edit.rs` (the `edit_thing` request, report,
                   flag plan and edit steps, whose unit tests are
-                  `edit_things/tests.rs`), `tools/palette.rs` with
+                  `edit_things/tests.rs`),
+                  `tools/edit_linedefs.rs` (the constants, the reported
+                  `LinedefDetail`, the flag adjustments and the checks every
+                  resulting linedef faces, and the router) with
+                  `edit_linedefs/endpoints.rs` (the two endpoint forms and
+                  their resolution against the map), `edit_linedefs/add.rs`
+                  (the `add_linedef` parameter, new side and report shapes
+                  beside its validation and one-step work),
+                  `edit_linedefs/edit.rs` (the `edit_linedef` parameter and
+                  report shapes, the plan and the step rewriting the selected
+                  lines), `edit_linedefs/side_edit.rs` (the `SideEdit`
+                  parameter, the sidedef it computes and the side it points
+                  at) and `edit_linedefs/remove.rs` (the
+                  `remove_linedef`, `split_linedef` and `join_linedefs`
+                  parameters, reports and runs); that group's tests are
+                  `edit_linedefs/tests.rs` (the shared fixture builders) plus
+                  `edit_linedefs/tests/add.rs` (the endpoint, side, family
+                  and append checks) and
+                  `edit_linedefs/tests/edit.rs` (the edit checks and the
+                  cascading removals),
+                  `tools/palette.rs` with
                   `palette/set.rs` (`set_palette`'s parameter, payload and
                   request types beside its source resolution and commit
                   steps) and `palette/tests.rs` (that group's unit tests),

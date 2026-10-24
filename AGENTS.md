@@ -645,11 +645,18 @@ src/
                   pure two-directory comparison: map blocks as units, lumps
                   keyed by namespace, name and occurrence and the
                   length/`FNV`-1a/bytes content rule, `wad/optimize.rs` the
-                  pure cleanup planner (`optimize_wad`): identical overrides,
-                  empty marker pairs, shadowed duplicates with the
-                  `ZDoom`-concatenated-name exception, unused
-                  `PNAMES`/patches/flats and the renumbered `PNAMES`/texture
-                  rewrite, `wad/game.rs`
+                  pure cleanup planner's (`optimize_wad`) root: the shared
+                  shapes and the `plan`, `run` and `apply` entry points, over
+                  `optimize/redundant.rs` (the identical-override,
+                  empty-marker-pair and shadowed-duplicate sweeps, the
+                  `ZDoom`-concatenated names excepted) and `optimize/unused.rs`
+                  (the unused `PNAMES`/patches/flats sweeps and the renumbered
+                  `PNAMES`/texture rewrite), with that module's tests in
+                  `optimize/tests.rs` (the shared builders and readers) plus
+                  `optimize/tests/redundant.rs` (the redundancy sweeps and the
+                  plan bookkeeping) and `optimize/tests/unused.rs` (the
+                  content-reading sweeps, their refusals, the commit and the
+                  wire shape), `wad/game.rs`
                   the pure game signature detection (`detect_game`),
                   `wad/textures.rs` the `PNAMES` and `TEXTURE1`/`TEXTURE2`
                   codecs: patch-name index, texture records with

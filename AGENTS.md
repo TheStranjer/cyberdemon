@@ -662,8 +662,21 @@ src/
                   codecs: patch-name index, texture records with
                   `Doom`/`Strife` layout detection and patch-reference
                   renumbering, and `wad/udmf.rs` the `UDMF` `TEXTMAP`
-                  grammar: tokenizer, parser and writer over `UdmfDoc`
-                  blocks and key/value pairs (no map model, no MCP).
+                  grammar's root: the constants, `UdmfValue`, `UdmfBlock`
+                  and `UdmfDoc`, the `parse_udmf`, `write_udmf`,
+                  `decimal_to_rounded_int` and `has_fraction` entry points,
+                  `Pos`, `err_at` and the writer helpers, over
+                  `udmf/cursor.rs` (the line-and-column character cursor:
+                  trivia, comments and quoted strings), `udmf/parser.rs`
+                  (the document, block, field and value passes, the integer
+                  literals and their radixes) and `udmf/decimal.rs` (the
+                  float shape and the digit-only rounding), with that
+                  module's tests in `udmf/tests.rs` (the shared parse,
+                  error, global and round-trip readers) plus
+                  `udmf/tests/read.rs` (every value kind, the comments and
+                  each grammar refusal) and `udmf/tests/write.rs` (the
+                  renders, the decimal rounds and the typed value reads)
+                  (no map model, no MCP).
   wad/map.rs      Map layer root: the `read_map`/`write_map` format
                   dispatcher and the model re-exports.
   wad/map/        Map data (no MCP concerns): `map/model.rs` the

@@ -45,8 +45,11 @@
 //! patches-group shared helpers in `patches` with its `patches/add`,
 //! `patches/replace` and `patches/remove` topic tests, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
-//! the plan-group tests in `plan`, the playability-group tests in
-//! `playability`, the query-group shared helpers in `query` with its
+//! the plan-group shared helpers in `plan` with its `plan/basics`,
+//! `plan/units`, `plan/things`, `plan/finalize`, `plan/features`,
+//! `plan/panels` and `plan/six_room` topic tests, the
+//! playability-group tests in `playability`, the query-group shared
+//! helpers in `query` with its
 //! `query/find`, `query/replace_surfaces`, `query/replace_things` and
 //! `query/bulk` topic tests, the sketch-group tests in
 //! `sketch`, the textures-group shared helpers in

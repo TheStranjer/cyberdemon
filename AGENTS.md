@@ -1013,7 +1013,21 @@ tests/
                     its tests in `convert/udmf.rs` (same-family rewrites),
                     `convert/forward.rs` (`Doom` into `Hexen` family records)
                     and `convert/reverse.rs` (the trips back and the
-                    refusals); and the `textures` group's shared helpers in
+                    refusals), the `plan` group's shared helpers in `plan.rs`
+                    (the features-`IWAD` client, the two-room plan, the refusal
+                    caller and the assembled-graph row and feature-row
+                    readers) with its tests in `plan/basics.rs` (the two-room
+                    bookkeeping, the two opening widths, the blue-key door
+                    wiring and the block's lifecycle), `plan/units.rs` (the
+                    `units` scale-and-mirror and `grid` snap, the `UDMF` block
+                    and the one-call `theme` override), `plan/things.rs` (the
+                    `things` and `player_start` rows), `plan/finalize.rs` (the
+                    finalized node run and the documented worked example),
+                    `plan/features.rs` (the lift, teleporter, light, secret,
+                    switch and exit rows), `plan/panels.rs` (the wall a panel
+                    mounts on) and `plan/six_room.rs` (the whole playable
+                    six-room map and the `UDMF` locked door); and the
+                    `textures` group's shared helpers in
                     `textures.rs` with its tests in `textures/list.rs` (the
                     `PNAMES` and `TEXTURE1`/`TEXTURE2` listings),
                     `textures/pnames.rs` (`edit_pnames`) and

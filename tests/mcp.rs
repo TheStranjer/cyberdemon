@@ -44,7 +44,10 @@
 //! palette-group tests in `palette`, the
 //! patches-group shared helpers in `patches` with its `patches/add`,
 //! `patches/replace` and `patches/remove` topic tests, the
-//! render-group tests in `render`, the scripts-group tests in `scripts`,
+//! render-group shared helpers in `render` with its `render/settings`,
+//! `render/topdown`, `render/overlays`, `render/decorations`,
+//! `render/minimap`, `render/view`, `render/view_sprites` and `render/scene`
+//! topic tests, the scripts-group tests in `scripts`,
 //! the plan-group shared helpers in `plan` with its `plan/basics`,
 //! `plan/units`, `plan/things`, `plan/finalize`, `plan/features`,
 //! `plan/panels` and `plan/six_room` topic tests, the

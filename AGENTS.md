@@ -1075,6 +1075,26 @@ tests/
                     beside the picture tools' missing-picture and argument
                     refusals) and `graphics/sprites.rs` (`get_sprite` with its
                     mirror rotations, `decode_patch` and `get_thing_sprite`),
+                    the `render` group's shared helpers in `render.rs` (the
+                    fixture-`IWAD` client, the `{"path": ...}` argument, the
+                    fitted top-down `transform` and its pixel mapping, the
+                    asset fetch, the PNG decode and the two pixel counters)
+                    with its tests in `render/settings.rs` (the session
+                    defaults and every setter's validation),
+                    `render/topdown.rs` (the fitted picture, the styles,
+                    sector fills, highlights and refusals),
+                    `render/overlays.rs` (the `underlay` picture's rectangle,
+                    the pixels it paints and the edges it must not cross),
+                    `render/decorations.rs` (the underlay and isometric
+                    refusals, the grid, sector labels and annotations and the
+                    session defaults the frame follows), `render/minimap.rs`
+                    (the automap square, its palette colours, zoom, arrow and
+                    refusals), `render/view.rs` (the first-person frame,
+                    pitch, lighting, floor texture, sky and masked grate),
+                    `render/view_sprites.rs` (the sprite pass, the
+                    stock-fixture ring and sky reads and the camera
+                    refusals) and `render/scene.rs` (the `build_scene`
+                    preparation the 3D view runs on),
                     and the `edit_linedefs` group's shared helpers in
                     `edit_linedefs.rs` with its tests in
                     `edit_linedefs/add.rs` (`add_linedef`),

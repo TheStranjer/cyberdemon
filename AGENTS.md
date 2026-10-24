@@ -598,8 +598,16 @@ src/
                   against an optional one-call theme override;
                   `tools/plan.rs` is the `plan` group: `build_map_from_plan`
                   maps its wire `rooms`/`connections` onto `crate::plan::model`
-                  (`tools/plan/params.rs`, which also shape-validates the
-                  `things`/`player_start` rows), carries the coordinates through
+                  (`tools/plan/params.rs`, whose root keeps the request, the
+                  `DEFAULT_*` wire defaults, `UnitsParam` and the conversion
+                  walking the three row kinds, over `params/rooms.rs`
+                  (`RoomParam`, `RectParam`, `ConnectionParam` and
+                  `parse_light_effect`), `params/features.rs` (`FeatureParam`
+                  and its four variant builders) and `params/things.rs`
+                  (`ThingParam`, `PlayerStartParam`, `KindSource`,
+                  `ThingRequest`, `check_angle` and `parse_skills`), which also
+                  shape-validates the `things`/`player_start` rows), carries
+                  the coordinates through
                   `crate::plan::units` (`units`/`grid` parameters), resolves
                   the eight `TextureRole` dressing slots through the theme, runs `crate::plan::compile`,
                   stands the things in with `crate::plan::things` (name
@@ -629,7 +637,14 @@ src/
                   `plan/tests/naming.rs` (the wire names, the dressing
                   roles and the plan paths) and `plan/tests/build.rs`
                   (the resolved specs, the report frame and the finalize
-                  steps);
+                  steps), with the parameter tests in
+                  `plan/params/tests.rs` (the shared request builders and
+                  the refusal reader) plus
+                  `plan/params/tests/rooms.rs` (the room and connection
+                  conversions), `plan/params/tests/features.rs` (the
+                  feature rows and a room's dressing) and
+                  `plan/params/tests/units_things.rs` (the `units`
+                  mapping, the snap grid and the thing rows);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

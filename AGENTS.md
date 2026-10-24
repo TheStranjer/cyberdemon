@@ -487,7 +487,13 @@ src/
                   `Writer` plus the checked usize/u32 casts,
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization (canonical and payload-deduplicating),
-                  lookup and atomic I/O, `wad/classify.rs`
+                  lookup and atomic I/O on `wad/archive/directory.rs` (the
+                  raw `DirectoryEntry`, the parse walk and the two header
+                  checks) and `wad/archive/io.rs` (the staging file and the
+                  path errors `write_file_atomic` reports), with that
+                  module's tests in `wad/archive/tests.rs` plus
+                  `wad/archive/tests/bytes.rs` and
+                  `wad/archive/tests/parse_io.rs`, `wad/classify.rs`
                   the pure lump-directory analysis pass: `Namespace`s,
                   `MapBlock`s and `LumpKind` type hints, `wad/diff.rs` the
                   pure two-directory comparison: map blocks as units, lumps

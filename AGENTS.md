@@ -968,14 +968,27 @@ src/
                   blocker reasons read off a finished walk, and
                   `playability/stuck.rs` the body-square tests for the
                   things that cannot stand.
-                  `map/query.rs` is the pure filter engine behind
+                  `map/query.rs` + `query/` is the pure filter engine behind
                   `find_elements`: a `Query` (element kind, ANDed field
                   `Filter`s over stored and derived values, an optional
                   `Within` bbox/sector bound) runs as one
                   `run_query(map, ctx, query)` over the model, the
                   `QueryContext` carrying the flag family and the game
                   definitions the derived fields read, and answering the
-                  ascending matching indices.
+                  ascending matching indices; the root keeps those shapes,
+                  the resolved `Bounds` of a `within` clause and
+                  `side_sector`, `query/fields.rs` the `FieldType`
+                  classification, every kind's field table and the `FValue`
+                  a read widens to, `query/engine.rs` the `Prepared` filter
+                  beside the `Engine` with its lazily built derived reads
+                  and its per-element tests, and `query/check.rs`
+                  `prepare_filter`'s field, op and value checks with the
+                  `compare` family they promise, that module's tests in
+                  `query/tests.rs` (the contexts, the query makers and the
+                  fixture maps) plus `query/tests/filters.rs` (every op,
+                  the derived fields and the two bounds) and
+                  `query/tests/checks.rs` (the `AND`ing, every refusal,
+                  the family tables and the wire shape).
                   `map/flags.rs` names the two families' flag bits and
                   carries the `Skill` whose bit a thing's presence is
                   tested against.

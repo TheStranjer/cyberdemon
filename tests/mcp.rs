@@ -1,6 +1,9 @@
 //! End-to-end tests: a real rmcp client talking to the server.
 //!
-//! The harness helpers live in `support`, the WAD builders in `fixtures`,
+//! The harness helpers live in `support`, the WAD builders in `fixtures`
+//! with its `fixtures/graphics`, `fixtures/iwads`, `fixtures/pwads`,
+//! `fixtures/nodes` and `fixtures/features` part files, all re-exported
+//! through the `fixtures` root,
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! audio-group tests in `audio`, the batch-group tests in `batch`, the
 //! convert-group helpers in `convert` with its `convert/udmf`,

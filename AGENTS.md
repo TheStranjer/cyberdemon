@@ -830,7 +830,18 @@ tests/
                     speaking the structured-result contract and the picture
                     helpers (PNG/MIDI/WAV builders, paper sheets);
                     fixtures.rs: WAD builders writing archives with the
-                    library; one test module per tool group (server, assets,
+                    library (the shared primitives, the two-room and L-room
+                    maps and the archive writer, re-exporting every moved
+                    builder) on fixtures/graphics.rs (palettes, patch,
+                    sprite and texture lump bytes and the textured-view
+                    `IWAD`), fixtures/iwads.rs (the `DOOM II`, stock,
+                    duplicated, Heretic, Hexen, L-room and broken-map
+                    `IWAD`s), fixtures/pwads.rs (the override, redundant,
+                    map-format, custom-defs and empty-map `PWAD`s and the
+                    not-a-`WAD` file), fixtures/nodes.rs (the hand-built
+                    node-lump `PWAD` and the conversion-fixture `PWAD`) and
+                    fixtures/features.rs (the door-wardrobe `IWAD`);
+                    one test module per tool group (server, assets,
                     session, save, batch, defs, lumps, map_edit,
                     maps, edit_*, features, graphics, imports, inspect,
                     nodes, palette, patches, plan, playability, query,

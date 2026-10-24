@@ -30,7 +30,8 @@
 //! `edit_sectors/create_loop` and `edit_sectors/carve` topic tests, the
 //! `edit_things`-group tests in `edit_things`, the
 //! `edit_vertices`-group tests in `edit_vertices`, the
-//! graphics-group tests in `graphics`,
+//! graphics-group shared helpers in `graphics` with its `graphics/list`,
+//! `graphics/flat_patch` and `graphics/sprites` topic tests,
 //! the imports-group tests in `imports`, the
 //! inspect-group tests in `inspect`, the features-group tests in
 //! `features`, the

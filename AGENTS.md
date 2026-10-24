@@ -903,7 +903,16 @@ tests/
                     with its tests in `patches/add.rs` (`add_patch`),
                     `patches/replace.rs` (`replace_patch`, carrying its
                     `refuse_replacements` half of the refusal table) and
-                    `patches/remove.rs` (`remove_patch`),
+                    `patches/remove.rs` (`remove_patch`), and the `graphics`
+                    group's shared helpers in `graphics.rs` (the fixture-`IWAD`
+                    client, the `add_lump` picture builders, the asset
+                    fetchers, the report checks and the refusal table) with its
+                    tests in `graphics/list.rs` (the flats, patch and sprite
+                    listings with their `PNAMES`, namespace, prefix and paging
+                    rules), `graphics/flat_patch.rs` (`get_flat` and `get_patch`
+                    beside the picture tools' missing-picture and argument
+                    refusals) and `graphics/sprites.rs` (`get_sprite` with its
+                    mirror rotations, `decode_patch` and `get_thing_sprite`),
                     and the `edit_linedefs` group's shared helpers in
                     `edit_linedefs.rs` with its tests in
                     `edit_linedefs/add.rs` (`add_linedef`),

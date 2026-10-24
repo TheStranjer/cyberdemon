@@ -214,7 +214,13 @@ src/
                   spanning a whole shared run keys that wall `joined` and
                   paints no band), `plan/emit.rs` the
                   arrangement-to-`Map` emission (regions to sectors, sides
-                  to sidedefs), `plan/textures.rs` the eight `TextureRole`
+                  to sidedefs) on `plan/emit/sectors.rs` (the room and
+                  connector `Sector` rows with their span and light reads)
+                  and `plan/emit/lines.rs` (the pieces to `Linedef`s,
+                  placeholder sides, shared vertices and the connector
+                  door-line pairing), with that module's tests in
+                  `plan/emit/tests.rs` plus
+                  `plan/emit/tests/geometry.rs`, `plan/textures.rs` the eight `TextureRole`
                   dressings of the emitted map (non-door band flats
                   inherited from the adjoining rooms), `plan/features.rs` the
                   fixed-order feature pipeline (doors, switches, lifts,

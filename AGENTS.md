@@ -774,9 +774,23 @@ src/
                   module's tests in `placement/tests.rs` plus
                   `placement/tests/clearance.rs` and
                   `placement/tests/split_facing.rs`,
-                  `map/convert.rs` the pure within- and cross-flag-family
-                  format conversion (`Target`, `convert_map`, `Conversion`)
-                  behind `convert_map_format`,
+                  `map/convert.rs` + `convert/plan.rs` +
+                  `convert/layout.rs` the pure within- and cross-flag-family
+                  format conversion behind `convert_map_format`: the
+                  `Target`, `Conversion` and `KindCounts` shapes, the
+                  `convert_map` entry point with its `to_hexen`/`from_hexen`
+                  table drivers and `fold_reports`, the shared constants and
+                  the `format_name`/`is_node_lump` readers in the root, the
+                  `Plan` and `Direction` resolution of a request against the
+                  map it names on `convert/plan.rs`, and the layout rewrite —
+                  `family_of`, the `into_udmf`/`into_binary` field sets, the
+                  `Line_SetIdentification` folds, the node-lump, `BEHAVIOR`
+                  and `extra`-bag drops and the `parse_format`/
+                  `namespace_name` word checks — on `convert/layout.rs`,
+                  with that module's tests in `convert/tests.rs` plus
+                  `convert/tests/same_family.rs`,
+                  `convert/tests/cross_family.rs` and
+                  `convert/tests/requests.rs`,
                   `map/describe.rs` the pure description core behind
                   `describe_map`: one `Describe` read per map folding
                   per-sector fact rows (`SectorFacts`, `sector_facts`:

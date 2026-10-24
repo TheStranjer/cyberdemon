@@ -27,7 +27,8 @@
 //! music-group tests in `music`, the
 //! nodes-group tests in `nodes`, the
 //! palette-group tests in `palette`, the
-//! patches-group tests in `patches`, the
+//! patches-group shared helpers in `patches` with its `patches/add`,
+//! `patches/replace` and `patches/remove` topic tests, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
 //! the plan-group tests in `plan`, the playability-group tests in
 //! `playability`, the query-group tests in `query`, the sketch-group tests in

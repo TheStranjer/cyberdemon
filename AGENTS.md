@@ -554,7 +554,19 @@ src/
                   reported line with its map-unit endpoints — runs between the
                   compile and the things, and `plan::playable_checks` appends
                   its never-error key/exit/remote warnings after the
-                  things);
+                  things); its root keeps the constants, the theme
+                  resolution (`plan_theme` with `feature_dress` and its
+                  notes) and the naming helpers beside the router, while
+                  `plan/build.rs` runs the rest — `plan_path` and
+                  `with_plan_path`'s prefixed refusals, `plan_definitions`
+                  and the resolved thing specs, the `finalize_nodes` and
+                  `finalize_validation` steps, the `PlanReport` frame and
+                  `build_run`'s one edit; and the group's tests are
+                  `plan/tests.rs` (the fixtures the topics share) plus
+                  `plan/tests/naming.rs` (the wire names, the dressing
+                  roles and the plan paths) and `plan/tests/build.rs`
+                  (the resolved specs, the report frame and the finalize
+                  steps);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

@@ -660,10 +660,18 @@ src/
                   and crossing splits, painted-over drops, two-sided
                   opening, offset-preserving side copies, the
                   `keep_interior` probe and the original-map outer side),
-                  `map/ops.rs` the pure linedef-geometry engine behind
-                  `split_linedef` and `join_linedefs` (integer on-segment
-                  and collinearity tests, offset-preserving side copies and
-                  shifts, and the removal-engine join),
+                  `map/ops.rs` + `ops/split.rs` + `ops/join.rs` the pure
+                  linedef-geometry engine behind `split_linedef` and
+                  `join_linedefs` (the two entry points, the shapes they
+                  report and the checks and geometry helpers both passes
+                  share in the root, the split point, the on-segment test,
+                  the side copies and the writes in `ops/split.rs`, the
+                  head-to-tail, collinearity and sector tests, the
+                  difference report and the removal-engine join in
+                  `ops/join.rs`, with the engine's tests in `ops/tests.rs`
+                  plus `ops/tests/split.rs` (the cut, its copies and its
+                  refusals) and `ops/tests/join.rs` (the welds and their
+                  own refusals)),
                   `map/remove.rs` + `remove/cascade.rs` +
                   `remove/renumber.rs` the pure element-removal engine
                   shared by the edit tools (the `Removal`, `Dependents` and

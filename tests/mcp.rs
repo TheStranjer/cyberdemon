@@ -12,7 +12,9 @@
 //! `save_wad` tests in `save`, the defs-group shared helpers in `defs` with
 //! its `defs/things`, `defs/custom`, `defs/specials` and `defs/sectors` topic
 //! tests, the `lumps`-group tests in `lumps`, the map-edit infrastructure
-//! checks in `map_edit`, the maps-group tests in `maps`, the capstone low-level
+//! checks in `map_edit`, the maps-group shared helpers in `maps` with its
+//! `maps/list`, `maps/summary`, `maps/assemble`, `maps/create` and
+//! `maps/copy_rename` topic tests, the capstone low-level
 //! element-tool workflow and the spawned-binary asset-server proof in
 //! `e2e`, the `images-to-assets`
 //! guide-chain checks in `e2e_assets`, the plain-English edit-flow chain

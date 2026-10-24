@@ -905,7 +905,16 @@ tests/
                     (`find_elements` with its `within` bounds and refusals),
                     `query/replace_surfaces.rs` (`replace_texture`,
                     `replace_flat`), `query/replace_things.rs`
-                    (`replace_thing_type`) and `query/bulk.rs` (`bulk_edit`);
+                    (`replace_thing_type`) and `query/bulk.rs` (`bulk_edit`),
+                    and the `maps` group's shared helpers in `maps.rs` (the
+                    three fixture loaders, the asset-`URL` splitter and fetcher
+                    and the `list_maps`/`get_map_lumps` row readers) with its
+                    tests in `maps/list.rs` (`list_maps` over the scopes and
+                    the `get_map_lumps` raw set), `maps/summary.rs`
+                    (`get_map_summary` and `set_active_map`),
+                    `maps/assemble.rs` (`assemble_map`), `maps/create.rs`
+                    (`create_map`) and `maps/copy_rename.rs` (`copy_map`,
+                    `rename_map` and `remove_map`);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

@@ -20,7 +20,9 @@
 //! `edit_linedefs/add`, `edit_linedefs/edit` and
 //! `edit_linedefs/remove_split` topic tests, the
 //! `edit_sidedefs`-group tests in `edit_sidedefs`, the
-//! `edit_sectors`-group tests in `edit_sectors`, the
+//! `edit_sectors`-group shared helpers in `edit_sectors` with its
+//! `edit_sectors/edit`, `edit_sectors/remove`,
+//! `edit_sectors/create_loop` and `edit_sectors/carve` topic tests, the
 //! `edit_things`-group tests in `edit_things`, the
 //! `edit_vertices`-group tests in `edit_vertices`, the
 //! graphics-group tests in `graphics`,

@@ -713,7 +713,15 @@ tests/
                     `edit_linedefs/add.rs` (`add_linedef`),
                     `edit_linedefs/edit.rs` (`edit_linedef`) and
                     `edit_linedefs/remove_split.rs` (`remove_linedef`,
-                    `split_linedef` and `join_linedefs`);
+                    `split_linedef` and `join_linedefs`), and the `defs`
+                    group's shared helpers in `defs.rs` with its tests in
+                    `defs/things.rs` (the thing tables, the detected default
+                    game and their filters), `defs/custom.rs` (the DEHACKED,
+                    DECORATE, `ZScript` and MAPINFO rows joining that table),
+                    `defs/specials.rs` (the linedef special tables with their
+                    generalized decoding and `family` override) and
+                    `defs/sectors.rs` (the sector type tables with their Boom
+                    decoding);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

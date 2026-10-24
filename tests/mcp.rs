@@ -6,9 +6,10 @@
 //! convert-group helpers in `convert` with its `convert/udmf`,
 //! `convert/forward` and `convert/reverse` topic tests, the
 //! session-group tests in `session`, the
-//! `save_wad` tests in `save`, the defs-group tests in `defs`, the
-//! `lumps`-group tests in `lumps`, the map-edit infrastructure checks in
-//! `map_edit`, the maps-group tests in `maps`, the capstone low-level
+//! `save_wad` tests in `save`, the defs-group shared helpers in `defs` with
+//! its `defs/things`, `defs/custom`, `defs/specials` and `defs/sectors` topic
+//! tests, the `lumps`-group tests in `lumps`, the map-edit infrastructure
+//! checks in `map_edit`, the maps-group tests in `maps`, the capstone low-level
 //! element-tool workflow and the spawned-binary asset-server proof in
 //! `e2e`, the `images-to-assets`
 //! guide-chain checks in `e2e_assets`, the plain-English edit-flow chain

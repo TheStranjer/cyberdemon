@@ -27,8 +27,14 @@ src/
                   `geom/segment.rs` integer segment math: orientations,
                   rounded crossings, T-junction and overlap cut finding,
                   the bounding-box sweep and the point-merge union-find,
-                  `geom/arrange.rs` the pipeline: polygon validation,
-                  splitting, dedupe, side labelling and collinear merge.
+                  `geom/arrange.rs` the pipeline root: the entry point,
+                  the shared constants and polygon validation, over
+                  `geom/arrange/split.rs` (chain splitting and the dedupe
+                  table) and `geom/arrange/merge.rs` (side labelling and
+                  the collinear merge), with the engine's tests in
+                  `geom/arrange/tests.rs` plus
+                  `geom/arrange/tests/cases.rs` and
+                  `geom/arrange/tests/properties.rs`.
   gfx.rs          Graphics core module root: dimensions limits and shared helpers.
   gfx/            Internal image building blocks (no MCP concerns):
                   `gfx/image.rs` RGBA/indexed images and resize/flip,

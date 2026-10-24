@@ -467,6 +467,27 @@ src/
                   fixture builders and the deletion checks) plus
                   `edit_geometry/tests/transform.rs` (the transform request
                   checks).
+                  `tools/graphics.rs` (the limits, the page, glob, last-wins
+                  and merged-row helpers and the router) splits into
+                  `graphics/list.rs` (the `list_flats` and `list_patches`
+                  arguments, rows, the `PNAMES` and candidate rules and the
+                  runs), `graphics/list_sprites.rs` (the `list_sprites`
+                  arguments, report, `Groups`, the prefix check and the
+                  rotation rows), `graphics/picture.rs` (the shared image
+                  options, `AssetFormat`, `Rendered`, `Prepared`, the render,
+                  `grAb` and publish helpers and the report),
+                  `graphics/get.rs` (the three `get_*` parameters, the sprite
+                  request either-or, the frame and rotation parsers and the
+                  runs), `graphics/thing_sprite.rs` (the `get_thing_sprite`
+                  parameter and report, `session_game`, the session's thing
+                  definitions and the preparation) and `graphics/decode.rs`
+                  (`decode_patch`'s parameter, payload rule and
+                  both-encoding report); that group's tests are
+                  `graphics/tests.rs` (the shared fixture, lump-bytes and
+                  argument builders) plus `graphics/tests/list.rs` (the three
+                  listings with their paging, grouping and override checks)
+                  and `graphics/tests/picture.rs` (the image options,
+                  selectors, offsets, renders and thing-sprite checks).
                   `tools/graphics/resolve.rs` holds the shared picture
                   resolvers' name lookup (`Place`, `locate`, `lump_bytes`),
                   flat and patch loading and `PNG` quantizing,

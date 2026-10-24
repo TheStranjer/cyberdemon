@@ -961,7 +961,15 @@ tests/
                     (the `glBSP` v2 `GL_*` block and its place in the
                     directory) and `nodes/build_all.rs` (`build_all_nodes` as
                     one undoable step);
-                    the flagship chains in e2e_sketch.rs, e2e_assets.rs,
+                    the flagship chains in e2e_sketch.rs (the drawn sheet,
+                    the session, the report readers and the plan builders
+                    every slice shares) with its topic files
+                    e2e_sketch/trace.rs (the `trace_sketch` measurements),
+                    e2e_sketch/build.rs (the traced plan builds a playable
+                    map), e2e_sketch/views.rs (the `render_topdown`
+                    underlay and the `render_view` frame) and
+                    e2e_sketch/save_and_lock.rs (`save_wad`/`open_wad` and
+                    the locked blue door), e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a
                     usability pass over hints and descriptions in

@@ -18,8 +18,10 @@
 //! element-tool workflow and the spawned-binary asset-server proof in
 //! `e2e`, the `images-to-assets`
 //! guide-chain checks in `e2e_assets`, the plain-English edit-flow chain
-//! checks in `e2e_edit`, the `sketch-to-map` guide-chain
-//! checks in `e2e_sketch`, the
+//! checks in `e2e_edit`, the `sketch-to-map` guide-chain's drawn sheet,
+//! session, report readers and plan builders in `e2e_sketch` with its
+//! `e2e_sketch/trace`, `e2e_sketch/build`, `e2e_sketch/views` and
+//! `e2e_sketch/save_and_lock` slice tests, the
 //! `edit_geometry`-group tests in `edit_geometry`, the
 //! `edit_linedefs`-group shared helpers in `edit_linedefs` with its
 //! `edit_linedefs/add`, `edit_linedefs/edit` and

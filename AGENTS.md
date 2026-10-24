@@ -666,7 +666,16 @@ src/
                   and `face_room_line` run through them — in
                   `doors/apply.rs`), its tests in `doors/tests.rs` plus
                   `doors/tests/apply.rs` and `doors/tests/specials.rs`,
-                  `map/features/place.rs` the door placement geometry,
+                  `map/features/place.rs` + `place/` the door placement
+                  geometry: the boundary selection (`longest_boundary`,
+                  `nearest_boundary`) and shared integer helpers in the
+                  root, the projection and width fit (`project_onto_line`,
+                  `door_segment`, `door_wall`, `door_rect`) in
+                  `place/cut.rs`, the `outward_depth` raycast in
+                  `place/depth.rs` and the `void_strip` boundary
+                  thickening in `place/strip.rs`, with those tests in
+                  `place/tests.rs` plus `place/tests/boundary.rs` and
+                  `place/tests/depth_strip.rs`,
                   `map/features/window.rs` the pure window core
                   (`window_record`'s sill/lintel heights and
                   `apply_window`'s two-sided blocking boundary dressing),

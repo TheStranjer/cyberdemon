@@ -707,7 +707,13 @@ tests/
                     with its tests in `patches/add.rs` (`add_patch`),
                     `patches/replace.rs` (`replace_patch`, carrying its
                     `refuse_replacements` half of the refusal table) and
-                    `patches/remove.rs` (`remove_patch`);
+                    `patches/remove.rs` (`remove_patch`),
+                    and the `edit_linedefs` group's shared helpers in
+                    `edit_linedefs.rs` with its tests in
+                    `edit_linedefs/add.rs` (`add_linedef`),
+                    `edit_linedefs/edit.rs` (`edit_linedef`) and
+                    `edit_linedefs/remove_split.rs` (`remove_linedef`,
+                    `split_linedef` and `join_linedefs`);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

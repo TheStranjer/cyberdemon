@@ -536,11 +536,13 @@ src/
                   `map/features/stairs.rs` the pure stair core
                   (`plan_stairs`' even step division and headroom test
                   and `build_stairs`' bottom-up overlay paints),
-                  `map/features/lift.rs` the pure lift core
-                  (`lift_specials`' per-family down-wait-up action and
-                  `build_lift`'s lower-facing edge selection,
-                  front-down orientation and platform tagging, with an
-                  optional `apply_overlay` platform draw),
+                  `map/features/lift.rs` + `map/features/lift/build.rs` the
+                  pure lift core (`lift_specials`' per-family down-wait-up
+                  action in the root; `build_lift`' lower-facing edge
+                  selection, front-down orientation and platform tagging,
+                  with an optional `apply_overlay` platform draw, in
+                  `lift/build.rs`) with `map/features/lift/tests.rs` its
+                  tests,
                   `map/features/teleport.rs` the pure teleporter core
                   (`teleport_specials`' per-family pad-border action and
                   `build_teleporter`'s pad and destination squares, the

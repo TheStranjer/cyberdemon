@@ -34,7 +34,9 @@
 //! `patches/replace` and `patches/remove` topic tests, the
 //! render-group tests in `render`, the scripts-group tests in `scripts`,
 //! the plan-group tests in `plan`, the playability-group tests in
-//! `playability`, the query-group tests in `query`, the sketch-group tests in
+//! `playability`, the query-group shared helpers in `query` with its
+//! `query/find`, `query/replace_surfaces`, `query/replace_things` and
+//! `query/bulk` topic tests, the sketch-group tests in
 //! `sketch`, the textures-group shared helpers in
 //! `textures` with its `textures/list`, `textures/pnames` and
 //! `textures/build` topic tests, the themes-group tests in

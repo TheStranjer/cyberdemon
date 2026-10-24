@@ -501,9 +501,16 @@ src/
                   `split_linedef` and `join_linedefs` (integer on-segment
                   and collinearity tests, offset-preserving side copies and
                   shifts, and the removal-engine join),
-                  `map/remove.rs` the pure element-removal engine shared by
-                  the edit tools (index shifts, dangling-reference repair
-                  and cascade bookkeeping),
+                  `map/remove.rs` + `remove/cascade.rs` +
+                  `remove/renumber.rs` the pure element-removal engine
+                  shared by the edit tools (the `Removal`, `Dependents` and
+                  `RemovalReport` model with `dependents`, `expand_cascade`
+                  and `apply_removal` in the root, the orphan-growth rules
+                  in `remove/cascade.rs`, the index shifts,
+                  dangling-reference repair and one-sided normalisation in
+                  `remove/renumber.rs`, and the engine's tests in
+                  `remove/tests.rs` with `remove/tests/cascade.rs` and
+                  `remove/tests/apply.rs`),
                   `map/transform.rs` the pure selection transform: the
                   integer scale/rotate/translate math and the whole-map
                   step behind `transform_selection`,

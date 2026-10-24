@@ -612,9 +612,20 @@ src/
                   per check group, each returning `Vec<Issue>`), and
                   `map/playability.rs` + `map/playability/` the pure
                   can-the-player-finish-this-map analysis:
-                  `playability/specials.rs` the hand-written door/lift/
+                  `map/playability/specials.rs` +
+                  `playability/specials/` the hand-written door/lift/
                   teleport/exit/lock/key tables read into a map's feature
-                  inventory, `playability/graph.rs` the sector movement
+                  inventory: `specials.rs` the constants, the `Effect`,
+                  `Feature`, `ExitLine`, `LockLine`, `KeyThing` and
+                  `Inventory` results, the shared `Reading` and `Plan`,
+                  the `Reader` struct and the `spawns`, `start_thing`,
+                  `start_sector` and `read_inventory` entry points, on
+                  `specials/tables.rs` (the row types and the `DOOM_ROWS`,
+                  `DOOM_EXITS`, `HEXEN_ROWS`, `HEXEN_IGNORED`,
+                  `HEXEN_EXITS` and `KEY_THINGS` tables) and
+                  `specials/reader.rs` (the whole `impl Reader` pass),
+                  with that group's tests in `specials/tests.rs`,
+                  `playability/graph.rs` the sector movement
                   graph and the player-shaped step/gap/width passability
                   tests, `playability/reach.rs` the fixpoint that
                   walks the sectors, collects the keys it reaches and

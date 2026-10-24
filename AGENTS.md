@@ -798,7 +798,12 @@ tests/
                     `defs/specials.rs` (the linedef special tables with their
                     generalized decoding and `family` override) and
                     `defs/sectors.rs` (the sector type tables with their Boom
-                    decoding);
+                    decoding), and the `query` group's shared helpers in
+                    `query.rs` with its tests in `query/find.rs`
+                    (`find_elements` with its `within` bounds and refusals),
+                    `query/replace_surfaces.rs` (`replace_texture`,
+                    `replace_flat`), `query/replace_things.rs`
+                    (`replace_thing_type`) and `query/bulk.rs` (`bulk_edit`);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

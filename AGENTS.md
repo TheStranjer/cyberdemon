@@ -536,22 +536,24 @@ src/
                   path, pages the pure `wad::map::describe` rows beside
                   its always-whole map summary, and publishes the same
                   overview, unhighlighted, by default;
-                  `tools/query.rs` is the `query` group: `find_elements`
-                  flattens the `Query` fields beside `map`/`offset`/
-                  `limit` (check the limit first), reads the map and the
-                  session's definitions under the same one-lock path the
-                  playability tools use, runs the pure
-                  `wad::map::query::run_query`, and pages its hits into
+                  `tools/query.rs` is the `query` group: its root keeps the
+                  row-cap and report-window constants beside the whole
+                  `#[tool_router]` impl, `query/find.rs` the `find_elements`
+                  parameters beside its read of the map and the session's
+                  definitions under the same one-lock path the playability
+                  tools use, the five compact summary rows and the paging of
+                  the pure `wad::map::query::run_query` hits into
                   `{kind, count, indices, rows, next_offset}` with one
-                  compact summary row per kind; the `bulk_edit` tool is
-                  one `Session::edit_map` step of the pure
+                  compact summary row per kind, `query/replace_tools.rs` the
+                  `replace_texture`/`replace_flat`/`replace_thing_type`
+                  parameters and runs, each one `Session::edit` step over
+                  the `wad::map::bulk` replacements, and `query/bulk.rs` the
+                  `bulk_edit` request, report and steps: one
+                  `Session::edit_map` step of the pure
                   `wad::map::bulk::edits` engine over a `find_elements`
                   selection, with thing-type name resolution, a `max`
-                  guard and a `dry_run` preview; the `replace_texture`/
-                  `replace_flat`/`replace_thing_type` tools are one
-                  `Session::edit` step over the `wad::map::bulk`
-                  replacements, and `tools/query/replace.rs` +
-                  `replace/` hold their shared machinery: the root keeps
+                  guard and a `dry_run` preview. `tools/query/replace.rs` +
+                  `replace/` hold the machinery they share: the root keeps
                   the `MapsSelector` wire shape and its `resolve`d name
                   list, `replace/apply.rs` the multi-map runner and the
                   folded `{maps, total, copied_maps, dry_run, next_steps}`
@@ -559,11 +561,17 @@ src/
                   `run_replacement`), and `replace/stock.rs` the `Stock`
                   existence checks with `parse_terms`, `require_target`
                   and the `ThingRef` doomednum-or-name resolution behind
-                  `replace_thing_type`; that module's tests are
-                  `replace/tests.rs` (the shared fixtures) plus
-                  `replace/tests/maps.rs` (the selections and the
-                  multi-map steps) and `replace/tests/stock.rs` (the
-                  stock and the parameter checks);
+                  `replace_thing_type`; the group's tests are
+                  `query/tests.rs` (the shared fixture map, session and
+                  argument builders) plus `query/tests/find.rs` (the row
+                  cap, the paging window, the summary rows and the read's
+                  refusals), `query/tests/replace_tools.rs` (the three
+                  swaps) and `query/tests/bulk.rs` (the bulk edit with its
+                  guard, preview, stock checks and paged report); that
+                  module's tests are `replace/tests.rs` (the shared
+                  fixtures) plus `replace/tests/maps.rs` (the selections
+                  and the multi-map steps) and `replace/tests/stock.rs`
+                  (the stock and the parameter checks);
                   `tools/sketch.rs` is the `sketch` group: `trace_sketch`
                   needs no session at all — it parses `crop`/`max_size`/
                   `ink`/the analysis and vectorize knobs, the plan `units`

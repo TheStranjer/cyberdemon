@@ -769,13 +769,29 @@ src/
                   `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
                   bounding boxes, line lengths and sector adjacency),
-                  `map/overlay.rs` the pure room-drawing and void-carving
-                  engine behind `create_sector_from_loop` and `carve_void`
-                  (a polygon folded over the map through `geom::arrange`
-                  rebuilds every linedef, sidedef and vertex: T-junction
-                  and crossing splits, painted-over drops, two-sided
-                  opening, offset-preserving side copies, the
-                  `keep_interior` probe and the original-map outer side),
+                  `map/overlay.rs` + `overlay/labeler.rs` +
+                  `overlay/prepared.rs` + `overlay/rebuilt.rs` +
+                  `overlay/geometry.rs` the pure room-drawing and
+                  void-carving engine behind `create_sector_from_loop` and
+                  `carve_void` (a polygon folded over the map through
+                  `geom::arrange` rebuilds every linedef, sidedef and
+                  vertex: T-junction and crossing splits, painted-over
+                  drops, two-sided opening, offset-preserving side copies,
+                  the `keep_interior` probe and the original-map outer
+                  side): the request, paint and result shapes, the
+                  `Source`, `Shape` and `OutsideRule` reads of the original
+                  map and `apply_overlay` in the root, the `OverlayLabeler`
+                  and the containment shapes it answers from in
+                  `overlay/labeler.rs`, the `Prepared` snapshot, the
+                  arrangement runs and the side dressing in
+                  `overlay/prepared.rs`, the `Rebuilt`, `Plan`, `Built` and
+                  `LineCtx` rows with their flag, orientation and texture
+                  rules in `overlay/rebuilt.rs` and the integer geometry
+                  from `grid_length` to `void_front` in
+                  `overlay/geometry.rs`, with that module's tests in
+                  `overlay/tests.rs` plus `overlay/tests/rooms.rs` (the
+                  painted rooms) and `overlay/tests/carve.rs` (the
+                  carvings),
                   `map/ops.rs` + `ops/split.rs` + `ops/join.rs` the pure
                   linedef-geometry engine behind `split_linedef` and
                   `join_linedefs` (the two entry points, the shapes they

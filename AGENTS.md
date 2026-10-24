@@ -225,7 +225,15 @@ src/
                   `plan/connectors.rs` the
                   connection cut placement on those walls (a plain opening
                   spanning a whole shared run keys that wall `joined` and
-                  paints no band), `plan/emit.rs` the
+                  paints no band) on `plan/connectors/frame.rs` (the stair
+                  run, the `Frame` a band is drawn in and the rounded integer
+                  helpers) and `plan/connectors/pass.rs` (the boundary choice,
+                  the refusals and the `Pass` placing one connection), with
+                  that module's tests in `plan/connectors/tests.rs` plus
+                  `plan/connectors/tests/bands.rs` (the placed bands and their
+                  refusals) and `plan/connectors/tests/stairs.rs` (the step
+                  stacks, the joined runs and the helper measures),
+                  `plan/emit.rs` the
                   arrangement-to-`Map` emission (regions to sectors, sides
                   to sidedefs) on `plan/emit/sectors.rs` (the room and
                   connector `Sector` rows with their span and light reads)

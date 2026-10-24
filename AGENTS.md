@@ -938,13 +938,29 @@ src/
                   `convert/tests/same_family.rs`,
                   `convert/tests/cross_family.rs` and
                   `convert/tests/requests.rs`,
-                  `map/describe.rs` the pure description core behind
-                  `describe_map`: one `Describe` read per map folding
+                  `map/describe.rs` + `describe/` the pure description core
+                  behind `describe_map`: one `Describe` read per map folding
                   per-sector fact rows (`SectorFacts`, `sector_facts`:
                   shoelace area, bbox, label centre, flats, sky, named
                   special, tag, wall-texture tally, counted things, role
                   names and neighbour `via` rows) and the whole-map
-                  `MapOverview` summary, `map/features.rs` +
+                  `MapOverview` summary — the answer shapes, the `ROLE_NAMES`
+                  and `via` words, the `Describe` type and the one-sector
+                  wrapper in the root, the one `impl Describe` with the
+                  `door`/`lift` neighbour rules, the closed band, the window
+                  gap and the walk-over sweep in `describe/reader.rs`, the
+                  boundary and neighbour-group reads and the per-family
+                  sector-special tables in `describe/roles.rs`, the shoelace,
+                  label-point and coordinate helpers in `describe/shape.rs`
+                  and the counts, tallies and playable sentences in
+                  `describe/tally.rs`, with that module's tests in
+                  `describe/tests.rs` (the definitions and the hand-drawn
+                  fixtures) plus `describe/tests/plans.rs` (the plan-built
+                  maps), `describe/tests/facts.rs` (the per-sector rows),
+                  `describe/tests/neighbours.rs` (the boundary readings),
+                  `describe/tests/roles.rs` (the role names) and
+                  `describe/tests/overview.rs` (the whole-map summary),
+                  `map/features.rs` +
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
                   action table and `next_free_tag` in the root; the
                   `DoorSides`-to-map-dressing — `plan_door`'s validated

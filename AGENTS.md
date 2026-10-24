@@ -99,9 +99,15 @@ src/
                   sections, the zlib wrap and the limit refusals,
                   `bsp/polygon.rs` Sutherland-Hodgman convex clipping of
                   the map box by partition and seg lines, and
-                  `bsp/gl.rs` the glBSP v2 writer: region polygons,
-                  miniseg-closed clockwise seg loops, the partner pass
-                  and the `GL_*` record lumps.
+                  `bsp/gl.rs` the glBSP v2 writer's root: the constants,
+                  `GlNodes`, `to_gl` and the refusal makers, on
+                  `gl/regions.rs` (the subsector region polygons and the
+                  miniseg-closed clockwise seg loops) and `gl/write.rs`
+                  (the vertex table, the seg pool, the partner pass and
+                  the `GL_*` record lumps), with that module's tests in
+                  `gl/tests.rs` plus `gl/tests/loops.rs` (the closed
+                  loops) and `gl/tests/records.rs` (the record layout
+                  and the refusals).
   music.rs        Music core module root: re-exports the converter and writer.
   music/          Music building blocks (no MCP concerns): `music/midi_write.rs`
                   the type-0 SMF writer (`MidiWriter`, big-endian chunks,

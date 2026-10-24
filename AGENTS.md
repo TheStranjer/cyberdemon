@@ -328,9 +328,15 @@ src/
                   `edit_geometry/tests/transform.rs` (the transform request
                   checks).
                   `tools/graphics/resolve.rs` holds the shared picture
-                  resolvers (flat, patch, composite texture, sprite
-                  rotation) that every tool and the renderers decode
-                  graphic lumps through;
+                  resolvers' name lookup (`Place`, `locate`, `lump_bytes`),
+                  flat and patch loading and `PNG` quantizing,
+                  `resolve/texture.rs` the composite texture definitions
+                  and `resolve/sprite.rs` the sprite rotations (`Sprite`,
+                  served by `Request`), that every tool and the renderers
+                  decode graphic lumps through, with those resolvers'
+                  tests in `resolve/tests.rs` plus
+                  `resolve/tests/pictures.rs` and
+                  `resolve/tests/textures.rs`;
                   `tools/maps/common.rs` holds the shared `map`-parameter
                   resolvers (`resolve_map_name`, `load_map`) every map
                   tool builds on, and `tools/maps/params.rs` the shared

@@ -302,6 +302,14 @@ src/
                   `palette/set.rs` (`set_palette`'s parameter, payload and
                   request types beside its source resolution and commit
                   steps) and `palette/tests.rs` (that group's unit tests),
+                  `tools/patches.rs` (the parameters, the staged bytes and
+                  their staging, the result reports, the `PNAMES` constant
+                  and the router) with `patches/write.rs` (the `add_patch`
+                  and `replace_patch` runs beside their merged-view scans
+                  and one-edit commits), `patches/remove.rs` (the
+                  `remove_patch` run with its working scan, the guarded
+                  lump deletion and the `PNAMES` rewrite commit) and
+                  `patches/tests.rs` (that group's unit tests),
                   `tools/edit_vertices.rs` (the parameter and report shapes,
                   the append and removal paths and the router) with
                   `edit_vertices/moves.rs` (the move's request-to-points

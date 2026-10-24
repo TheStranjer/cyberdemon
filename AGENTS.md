@@ -314,7 +314,14 @@ src/
                   and shape parsing), `imports/image_pipeline.rs` (the shared
                   patch-import run), `imports/sprite.rs`,
                   `imports/texture.rs`, `imports/create_flat.rs`,
-                  `imports/create_sprite.rs`, `imports/processed.rs` (the
+                  `imports/create_sprite.rs` (the constants, the parameters,
+                  the validated request and the three naming forms) with
+                  `create_sprite/build.rs` (the cleanup ops, the height
+                  rule, the built patch, the warnings, the one-edit commit
+                  and the report) and that tool's tests in
+                  `create_sprite/tests.rs` plus
+                  `create_sprite/tests/request.rs` and
+                  `create_sprite/tests/build.rs`, `imports/processed.rs` (the
                   preview pipeline) and `imports/tests.rs` (that group's
                   unit tests), `tools/session.rs` (the shared path,
                   archive-read and dirty-work helpers, `UNSAVED_WORKING` and

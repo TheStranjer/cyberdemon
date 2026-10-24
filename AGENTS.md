@@ -576,7 +576,15 @@ src/
                   `map/common.rs` the record codecs the two binary formats
                   share (`SIDEDEFS`/`VERTEXES`/`SECTORS` are byte-identical),
                   `map/udmf_map.rs` the `UDMF` `TEXTMAP`/`ENDMAP` reader and
-                  writer over the model,
+                  writer over the model: the defaults and the flag-name
+                  tables both halves read, the block walk dispatching a
+                  document's blocks and the document builder ordering the
+                  element blocks, on `udmf_map/read.rs` (the `Fields`
+                  reader over one block, the five element readers, the
+                  flag-boolean decoders and the shape errors) and
+                  `udmf_map/write.rs` (the `Out` block builder, the five
+                  element writers and the `Doom` thing booleans), with
+                  that module's tests in `udmf_map/tests.rs`,
                   `map/nodes.rs` typed SEGS/SSECTORS/NODES parsing in the
                   vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
                   `Seg`, `Subsector`, `Node`, `Child`, magic detection, the

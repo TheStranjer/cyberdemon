@@ -677,6 +677,30 @@ src/
                   and request types, source resolution and commit steps in
                   `palette/set.rs` and the group's unit tests in
                   `palette/tests.rs`;
+                  `tools/textures.rs` is the `textures` group: its root keeps
+                  the constants, the merged view's `TextureSet` loader with
+                  its `WhichLump`, decode and paging helpers, `put_global`
+                  (the global-lump write the `palette`, `patches` and
+                  `imports` groups reuse), the re-exports those groups import
+                  and the router methods, over `textures/list.rs` (the
+                  `list_textures` and `list_pnames` arguments, rows and runs),
+                  `textures/pnames.rs` (the `edit_pnames` arguments, the
+                  `Operation` they carry and the `Plan` `plan_edit` computes),
+                  `textures/pnames_rewrite.rs` (the committed change:
+                  `rewrite_textures`, `PnamesRewrite`, `plan_pnames_removal`,
+                  `write_pnames_rewrite`, the two `edit_pnames` runs and their
+                  reports) and `textures/build.rs` (`build_texture`,
+                  `remove_texture` and the definition steps
+                  `create_texture_from_image` shares); that group's unit tests
+                  are `textures/tests.rs` (the shared fixture lumps, session
+                  and argument builders) plus `textures/tests/list.rs` (the
+                  load, the two listings and their paging),
+                  `textures/tests/pnames_edit.rs` (the adds and removes as one
+                  undoable step and the reusable rewrite),
+                  `textures/tests/pnames_plan.rs` (the rename and replace_all
+                  plans, the picker, the mapping and `put_global`) and
+                  `textures/tests/build.rs` (the builds, the removals and
+                  their refusals);
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,
                   and `theme_roles(session, override, roles)` which

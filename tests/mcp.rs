@@ -15,7 +15,9 @@
 //! checks in `e2e_edit`, the `sketch-to-map` guide-chain
 //! checks in `e2e_sketch`, the
 //! `edit_geometry`-group tests in `edit_geometry`, the
-//! `edit_linedefs`-group tests in `edit_linedefs`, the
+//! `edit_linedefs`-group shared helpers in `edit_linedefs` with its
+//! `edit_linedefs/add`, `edit_linedefs/edit` and
+//! `edit_linedefs/remove_split` topic tests, the
 //! `edit_sidedefs`-group tests in `edit_sidedefs`, the
 //! `edit_sectors`-group tests in `edit_sectors`, the
 //! `edit_things`-group tests in `edit_things`, the

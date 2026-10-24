@@ -667,13 +667,22 @@ src/
                   the CD-108 `bulk_edit` tool: per-kind `set`/`add`
                   tables over all five element kinds, the family-gated
                   linedef fields and the named flag edits,
-                  `map/placement.rs` the pure thing-placement core: the
-                  clearance primitives (`fits`, `keeps_distance`,
-                  `boundary_clear`, `axis_points`, `thing_clearance`) the
-                  plan builder's room fills share with the `distribute`
-                  grid engine (centred clearance grids spread by distance
-                  from the area centre), the `split_proportional` area
-                  split and the seeded/face modes behind `place_things`,
+                  `map/placement.rs` + `placement/` the pure
+                  thing-placement core: the clearance primitives (`fits`,
+                  `keeps_distance`, `boundary_clear`, `axis_points`,
+                  `thing_clearance`) the plan builder's room fills share
+                  with the `distribute` grid engine (centred clearance
+                  grids spread by distance from the area centre), the
+                  `split_proportional` area split and the seeded/face
+                  modes behind `place_things`, on `placement/facing.rs`
+                  (the `Facing` modes, `snap_angle`, `bearing`, `next_u32`
+                  and the `FacingRun` threading them) and
+                  `placement/distribute.rs` (`Placed`, `DistributeSpec`,
+                  `Distribution`, the `Run` behind `distribute` and the
+                  `Share` and `Order` of `split_proportional`), with that
+                  module's tests in `placement/tests.rs` plus
+                  `placement/tests/clearance.rs` and
+                  `placement/tests/split_facing.rs`,
                   `map/convert.rs` the pure within- and cross-flag-family
                   format conversion (`Target`, `convert_map`, `Conversion`)
                   behind `convert_map_format`,

@@ -790,7 +790,15 @@ tests/
                     `edit_linedefs/add.rs` (`add_linedef`),
                     `edit_linedefs/edit.rs` (`edit_linedef`) and
                     `edit_linedefs/remove_split.rs` (`remove_linedef`,
-                    `split_linedef` and `join_linedefs`), and the `defs`
+                    `split_linedef` and `join_linedefs`), the `edit_sectors`
+                    group's shared helpers in `edit_sectors.rs` with its
+                    tests in `edit_sectors/edit.rs` (`add_sector`,
+                    `edit_sector`), `edit_sectors/remove.rs` (the format
+                    caps, `remove_sector` with its cascade and the undo of
+                    the add/edit/remove trio), `edit_sectors/create_loop.rs`
+                    (`create_sector_from_loop` with the report and wall
+                    checks the carvings reuse) and `edit_sectors/carve.rs`
+                    (`carve_void`), and the `defs`
                     group's shared helpers in `defs.rs` with its tests in
                     `defs/things.rs` (the thing tables, the detected default
                     game and their filters), `defs/custom.rs` (the DEHACKED,

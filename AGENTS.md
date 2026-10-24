@@ -259,8 +259,13 @@ src/
   session.rs      The per-connection editing session: an optional IWAD layer and
                   read-only resource layers under one editable working archive,
                   the merged view, the layer-only `base_lumps` view, `Scope`
-                  reads and `Session::edit`.
+                  reads and `Session::edit`: `LayerRole`, `Layer` and the one
+                  `impl Session` every tool reaches through, its read-view
+                  methods delegating to `session/views.rs`.
   session/        Session building blocks (no MCP concerns):
+                  `session/scope.rs` the origin and read-target types of those
+                  archives (`Source`, `MergedLump` and `Scope` with the name
+                  parser behind `Scope::parse`),
                   `session/merge.rs` folds one archive over another with vanilla
                   override rules (map blocks, namespaces, globals, last wins;
                   `merge_into` and `merge_counts` are the whole-archive forms)
@@ -275,13 +280,25 @@ src/
                   revision bookkeeping behind dirty state, and
                   `session/cow.rs` the copy-on-write step that brings one map
                   block from the merged view into the working archive
-                  (`copy_map_block`, `Session::copy_map_to_working`), and
+                  (`copy_map_block`, `Session::copy_map_to_working`),
+                  `session/views.rs` the bodies of the session's read views
+                  (`merged`, `base_lumps`, `game`, `lumps_in` and `find`) as
+                  free functions over a `&Session`, with the layer directory
+                  and lookup-match helpers they share, and
                   `session/map_edit.rs` the single undoable step behind every
                   map edit tool (`Session::edit_map`: copy, typed edit, node
                   invalidation on geometry change, in-place block rewrite)
                   and its format-rewriting sibling `Session::convert_map`
                   (`rewrite_in_place`: the same step, always dropping the
-                  block's node data and `GL` run).
+                  block's node data and `GL` run), with the session's own
+                  tests in `session/tests.rs` (the fixtures the topics share)
+                  plus `session/tests/layers.rs` (the scope names and wire
+                  forms, the layer stack, the merged view, `find` and the
+                  `Scope` reads), `session/tests/history.rs` (labels, undo,
+                  redo, dirty state, the cap and the batch marks) and
+                  `session/tests/state.rs` (the active map, the render
+                  settings and theme, the layer-only view, game detection
+                  and the copy-on-write step).
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.

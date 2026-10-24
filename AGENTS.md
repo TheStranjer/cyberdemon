@@ -914,7 +914,19 @@ tests/
                     (`get_map_summary` and `set_active_map`),
                     `maps/assemble.rs` (`assemble_map`), `maps/create.rs`
                     (`create_map`) and `maps/copy_rename.rs` (`copy_map`,
-                    `rename_map` and `remove_map`);
+                    `rename_map` and `remove_map`), and the `nodes` group's
+                    shared helpers in `nodes.rs` (the three fixture loaders,
+                    the asset-`URL` splitter and fetcher, the `JSON` asset
+                    reader and the directory name column) with its tests in
+                    `nodes/read.rs` (`get_nodes`, `get_reject` and
+                    `get_blockmap` over the hand-built, malformed and `XNOD`
+                    fixtures), `nodes/build_tables.rs` (`build_blockmap` and
+                    `build_reject` with their refusals), `nodes/build_nodes.rs`
+                    (`build_nodes` as the classic run with its split vertices
+                    and as one `ZDoom` extended lump), `nodes/build_gl.rs`
+                    (the `glBSP` v2 `GL_*` block and its place in the
+                    directory) and `nodes/build_all.rs` (`build_all_nodes` as
+                    one undoable step);
                     the flagship chains in e2e_sketch.rs, e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a

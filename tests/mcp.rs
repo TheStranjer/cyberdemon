@@ -35,7 +35,9 @@
 //! inspect-group tests in `inspect`, the features-group tests in
 //! `features`, the
 //! music-group tests in `music`, the
-//! nodes-group tests in `nodes`, the
+//! nodes-group shared helpers in `nodes` with its `nodes/read`,
+//! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
+//! `nodes/build_all` topic tests, the
 //! palette-group tests in `palette`, the
 //! patches-group shared helpers in `patches` with its `patches/add`,
 //! `patches/replace` and `patches/remove` topic tests, the

@@ -231,7 +231,14 @@ src/
   session/        Session building blocks (no MCP concerns):
                   `session/merge.rs` folds one archive over another with vanilla
                   override rules (map blocks, namespaces, globals, last wins;
-                  `merge_into` and `merge_counts` are the whole-archive forms),
+                  `merge_into` and `merge_counts` are the whole-archive forms)
+                  on `session/merge/pass.rs` (the `Pass` copying one overlay's
+                  map blocks, regions and globals, and its marker, lookup,
+                  analysis and tagging helpers), with that module's tests in
+                  `session/merge/tests.rs` plus
+                  `session/merge/tests/rules.rs` (the override rules) and
+                  `session/merge/tests/entry_points.rs` (the whole-archive
+                  forms and helpers),
                   `session/history.rs` is the labelled undo/redo stack and the
                   revision bookkeeping behind dirty state, and
                   `session/cow.rs` the copy-on-write step that brings one map

@@ -128,8 +128,17 @@ src/
                   overlay, `defs/dehacked.rs` the `Thing <n>` block subset
                   over the embedded `deh_mobj.tsv` map, `defs/decorate.rs`
                   the tokenising DECORATE `actor` reader, `defs/zscript.rs`
-                  the `class` reader on the same scanner and
-                  `defs/mapinfo.rs` the `DoomEdNums` block reader.
+                  the `class` reader on the same scanner,
+                  `defs/mapinfo.rs` the `DoomEdNums` block reader and
+                  `defs/dehacked_edit.rs` the line-oriented DeHackEd/BEX
+                  patch model (its constants and the `Field`, `Block`,
+                  `Section`, `Patch` and `Opened` shapes) on
+                  `defs/dehacked_edit/reader.rs` (the `Reading` pass,
+                  `parse` and the header-word helpers) and
+                  `defs/dehacked_edit/edit.rs` (`Target`, `parse_spec`, the
+                  key and value checks, the `Region` lookup and the
+                  `set_patch`/`remove_patch` line rewrites), with that
+                  module's tests in `defs/dehacked_edit/tests.rs`.
   render.rs       Rendering core module root: the integer gamma curve
                   (`gamma_table`) and the settings, canvas, lighting, scene
                   and column-caster re-exports.

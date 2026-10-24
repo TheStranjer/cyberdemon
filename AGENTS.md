@@ -196,7 +196,12 @@ src/
                   compiler and its stages (pure; no archive I/O, no tools).
   plan/           Compiler building blocks (no MCP concerns):
                   `plan/model.rs` the `Plan`/`Room`/`Connection` data model
-                  and structural validation, `plan/units.rs` the integer
+                  on `plan/model/validate.rs` (the `impl Plan` validation
+                  pass: the size and thickness budgets and the room,
+                  connection and feature checks), with that module's tests
+                  in `plan/model/tests.rs` plus `plan/model/tests/wire.rs`
+                  (the serde shape) and `plan/model/tests/validate.rs`
+                  (the refusals), `plan/units.rs` the integer
                   `Units` scaling, mirroring and grid snapping from plan
                   coordinates to map units with `plan/units/tests.rs` plus
                   `plan/units/tests/mapping.rs` and

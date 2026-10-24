@@ -165,11 +165,26 @@ src/
                   colours (RGB defaults plus `PLAYPAL` entries), thing
                   visuals, and the square `Window` mapping the minimap
                   frames with, `render/view.rs` the 3D-view column
-                  caster: 16.16 camera trig, exact `i128` ray/segment
-                  fractions, the sorted portal column walk (textured
-                  upper/middle/lower faces with pegging, world-aligned
-                  textured planes, a view-angled sky, a per-pixel depth
-                  buffer) and the masked-middle collection, and
+                  caster's root: the pitch limits, `ViewCamera`,
+                  `MaskedMiddle`, `Rendered` and `ViewFrame` beside the
+                  `render_view` and `render_frame` entry points, on
+                  `view/projection.rs` (the exact `Fraction`s and the
+                  camera's `Projection`), `view/walk.rs` (the `Edge`,
+                  `Side`, `Plane`, `Hit`, `Visit`, `Window`, `Walk`,
+                  `Slot`, `FlatRun`, `FacePlan` and `Part` rows a column
+                  moves through), `view/caster.rs` (the `Caster` and its
+                  sorted portal column walk: textured upper/middle/lower
+                  faces with pegging, world-aligned textured planes, a
+                  view-angled sky, a per-pixel depth buffer and the
+                  masked-middle collection) and `view/texels.rs`
+                  (piercing, plane and wall texels, pegging, texture
+                  keys and the edge and sidedef preparation), with that
+                  module's tests in `view/tests.rs` plus
+                  `view/tests/math.rs` (the exact maths),
+                  `view/tests/texturing.rs` (the mapping helpers),
+                  `view/tests/box_render.rs` (the box map pixel by
+                  pixel) and `view/tests/masked.rs` (the divider and the
+                  transparent pass), and
                   `render/sprites.rs` the transparent pass: thing sprites
                   projected through the eight-rotation bucketing and the
                   masked middles painted far to near, depth-tested

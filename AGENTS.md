@@ -361,9 +361,21 @@ src/
                   pure `wad::map::validate` checks, paging and counting the
                   issues outside them;
                   `tools/playability.rs` is the thin `check_playability`
-                  and `describe_map` group: the first parses `skill`,
-                  reads the map and the session's definitions under one
-                  lock, runs the pure `wad::map::playability` walk with
+                  and `describe_map` group: its root keeps the shared
+                  `UNKNOWN_THING_RADIUS`, the `Prepared` inputs and `load`
+                  and the two router methods, with `CheckPlayabilityParams`,
+                  `parse_skill`, `Analysis`, the report's row types,
+                  `PlayabilityReport`, its count, summary and mark builders
+                  and `check_run` in `playability/check.rs`, the reason-keyed
+                  `blocker_hint`, `step_hint`, `stuck_hint`, `stuck_rows` and
+                  `unreachable_rows` in `playability/hints.rs`, the
+                  `DESCRIBE_*` caps, `DescribeMapParams`, `parse_limit`,
+                  `sector_selection`, `page_rows`, `DescribeReport` and
+                  `describe_run` in `playability/describe.rs` and the group's
+                  unit tests in `playability/tests.rs`; the first parses
+                  `skill`, reads the map and the session's definitions
+                  under one lock, runs the pure
+                  `wad::map::playability` walk with
                   its `blockers` and `stuck_things` readings, folds the
                   reason-keyed hints and the plain summary, and sends
                   `render: true` over the `tools/render.rs` overview

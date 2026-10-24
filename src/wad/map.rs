@@ -8,8 +8,9 @@
 //! with the named bit tables of both flag families in [`flags`].
 //! [`read_map`] and [`write_map`] dispatch on a block's [`MapFormat`].
 //! [`remove`] is the pure deletion engine behind the element-removal
-//! tools: it reports dependents, expands a cascade and renumbers the
-//! references of what survives. [`stats`] folds a decoded map plus its
+//! tools: it reports dependents, grows a removal by its private `cascade`
+//! rules and renumbers the references of what survives in its private
+//! `renumber` pass. [`stats`] folds a decoded map plus its
 //! block's lump sizes into the compact summary the overview tool reports.
 //! [`nodes`], [`reject`] and [`blockmap`] type the node-builder output:
 //! the `SEGS`/`SSECTORS`/`NODES` tree in its vanilla and `ZDoom` extended

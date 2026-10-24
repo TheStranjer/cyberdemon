@@ -482,7 +482,21 @@ src/
                   region's id lists narrowed to the rows it carries, and
                   publishes the overlay of `tools/sketch/debug.rs` (washed
                   sketch, filled region polygons, the reported gap circles
-                  and mark boxes, bitmap-font ids) as a `PNG` asset;
+                  and mark boxes, bitmap-font ids) as a `PNG` asset. Its
+                  root keeps the parameters, the constants, the run and the
+                  router; the work is split over `sketch/request.rs` (the
+                  validated `Request`, the `Frame` mapping, the crop, the
+                  downscale and the option builders), `sketch/thin.rs` (the
+                  noise floor, the ranking and the caps over the two long
+                  lists) and `sketch/report.rs` (the row types and the
+                  assembled `TraceReport`); that group's unit tests are
+                  `sketch/tests.rs` (the fixtures the topics share) plus
+                  `sketch/tests/params.rs` (the wire parsing and the crop
+                  refusals), `sketch/tests/mapping.rs` (the scale, the frame
+                  and one downscaled drawing measured), `sketch/tests/
+                  report.rs` (the rows and the next steps) and
+                  `sketch/tests/thin.rs` (the floor, the ranking, the caps
+                  and the warnings);
                   `tools/palette.rs` is the `palette` group: `get_palette`
                   beside the shared `load_palette` reader, the swatch
                   builder, the constants both halves share and the two

@@ -490,7 +490,13 @@ src/
                   writer over the model,
                   `map/nodes.rs` typed SEGS/SSECTORS/NODES parsing in the
                   vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
-                  `Seg`, `Subsector`, `Node`, `Child`, magic detection),
+                  `Seg`, `Subsector`, `Node`, `Child`, magic detection, the
+                  record sizes and child-word masks both layouts share, and
+                  its two `pub use` entry points) on `nodes/vanilla.rs` (the
+                  vanilla record walker, whose `read_box` the node records of
+                  both layouts reuse) and `nodes/extended.rs` (the extended
+                  lump's magic, `zlib` cap and four sections), with the two
+                  layouts' tests in `nodes/tests.rs`,
                   `map/reject.rs` the REJECT visibility bit-matrix,
                   `map/blockmap.rs` the BLOCKMAP grid (offset table,
                   blocklist validation and the `to_bytes` serializers),

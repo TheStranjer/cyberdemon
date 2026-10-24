@@ -278,7 +278,11 @@ src/
                   definition texts), `tools/edit_things.rs` with
                   `edit_things/edit.rs` (the `edit_thing` request, report,
                   flag plan and edit steps, whose unit tests are
-                  `edit_things/tests.rs`) and `tools/edit_geometry.rs` with
+                  `edit_things/tests.rs`), `tools/palette.rs` with
+                  `palette/set.rs` (`set_palette`'s parameter, payload and
+                  request types beside its source resolution and commit
+                  steps) and `palette/tests.rs` (that group's unit tests),
+                  and `tools/edit_geometry.rs` with
                   `edit_geometry/delete.rs` (the `delete_geometry` request,
                   report and removal steps) and `edit_geometry/transform.rs`
                   (the `transform_selection` request types and its run); that
@@ -399,7 +403,13 @@ src/
                   publishes the overlay of `tools/sketch/debug.rs` (washed
                   sketch, filled region polygons, the reported gap circles
                   and mark boxes, bitmap-font ids) as a `PNG` asset;
-                  `tools/palette.rs`' `load_palette` is its palette side;
+                  `tools/palette.rs` is the `palette` group: `get_palette`
+                  beside the shared `load_palette` reader, the swatch
+                  builder, the constants both halves share and the two
+                  router methods, with `set_palette`'s parameter, payload
+                  and request types, source resolution and commit steps in
+                  `palette/set.rs` and the group's unit tests in
+                  `palette/tests.rs`;
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,
                   and `theme_roles(session, override, roles)` which

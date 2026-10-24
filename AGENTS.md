@@ -336,11 +336,17 @@ src/
                   with shared machinery split it into submodules described
                   below, e.g. `tools/lumps.rs` with `lumps/rows.rs` (shared
                   directory rows), `lumps/select.rs` (the lump selector),
-                  `lumps/place.rs` (placement), `lumps/edit.rs`
-                  (replace/remove/rename) and `lumps/reorder.rs` (the run
-                  move), `tools/imports.rs` (the `PNAMES` reader and plan,
-                  the name and region parsers, the tool descriptions and the
-                  router) with `imports/patch.rs` (the patch and raw
+                  `lumps/place.rs` (placement), `lumps/edit.rs` (the
+                  working-archive selector over `edit/replace.rs` (the
+                  copy-on-write payload swap), `edit/remove.rs` (the
+                  working-archive deletions) and `edit/rename.rs` (the
+                  in-place rename), with those tools' tests in
+                  `edit/tests.rs` plus `edit/tests/replace.rs`,
+                  `edit/tests/remove.rs` and `edit/tests/rename.rs`) and
+                  `lumps/reorder.rs` (the run move), `tools/imports.rs` (the
+                  `PNAMES` reader and plan, the name and region parsers, the
+                  tool descriptions and the router) with
+                  `imports/patch.rs` (the patch and raw
                   imports), `imports/flat.rs` (the flat import with its size
                   and shape parsing), `imports/image_pipeline.rs` (the shared
                   patch-import run), `imports/sprite.rs`,

@@ -110,8 +110,14 @@ src/
                   (`parse_midi`: running status, track merge to absolute
                   ticks), `music/mus2mid.rs` Doom MUS music lump ("D_*") to
                   MIDI bytes, `music/mid2mus.rs` the reverse
-                  (`midi_to_mus`), and `music/sniff.rs` the magic-based
-                  `sniff_music` container identification.
+                  (`midi_to_mus`: the tick timeline, `Body`, the header and
+                  the instrument table) on `music/mid2mus/score.rs` (the
+                  `Score` stream, its channel mapping, volumes, delays and
+                  `Dropped` counts), with that module's tests in
+                  `music/mid2mus/tests.rs` (the hand-built SMF and MUS
+                  helpers) plus `music/mid2mus/tests/convert.rs` (the
+                  whole-conversion checks), and `music/sniff.rs` the
+                  magic-based `sniff_music` container identification.
   defs.rs         Definitions core module root: the game definitions registry
                   entry point, the Boom generalized/sector bit decoders, the
                   session-aware overlay entry (`session_definitions`) and

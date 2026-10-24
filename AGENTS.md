@@ -339,9 +339,20 @@ src/
                   shapes and builders), `session/undo.rs` (`undo` and `redo`;
                   named apart from `session/history.rs`, the stack itself)
                   and `session/tests.rs` (that group's unit tests),
-                  `tools/scripts.rs` with
-                  `scripts/text_edit.rs` (the shared text-lump editor behind
-                  `edit_decorate`/`edit_zscript`), `tools/defs.rs` with
+                  `tools/scripts.rs` (the shared lump-name, scope and
+                  directory helpers, `DEFAULT_LUMP`, `UNDO_LABEL` and the
+                  router) with `scripts/get_dehacked.rs` (`get_dehacked`'s
+                  parameters, the report rows, their builders and its run),
+                  `scripts/edit_dehacked.rs` (the `edit_dehacked` parameters,
+                  the draft, the validated line `Op`s, the source fetch, the
+                  change counting, the shared `write_lump` and the one-edit
+                  run), `scripts/text_edit.rs` (the shared text-lump editor
+                  behind `edit_decorate`/`edit_zscript`) and
+                  `scripts/text_tools.rs` (the two script tools' descriptors,
+                  parameters, report and runs), with that group's unit tests
+                  in `scripts/tests.rs` plus `scripts/tests/dehacked.rs` (the
+                  patch pair) and `scripts/tests/text.rs` (the script tools),
+                  `tools/defs.rs` with
                   `defs/collect.rs` (gathering the session's custom
                   definition texts), `tools/edit_things.rs` with
                   `edit_things/edit.rs` (the `edit_thing` request, report,

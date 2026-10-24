@@ -309,7 +309,17 @@ src/
                   `imports/texture.rs`, `imports/create_flat.rs`,
                   `imports/create_sprite.rs`, `imports/processed.rs` (the
                   preview pipeline) and `imports/tests.rs` (that group's
-                  unit tests), `tools/scripts.rs` with
+                  unit tests), `tools/session.rs` (the shared path,
+                  archive-read and dirty-work helpers, `UNSAVED_WORKING` and
+                  the router) with `session/open.rs` (the three load tools'
+                  parameters, reports and runs), `session/merge_save.rs`
+                  (`merge_wad` and `save_wad` with their modes, the target
+                  resolution and the layer-overwrite refusal),
+                  `session/info.rs` (the session and merged-view reports'
+                  shapes and builders), `session/undo.rs` (`undo` and `redo`;
+                  named apart from `session/history.rs`, the stack itself)
+                  and `session/tests.rs` (that group's unit tests),
+                  `tools/scripts.rs` with
                   `scripts/text_edit.rs` (the shared text-lump editor behind
                   `edit_decorate`/`edit_zscript`), `tools/defs.rs` with
                   `defs/collect.rs` (gathering the session's custom

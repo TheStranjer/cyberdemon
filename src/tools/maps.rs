@@ -653,10 +653,10 @@ impl Cyberdemon {
             Ok(plan) => plan,
             Err(error) => return fail(&error),
         };
-        reported(
-            self.state()
-                .with_session(|session| manage::create_run(session, plan)),
-        )
+        let outcome: Result<manage::CreateReport, CyberError> = self
+            .state()
+            .with_session(|session| manage::create_run(session, plan));
+        reported(outcome)
     }
 
     /// Copies a scope's map block into the working archive under a new name.
@@ -671,10 +671,10 @@ impl Cyberdemon {
             Ok(plan) => plan,
             Err(error) => return fail(&error),
         };
-        reported(
-            self.state()
-                .with_session(|session| manage::copy_run(session, &plan)),
-        )
+        let outcome: Result<manage::CopyReport, CyberError> = self
+            .state()
+            .with_session(|session| manage::copy_run(session, &plan));
+        reported(outcome)
     }
 
     /// Renames a working-archive map block in place.
@@ -685,11 +685,12 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RenameMapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let outcome = self.state().with_session(|session| {
-            let from = LumpName::parse(&args.from)?;
-            let to = LumpName::parse(&args.to)?;
-            manage::rename_run(session, from, to)
-        });
+        let outcome: Result<manage::RenameReport, CyberError> =
+            self.state().with_session(|session| {
+                let from = LumpName::parse(&args.from)?;
+                let to = LumpName::parse(&args.to)?;
+                manage::rename_run(session, from, to)
+            });
         reported(outcome)
     }
 
@@ -701,10 +702,12 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RemoveMapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(self.state().with_session(|session| {
-            let name = LumpName::parse(&args.name)?;
-            manage::remove_run(session, name)
-        }))
+        let outcome: Result<manage::RemoveReport, CyberError> =
+            self.state().with_session(|session| {
+                let name = LumpName::parse(&args.name)?;
+                manage::remove_run(session, name)
+            });
+        reported(outcome)
     }
 }
 

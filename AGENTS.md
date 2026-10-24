@@ -351,7 +351,14 @@ src/
                   `check_index`, `validate_texture_name`, `edit_result_fragment`)
                   every map edit tool builds on; `tools/maps/manage.rs`
                   the block-level machinery behind `create_map`,
-                  `copy_map`, `rename_map` and `remove_map`;
+                  `copy_map`, `rename_map` and `remove_map` (the plans,
+                  the `GL` helpers and the block builders) on
+                  `maps/manage/runs.rs` (the four runs and their reports,
+                  re-exported through `manage::`), with that module's
+                  tests in `maps/manage/tests.rs` (the shared fixtures)
+                  plus `maps/manage/tests/plans.rs` (the pure validators
+                  and helpers) and `maps/manage/tests/runs.rs` (the runs
+                  end to end);
                   `tools/maps/assemble.rs` builds
                   `assemble_map`'s typed graph (resolved references,
                   dangling ones reported as `problems`, published as a

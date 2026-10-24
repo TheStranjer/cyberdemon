@@ -408,6 +408,18 @@ src/
                   `remove_patch` run with its working scan, the guarded
                   lump deletion and the `PNAMES` rewrite commit) and
                   `patches/tests.rs` (that group's unit tests),
+                  `tools/edit_sectors.rs` (the constants, the reported
+                  `SectorDetail`, the checks every resulting sector faces
+                  and the router) with `edit_sectors/edit.rs` (the
+                  `add_sector`, `edit_sector` and `remove_sector` parameter
+                  and report shapes beside their planning and one-step
+                  work) and `edit_sectors/draw.rs` (the
+                  `create_sector_from_loop` and `carve_void` parameters and
+                  the overlay requests they build); that group's tests are
+                  `edit_sectors/tests.rs` (the shared fixture builders) plus
+                  `edit_sectors/tests/edit.rs` (the add, edit and removal
+                  checks) and `edit_sectors/tests/draw.rs` (the loop and
+                  carve requests),
                   `tools/edit_vertices.rs` (the parameter and report shapes,
                   the append and removal paths and the router) with
                   `edit_vertices/moves.rs` (the move's request-to-points

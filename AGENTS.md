@@ -167,9 +167,16 @@ src/
                   `render/sprites.rs` the transparent pass: thing sprites
                   projected through the eight-rotation bucketing and the
                   masked middles painted far to near, depth-tested
-                  against the caster's buffer, and `render/font.rs` the
-                  5x7 bitmap font the `draw_text` overlay labels and
-                  annotations of the top-down renders draw through.
+                  against the caster's buffer, on
+                  `render/sprites/placement.rs` (the pixels-per-map-unit
+                  `Scale`, the projected `Axis` and the `Placement` that
+                  turn a patch into the columns and rows it touches)
+                  whose tests are `render/sprites/tests.rs` plus
+                  `render/sprites/tests/projection.rs` and
+                  `render/sprites/tests/sampling.rs`, and
+                  `render/font.rs` the 5x7 bitmap font the `draw_text`
+                  overlay labels and annotations of the top-down renders
+                  draw through.
   sketch.rs       Sketch analysis core module root: the `Mask`/`Labels`
                   rasters and the `analyze` and `vectorize` entry points.
                   It measures ink, stroke width, marks, enclosed regions

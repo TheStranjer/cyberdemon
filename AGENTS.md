@@ -549,9 +549,18 @@ src/
                   `remove/renumber.rs`, and the engine's tests in
                   `remove/tests.rs` with `remove/tests/cascade.rs` and
                   `remove/tests/apply.rs`),
-                  `map/transform.rs` the pure selection transform: the
-                  integer scale/rotate/translate math and the whole-map
-                  step behind `transform_selection`,
+                  `map/transform.rs` + `transform/select.rs` +
+                  `transform/apply.rs` the pure selection transform: the
+                  integer scale/rotate/translate math (the `Point`, `Scale`,
+                  `Rotation` and `Operations` values, the `SelectionRequest`
+                  and `Selection`, `TransformReport`, `Move` and `ThingMove`
+                  shapes and the whole-map `apply_transform` step behind
+                  `transform_selection`) in the root, the request-to-`Selection`
+                  expansion in `transform/select.rs`, the planned moves, the
+                  default origin, fit, collapse and coincidence checks and the
+                  commit in `transform/apply.rs`, with that module's tests in
+                  `transform/tests.rs` plus `transform/tests/maths.rs` and
+                  `transform/tests/engine.rs`,
                   `map/stats.rs` the pure fold of a decoded map into the
                   `MapSummary` the `get_map_summary` tool reports (counts,
                   bounds, line and height stats, thing tallies, used names

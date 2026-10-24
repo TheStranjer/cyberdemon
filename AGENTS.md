@@ -601,7 +601,12 @@ src/
                   names and neighbour `via` rows) and the whole-map
                   `MapOverview` summary, `map/features.rs` +
                   `map/features/doors.rs` the pure door core (the `DoorStyle`
-                  action table, `apply_door`'s doorway dressing and `next_free_tag`),
+                  action table and `next_free_tag` in the root; the
+                  `DoorSides`-to-map-dressing — `plan_door`'s validated
+                  `RoomPlan`/`JambPlan` rows and the writes `apply_door`
+                  and `face_room_line` run through them — in
+                  `doors/apply.rs`), its tests in `doors/tests.rs` plus
+                  `doors/tests/apply.rs` and `doors/tests/specials.rs`,
                   `map/features/place.rs` the door placement geometry,
                   `map/features/window.rs` the pure window core
                   (`window_record`'s sill/lintel heights and

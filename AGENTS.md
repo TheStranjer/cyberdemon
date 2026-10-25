@@ -1332,7 +1332,31 @@ tests/
                     and as one `ZDoom` extended lump), `nodes/build_gl.rs`
                     (the `glBSP` v2 `GL_*` block and its place in the
                     directory) and `nodes/build_all.rs` (`build_all_nodes` as
-                    one undoable step);
+                    one undoable step); the `features` group's shared loaders
+                    and readers in `features.rs` (the three `IWAD` loaders,
+                    the `assemble_map` row readers, `validate_clean` and the
+                    `add_door` `refuse_with`) with its tests in
+                    `features/door.rs` (the touching-room door and its
+                    track/key/`Hexen` dressings, the remote loop, the refusal
+                    catalogue and the themed `render_view`),
+                    `features/window.rs` (the blocking glass strip and its
+                    refusals), `features/switch.rs` (the split panel, the
+                    minted tag, the `Hexen` use lines and the remote-door
+                    pairing), `features/exit.rs` (the wall-mounted and
+                    walk-over level ends), `features/secret.rs` (the
+                    per-family secret bits, holding the `pub(super)`
+                    `set_special`/`refuse_secret`/`EffectCase` case machinery
+                    the `light` module drives), `features/light.rs` (the
+                    per-family basic types, the riding light level and the
+                    two special tools' argument checks), `features/stairs.rs`
+                    (the four rising steps, their risers and the geometry
+                    refusals), `features/lift.rs` (the step platform, the
+                    drawn ledge, the `Hexen` scripted plat and the undo),
+                    `features/teleporter.rs` (the pad and destination
+                    squares, the `two_way` return leg and the `Hexen` TID
+                    threading, with the `place`-shared `reported_things`) and
+                    `features/place.rs` (the `place_things` spreads, facings,
+                    shortfall, dry run, undo and refusal catalogue);
                     the flagship chains in e2e_sketch.rs (the drawn sheet,
                     the session, the report readers and the plan builders
                     every slice shares) with its topic files

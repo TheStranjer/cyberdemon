@@ -259,11 +259,27 @@ src/
                   `plan/emit/tests/geometry.rs`, `plan/textures.rs` the eight `TextureRole`
                   dressings of the emitted map (non-door band flats
                   inherited from the adjoining rooms), `plan/features.rs` the
-                  fixed-order feature pipeline (doors, switches, lifts,
-                  teleporters, exits, then room lights and secrets, ending
-                  in a door/lift line re-face and the rows' line-endpoint
-                  report; a mounted panel picks its wall by side, length and
-                  an optional plan `at` point), `plan/things.rs` the name
+                  fixed-order feature pipeline's root (the dress, the rows,
+                  the run and its re-face and line-endpoint report) on
+                  `plan/features/doors.rs` (the door wiring),
+                  `plan/features/switches.rs` (the switch and exit steps, a
+                  mounted panel picking its wall by side, length and an
+                  optional plan `at` point) with the chooser itself on
+                  `plan/features/switches/wall.rs`,
+                  `plan/features/lifts.rs`,
+                  `plan/features/teleporters.rs`,
+                  `plan/features/rooms.rs` (the lights and secrets) and
+                  `plan/features/checks.rs` (the playability checks and the
+                  switch step's remote-door lookup), with that module's
+                  tests in `plan/features/tests.rs` (the shared plan and
+                  map builders) plus `plan/features/tests/doors.rs`,
+                  `plan/features/tests/switches.rs` with its
+                  `tests/switches/wall.rs` and `tests/switches/points.rs`,
+                  `plan/features/tests/lifts.rs`,
+                  `plan/features/tests/teleporters.rs`,
+                  `plan/features/tests/rooms.rs` and
+                  `plan/features/tests/pipeline.rs`,
+                  `plan/things.rs` the name
                   resolution, in-room grid placement and presence flags,
                   and `plan/compile.rs` the `compile` pipeline folding it
                   all into a `CompiledPlan`.

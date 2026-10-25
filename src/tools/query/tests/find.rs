@@ -1,5 +1,5 @@
 //! The `find_elements` read: [`parse_limit`]'s row-cap range,
-//! [`page_hits`]'s window over the ascending hits, the compact summary
+//! [`Page::window`]'s window over the ascending hits, the compact summary
 //! [`rows`] builds per kind and the parameter and map errors
 //! [`find_run`] reports.
 
@@ -7,8 +7,9 @@ use serde_json::json;
 
 use crate::defs::definitions_for;
 use crate::state::AppState;
-use crate::tools::query::find::{Row, find_run, page_hits, parse_limit, rows};
+use crate::tools::query::find::{Row, find_run, rows};
 use crate::tools::query::{DEFAULT_LIMIT, MAX_LIMIT};
+use crate::tools::{Page, parse_limit};
 use crate::wad::game::Game;
 use crate::wad::map::query::{ElementKind, QueryContext};
 
@@ -16,11 +17,12 @@ use super::{mini_map, params};
 
 #[test]
 fn parse_limit_pages_between_one_and_a_thousand() {
-    assert_eq!(parse_limit(None).expect("absent"), DEFAULT_LIMIT);
-    assert_eq!(parse_limit(Some(1)).expect("one"), 1);
-    assert_eq!(parse_limit(Some(MAX_LIMIT)).expect("max"), MAX_LIMIT);
+    let shared = |value| parse_limit(value, DEFAULT_LIMIT, MAX_LIMIT, "limit");
+    assert_eq!(shared(None).expect("absent"), DEFAULT_LIMIT);
+    assert_eq!(shared(Some(1)).expect("one"), 1);
+    assert_eq!(shared(Some(MAX_LIMIT)).expect("max"), MAX_LIMIT);
     for bad in [0, MAX_LIMIT.checked_add(1).expect("small")] {
-        let error = parse_limit(Some(bad)).expect_err("out of range");
+        let error = shared(Some(bad)).expect_err("out of range");
         assert_eq!(error.code(), "invalid_argument", "bad limit code");
         assert!(
             error.to_string().contains("between 1 and 1000"),
@@ -32,22 +34,22 @@ fn parse_limit_pages_between_one_and_a_thousand() {
 #[test]
 fn page_hits_windows_the_list_and_names_the_rest() {
     let hits: Vec<usize> = (0..6).collect();
-    let (first, continues) = page_hits(&hits, 0, 2);
+    let (first, continues) = Page::new(0, 2).window(&hits);
     assert_eq!(first, vec![0_usize, 1], "the leading page");
     assert_eq!(continues, Some(2), "the rest continues at 2");
-    let (middle, more) = page_hits(&hits, 2, 2);
+    let (middle, more) = Page::new(2, 2).window(&hits);
     assert_eq!(middle, vec![2_usize, 3], "the middle page");
     assert_eq!(more, Some(4), "and one page more");
-    let (last, rest) = page_hits(&hits, 4, 2);
+    let (last, rest) = Page::new(4, 2).window(&hits);
     assert_eq!(last, vec![4_usize, 5], "the final page");
     assert_eq!(rest, None, "nothing stayed behind");
-    let (past, beyond) = page_hits(&hits, 9, 2);
+    let (past, beyond) = Page::new(9, 2).window(&hits);
     assert!(
         past.is_empty(),
         "an offset past the end is empty, not an error"
     );
     assert_eq!(beyond, None, "and has no continuation");
-    let (all, tail) = page_hits(&hits, 1, 100);
+    let (all, tail) = Page::new(1, 100).window(&hits);
     assert_eq!(
         all,
         vec![1_usize, 2, 3, 4, 5],

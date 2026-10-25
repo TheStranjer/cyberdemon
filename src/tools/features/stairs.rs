@@ -27,7 +27,8 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{PaintedStep, StairSpec, build_stairs};
 
 use super::current_map;
-use super::door::{DoorPointParam, point_of};
+use super::door::point_of;
+use crate::tools::maps::params::PointParam;
 
 /// The `add_stairs` default step width in map units.
 const DEFAULT_STAIR_WIDTH: i32 = 64_i32;
@@ -44,10 +45,10 @@ pub(super) struct AddStairsParams {
     pub(super) map: Option<String>,
     /// The path's lower end, `{x, y}`: a point inside the area the stairs
     /// climb from (its sector's floor is the default `floor_from`).
-    pub(super) from: DoorPointParam,
+    pub(super) from: PointParam,
     /// The path's higher end, `{x, y}`: a point inside the area the
     /// stairs climb into (its sector's floor is the default `floor_to`).
-    pub(super) to: DoorPointParam,
+    pub(super) to: PointParam,
     /// The width of every step across the path in map units (default 64).
     #[serde(default)]
     pub(super) width: Option<i32>,

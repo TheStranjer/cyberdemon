@@ -1,12 +1,13 @@
 //! The two listings over the fixture set: what [`TextureSet::load`] decodes
 //! from the winning lumps, what [`TextureSet::find`] answers with, the rows
 //! [`list_textures_run`] and [`list_pnames_run`] filter and page, the
-//! [`Page`] bounds [`parse_page`] refuses and the lumps
+//! [`Page`] bounds [`Page::parse`] refuses and the lumps
 //! [`crate::session::Session::find_global`] locates.
 
 use crate::session::{Session, Source};
+use crate::tools::Page;
 use crate::tools::textures::list::{PnamesReport, list_pnames_run, list_textures_run};
-use crate::tools::textures::{TextureSet, WhichLump, parse_page};
+use crate::tools::textures::{DEFAULT_LIMIT, MAX_LIMIT, TextureSet, WhichLump};
 use crate::wad::archive::Lump;
 use crate::wad::lumps;
 use crate::wad::textures::{TextureLayout, TextureLump, write_texture_lump};
@@ -73,15 +74,18 @@ fn find_global_returns_the_last_copy_of_the_merged_view() {
 
 #[test]
 fn pages_default_and_reject_out_of_range_limits() {
-    let fresh = parse_page(None, None).expect("defaults");
+    let fresh = Page::parse(None, None, DEFAULT_LIMIT, MAX_LIMIT).expect("defaults");
     assert_eq!((fresh.offset, fresh.limit), (0, 200), "documented defaults");
     assert_eq!(
-        parse_page(Some(3), Some(2000)).expect("max").limit,
+        Page::parse(Some(3), Some(2000), DEFAULT_LIMIT, MAX_LIMIT)
+            .expect("max")
+            .limit,
         2000,
         "the cap"
     );
     for bad in [0_usize, 2001] {
-        let error = parse_page(None, Some(bad)).expect_err("out of range");
+        let error =
+            Page::parse(None, Some(bad), DEFAULT_LIMIT, MAX_LIMIT).expect_err("out of range");
         assert_eq!(code(&error), "invalid_argument", "limit {bad} code");
         assert!(
             error.to_string().contains("between 1 and 2000"),

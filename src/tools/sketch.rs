@@ -46,10 +46,10 @@ use crate::server::Cyberdemon;
 use crate::sketch::analyze;
 use crate::state::AppState;
 use crate::tools::plan::params::UnitsParam;
+use crate::tools::reply;
 use crate::tools::sketch::report::{Parts, TraceReport, assemble};
 use crate::tools::sketch::request::{analyze_options, parse_request, prepare, run_vectorize};
 use crate::tools::sketch::thin::thin_all;
-use crate::tools::{fail, ok};
 
 /// A pixel coordinate pair in the result's coordinate space.
 type XY = (i64, i64);
@@ -70,8 +70,6 @@ const DEFAULT_GRID: i64 = 8_i64;
 /// Default [`TraceSketchParams::max_gaps`] and
 /// [`TraceSketchParams::max_marks`].
 const DEFAULT_MAX_ROWS: usize = 50_usize;
-/// Smallest accepted row cap.
-const MIN_MAX_ROWS: usize = 1_usize;
 /// Largest accepted row cap.
 const MAX_MAX_ROWS: usize = 500_usize;
 /// Name the debug overlay is published under.
@@ -275,10 +273,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<TraceSketchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match trace_run(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(trace_run(self.state(), &args).await)
     }
 }
 

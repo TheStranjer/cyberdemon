@@ -15,6 +15,7 @@ use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
 use crate::state::AppState;
+use crate::tools::{json_bytes, parse_limit};
 use crate::wad::map::flags::to_names;
 use crate::wad::map::geometry;
 use crate::wad::map::{FlagKind, Map};
@@ -110,17 +111,20 @@ fn unknown_include(text: &str) -> CyberError {
 /// [`CyberError::InvalidArgument`] for `0` or any value above
 /// [`MAX_INLINE_LIMIT`].
 pub(super) fn parse_inline_limit(given: Option<usize>) -> Result<usize, CyberError> {
-    let Some(limit) = given else {
-        return Ok(DEFAULT_INLINE_LIMIT);
-    };
-    if limit == 0 || limit > MAX_INLINE_LIMIT {
-        return Err(CyberError::InvalidArgument(format!(
-            "inline_limit {limit} is outside 1..={MAX_INLINE_LIMIT}; pass the \
+    parse_limit(
+        given,
+        DEFAULT_INLINE_LIMIT,
+        MAX_INLINE_LIMIT,
+        "inline_limit",
+    )
+    .map_err(|_ignored| {
+        CyberError::InvalidArgument(format!(
+            "inline_limit {} is outside 1..={MAX_INLINE_LIMIT}; pass the \
              largest element count to inline, or leave the parameter out for \
-             {DEFAULT_INLINE_LIMIT}"
-        )));
-    }
-    Ok(limit)
+             {DEFAULT_INLINE_LIMIT}",
+            given.unwrap_or_default()
+        ))
+    })
 }
 
 /// A vertex row.
@@ -386,9 +390,7 @@ impl Plan {
         if self.graph.total() <= limit {
             return Ok(Outcome::Inline(self.graph));
         }
-        let data = serde_json::to_vec_pretty(&self.graph).map_err(|error| {
-            CyberError::Internal(format!("the graph does not serialize: {error}"))
-        })?;
+        let data = json_bytes(&self.graph, "graph")?;
         let filename = format!("{}_graph.{JSON_EXTENSION}", self.graph.map);
         let asset = state.publish(&filename, mime_for_extension(JSON_EXTENSION), data)?;
         Ok(Outcome::Asset(Summary {

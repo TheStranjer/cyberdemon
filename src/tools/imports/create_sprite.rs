@@ -39,14 +39,13 @@ use serde::Deserialize;
 use crate::error::CyberError;
 use crate::gfx::ops::parse_hex_color;
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::create_sprite::build::create_sprite_build;
 use crate::tools::imports::image_pipeline::{OffsetMode, OffsetsParam, parse_offset_mode};
 use crate::tools::imports::processed::ProcessParams;
 use crate::tools::imports::sprite::{
     Naming, parse_frame, parse_mirror, parse_prefix, parse_rotation, part_name, whole_name,
 };
-use crate::tools::ok;
+use crate::tools::reply;
 use crate::wad::name::LumpName;
 
 /// The documented default [`crate::gfx::ops::ImageOp::RemoveBackground`] tolerance.
@@ -340,10 +339,7 @@ pub(in crate::tools) async fn create_sprite_run(
     state: &AppState,
     args: &CreateSpriteParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match create_sprite_build(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(create_sprite_build(state, args).await)
 }
 
 #[cfg(test)]

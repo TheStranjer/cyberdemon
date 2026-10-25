@@ -23,6 +23,7 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::state::AppState;
 use crate::tools::render::{OverviewMarks, playability_overview};
+use crate::tools::{Page, parse_limit};
 use crate::wad::map::describe::{Describe, MapOverview, SectorFacts};
 use crate::wad::name::LumpName;
 
@@ -63,25 +64,6 @@ pub(super) struct DescribeMapParams {
     pub(super) render: Option<bool>,
 }
 
-/// The sector-row cap `describe_map`'s `limit` asks for,
-/// [`DESCRIBE_DEFAULT_LIMIT`] when unset.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for `0` or anything above
-/// [`DESCRIBE_MAX_LIMIT`].
-pub(super) fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
-    let Some(limit) = value else {
-        return Ok(DESCRIBE_DEFAULT_LIMIT);
-    };
-    if limit == 0 || limit > DESCRIBE_MAX_LIMIT {
-        return Err(CyberError::InvalidArgument(format!(
-            "limit {limit} is out of range: pass a value between 1 and {DESCRIBE_MAX_LIMIT}"
-        )));
-    }
-    Ok(limit)
-}
-
 /// The sectors `describe_map` will report, ascending and deduplicated:
 /// every stored index when `wanted` is unset, else `wanted` with each
 /// index checked against the `count` of sectors `map` holds.
@@ -111,21 +93,6 @@ pub(super) fn sector_selection(
     Ok(chosen.into_iter().collect())
 }
 
-/// The `offset`/`limit` window over the selected `indices`: this page's
-/// indices and the `next_offset` that continues them (`None` when the page
-/// took everything left, which an offset past the end always does).
-pub(super) fn page_rows(
-    indices: &[usize],
-    offset: usize,
-    limit: usize,
-) -> (Vec<usize>, Option<usize>) {
-    let start = offset.min(indices.len());
-    let stop = start.saturating_add(limit).min(indices.len());
-    let rows = indices.get(start..stop).unwrap_or_default().to_vec();
-    let next = (stop < indices.len()).then(|| offset.saturating_add(rows.len()));
-    (rows, next)
-}
-
 /// Structured result of [`crate::server::Cyberdemon::describe_map`].
 #[derive(Debug, Serialize)]
 pub(super) struct DescribeReport {
@@ -151,20 +118,25 @@ pub(super) struct DescribeReport {
 ///
 /// # Errors
 ///
-/// [`parse_limit`]'s and [`sector_selection`]'s refusals, [`load`]'s
+/// [`crate::tools::parse_limit`]'s and [`sector_selection`]'s refusals, [`load`]'s
 /// errors and - with `render` - the [`playability_overview`] refusals.
 pub(super) async fn describe_run(
     state: &AppState,
     args: &DescribeMapParams,
 ) -> Result<DescribeReport, CyberError> {
-    let limit = parse_limit(args.limit)?;
+    let limit = parse_limit(
+        args.limit,
+        DESCRIBE_DEFAULT_LIMIT,
+        DESCRIBE_MAX_LIMIT,
+        "limit",
+    )?;
     let prepared = load(state, args.map.as_deref())?;
     let selected = sector_selection(
         args.sectors.as_deref(),
         prepared.map.sectors.len(),
         prepared.map.name,
     )?;
-    let (page, next_offset) = page_rows(&selected, args.offset.unwrap_or(0), limit);
+    let (page, next_offset) = Page::new(args.offset.unwrap_or(0), limit).window(&selected);
     let describe = Describe::new(&prepared.map, &prepared.defs);
     let sectors: Vec<SectorFacts> = page
         .iter()

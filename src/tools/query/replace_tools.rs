@@ -28,7 +28,7 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::query::replace::{
     MapsSelector, ReplaceReport, Replacement, Stock, ThingRef, parse_terms, require_defined_thing,
-    require_target, resolve_thing_ref, run_replacement, thing_definitions,
+    require_target, resolve_thing_ref, run_replacement,
 };
 use crate::wad::map::bulk::{Face, Surface, replace_flats, replace_textures, replace_thing_types};
 
@@ -208,7 +208,7 @@ pub(super) fn thing_type_run(
     let from = resolve_side(session, &args.from, "from")?;
     let to = resolve_side(session, &args.to, "to")?;
     if !args.allow_unknown.unwrap_or(false) {
-        require_defined_thing(&thing_definitions(session)?, to)?;
+        require_defined_thing(&session.definitions()?, to)?;
     }
     let label = format!("replace_thing_type {from} -> {to}");
     let replacement = Replacement {

@@ -60,13 +60,12 @@ use crate::tools::graphics::thing_sprite::{
     GetThingSpriteParams, get_thing_sprite_run, thing_request,
 };
 use crate::tools::lumps::rows::{LumpRow, build_rows};
-use crate::tools::{fail, ok};
+use crate::tools::{Page, fail, reply};
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::{LumpName, glob_match};
 
 // The thing-table game default, kept at the path the `query`, `render` and
 // `playability` groups already import; the function lives beside its tool.
-pub(in crate::tools) use crate::tools::graphics::thing_sprite::session_game;
 
 /// Default page size for the listing tools.
 const DEFAULT_LIMIT: usize = 200;
@@ -91,52 +90,9 @@ const FALLBACK_NAME: &str = "PATCH";
 /// Media type of the raw `RGBA8` assets.
 const RGBA_MIME: &str = "application/octet-stream";
 
-/// The validated page request of the listing tools.
-#[derive(Debug)]
-struct Page {
-    /// Rows to skip before the page.
-    offset: usize,
-    /// Maximum rows on the page.
-    limit: usize,
-}
-
-/// The `{offset, limit}` pair a listing tool was given.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for a `limit` outside `1..=2000`.
-fn parse_page(offset: Option<usize>, limit: Option<usize>) -> Result<Page, CyberError> {
-    let value = match limit {
-        None => DEFAULT_LIMIT,
-        Some(value) if value == 0 || value > MAX_LIMIT => {
-            return Err(CyberError::InvalidArgument(format!(
-                "limit {value} is out of range: pass a value between 1 and {MAX_LIMIT}"
-            )));
-        }
-        Some(value) => value,
-    };
-    Ok(Page {
-        offset: offset.unwrap_or(0_usize),
-        limit: value,
-    })
-}
-
 /// Whether `name` passes the optional glob filter.
 fn passes(name: LumpName, pattern: Option<&str>) -> bool {
     pattern.is_none_or(|glob| glob_match(name.as_bytes(), glob))
-}
-
-/// Keeps the matching rows of `matched` on `page` and counts all matches.
-fn page_rows<T>(matched: Vec<T>, page: &Page) -> (usize, Vec<T>) {
-    let total = matched.len();
-    (
-        total,
-        matched
-            .into_iter()
-            .skip(page.offset)
-            .take(page.limit)
-            .collect(),
-    )
 }
 
 /// Keeps the last occurrence of every lump name: a name lookup over the
@@ -181,17 +137,14 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ListFlatsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let page = match parse_page(args.offset, args.limit) {
+        let page = match Page::parse(args.offset, args.limit, DEFAULT_LIMIT, MAX_LIMIT) {
             Ok(page) => page,
             Err(error) => return fail(&error),
         };
         let report = self
             .state()
             .with_session(|session| list_flats_run(session, &page, args.pattern.as_deref()));
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Lists the patch lumps of the session.
@@ -202,7 +155,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ListPatchesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let page = match parse_page(args.offset, args.limit) {
+        let page = match Page::parse(args.offset, args.limit, DEFAULT_LIMIT, MAX_LIMIT) {
             Ok(page) => page,
             Err(error) => return fail(&error),
         };
@@ -214,10 +167,7 @@ impl Cyberdemon {
                 args.in_pnames_only.unwrap_or(false),
             )
         });
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Lists the sprite lumps of the session, grouped by sprite.
@@ -228,7 +178,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ListSpritesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let page = match parse_page(args.offset, args.limit) {
+        let page = match Page::parse(args.offset, args.limit, DEFAULT_LIMIT, MAX_LIMIT) {
             Ok(page) => page,
             Err(error) => return fail(&error),
         };
@@ -239,10 +189,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| list_sprites_run(session, &page, prefix.as_deref()));
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Publishes one flat as an image asset.
@@ -261,10 +208,7 @@ impl Cyberdemon {
             Ok(name) => name,
             Err(error) => return fail(&error),
         };
-        match get_flat_run(self.state(), name, &options) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(get_flat_run(self.state(), name, &options))
     }
 
     /// Publishes one patch lump as an image asset.
@@ -283,10 +227,7 @@ impl Cyberdemon {
             Ok(name) => name,
             Err(error) => return fail(&error),
         };
-        match get_patch_run(self.state(), name, &options) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(get_patch_run(self.state(), name, &options))
     }
 
     /// Publishes one sprite lump or rotation as an image asset.
@@ -305,10 +246,7 @@ impl Cyberdemon {
             Ok(options) => options,
             Err(error) => return fail(&error),
         };
-        match get_sprite_run(self.state(), request, &options) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(get_sprite_run(self.state(), request, &options))
     }
 
     /// Previews one thing type's sprite rotation as an image asset.
@@ -327,10 +265,7 @@ impl Cyberdemon {
             Ok(options) => options,
             Err(error) => return fail(&error),
         };
-        match get_thing_sprite_run(self.state(), &request, &options) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(get_thing_sprite_run(self.state(), &request, &options))
     }
 
     /// Decodes a Doom-format patch from a lump or a file and publishes it
@@ -342,10 +277,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<DecodePatchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match decode_patch_run(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(decode_patch_run(self.state(), &args).await)
     }
 }
 

@@ -26,9 +26,9 @@ use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{MergedLump, Scope, Session};
 use crate::state::AppState;
-use crate::tools::{fail, ok};
+use crate::tools::session::read_archive_at;
+use crate::tools::{parse_limit, reply};
 use crate::wad::Lump;
-use crate::wad::archive::Wad;
 use crate::wad::diff::{Diff, LumpDiff, MapDiff, Mode, Status, Summary, diff};
 use crate::wad::name::LumpName;
 use crate::wad::optimize::{self, Action, Operation, Plan};
@@ -127,11 +127,10 @@ fn parse_side(text: &str) -> Result<Side, CyberError> {
     if Path::new(text).is_absolute() {
         return Ok(Side::File(PathBuf::from(text)));
     }
-    let lowered = text.to_ascii_lowercase();
-    if lowered == "base" {
+    if text.eq_ignore_ascii_case("base") {
         return Ok(Side::Base);
     }
-    if lowered == "working" || lowered == "merged" || lowered.starts_with("layer:") {
+    if Scope::accepts(text) {
         return Scope::parse(text).map(Side::Scope);
     }
     Err(CyberError::InvalidArgument(format!(
@@ -152,22 +151,6 @@ const fn pick_mode(a: &Side, b: &Side) -> Mode {
     }
 }
 
-/// Read a file side: a missing file is `not_found`, other read failures
-/// keep [`Wad::read_file`]'s `io_error` and format failures pass through.
-fn read_archive(path: &Path) -> Result<Wad, CyberError> {
-    Wad::read_file(path).map_err(|error| open_error(path, error))
-}
-
-/// A failed archive read: a missing file is `not_found`, everything else
-/// is what [`Wad::read_file`] reported.
-fn open_error(path: &Path, error: CyberError) -> CyberError {
-    let missing = matches!(error, CyberError::Io(_)) && matches!(path.try_exists(), Ok(false));
-    if missing {
-        return CyberError::NotFound(format!("no file at {}", path.display()));
-    }
-    error
-}
-
 /// The plain lumps of a session directory view.
 fn owned(view: Vec<MergedLump>) -> Vec<Lump> {
     view.into_iter().map(|entry| entry.lump).collect()
@@ -182,33 +165,15 @@ fn side_lumps(session: &Session, side: Side) -> Result<Vec<Lump>, CyberError> {
     match side {
         Side::Base => Ok(owned(session.base_lumps())),
         Side::Scope(scope) => Ok(owned(session.lumps_in(scope)?)),
-        Side::File(path) => Ok(read_archive(&path)?.lumps),
+        Side::File(path) => Ok(read_archive_at(&path)?.lumps),
     }
-}
-
-/// The row cap `limit` asks for, [`DEFAULT_LIMIT`] when unset.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for `0` or anything above
-/// [`MAX_LIMIT`].
-fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
-    let Some(limit) = value else {
-        return Ok(DEFAULT_LIMIT);
-    };
-    if limit == 0 || limit > MAX_LIMIT {
-        return Err(CyberError::InvalidArgument(format!(
-            "limit {limit} is out of range: pass a value between 1 and {MAX_LIMIT}"
-        )));
-    }
-    Ok(limit)
 }
 
 /// Validate both side strings and the limit before the session is touched.
 ///
 /// # Errors
 ///
-/// [`parse_side`]'s and [`parse_limit`]'s errors.
+/// [`parse_side`]'s and [`crate::tools::parse_limit`]'s errors.
 fn plan(args: &DiffWadsParams) -> Result<(Prepared, Prepared, usize), CyberError> {
     let a_text = args.a.as_deref().unwrap_or(DEFAULT_A);
     let b_text = args.b.as_deref().unwrap_or(DEFAULT_B);
@@ -221,7 +186,7 @@ fn plan(args: &DiffWadsParams) -> Result<(Prepared, Prepared, usize), CyberError
             text: b_text.to_owned(),
             side: parse_side(b_text)?,
         },
-        parse_limit(args.limit)?,
+        parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?,
     ))
 }
 
@@ -411,10 +376,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<DiffWadsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match diff_run(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(diff_run(self.state(), &args))
     }
 
     /// Plans and optionally applies a cleanup of the working archive.
@@ -425,10 +387,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<OptimizeWadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match optimize_run(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(optimize_run(self.state(), &args))
     }
 }
 
@@ -437,12 +396,13 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Action, DEFAULT_A, DEFAULT_B, DiffWadsParams, MAX_LIMIT, Mode, OptimizeWadParams, Prepared,
-        Side, diff_run, optimize_run, parse_limit, parse_operations, parse_side, pick_mode, plan,
-        shows,
+        Action, DEFAULT_A, DEFAULT_B, DEFAULT_LIMIT, DiffWadsParams, MAX_LIMIT, Mode,
+        OptimizeWadParams, Prepared, Side, diff_run, optimize_run, parse_operations, parse_side,
+        pick_mode, plan, shows,
     };
     use crate::server::Cyberdemon;
     use crate::session::{Layer, LayerRole, Scope, Session};
+    use crate::tools::parse_limit;
     use crate::wad::Status;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::name::LumpName;
@@ -597,19 +557,25 @@ mod tests {
     #[test]
     fn the_limit_defaults_pages_and_is_capped() {
         assert_eq!(
-            parse_limit(None).expect("the default"),
+            parse_limit(None, DEFAULT_LIMIT, MAX_LIMIT, "limit").expect("the default"),
             500,
             "default limit"
         );
-        assert_eq!(parse_limit(Some(1)).expect("the floor"), 1, "the floor");
         assert_eq!(
-            parse_limit(Some(MAX_LIMIT)).expect("the ceiling"),
+            parse_limit(Some(1), DEFAULT_LIMIT, MAX_LIMIT, "limit").expect("the floor"),
+            1,
+            "the floor"
+        );
+        assert_eq!(
+            parse_limit(Some(MAX_LIMIT), DEFAULT_LIMIT, MAX_LIMIT, "limit").expect("the ceiling"),
             MAX_LIMIT,
             "the ceiling"
         );
-        let zero = parse_limit(Some(0)).expect_err("zero rows is no page");
+        let zero = parse_limit(Some(0), DEFAULT_LIMIT, MAX_LIMIT, "limit")
+            .expect_err("zero rows is no page");
         assert_eq!(zero.code(), "invalid_argument", "zero limit code");
-        let over = parse_limit(Some(MAX_LIMIT + 1)).expect_err("past the ceiling");
+        let over = parse_limit(Some(MAX_LIMIT + 1), DEFAULT_LIMIT, MAX_LIMIT, "limit")
+            .expect_err("past the ceiling");
         assert_eq!(over.code(), "invalid_argument", "overshoot limit code");
     }
 

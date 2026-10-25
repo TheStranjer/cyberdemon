@@ -37,9 +37,12 @@
 //! into the single undoable [`Session::edit_map`] step every map editing
 //! tool builds on.
 //!
-//! The scope and origin types are `scope`; the read-view bodies are `views`.
+//! The scope and origin types are `scope`; the read-view bodies are `views`;
+//! the [`Session::custom_sources`] collection behind [`Session::definitions`]
+//! is `custom`.
 
 pub mod cow;
+mod custom;
 pub mod history;
 pub mod map_edit;
 pub mod merge;
@@ -52,6 +55,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::defs::{CustomSources, Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::render::RenderSettings;
 use crate::session::{history::History, map_edit::MapEditReport};
@@ -66,6 +70,29 @@ pub enum LayerRole {
     Iwad,
     /// A content archive stacked above the base, in load order.
     Resource,
+}
+
+impl LayerRole {
+    /// The role's lowercase wire word, as the layer tools report it.
+    #[must_use]
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Iwad => "iwad",
+            Self::Resource => "resource",
+        }
+    }
+
+    /// The role's label in messages: the base archive names its format in
+    /// caps, a resource keeps the plain word.
+    #[must_use]
+    #[inline]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Iwad => "IWAD",
+            Self::Resource => "resource",
+        }
+    }
 }
 
 /// One read-only archive of the session's layer stack.
@@ -361,6 +388,47 @@ impl Session {
     #[inline]
     pub fn game(&self) -> Game {
         views::game(self)
+    }
+
+    /// The game the tools treat the session as: [`Session::game`]'s
+    /// detection, with an unidentified session standing for DOOM II (the
+    /// same default the `defs` tools document).
+    #[must_use]
+    #[inline]
+    pub fn effective_game(&self) -> Game {
+        let found = self.game();
+        if found == Game::Unknown {
+            return Game::Doom2;
+        }
+        found
+    }
+
+    /// The custom definition texts of the merged view: every `DEHACKED`,
+    /// `DECORATE`, `ZSCRIPT` and `MAPINFO`/`ZMAPINFO` lump in load order
+    /// with `#include` lumps appended, plus notes about includes that
+    /// could not be followed (see [`crate::defs::CustomSources`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Session::lumps_in`]'s error for the merged scope.
+    #[inline]
+    pub fn custom_sources(&self) -> Result<(CustomSources, Vec<String>), CyberError> {
+        custom::custom_sources(self)
+    }
+
+    /// The definitions the session's tools read: the [`Session::effective_game`]
+    /// tables overlaid with the merged view's `DEHACKED`, `DECORATE`,
+    /// `ZScript` and `MAPINFO` customs — one read under one session lock,
+    /// shared by every tool that resolves thing names or describes specials.
+    ///
+    /// # Errors
+    ///
+    /// [`Session::custom_sources`]' read errors and
+    /// [`session_definitions`]' refusal for malformed embedded tables.
+    #[inline]
+    pub fn definitions(&self) -> Result<Definitions, CyberError> {
+        let (sources, _notes) = self.custom_sources()?;
+        session_definitions(self.effective_game(), &sources)
     }
 
     /// The lumps of one scope, in directory order.

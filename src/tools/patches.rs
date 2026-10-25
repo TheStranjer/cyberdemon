@@ -38,14 +38,13 @@ use crate::error::CyberError;
 use crate::gfx::patch::{decode_patch, patch_header, set_patch_offsets};
 use crate::server::Cyberdemon;
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{
     ImageImportParams, OffsetDefault, OffsetMode, OffsetsParam, ParsedImport, Patched,
     TransparencyParams, build_patch,
 };
-use crate::tools::ok;
 use crate::tools::patches::remove::remove_patch_run;
 use crate::tools::patches::write::{add_patch_run, replace_patch_run};
+use crate::tools::reply;
 use crate::wad::classify::is_doom_patch;
 use crate::wad::name::LumpName;
 
@@ -355,10 +354,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddPatchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match add_patch_run(self.state(), &args).await {
-            Ok(outcome) => ok(&outcome),
-            Err(error) => fail(&error),
-        }
+        reply(add_patch_run(self.state(), &args).await)
     }
 
     /// Replaces one patch lump the session already has.
@@ -367,10 +363,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ReplacePatchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match replace_patch_run(self.state(), &args).await {
-            Ok(outcome) => ok(&outcome),
-            Err(error) => fail(&error),
-        }
+        reply(replace_patch_run(self.state(), &args).await)
     }
 
     /// Removes one patch from the working archive, `PNAMES` entry included.
@@ -379,10 +372,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RemovePatchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match remove_patch_run(self.state(), &args) {
-            Ok(outcome) => ok(&outcome),
-            Err(error) => fail(&error),
-        }
+        reply(remove_patch_run(self.state(), &args))
     }
 }
 

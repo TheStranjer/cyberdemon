@@ -304,14 +304,6 @@ fn canonical_existing(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 
-/// The layer's role as text, for the overwrite refusal.
-const fn role_label(role: LayerRole) -> &'static str {
-    match role {
-        LayerRole::Iwad => "IWAD",
-        LayerRole::Resource => "resource",
-    }
-}
-
 /// Refuse to overwrite the file one of the session's read-only layers reads
 /// from, compared by canonical path whenever the target exists.
 ///
@@ -329,7 +321,7 @@ fn ensure_not_layer_file(session: &Session, target: &Path) -> Result<(), CyberEr
             return Err(CyberError::Conflict(format!(
                 "{} is the session's {} layer at {}; pass a different path",
                 target.display(),
-                role_label(layer.role),
+                layer.role.label(),
                 layer.path.display(),
             )));
         }

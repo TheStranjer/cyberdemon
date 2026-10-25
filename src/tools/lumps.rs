@@ -7,8 +7,8 @@
 //! [`Cyberdemon::remove_lump`], [`Cyberdemon::rename_lump`] and
 //! [`Cyberdemon::reorder_lumps`].
 //!
-//! This file keeps what the group shares: the limits, the [`reported`]
-//! wrapper and the router. Each tool's own arguments, reports and work live
+//! This file keeps what the group shares: the limits, the [`reply`] handoff
+//! and the router. Each tool's own arguments, reports and work live
 //! beside them - [`list`] is the browsing pair, built on the shared rows in
 //! [`rows`] and the filters in [`parse`], [`get`] is the one-lump read on the
 //! shared selector in [`select`], [`extract`] is the same selector writing
@@ -18,7 +18,7 @@
 //!
 //! The scope, namespace, kind and limit parsers stay reachable through this
 //! module, which is how [`select`], [`place`] and [`edit`] keep calling
-//! `super::parse_scope` and friends.
+//! their shared parsers.
 
 mod add;
 mod edit;
@@ -34,9 +34,7 @@ pub(in crate::tools) mod select;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
-use serde::Serialize;
 
-use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::tools::lumps::add::{AddLumpParams, ImportParams, commit, imported, plan_add};
 use crate::tools::lumps::edit::{RemoveLumpParams, RenameLumpParams, ReplaceLumpParams};
@@ -47,9 +45,9 @@ use crate::tools::lumps::get::{GetLumpParams, deliver, parse_get_options, run_ge
 use crate::tools::lumps::list::{
     ListLumpsParams, SearchLumpsParams, list_run, parse_listing, parse_search, search_run,
 };
-use crate::tools::lumps::parse::{hex_bytes, parse_namespace, parse_scope};
+use crate::tools::lumps::parse::{hex_bytes, parse_namespace};
 use crate::tools::lumps::reorder::ReorderLumpsParams;
-use crate::tools::{fail, ok};
+use crate::tools::{fail, ok, reply};
 use crate::wad::archive::write_file_atomic;
 
 /// Default page size for both tools.
@@ -64,17 +62,6 @@ const MAX_HEX_LENGTH: usize = 4_096;
 const HEX_PREVIEW_BYTES: usize = 64;
 /// Default character cap for a `get_lump` `text` body.
 const DEFAULT_MAX_CHARS: usize = 100_000;
-
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -97,7 +84,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| list_run(session, &listing));
-        reported(report)
+        reply(report)
     }
 
     /// Searches a scope's directory by name, type, namespace or content.
@@ -115,7 +102,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| search_run(session, scope, limit, &search));
-        reported(report)
+        reply(report)
     }
 
     /// Reads one lump through the shared selector.
@@ -137,10 +124,7 @@ impl Cyberdemon {
             Ok(outcome) => outcome,
             Err(error) => return fail(&error),
         };
-        match deliver(self.state(), outcome) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(deliver(self.state(), outcome))
     }
 
     /// Writes one lump's raw bytes to a file.
@@ -183,10 +167,7 @@ impl Cyberdemon {
             Ok(pending) => pending,
             Err(error) => return fail(&error),
         };
-        match commit(self.state(), pending).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(commit(self.state(), pending).await)
     }
 
     /// Fetches a source and inserts its bytes as a new lump.
@@ -219,10 +200,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ReplaceLumpParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match edit::replace_lump(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(edit::replace_lump(self.state(), &args).await)
     }
 
     /// Removes lumps from the working archive, all or nothing.
@@ -236,7 +214,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| edit::remove_lump(session, &args));
-        reported(report)
+        reply(report)
     }
 
     /// Renames one lump of the working archive.
@@ -250,7 +228,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| edit::rename_lump(session, &args));
-        reported(report)
+        reply(report)
     }
 
     /// Moves a contiguous run of lumps within the working archive.
@@ -264,7 +242,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| reorder::reorder_lumps(session, &args));
-        reported(report)
+        reply(report)
     }
 }
 

@@ -29,7 +29,7 @@ use crate::server::Cyberdemon;
 use crate::session::{Scope, Session, Source};
 use crate::state::AppState;
 use crate::tools::maps::common::Directory;
-use crate::tools::{fail, ok};
+use crate::tools::{fail, reply};
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpKind, MapBlock, MapFormat};
 use crate::wad::map::read_map;
@@ -254,15 +254,6 @@ pub(crate) fn write_block(
     lumps: Vec<Lump>,
 ) -> Result<(), CyberError> {
     manage::append_block(wad, name, replace, lumps)
-}
-
-/// The accepted `scope` text, the merged view being the default.
-///
-/// # Errors
-///
-/// [`Scope::parse`]'s [`CyberError::InvalidArgument`] for any other name.
-fn parse_scope(text: Option<&str>) -> Result<Scope, CyberError> {
-    text.map_or(Ok(Scope::Merged), Scope::parse)
 }
 
 /// One map block as [`Cyberdemon::list_maps`] reports it.
@@ -521,17 +512,6 @@ fn set_active_run(
     })
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -546,11 +526,11 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ListMapsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let scope = match parse_scope(args.scope.as_deref()) {
+        let scope = match Scope::parse_or_merged(args.scope.as_deref()) {
             Ok(scope) => scope,
             Err(error) => return fail(&error),
         };
-        reported(
+        reply(
             self.state()
                 .with_session(|session| list_run(session, scope)),
         )
@@ -564,7 +544,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetMapLumpsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let scope = match parse_scope(args.scope.as_deref()) {
+        let scope = match Scope::parse_or_merged(args.scope.as_deref()) {
             Ok(scope) => scope,
             Err(error) => return fail(&error),
         };
@@ -575,7 +555,7 @@ impl Cyberdemon {
             Ok(plan) => plan,
             Err(error) => return fail(&error),
         };
-        reported(deliver(self.state(), plan))
+        reply(deliver(self.state(), plan))
     }
 
     /// Summarizes one map cheaply: counts, bounds, heights and node state.
@@ -586,11 +566,11 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetMapSummaryParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let scope = match parse_scope(args.scope.as_deref()) {
+        let scope = match Scope::parse_or_merged(args.scope.as_deref()) {
             Ok(scope) => scope,
             Err(error) => return fail(&error),
         };
-        reported(
+        reply(
             self.state()
                 .with_session(|session| summary_run(session, args.map.as_deref(), scope)),
         )
@@ -604,7 +584,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AssembleMapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let scope = match parse_scope(args.scope.as_deref()) {
+        let scope = match Scope::parse_or_merged(args.scope.as_deref()) {
             Ok(scope) => scope,
             Err(error) => return fail(&error),
         };
@@ -624,7 +604,7 @@ impl Cyberdemon {
             Ok(plan) => plan,
             Err(error) => return fail(&error),
         };
-        reported(plan.finish(self.state(), limit))
+        reply(plan.finish(self.state(), limit))
     }
 
     /// Selects or clears the map the map tools default to.
@@ -635,7 +615,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SetActiveMapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| set_active_run(session, args.map.as_deref())),
         )
@@ -656,7 +636,7 @@ impl Cyberdemon {
         let outcome: Result<manage::CreateReport, CyberError> = self
             .state()
             .with_session(|session| manage::create_run(session, plan));
-        reported(outcome)
+        reply(outcome)
     }
 
     /// Copies a scope's map block into the working archive under a new name.
@@ -674,7 +654,7 @@ impl Cyberdemon {
         let outcome: Result<manage::CopyReport, CyberError> = self
             .state()
             .with_session(|session| manage::copy_run(session, &plan));
-        reported(outcome)
+        reply(outcome)
     }
 
     /// Renames a working-archive map block in place.
@@ -691,7 +671,7 @@ impl Cyberdemon {
                 let to = LumpName::parse(&args.to)?;
                 manage::rename_run(session, from, to)
             });
-        reported(outcome)
+        reply(outcome)
     }
 
     /// Removes a map block (and its GL run) from the working archive.
@@ -707,14 +687,14 @@ impl Cyberdemon {
                 let name = LumpName::parse(&args.name)?;
                 manage::remove_run(session, name)
             });
-        reported(outcome)
+        reply(outcome)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_scope, set_active_run};
-    use crate::session::{Layer, LayerRole, Scope, Session};
+    use super::set_active_run;
+    use crate::session::{Layer, LayerRole, Session};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::name::LumpName;
     use std::path::PathBuf;
@@ -741,17 +721,6 @@ mod tests {
             },
         ));
         session
-    }
-
-    #[test]
-    fn parse_scope_defaults_to_the_merged_view() {
-        assert_eq!(parse_scope(None).expect("absent"), Scope::Merged);
-        assert_eq!(
-            parse_scope(Some("working")).expect("working"),
-            Scope::Working
-        );
-        let error = parse_scope(Some("nope")).expect_err("not a scope");
-        assert_eq!(error.code(), "invalid_argument", "bad scope code");
     }
 
     #[test]

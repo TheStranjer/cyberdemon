@@ -21,7 +21,7 @@
 //! itself). This root keeps what the four families share:
 //! [`UNSAVED_WORKING`], the helpers they read paths, archives, the session
 //! and the result channel through ([`path_text`], [`read_archive`],
-//! [`open_error`], [`ensure_clean`], [`chronological`] and [`reported`]) and
+//! [`read_archive_at`], [`ensure_clean`] and [`chronological`]) and
 //! the `#[tool_router]` block that hands every tool to its family's run. The
 //! group's unit tests live in `session/tests.rs`.
 
@@ -35,11 +35,11 @@ use std::path::{Path, PathBuf};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
-use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::Session;
+use crate::tools::reply;
 use crate::tools::session::info::{describe_session, describe_wad};
 use crate::tools::session::merge_save::{
     MergeWadParams, SaveWadParams, merge_wad_report, save_wad_report,
@@ -48,14 +48,14 @@ use crate::tools::session::open::{
     NewWadParams, OpenIwadParams, OpenWadParams, new_wad_report, open_iwad_report, open_wad_report,
 };
 use crate::tools::session::undo::{RedoParams, UndoParams, parse_steps, redo_run, undo_run};
-use crate::tools::{fail, ok};
 use crate::wad::archive::Wad;
 
 /// The placeholder the `pwads` list shows for an unsaved working archive.
 const UNSAVED_WORKING: &str = "(unsaved working archive)";
 
-/// A path as report text.
-fn path_text(path: &Path) -> String {
+/// A path as report text, shared by every tool that quotes a path in a
+/// report or a refusal.
+pub(in crate::tools) fn path_text(path: &Path) -> String {
     path.display().to_string()
 }
 
@@ -67,15 +67,26 @@ fn path_text(path: &Path) -> String {
 /// [`CyberError::NotFound`] for a missing file, [`CyberError::Io`] for any
 /// other read failure and whatever [`Wad::read_file`] reports for contents
 /// that are not a valid `WAD`.
-fn read_archive(text: &str) -> Result<(PathBuf, Wad), CyberError> {
+pub(in crate::tools) fn read_archive(text: &str) -> Result<(PathBuf, Wad), CyberError> {
     let path = Path::new(text);
     if !path.is_absolute() {
         return Err(CyberError::InvalidArgument(format!(
             "path {text:?} is not absolute; pass the full filesystem path of the WAD file"
         )));
     }
-    let wad = Wad::read_file(path).map_err(|error| open_error(path, error))?;
+    let wad = read_archive_at(path)?;
     Ok((path.to_path_buf(), wad))
+}
+
+/// Read the archive at `path`, mapping a missing file to `not_found`.
+///
+/// # Errors
+///
+/// [`read_archive_at`]'s [`CyberError::NotFound`] / [`CyberError::Io`] and
+/// whatever [`Wad::read_file`] reports for contents that are not a valid
+/// `WAD`.
+pub(in crate::tools) fn read_archive_at(path: &Path) -> Result<Wad, CyberError> {
+    Wad::read_file(path).map_err(|error| open_error(path, error))
 }
 
 /// A failed archive read: a missing file is `not_found`, other I/O stays as
@@ -112,17 +123,6 @@ fn chronological(labels: Vec<&str>) -> Vec<String> {
     labels.into_iter().rev().map(str::to_owned).collect()
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -137,7 +137,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<OpenIwadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(open_iwad_report(self.state(), &args.path))
+        reply(open_iwad_report(self.state(), &args.path))
     }
 
     /// Opens a file as the editable working archive.
@@ -148,7 +148,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<OpenWadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(open_wad_report(
+        reply(open_wad_report(
             self.state(),
             &args.path,
             args.discard_changes,
@@ -163,7 +163,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<NewWadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(new_wad_report(self.state(), args.discard_changes))
+        reply(new_wad_report(self.state(), args.discard_changes))
     }
 
     /// Merges a file in as a resource layer or into the working archive.
@@ -174,7 +174,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<MergeWadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(merge_wad_report(
+        reply(merge_wad_report(
             self.state(),
             &args.path,
             args.mode.as_deref(),
@@ -189,7 +189,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SaveWadParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(save_wad_report(self.state(), &args))
+        reply(save_wad_report(self.state(), &args))
     }
 
     /// Describes the session's archives, history and state.
@@ -200,7 +200,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| Ok(describe_session(session)));
-        reported(report)
+        reply(report)
     }
 
     /// Summarizes the merged view an engine would load.
@@ -211,7 +211,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| Ok(describe_wad(session)));
-        reported(report)
+        reply(report)
     }
 
     /// Steps back over recent edits of the working archive.
@@ -223,7 +223,7 @@ impl Cyberdemon {
             self.state()
                 .with_session(|session| undo_run(session, steps))
         });
-        reported(outcome)
+        reply(outcome)
     }
 
     /// Replays recently undone edits onto the working archive.
@@ -235,7 +235,7 @@ impl Cyberdemon {
             self.state()
                 .with_session(|session| redo_run(session, steps))
         });
-        reported(outcome)
+        reply(outcome)
     }
 }
 

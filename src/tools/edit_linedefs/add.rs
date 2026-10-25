@@ -28,10 +28,10 @@ use crate::wad::map::{FlagKind, Linedef, Map, Sidedef};
 
 use super::edit::edit_row;
 use super::endpoints::{EndpointSpec, Ends, endpoint_spec, place_endpoints};
-use super::remove::PointParam;
 use super::{
     LinedefDetail, ZERO_ARGS, check_binary_offsets, check_line, default_line_flags, new_texture,
 };
+use crate::tools::maps::params::PointParam;
 
 /// Arguments for [`Cyberdemon::add_linedef`].
 #[derive(Debug, Deserialize, JsonSchema)]

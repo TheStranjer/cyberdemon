@@ -17,8 +17,8 @@ use crate::tools::maps::params::check_index;
 use crate::wad::map::{Map, Vertex};
 
 use super::add::AddLinedefParams;
-use super::remove::PointParam;
 use super::{check_binary_coords, find_vertex};
+use crate::tools::maps::params::PointParam;
 
 /// The two endpoint forms of an [`Cyberdemon::add_linedef`] call, checked
 /// to be exactly one of them.

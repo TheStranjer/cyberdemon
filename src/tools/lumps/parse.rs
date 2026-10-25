@@ -5,28 +5,17 @@
 //! Each one is a pure function of the wire text, so every tool can refuse a
 //! bad argument before it takes a session lock. [`crate::tools::lumps::list`]
 //! and [`crate::tools::lumps::get`] import what their own tools parse; the
-//! three names [`crate::tools::lumps::select`],
+//! two names [`crate::tools::lumps::select`],
 //! [`crate::tools::lumps::place`] and [`crate::tools::lumps::edit`] parse
 //! with stay re-exported from the group's root, so their
-//! `crate::tools::lumps::parse_namespace` and `super::parse_scope` imports
-//! keep working.
+//! `crate::tools::lumps::parse_namespace` imports keep working. Scope names
+//! come from [`Scope::parse_or_merged`] and page sizes from
+//! [`crate::tools::parse_limit`].
 
 use crate::error::CyberError;
-use crate::session::Scope;
 use crate::tools::lumps::list::parse_pair;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
-
-use super::{DEFAULT_LIMIT, MAX_LIMIT};
-
-/// The accepted `scope` text, the merged view being the default.
-///
-/// # Errors
-///
-/// [`Scope::parse`]'s [`CyberError::InvalidArgument`] for any other name.
-pub(super) fn parse_scope(text: Option<&str>) -> Result<Scope, CyberError> {
-    text.map_or(Ok(Scope::Merged), Scope::parse)
-}
 
 /// Every `Namespace` name, for error hints.
 pub(super) fn namespace_names() -> String {
@@ -90,24 +79,6 @@ pub(super) fn parse_kind(text: Option<&str>) -> Result<Option<LumpKind>, CyberEr
 /// not 1 to 8 printable `ASCII` characters.
 pub(super) fn parse_map(text: Option<&str>) -> Result<Option<LumpName>, CyberError> {
     text.map(LumpName::parse).transpose()
-}
-
-/// The page size to apply, the default being [`DEFAULT_LIMIT`].
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for `0` or anything above
-/// [`MAX_LIMIT`].
-pub(super) fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
-    let Some(limit) = value else {
-        return Ok(DEFAULT_LIMIT);
-    };
-    if limit == 0 || limit > MAX_LIMIT {
-        return Err(CyberError::InvalidArgument(format!(
-            "limit {limit} is out of range: pass a value between 1 and {MAX_LIMIT}"
-        )));
-    }
-    Ok(limit)
 }
 
 /// The needle bytes of a `contains_hex` string: hex digits in pairs, with

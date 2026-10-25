@@ -26,7 +26,7 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::lumps::select::{LumpSelector, resolve};
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::name::{LumpName, MAX_NAME_LEN};
 
@@ -417,10 +417,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ImportMusicParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match import(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(import(self.state(), &args).await)
     }
 
     /// Publishes one music lump as a playable MIDI or original-file asset.
@@ -431,10 +428,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<PreviewMusicParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match preview(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(preview(self.state(), &args))
     }
 }
 

@@ -18,7 +18,7 @@ use crate::tools::lumps::rows::build_rows;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
-use super::{Page, TextureSet, page_rows, passes};
+use super::{Page, TextureSet, passes};
 
 /// Arguments for [`Cyberdemon::list_textures`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -113,7 +113,7 @@ pub(super) fn list_textures_run(
         .into_iter()
         .filter(|row| passes(&row.name, pattern))
         .collect();
-    let (total, textures) = page_rows(matched, page);
+    let (total, textures) = page.take(matched);
     Ok(TexturesReport { total, textures })
 }
 
@@ -140,7 +140,7 @@ pub(super) fn list_pnames_run(
             name: entry.clone(),
         })
         .collect();
-    let (total, pnames) = page_rows(matched, page);
+    let (total, pnames) = page.take(matched);
     Ok(PnamesReport { total, pnames })
 }
 

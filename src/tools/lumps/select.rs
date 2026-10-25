@@ -50,7 +50,7 @@ pub(in crate::tools) fn resolve(
     selector: &LumpSelector,
 ) -> Result<LumpRow, CyberError> {
     let name = LumpName::parse(&selector.name)?;
-    let scope = super::parse_scope(selector.scope.as_deref())?;
+    let scope = Scope::parse_or_merged(selector.scope.as_deref())?;
     let namespace = super::parse_namespace(selector.namespace.as_deref())?;
     let matched: Vec<LumpRow> = build_rows(session, scope)?
         .into_iter()
@@ -76,36 +76,25 @@ fn choose(
 ) -> Result<LumpRow, CyberError> {
     let count = matched.len();
     let Some(last) = count.checked_sub(1) else {
-        return Err(CyberError::NotFound(format!(
-            "lump {name} not found in {scope}",
-            scope = scope_label(scope)
-        ))
-        .with_hint("search_lumps finds lumps by pattern"));
+        return Err(
+            CyberError::NotFound(format!("lump {name} not found in {scope}"))
+                .with_hint("search_lumps finds lumps by pattern"),
+        );
     };
     let wanted = occurrence.unwrap_or(last);
     matched.into_iter().nth(wanted).ok_or_else(|| {
         CyberError::NotFound(format!(
             "only {count} lumps named {name} in {scope}: occurrence {wanted} is out of range \
-             (0 to {last})",
-            scope = scope_label(scope)
+             (0 to {last})"
         ))
     })
-}
-
-/// The scope's name as text, for selector error messages.
-fn scope_label(scope: Scope) -> String {
-    match scope {
-        Scope::Merged => "merged".to_owned(),
-        Scope::Working => "working".to_owned(),
-        Scope::Layer(index) => format!("layer:{index}"),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{LumpSelector, resolve, scope_label};
+    use super::{LumpSelector, resolve};
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::wad::archive::{Lump, Wad, WadKind};
@@ -271,12 +260,12 @@ mod tests {
 
     #[test]
     fn scope_labels_name_every_archive() {
-        assert_eq!(scope_label(Scope::Merged), "merged", "the merged view");
+        assert_eq!(Scope::Merged.to_string(), "merged", "the merged view");
         assert_eq!(
-            scope_label(Scope::Working),
+            Scope::Working.to_string(),
             "working",
             "the editable archive"
         );
-        assert_eq!(scope_label(Scope::Layer(2)), "layer:2", "a layer index");
+        assert_eq!(Scope::Layer(2).to_string(), "layer:2", "a layer index");
     }
 }

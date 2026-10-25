@@ -37,7 +37,7 @@ use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::music::music_to_playable;
 use crate::tools::palette::{load_palette, swatch_image};
 use crate::tools::textures::TextureSet;
-use crate::tools::{fail, ok};
+use crate::tools::{fail, reply};
 use crate::wad::classify::{LumpKind, Namespace, is_doom_patch};
 use crate::wad::name::LumpName;
 
@@ -653,10 +653,7 @@ impl Cyberdemon {
                 max_asset_bytes: MAX_ASSET_BYTES,
             })
         });
-        match info {
-            Ok(value) => ok(&value),
-            Err(error) => fail(&error),
-        }
+        reply(info)
     }
 
     /// Resizes the asset store at runtime.
@@ -674,10 +671,7 @@ impl Cyberdemon {
                 evicted,
             })
         });
-        match report {
-            Ok(value) => ok(&value),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Publishes any viewable or playable session resource as one asset.
@@ -688,10 +682,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetAssetUrlParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match run(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(run(self.state(), &args))
     }
 }
 

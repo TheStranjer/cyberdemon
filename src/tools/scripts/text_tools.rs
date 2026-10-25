@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::CyberError;
 use crate::session::{MergedLump, Session};
 use crate::state::AppState;
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::archive::Lump;
 use crate::wad::name::LumpName;
 
@@ -196,8 +196,5 @@ pub(super) fn run_text_tool(
 ) -> Result<CallToolResult, ErrorData> {
     let outcome = text_lump_name(tool, lump)
         .and_then(|name| state.with_session(|session| text_edit_run(session, tool, name, op)));
-    match outcome {
-        Ok(found) => ok(&found),
-        Err(error) => fail(&error),
-    }
+    reply(outcome)
 }

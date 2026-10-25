@@ -220,6 +220,91 @@ fn game_falls_back_to_the_merged_view_without_an_iwad() {
 }
 
 #[test]
+fn effective_game_falls_back_to_doom_ii_only_when_unidentified() {
+    assert_eq!(
+        Session::default().effective_game(),
+        Game::Doom2,
+        "no archives: DOOM II rows"
+    );
+    let mut session = Session::default();
+    session.set_iwad(layer(LayerRole::Iwad, "plain", vec![marker("PLAYPAL")]));
+    assert_eq!(
+        session.effective_game(),
+        Game::Doom2,
+        "an unidentifiable IWAD also stands for DOOM II"
+    );
+    session.set_iwad(layer(
+        LayerRole::Iwad,
+        "hexen",
+        vec![marker("TITLE"), marker("WINNOWR")],
+    ));
+    assert_eq!(
+        session.effective_game(),
+        Game::Hexen,
+        "a detected game wins"
+    );
+}
+
+#[test]
+fn custom_sources_returns_the_merged_texts_and_the_include_notes() {
+    let mut session = Session::default();
+    session.set_iwad(layer(
+        LayerRole::Iwad,
+        "base",
+        vec![
+            marker("PLAYPAL"),
+            crate::wad::archive::Lump::new(
+                name("DECORATE"),
+                b"#include \"MISSING\"\nactor SessionTest 9101 { }".to_vec(),
+            ),
+        ],
+    ));
+    let (texts, notes) = session.custom_sources().expect("the merged scope lists");
+    assert_eq!(texts.decorate.len(), 1, "the DECORATE text");
+    assert_eq!(notes.len(), 1, "the missing include is noted: {notes:?}");
+    assert!(
+        notes
+            .first()
+            .expect("one note")
+            .contains("not in the merged view"),
+        "the note says what is missing: {notes:?}"
+    );
+    assert_eq!(session.effective_game(), Game::Doom2, "an unnamed base");
+}
+
+#[test]
+fn definitions_overlay_the_merged_custom_sources_on_the_effective_game() {
+    let mut session = Session::default();
+    session.set_iwad(layer(
+        LayerRole::Iwad,
+        "doom2.wad",
+        vec![
+            marker("MAP01"),
+            crate::wad::archive::Lump::new(
+                name("DECORATE"),
+                b"actor SessionTest 9101 { }".to_vec(),
+            ),
+        ],
+    ));
+    let defs = session.definitions().expect("the overlay parses");
+    let row = defs
+        .things
+        .iter()
+        .find(|def| def.kind == 9101)
+        .expect("the DECORATE thing");
+    assert_eq!(row.name, "SessionTest", "the custom name reads through");
+    assert_eq!(row.source, "decorate", "the row carries its source");
+}
+
+#[test]
+fn layer_role_labels_are_the_documented_words() {
+    assert_eq!(LayerRole::Iwad.as_str(), "iwad", "the wire word");
+    assert_eq!(LayerRole::Resource.as_str(), "resource", "the wire word");
+    assert_eq!(LayerRole::Iwad.label(), "IWAD", "the message label");
+    assert_eq!(LayerRole::Resource.label(), "resource", "the message label");
+}
+
+#[test]
 fn copy_map_to_working_brings_a_layer_map_into_the_working_archive() {
     let mut session = loaded();
     let copied = session

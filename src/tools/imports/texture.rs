@@ -51,9 +51,8 @@ use crate::error::CyberError;
 use crate::gfx::ops::FitMode;
 use crate::state::AppState;
 use crate::themes::Role;
-use crate::tools::fail;
 use crate::tools::imports::processed::ProcessParams;
-use crate::tools::ok;
+use crate::tools::reply;
 use crate::tools::textures::checked_name;
 use crate::wad::name::LumpName;
 
@@ -223,10 +222,7 @@ pub(in crate::tools) async fn create_texture_run(
     state: &AppState,
     args: &CreateTextureParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match create_texture_build(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(create_texture_build(state, args).await)
 }
 
 /// The measured body of [`create_texture_run`].

@@ -19,11 +19,12 @@ use crate::gfx::ops::{Filter, pixel_at, rounded_div};
 use crate::gfx::{BYTES_PER_PIXEL, pixel_index};
 use crate::plan::Units;
 use crate::sketch::{Analysis, AnalyzeOptions, InkMode, VectorizeOptions, Vectorized, vectorize};
+use crate::tools::parse_limit;
 use crate::tools::plan::params::UnitsParam;
 
 use super::{
     CropParams, DEFAULT_MAX_ROWS, DEFAULT_MAX_SIZE, InkParams, MAX_MAX_ROWS, MAX_MAX_SIZE,
-    MIN_MAX_ROWS, MIN_MAX_SIZE, PixelBox, TraceSketchParams, XY,
+    MIN_MAX_SIZE, PixelBox, TraceSketchParams, XY,
 };
 
 /// The validated request: parameter texts resolved into engine values.
@@ -249,14 +250,13 @@ pub(super) fn parse_request(args: &TraceSketchParams) -> Result<Request, CyberEr
 /// [`CyberError::InvalidArgument`] naming `name` for a value outside the
 /// range, pointing at `verbose` for every row.
 pub(super) fn parse_cap(name: &str, value: Option<usize>) -> Result<usize, CyberError> {
-    let cap = value.unwrap_or(DEFAULT_MAX_ROWS);
-    if (MIN_MAX_ROWS..=MAX_MAX_ROWS).contains(&cap) {
-        return Ok(cap);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {cap} is out of range: pass a value between {MIN_MAX_ROWS} and {MAX_MAX_ROWS}, \
-         or verbose: true for every row"
-    )))
+    parse_limit(value, DEFAULT_MAX_ROWS, MAX_MAX_ROWS, name).map_err(|_ignored| {
+        CyberError::InvalidArgument(format!(
+            "{name} {} is out of range: pass a value between 1 and {MAX_MAX_ROWS}, or \
+             verbose: true for every row",
+            value.unwrap_or_default()
+        ))
+    })
 }
 
 /// The `max_size`: default `1024`, accepted `256..=4096`.
@@ -305,15 +305,7 @@ pub(super) fn parse_units(
     grid: i64,
 ) -> Result<Option<Units>, CyberError> {
     let given = requested.is_some();
-    let wire = requested.unwrap_or_default();
-    let units = Units {
-        scale_num: wire.scale_num,
-        scale_den: wire.scale_den,
-        origin_x: wire.origin_x,
-        origin_y: wire.origin_y,
-        grid,
-        flip_y: wire.flip_y,
-    };
+    let units = requested.unwrap_or_default().to_units(grid);
     units.check()?;
     Ok(given.then_some(units))
 }

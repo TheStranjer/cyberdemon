@@ -29,7 +29,7 @@ use serde_json::{Map as JsonMap, Value, json};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::history::HISTORY_LIMIT;
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 
 /// The largest number of steps one batch may hold.
 const MAX_STEPS: usize = 50;
@@ -534,10 +534,7 @@ impl Cyberdemon {
         Parameters(args): Parameters<RunBatchParams>,
         request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        match batch_run(self, args, request).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(batch_run(self, args, request).await)
     }
 }
 

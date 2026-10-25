@@ -15,7 +15,7 @@ use alloc::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::plan::CompiledPlan;
 use crate::plan::compile;
@@ -25,7 +25,6 @@ use crate::plan::things::{
 };
 use crate::plan::transform_plan;
 use crate::session::Session;
-use crate::tools::defs::collect;
 use crate::tools::maps::{parse_format, resolve_namespace, write_block};
 use crate::tools::nodes::{AllPlan, apply_all};
 use crate::tools::plan::params::{BuildPlanParams, KindSource, ThingRequest};
@@ -35,7 +34,6 @@ use crate::tools::plan::{
 };
 use crate::tools::validate::{Counts, resource_index, session_tables};
 use crate::wad::classify::MapFormat;
-use crate::wad::game::Game;
 use crate::wad::map::FlagFamily;
 use crate::wad::map::Map;
 use crate::wad::map::validate::{Issue, Outcome as ValidateOutcome, Severity, run as run_checks};
@@ -87,29 +85,6 @@ pub(super) fn with_plan_path(error: CyberError, args: &BuildPlanParams) -> Cyber
 pub(super) fn bounds_of(map: &Map) -> Option<PlanBounds> {
     map.bounds()
         .map(|(x1, y1, x2, y2)| PlanBounds { x1, y1, x2, y2 })
-}
-
-/// The definitions game a plan run reads: the session's detected game,
-/// with an unidentified session standing for DOOM II (as the validate
-/// and defs tools do).
-pub(super) fn plan_game(found: Game) -> Game {
-    if found == Game::Unknown {
-        return Game::Doom2;
-    }
-    found
-}
-
-/// The thing definitions `build_map_from_plan` resolves names against:
-/// the detected game's tables overlaid with the merged view's
-/// `DEHACKED`, `DECORATE`, `ZScript` and `MAPINFO` customs.
-///
-/// # Errors
-///
-/// [`collect::custom_sources`]' read errors and [`session_definitions`]'
-/// refusal for malformed embedded definition data.
-fn plan_definitions(session: &Session) -> Result<Definitions, CyberError> {
-    let (sources, _notes) = collect::custom_sources(session)?;
-    session_definitions(plan_game(session.game()), &sources)
 }
 
 /// The doomednum of a request row: its explicit `type`, the type its
@@ -382,7 +357,7 @@ pub(super) fn build_run(
     compiled.warnings.extend(theme.notes);
     let features = apply_features(&plan, &mut compiled, &theme.features)
         .map_err(|error| with_plan_path(error, args))?;
-    let definitions = plan_definitions(session)?;
+    let definitions = session.definitions()?;
     let things_placed = place_planned(&definitions, args, &mut compiled)?;
     compiled
         .warnings

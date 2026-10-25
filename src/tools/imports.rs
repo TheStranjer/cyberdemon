@@ -71,7 +71,6 @@ use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::create_flat::{
     CREATE_FLAT_TOOL_DESCRIPTION, CreateFlatParams, create_flat_run,
 };
@@ -92,7 +91,7 @@ use crate::tools::imports::sprite::{
 use crate::tools::imports::texture::{
     CREATE_TEXTURE_TOOL_DESCRIPTION, CreateTextureParams, create_texture_run,
 };
-use crate::tools::ok;
+use crate::tools::reply;
 use crate::wad::classify::Namespace;
 use crate::wad::lumps;
 use crate::wad::name::LumpName;
@@ -281,10 +280,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ImportRawParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match import_raw_run(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(import_raw_run(self.state(), &args).await)
     }
 
     /// Runs the image-processing pipeline and publishes the result.

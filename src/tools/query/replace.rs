@@ -54,7 +54,7 @@ pub use apply::{
     ApplyOptions, MapReplaceRun, ReplaceReport, Replacement, apply_to_maps, run_replacement,
 };
 pub use stock::{Stock, ThingRef, parse_terms, require_target};
-pub(in crate::tools) use stock::{require_defined_thing, resolve_thing_ref, thing_definitions};
+pub(in crate::tools) use stock::{require_defined_thing, resolve_thing_ref};
 
 use alloc::borrow::Cow;
 use alloc::format;

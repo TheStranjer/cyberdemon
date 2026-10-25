@@ -5,8 +5,8 @@
 //!
 //! [`find_run`] checks the row cap with [`parse_limit`] before the session
 //! is touched, reads the block and the session's definitions (custom
-//! `DECORATE`/`DEHACKED` things included) with [`load`], runs
-//! [`run_query`] and windows the ascending hits with [`page_hits`].
+//! `DECORATE`/`DEHACKED` things included) with [`common::load`], runs
+//! [`run_query`] and windows the ascending hits with [`Page::window`].
 //! [`rows`] summarises one page in the shape its kind documents:
 //! [`SectorRow`], [`LinedefRow`], [`SidedefRow`], [`ThingRow`] or
 //! [`VertexRow`] folded into [`Row`]; an index that left its own block
@@ -16,20 +16,16 @@
 //! three `replace_*` swaps and the machinery they share across maps are the
 //! `replace_tools` and public `replace` modules'.
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
-use crate::session::Scope;
 use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
-use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
+use crate::tools::{Page, parse_limit};
 use crate::wad::map::Map;
 use crate::wad::map::query::{ElementKind, Filter, Query, QueryContext, Within, run_query};
 
@@ -64,48 +60,6 @@ pub(super) struct FindElementsParams {
     /// fails with `invalid_argument`. `count` always totals everything.
     #[serde(default)]
     pub(super) limit: Option<usize>,
-}
-
-/// The row cap `limit` asks for, [`DEFAULT_LIMIT`] when unset.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for `0` or anything above [`MAX_LIMIT`].
-pub(super) fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
-    let Some(limit) = value else {
-        return Ok(DEFAULT_LIMIT);
-    };
-    if limit == 0 || limit > MAX_LIMIT {
-        return Err(CyberError::InvalidArgument(format!(
-            "limit {limit} is out of range: pass a value between 1 and {MAX_LIMIT}"
-        )));
-    }
-    Ok(limit)
-}
-
-/// The map and definitions one query reads, out of the session lock.
-struct Prepared {
-    /// The map to filter, from the merged view.
-    map: Map,
-    /// The session's definitions: custom `DECORATE`/`DEHACKED` things
-    /// included, exactly what `describe_map` names rows through.
-    defs: Definitions,
-}
-
-/// Read the query's inputs under the session lock.
-///
-/// # Errors
-///
-/// [`common::resolve_map_name`] and [`common::load_map`]'s errors, and the
-/// definition-collection errors of [`session_definitions`].
-fn load(state: &AppState, requested: Option<&str>) -> Result<Prepared, CyberError> {
-    state.with_session(|session| {
-        let name = common::resolve_map_name(session, requested)?;
-        let map = common::load_map(session, name, Scope::Merged)?;
-        let (sources, _notes) = custom_sources(session)?;
-        let defs = session_definitions(session_game(session), &sources)?;
-        Ok(Prepared { map, defs })
-    })
 }
 
 /// One compact sector summary beside its index.
@@ -307,34 +261,20 @@ pub(super) struct FindReport {
     next_offset: Option<usize>,
 }
 
-/// The `offset`/`limit` window over the ascending hit list: this page and
-/// the `next_offset` that continues it (`None` when nothing stayed behind).
-pub(super) fn page_hits(
-    hits: &[usize],
-    offset: usize,
-    limit: usize,
-) -> (Vec<usize>, Option<usize>) {
-    let start = offset.min(hits.len());
-    let stop = start.saturating_add(limit).min(hits.len());
-    let page = hits.get(start..stop).unwrap_or_default().to_vec();
-    let next = (stop < hits.len()).then(|| offset.saturating_add(page.len()));
-    (page, next)
-}
-
 /// `find_elements`' work: check the limit before the session is touched,
 /// read the map and the definitions under one lock, run the pure query and
 /// page its hits.
 ///
 /// # Errors
 ///
-/// [`parse_limit`]'s [`CyberError::InvalidArgument`], [`load`]'s errors and
+/// [`parse_limit`]'s [`CyberError::InvalidArgument`], [`common::load`]'s errors and
 /// [`run_query`]'s refusals for a bad field, op or value.
 pub(super) fn find_run(
     state: &AppState,
     args: &FindElementsParams,
 ) -> Result<FindReport, CyberError> {
-    let limit = parse_limit(args.limit)?;
-    let prepared = load(state, args.map.as_deref())?;
+    let limit = parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
+    let prepared = common::load(state, args.map.as_deref())?;
     let query = Query {
         kind: args.kind,
         r#where: args.r#where.clone(),
@@ -342,7 +282,7 @@ pub(super) fn find_run(
     };
     let ctx = QueryContext::new(prepared.map.flag_family(), &prepared.defs);
     let hits = run_query(&prepared.map, &ctx, &query)?;
-    let (page, next_offset) = page_hits(&hits, args.offset.unwrap_or(0), limit);
+    let (page, next_offset) = Page::new(args.offset.unwrap_or(0), limit).window(&hits);
     Ok(FindReport {
         kind: args.kind.as_str(),
         count: hits.len(),

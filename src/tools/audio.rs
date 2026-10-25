@@ -27,9 +27,8 @@ use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::lumps::select::{LumpSelector, resolve};
-use crate::tools::ok;
+use crate::tools::{parse_limit, reply};
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::LumpKind;
 use crate::wad::name::{LumpName, MAX_NAME_LEN};
@@ -183,16 +182,13 @@ fn parse_rate(value: Option<u32>) -> Result<u32, CyberError> {
 ///
 /// [`CyberError::InvalidArgument`] outside `1..=600`.
 fn parse_max_seconds(value: Option<u32>) -> Result<u32, CyberError> {
-    let Some(seconds) = value else {
-        return Ok(DEFAULT_MAX_SECONDS);
-    };
-    if seconds == 0 || seconds > MAX_MAX_SECONDS {
-        return Err(CyberError::InvalidArgument(format!(
-            "max_seconds {seconds} is outside 1..={MAX_MAX_SECONDS}; pass a cap in that range \
-             (decoding itself never returns more than 10 minutes of audio)"
-        )));
-    }
-    Ok(seconds)
+    parse_limit(value, DEFAULT_MAX_SECONDS, MAX_MAX_SECONDS, "max_seconds").map_err(|_ignored| {
+        CyberError::InvalidArgument(format!(
+            "max_seconds {} is outside 1..={MAX_MAX_SECONDS}; pass a cap in that range \
+             (decoding itself never returns more than 10 minutes of audio)",
+            value.unwrap_or_default()
+        ))
+    })
 }
 
 /// Validate [`Cyberdemon::import_sound`]'s arguments before any fetching.
@@ -587,10 +583,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ImportSoundParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match import(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(import(self.state(), &args).await)
     }
 
     /// Publishes one sound lump as a playable audio asset.
@@ -601,10 +594,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<PreviewSoundParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match preview(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(preview(self.state(), &args))
     }
 }
 

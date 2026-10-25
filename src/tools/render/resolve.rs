@@ -281,15 +281,7 @@ pub(super) fn resolve_opacity(requested: Option<u8>) -> Result<u8, CyberError> {
 /// The wire `units` object as an unsnapped [`Units`]: the render's grid is
 /// always `1`, snapping belongs to plan building, not to picture sampling.
 pub(super) fn to_overlay_units(requested: Option<UnitsParam>) -> Units {
-    let wire = requested.unwrap_or_default();
-    Units {
-        scale_num: wire.scale_num,
-        scale_den: wire.scale_den,
-        origin_x: wire.origin_x,
-        origin_y: wire.origin_y,
-        grid: 1_i64,
-        flip_y: wire.flip_y,
-    }
+    requested.unwrap_or_default().to_units(1_i64)
 }
 
 /// The enclosing map-space rectangle of an `image` under `units`: its four

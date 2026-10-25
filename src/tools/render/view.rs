@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::server::AssetRef;
-use crate::defs::{Definitions, ThingDef, session_definitions};
+use crate::defs::{Definitions, ThingDef};
 use crate::error::CyberError;
 use crate::fixed::{Angle, FRACBITS};
 use crate::gfx::codec::encode_png;
@@ -24,9 +24,7 @@ use crate::render::{
 };
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::resolve::load_sprite_cached;
-use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::wad::LumpName;
 use crate::wad::map::geometry;
@@ -339,8 +337,7 @@ fn load_view(state: &AppState, args: &RenderViewParams) -> Result<PreparedView, 
             fov: settings.fov,
         };
         let (sprites, sprite_problems) = if settings.show_sprites.is_on() {
-            let (sources, _notes) = custom_sources(session)?;
-            let defs = session_definitions(session_game(session), &sources)?;
+            let defs = session.definitions()?;
             view_sprites(session, &scene, &defs, &camera)
         } else {
             (Vec::new(), Vec::new())

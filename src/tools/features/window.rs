@@ -29,7 +29,7 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
+use crate::tools::maps::params::{PointParam, edit_result_fragment, validate_texture_name};
 use crate::tools::themes::theme_texture;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::DEFAULT_LINTEL;
@@ -42,8 +42,7 @@ use crate::wad::map::overlay::{self, Outside, OverlayRequest, Paint, WallTexture
 use crate::wad::map::{Map, Sector};
 
 use super::door::{
-    Chosen, DEFAULT_WIDTH, DoorPointParam, MAX_DEPTH, Target, point_of, require_wall_survives,
-    target_of,
+    Chosen, DEFAULT_WIDTH, MAX_DEPTH, Target, point_of, require_wall_survives, target_of,
 };
 use super::wall::{
     STRIP_THICKNESS, carve_strip, choose_wall, outward_normal, require_landing, strip_face_lost,
@@ -75,7 +74,7 @@ pub(super) struct AddWindowParams {
     /// centres on the wall's midpoint; `between` picks the shared line
     /// nearest here).
     #[serde(default)]
-    pub(super) at: Option<DoorPointParam>,
+    pub(super) at: Option<PointParam>,
     /// The window's opening width in map units (default 64).
     #[serde(default)]
     pub(super) width: Option<i32>,

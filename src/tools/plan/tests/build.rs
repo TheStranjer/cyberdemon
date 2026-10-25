@@ -9,7 +9,7 @@ use crate::plan::{FeatureLineEnds, FeatureRow};
 use crate::tools::plan::PlanTheme;
 use crate::tools::plan::VALIDATION_ERROR_CAP;
 use crate::tools::plan::build::{
-    ensure_player_start, finalize_nodes, plan_game, reporting, resolve_specs, validation_view,
+    ensure_player_start, finalize_nodes, reporting, resolve_specs, validation_view,
 };
 use crate::tools::plan::params::{KindSource, ThingRequest};
 use crate::wad::classify::MapFormat;
@@ -100,13 +100,6 @@ fn ensure_player_start_reads_resolved_kinds_not_wire_names() {
         ..monster.clone()
     };
     ensure_player_start(&[monster, start]).expect("the resolved type 1 satisfies the check");
-}
-
-#[test]
-fn an_unidentified_session_stands_for_doom_ii() {
-    assert_eq!(plan_game(Game::Unknown), Game::Doom2, "the fallback");
-    assert_eq!(plan_game(Game::Doom), Game::Doom, "a detected game stands");
-    assert_eq!(plan_game(Game::Hexen), Game::Hexen);
 }
 
 #[test]

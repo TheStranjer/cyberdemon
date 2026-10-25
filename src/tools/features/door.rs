@@ -35,7 +35,7 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{PointParam, edit_result_fragment};
 use crate::wad::map::features::{
     DoorSides, DoorStyle, DoorTextures, apply_door, door_specials, next_free_tag,
 };
@@ -75,7 +75,7 @@ pub(super) struct AddDoorParams {
     /// centres on the wall's midpoint; `between` picks the shared line
     /// nearest here).
     #[serde(default)]
-    pub(super) at: Option<DoorPointParam>,
+    pub(super) at: Option<PointParam>,
     /// The doorway's opening width in map units (default 64).
     #[serde(default)]
     pub(super) width: Option<i32>,
@@ -95,15 +95,6 @@ pub(super) struct AddDoorParams {
     /// coloured row for the locked styles).
     #[serde(default)]
     pub(super) track_texture: Option<String>,
-}
-
-/// One `at` point of the feature tools.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize, JsonSchema)]
-pub(super) struct DoorPointParam {
-    /// `X` coordinate in map units.
-    pub(super) x: i32,
-    /// `Y` coordinate in map units.
-    pub(super) y: i32,
 }
 
 /// The wall the parameters name, already checked for "exactly one".
@@ -299,7 +290,7 @@ pub(super) fn target_of(
 }
 
 /// The [`Point`] a wire parameter names.
-pub(super) const fn point_of(param: DoorPointParam) -> Point {
+pub(super) const fn point_of(param: PointParam) -> Point {
     Point {
         x: param.x,
         y: param.y,

@@ -1,10 +1,11 @@
 //! Shared wire types and validators for the map editing tools.
 //!
 //! The `flags` and index parameter shapes ([`FlagsInput`],
-//! [`IndexSelector`]), element bounds checking ([`check_index`]),
-//! texture-name validation ([`validate_texture_name`]) and the standard
-//! result fragment ([`edit_result_fragment`]) every edit tool merges into
-//! its structured content.
+//! [`IndexSelector`]), the one `{x, y}` map-unit point ([`PointParam`]),
+//! element bounds checking ([`check_index`]), texture-name validation
+//! ([`validate_texture_name`]) and the standard result fragment
+//! ([`edit_result_fragment`]) every edit tool merges into its structured
+//! content.
 //!
 //! These are the pieces the per-element editing tools (vertices, linedefs,
 //! sidedefs, sectors, things, ...) reuse so they stay thin wrappers around
@@ -102,6 +103,26 @@ impl IndexSelector {
     }
 }
 
+/// One `{x, y}` point parameter in map units: the endpoint form of an
+/// added or split linedef, a drawn loop's corner, a feature's `at` point,
+/// a transform `origin` and a minimap `center` are all this same shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+pub struct PointParam {
+    /// `X` coordinate in map units.
+    pub x: i32,
+    /// `Y` coordinate in map units.
+    pub y: i32,
+}
+
+impl PointParam {
+    /// The point as wide integers, for the math that runs in `i64`.
+    #[must_use]
+    #[inline]
+    pub fn to_wide(self) -> (i64, i64) {
+        (i64::from(self.x), i64::from(self.y))
+    }
+}
+
 /// Refuses an element `index` outside `0..len`.
 ///
 /// The message states the valid range `0..=N-1`; the hint names the tools
@@ -192,7 +213,8 @@ mod tests {
     use serde_json::{from_str, json};
 
     use super::{
-        FlagsInput, IndexSelector, check_index, edit_result_fragment, validate_texture_name,
+        FlagsInput, IndexSelector, PointParam, check_index, edit_result_fragment,
+        validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
     use crate::wad::classify::MapFormat;
@@ -290,6 +312,20 @@ mod tests {
         assert!(
             from_str::<IndexSelector>("\"3\"").is_err(),
             "a string is no index"
+        );
+    }
+
+    #[test]
+    fn point_params_read_xy_and_widen_for_i64_math() {
+        let point = from_str::<PointParam>(r#"{"x": -5, "y": 64}"#).expect("an object is a point");
+        assert_eq!((point.x, point.y), (-5_i32, 64_i32), "both coordinates");
+        assert_eq!(point.to_wide(), (-5_i64, 64_i64), "the wide form");
+        let round = PointParam { x: 8, y: -8 };
+        let copied = round;
+        assert_eq!(round, copied, "Copy and PartialEq round-trip");
+        assert!(
+            from_str::<PointParam>(r#"{"x": "0", "y": 1}"#).is_err(),
+            "a string is no coordinate"
         );
     }
 

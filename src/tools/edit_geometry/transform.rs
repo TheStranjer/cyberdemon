@@ -15,7 +15,7 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{PointParam, edit_result_fragment};
 use crate::wad::map::transform::{
     Operations, Point, Rotation, Scale, SelectionRequest, TransformReport, apply_transform,
     expand_selection,
@@ -85,22 +85,11 @@ pub(super) struct TranslateInput {
     dy: i32,
 }
 
-/// A bare `{x, y}` point parameter (`origin`).
-#[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct PointInput {
-    /// `X` in map units.
-    x: i32,
-    /// `Y` in map units.
-    y: i32,
-}
-
-impl From<&PointInput> for Point {
+impl From<&PointParam> for Point {
     #[inline]
-    fn from(input: &PointInput) -> Self {
-        Self {
-            x: i64::from(input.x),
-            y: i64::from(input.y),
-        }
+    fn from(input: &PointParam) -> Self {
+        let (x, y) = input.to_wide();
+        Self { x, y }
     }
 }
 
@@ -125,7 +114,7 @@ pub(super) struct TransformSelectionParams {
     /// The pivot of `scale` and `rotate`; defaults to the centre of the
     /// selection's bounding box, rounded to nearest.
     #[serde(default)]
-    pub(super) origin: Option<PointInput>,
+    pub(super) origin: Option<PointParam>,
 }
 
 /// Structured result of

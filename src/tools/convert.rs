@@ -23,7 +23,7 @@ use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::tools::maps::common;
-use crate::tools::{fail, ok};
+use crate::tools::{fail, reply};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::convert::{self, Conversion};
 use crate::wad::name::LumpName;
@@ -169,17 +169,6 @@ fn assembled(map: LumpName, target: &convert::Target, step: Step, dry_run: bool)
     }
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -199,7 +188,7 @@ impl Cyberdemon {
             Ok(target) => target,
             Err(error) => return fail(&error),
         };
-        reported(self.state().with_session(|session| {
+        reply(self.state().with_session(|session| {
             let name = common::resolve_map_name(session, args.map.as_deref())?;
             convert_run(session, name, &target, args.dry_run)
         }))

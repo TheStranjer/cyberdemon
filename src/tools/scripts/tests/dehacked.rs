@@ -10,7 +10,7 @@ use crate::tools::scripts::edit_dehacked::{
     Body, Draft, EditDehackedParams, Op, RemoveEntry, SetEntry, apply_ops, changed_against,
     edit_run, plan,
 };
-use crate::tools::scripts::{find_lump, lump_name, parse_scope};
+use crate::tools::scripts::{find_lump, lump_name};
 
 #[test]
 fn the_default_name_is_dehacked_and_bad_names_are_refused() {
@@ -28,14 +28,18 @@ fn the_default_name_is_dehacked_and_bad_names_are_refused() {
 
 #[test]
 fn scope_defaults_to_merged_and_refuses_other_names() {
-    assert_eq!(parse_scope(None).expect("default"), Scope::Merged, "merged");
     assert_eq!(
-        parse_scope(Some("working")).expect("working"),
+        Scope::parse_or_merged(None).expect("default"),
+        Scope::Merged,
+        "merged"
+    );
+    assert_eq!(
+        Scope::parse_or_merged(Some("working")).expect("working"),
         Scope::Working,
         "working"
     );
     assert_eq!(
-        code(&parse_scope(Some("nope")).expect_err("not a scope")),
+        code(&Scope::parse_or_merged(Some("nope")).expect_err("not a scope")),
         "invalid_argument",
         "bad scope code"
     );

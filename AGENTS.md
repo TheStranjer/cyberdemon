@@ -325,14 +325,17 @@ src/
   session.rs      The per-connection editing session: an optional IWAD layer and
                   read-only resource layers under one editable working archive,
                   the merged view, the layer-only `base_lumps` view, `Scope`
-                  reads, the `find`/`find_global` engine lookups and
-                  `Session::edit`: `LayerRole`, `Layer` and the one
-                  `impl Session` every tool reaches through, its read-view
-                  methods delegating to `session/views.rs`.
+                  reads, the `find`/`find_global` engine lookups, the
+                  `effective_game`/`custom_sources`/`definitions` reads every
+                  definition-asking tool shares and `Session::edit`:
+                  `LayerRole` (with its `as_str`/`label` words), `Layer` and
+                  the one `impl Session` every tool reaches through, its
+                  read-view methods delegating to `session/views.rs`.
   session/        Session building blocks (no MCP concerns):
                   `session/scope.rs` the origin and read-target types of those
                   archives (`Source`, `MergedLump` and `Scope` with the name
-                  parser behind `Scope::parse`),
+                  parsers behind `Scope::parse`/`parse_or_merged`/`accepts`
+                  and the `Display` wire label),
                   `session/merge.rs` folds one archive over another with vanilla
                   override rules (map blocks, namespaces, globals, last wins;
                   `merge_into` and `merge_counts` are the whole-archive forms)
@@ -351,7 +354,11 @@ src/
                   `session/views.rs` the bodies of the session's read views
                   (`merged`, `base_lumps`, `game`, `lumps_in` and `find`) as
                   free functions over a `&Session`, with the layer directory
-                  and lookup-match helpers they share, and
+                  and lookup-match helpers they share,
+                  `session/custom.rs` the merged-view collector behind
+                  `Session::custom_sources` (the `DEHACKED`/`DECORATE`/`ZSCRIPT`
+                  and `MAPINFO`/`ZMAPINFO` texts in load order, `#include`
+                  lumps followed depth-bounded, include problems as notes), and
                   `session/map_edit.rs` the single undoable step behind every
                   map edit tool (`Session::edit_map`: copy, typed edit, node
                   invalidation on geometry change, in-place block rewrite)
@@ -364,8 +371,8 @@ src/
                   `Scope` reads), `session/tests/history.rs` (labels, undo,
                   redo, dirty state, the cap and the batch marks) and
                   `session/tests/state.rs` (the active map, the render
-                  settings and theme, the layer-only view, game detection
-                  and the copy-on-write step).
+                  settings and theme, the layer-only view, game detection, the
+                  effective-game/definitions reads and the copy-on-write step).
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.
@@ -384,7 +391,9 @@ src/
                   engine (drawing-order wall chains, x offsets modulo the
                   texture width, y offsets pegged to the chain's highest
                   ceiling).
-  tools.rs        Shared result helpers (ok/fail) plus the tool group modules.
+  tools.rs        Shared result helpers (ok/fail/reply), the shared
+                  `parse_limit`/`Page` paging pair, `json_bytes` and the tool
+                  group modules.
   tools/          One module per tool group, each with its own #[tool_router];
                   Cyberdemon::router() in server.rs merges them. The group
                   modules are `tools/meta.rs`, `tools/assets.rs`,
@@ -403,8 +412,8 @@ src/
                   with shared machinery split it into submodules described
                   below, e.g. `tools/lumps.rs` with `lumps/rows.rs` (shared
                   directory rows), `lumps/select.rs` (the lump selector),
-                  `lumps/parse.rs` (the shared scope, namespace, kind, map,
-                  limit and hex argument parsers), `lumps/list.rs` (the
+                  `lumps/parse.rs` (the shared namespace, kind, map
+                  and hex argument parsers), `lumps/list.rs` (the
                   `list_lumps` and `search_lumps` arguments, criteria and
                   runs), `lumps/get.rs` (`get_lump`'s formats, bodies and
                   delivery), `lumps/extract.rs` (`extract_lump`'s target,
@@ -475,9 +484,8 @@ src/
                   parameters, report and runs), with that group's unit tests
                   in `scripts/tests.rs` plus `scripts/tests/dehacked.rs` (the
                   patch pair) and `scripts/tests/text.rs` (the script tools),
-                  `tools/defs.rs` with
-                  `defs/collect.rs` (gathering the session's custom
-                  definition texts), `tools/edit_things.rs` with
+                  `tools/defs.rs`, whose custom-definition gathering is the
+                  session's own `custom` module, `tools/edit_things.rs` with
                   `edit_things/edit.rs` (the `edit_thing` request, report,
                   flag plan and edit steps, whose unit tests are
                   `edit_things/tests.rs`),
@@ -573,10 +581,12 @@ src/
                   `resolve/tests/textures.rs`;
                   `tools/maps/common.rs` holds the shared `map`-parameter
                   resolvers (`resolve_map_name`, `load_map`) every map
-                  tool builds on, and `tools/maps/params.rs` the shared
+                  tool builds on, the one locked `load` of a merged-view map
+                  with the session's definitions (`Prepared`) the analysing
+                  tools share, and `tools/maps/params.rs` the shared
                   editing parameter types (`FlagsInput`, `IndexSelector`,
-                  `check_index`, `validate_texture_name`, `edit_result_fragment`)
-                  every map edit tool builds on; `tools/maps/manage.rs`
+                  `PointParam`, `check_index`, `validate_texture_name`,
+                  `edit_result_fragment`) every map edit tool builds on; `tools/maps/manage.rs`
                   the block-level machinery behind `create_map`,
                   `copy_map`, `rename_map` and `remove_map` (the plans,
                   the `GL` helpers and the block builders) on

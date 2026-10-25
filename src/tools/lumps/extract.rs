@@ -40,10 +40,9 @@ pub(super) struct ExtractReport {
     pub(super) bytes: usize,
 }
 
-/// A filesystem path as display text, for reports.
-pub(super) fn path_text(path: &Path) -> String {
-    path.display().to_string()
-}
+/// The shared path-as-text helper, re-exported at the group path the
+/// extract and `get_lump` rows import from.
+pub(super) use crate::tools::session::path_text;
 
 /// The destination of an `extract_lump` call: its `path` argument as a
 /// [`PathBuf`], which must be absolute.

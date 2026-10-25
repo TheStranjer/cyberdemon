@@ -25,13 +25,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::plan::things::resolve_thing_kind;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
-use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::tools::maps::params::edit_result_fragment;
 use crate::tools::query::replace::Stock;
@@ -280,8 +278,7 @@ pub(super) fn bulk_in_session(
     }
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let mut map = common::load_map(session, name, Scope::Merged)?;
-    let (sources, _notes) = custom_sources(session)?;
-    let defs = session_definitions(session_game(session), &sources)?;
+    let defs = session.definitions()?;
     let hits = selected(&map, &defs, args)?;
     let edits = resolve_thing_type(requested, args.kind, &defs)?;
     let stock = Stock::load(session)?;

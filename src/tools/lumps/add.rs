@@ -22,7 +22,7 @@ use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::lumps::parse::hex_bytes;
 use crate::tools::lumps::place::{self, Placement, PlacementParams, parse_placement};
-use crate::tools::{fail, ok};
+use crate::tools::{fail, reply};
 use crate::wad::archive::Lump;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
@@ -327,8 +327,5 @@ pub(super) async fn imported(
         Ok(pending) => pending,
         Err(error) => return fail(&error),
     };
-    match commit(state, pending).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(commit(state, pending).await)
 }

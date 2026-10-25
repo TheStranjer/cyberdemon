@@ -5,26 +5,35 @@
 use crate::session::Scope;
 use crate::tools::lumps::list::{Match, Needle, Search, find_needle, parse_pair};
 use crate::tools::lumps::parse::{
-    kind_names, namespace_names, parse_hex, parse_kind, parse_limit, parse_map, parse_namespace,
-    parse_scope,
+    kind_names, namespace_names, parse_hex, parse_kind, parse_map, parse_namespace,
 };
+use crate::tools::lumps::{DEFAULT_LIMIT, MAX_LIMIT};
+use crate::tools::parse_limit;
 use crate::wad::classify::{LumpKind, Namespace};
 
 use super::{code, glob_search, name, row};
 
 #[test]
 fn scope_defaults_to_merged_and_parses_every_form() {
-    assert_eq!(parse_scope(None).expect("default"), Scope::Merged);
     assert_eq!(
-        parse_scope(Some("working")).expect("working"),
+        Scope::parse_or_merged(None).expect("default"),
+        Scope::Merged
+    );
+    assert_eq!(
+        Scope::parse_or_merged(Some("working")).expect("working"),
         Scope::Working
     );
     assert_eq!(
-        parse_scope(Some("layer:1")).expect("layer"),
+        Scope::parse_or_merged(Some("layer:1")).expect("layer"),
         Scope::Layer(1)
     );
-    let error = parse_scope(Some("bogus")).expect_err("not a scope");
+    let error = Scope::parse_or_merged(Some("bogus")).expect_err("not a scope");
     assert_eq!(code(&error), "invalid_argument", "bad scope code");
+    assert_eq!(
+        Scope::Layer(2).to_string(),
+        "layer:2",
+        "the Display label round-trips"
+    );
 }
 
 #[test]
@@ -67,14 +76,23 @@ fn map_filter_parses_lump_names_strictly() {
 #[test]
 fn limit_defaults_and_stays_in_range() {
     assert_eq!(
-        parse_limit(None).expect("default"),
+        parse_limit(None, DEFAULT_LIMIT, MAX_LIMIT, "limit").expect("default"),
         200,
         "documented default"
     );
-    assert_eq!(parse_limit(Some(2000)).expect("max"), 2000, "the cap");
-    assert_eq!(parse_limit(Some(1)).expect("min"), 1, "the floor");
+    assert_eq!(
+        parse_limit(Some(2000), DEFAULT_LIMIT, MAX_LIMIT, "limit").expect("max"),
+        2000,
+        "the cap"
+    );
+    assert_eq!(
+        parse_limit(Some(1), DEFAULT_LIMIT, MAX_LIMIT, "limit").expect("min"),
+        1,
+        "the floor"
+    );
     for bad in [0_usize, 2001] {
-        let error = parse_limit(Some(bad)).expect_err("out of range");
+        let error =
+            parse_limit(Some(bad), DEFAULT_LIMIT, MAX_LIMIT, "limit").expect_err("out of range");
         assert_eq!(code(&error), "invalid_argument", "limit {bad} code");
     }
 }

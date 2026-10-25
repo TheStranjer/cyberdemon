@@ -23,8 +23,9 @@ use crate::wad::map::features::{
     build_walk_over_exit,
 };
 
-use super::door::{DoorPointParam, point_of};
+use super::door::point_of;
 use super::{current_map, invalid};
+use crate::tools::maps::params::PointParam;
 
 /// Arguments for [`Cyberdemon::add_switch`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -39,7 +40,7 @@ pub(super) struct AddSwitchParams {
     /// centres on the wall's midpoint; a point off the wall is projected
     /// onto it).
     #[serde(default)]
-    pub(super) at: Option<DoorPointParam>,
+    pub(super) at: Option<PointParam>,
     /// The switch face's width in map units (default 32).
     #[serde(default)]
     pub(super) width: Option<i32>,

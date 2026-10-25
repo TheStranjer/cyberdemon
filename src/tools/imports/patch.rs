@@ -19,12 +19,11 @@ use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, format_name};
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{
     ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched, build_patch, parse_import,
     put_lump,
 };
-use crate::tools::ok;
+use crate::tools::reply;
 use crate::wad::classify::Namespace;
 use crate::wad::lumps;
 use crate::wad::name::LumpName;
@@ -205,8 +204,5 @@ pub(super) async fn patch_imported(
     state: &AppState,
     args: &ImportPatchParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match import_patch_run(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(import_patch_run(state, args).await)
 }

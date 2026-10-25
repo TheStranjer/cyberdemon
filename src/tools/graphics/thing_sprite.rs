@@ -5,8 +5,8 @@
 //! [`ThingRequest`]: the same frame check `get_sprite` makes, with
 //! [`parse_thing_rotation`] refusing the all-angles `0` this tool does not
 //! serve. [`prepare_thing_sprite`] then looks the type up with
-//! [`thing_sprite_def`] over [`session_things`] - the built-in table of
-//! [`session_game`]'s game overlaid with the session's custom sources -
+//! [`thing_sprite_def`] over [`crate::session::Session::definitions`] -
+//! the built-in table of the session's game overlaid with its customs -
 //! resolves the rotation as `get_sprite` does and renders it, reporting a
 //! rotation no lump serves through [`missing_thing_sprite`].
 //! [`get_thing_sprite_run`] publishes that [`PreparedThing`] as its own
@@ -16,18 +16,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::server::AssetRef;
-use crate::defs::{CustomSources, Definitions, ThingDef, session_definitions};
+use crate::defs::ThingDef;
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::get::parse_frame;
 use crate::tools::graphics::picture::{
     ImageOptions, ImageParams, Rendered, publish_image, render_patch,
 };
 use crate::tools::graphics::resolve::load_sprite;
 use crate::tools::graphics::{DEFAULT_ROTATION, MAX_ROTATION};
-use crate::wad::game::Game;
 use crate::wad::name::LumpName;
 
 /// Arguments for [`Cyberdemon::get_thing_sprite`].
@@ -100,30 +98,6 @@ pub(super) fn parse_thing_rotation(value: Option<u8>) -> Result<u8, CyberError> 
     }
 }
 
-/// The game whose definition tables the session selects: the detected
-/// game, and DOOM II for an unidentified session, as `get_thing_types`
-/// defaults.
-pub(in crate::tools) fn session_game(session: &Session) -> Game {
-    let detected = session.game();
-    if detected == Game::Unknown {
-        Game::Doom2
-    } else {
-        detected
-    }
-}
-
-/// The session's thing definitions: the built-in tables of the session's
-/// game overlaid with the custom sources of the merged view.
-///
-/// # Errors
-///
-/// [`session_definitions`]' errors for the tables; collection errors for
-/// the merged scope.
-fn session_things(session: &Session) -> Result<Definitions, CyberError> {
-    let (sources, _notes): (CustomSources, Vec<String>) = custom_sources(session)?;
-    session_definitions(session_game(session), &sources)
-}
-
 /// The definition one `get_thing_sprite` call previews: a known type with
 /// a non-empty sprite.
 ///
@@ -132,16 +106,13 @@ fn session_things(session: &Session) -> Result<Definitions, CyberError> {
 /// [`CyberError::NotFound`] for a type the session definitions do not
 /// hold, and for a definition whose sprite is empty.
 pub(super) fn thing_sprite_def(session: &Session, kind: u32) -> Result<ThingDef, CyberError> {
-    let def = session_things(session)?
-        .thing(kind)
-        .cloned()
-        .ok_or_else(|| {
-            CyberError::NotFound(format!(
-                "no thing type {kind} in the session definitions; get_thing_types lists what the \
+    let def = session.definitions()?.thing(kind).cloned().ok_or_else(|| {
+        CyberError::NotFound(format!(
+            "no thing type {kind} in the session definitions; get_thing_types lists what the \
                  game has, and custom types need their archive loaded"
-            ))
-            .with_hint("get_thing_types with a search term")
-        })?;
+        ))
+        .with_hint("get_thing_types with a search term")
+    })?;
     if def.sprite.is_empty() {
         return Err(CyberError::NotFound(format!(
             "thing type {kind} has no sprite; get_thing_types shows which types define one"

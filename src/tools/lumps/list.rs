@@ -15,9 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::session::{Scope, Session};
-use crate::tools::lumps::parse::{
-    parse_hex, parse_kind, parse_limit, parse_map, parse_namespace, parse_scope,
-};
+use crate::tools::lumps::parse::{parse_hex, parse_kind, parse_map, parse_namespace};
+use crate::tools::parse_limit;
+
+use super::{DEFAULT_LIMIT, MAX_LIMIT};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
@@ -278,12 +279,12 @@ pub(super) struct SearchReport {
 /// `map` or `limit`.
 pub(super) fn parse_listing(args: &ListLumpsParams) -> Result<Listing, CyberError> {
     Ok(Listing {
-        scope: parse_scope(args.scope.as_deref())?,
+        scope: Scope::parse_or_merged(args.scope.as_deref())?,
         namespace: parse_namespace(args.namespace.as_deref())?,
         kind: parse_kind(args.kind.as_deref())?,
         map: parse_map(args.map.as_deref())?,
         offset: args.offset.unwrap_or(0_usize),
-        limit: parse_limit(args.limit)?,
+        limit: parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?,
     })
 }
 
@@ -334,8 +335,8 @@ pub(super) fn parse_search(args: &SearchLumpsParams) -> Result<(Scope, usize, Se
         ));
     }
     Ok((
-        parse_scope(args.scope.as_deref())?,
-        parse_limit(args.limit)?,
+        Scope::parse_or_merged(args.scope.as_deref())?,
+        parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?,
         search,
     ))
 }

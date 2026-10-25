@@ -22,9 +22,10 @@ use crate::wad::textures::{
 
 use super::redundant::{is_global, last_global};
 use super::{
-    Action, Context, Draft, NONE_FLAT, Operation, PNAMES_ENTRY_LEN, PNAMES_RAW, Rewrite,
-    TEXTURE1_RAW, TEXTURE2_RAW, Target,
+    Action, Context, Draft, Operation, PNAMES_ENTRY_LEN, PNAMES_RAW, Rewrite, TEXTURE1_RAW,
+    TEXTURE2_RAW, Target,
 };
+use crate::wad::map::consts::NO_TEXTURE;
 
 /// The working `PNAMES` to trim: the last global copy, `None` when the
 /// working archive holds none or the plan already removes it — a
@@ -292,7 +293,7 @@ fn add_flat_name(used: &mut BTreeSet<Vec<u8>>, bytes: &[u8]) {
     let Some(name_bytes) = bytes.get(..end) else {
         return;
     };
-    if name_bytes.is_empty() || name_bytes == NONE_FLAT {
+    if name_bytes.is_empty() || name_bytes == NO_TEXTURE.as_bytes() {
         return;
     }
     let name: Vec<u8> = name_bytes.iter().map(u8::to_ascii_uppercase).collect();

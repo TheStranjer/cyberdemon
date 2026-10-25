@@ -61,7 +61,13 @@
 //! decoded map into the ascending indices of the matching elements, reading
 //! the derived fields through [`geometry`] and [`describe`] and the flag and
 //! definition names through the [`query::QueryContext`] the caller passes.
-//! [`bulk`] is the bulk-editing core: [`bulk::replace`] globs texture
+//! [`consts`] holds the names and limits the whole layer shares: the
+//! `"-"` none-texture marker, the sky flat with its readers
+//! ([`consts::normalized_picture`] and [`consts::is_sky_flat`]), the
+//! player's step height, standing height and minimum line width, the
+//! window lintel default, the unknown-thing radius and the player-start
+//! thing types. [`bulk`] is the bulk-editing core: [`bulk::replace`]
+//! globs texture
 //! and flat names over a map's sidedef faces and sector surfaces and
 //! rewrites thing types, counting changed fields for the multi-map
 //! `replace_*` tools, and [`bulk::edits`] applies whole
@@ -76,6 +82,7 @@ pub mod blockmap;
 pub mod build_blockmap;
 pub mod build_reject;
 pub mod bulk;
+pub mod consts;
 pub mod convert;
 pub mod describe;
 pub mod doom;

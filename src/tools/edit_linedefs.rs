@@ -60,6 +60,7 @@ use crate::tools::edit_linedefs::remove::{
 use crate::tools::maps::params::{FlagsInput, validate_texture_name};
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{self, BLOCKING, TWO_SIDED};
 use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map, Sidedef};
 
@@ -81,8 +82,6 @@ const COORD_MAX: i32 = 0x7FFF_i32;
 const OFFSET_MIN: i32 = -0x8000_i32;
 /// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
 const OFFSET_MAX: i32 = 0x7FFF_i32;
-/// The name of an empty texture field, `"-"` for no texture.
-const NO_TEXTURE: &str = "-";
 
 /// One linedef's fields as the tools report them, flags named for the
 /// map's family.

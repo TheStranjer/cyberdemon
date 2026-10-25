@@ -89,9 +89,8 @@ use crate::tools::plan::build::build_run;
 use crate::tools::plan::params::{BuildPlanParams, ConnectionParam, FeatureParam};
 use crate::tools::themes::theme_roles;
 use crate::tools::{fail, ok};
+use crate::wad::map::consts::NO_TEXTURE;
 
-/// The texture name meaning "nothing here" in a resolved theme.
-const NO_TEXTURE: &str = "-";
 /// Error rows the finalized result lists at most; the counts stay exact.
 const VALIDATION_ERROR_CAP: usize = 20_usize;
 /// The steps every result hands the caller.

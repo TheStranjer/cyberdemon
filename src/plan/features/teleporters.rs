@@ -22,7 +22,7 @@ use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportSpec, build_teleporter
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
 use crate::wad::map::ops::Point;
 
-use super::{FeatureDress, FeatureRow, FeatureRun, NO_NAME, invalid, room_sectors_of};
+use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sectors_of};
 
 /// The units by which the plan teleporter's fit rule insets the square's
 /// corners: every corner of the 64-unit square shrunk by this much must
@@ -198,7 +198,7 @@ fn teleport_spec(
         angle: row.angle,
         pad_size: DEFAULT_PAD_SIZE,
         two_way: row.two_way,
-        floor_flat: NO_NAME.to_owned(),
+        floor_flat: NO_TEXTURE.to_owned(),
         wall: teleport_wall(dress),
     })
 }
@@ -206,7 +206,7 @@ fn teleport_spec(
 /// The texture a plan teleporter's bare new edges fall back to: the
 /// theme's `wall` name, `"-"` when the theme left the role unnamed.
 pub(super) fn teleport_wall(dress: &FeatureDress) -> String {
-    dress.texture("wall").unwrap_or(NO_NAME).to_owned()
+    dress.texture("wall").unwrap_or(NO_TEXTURE).to_owned()
 }
 
 /// The four corners of the [`DEFAULT_PAD_SIZE`] square centred on

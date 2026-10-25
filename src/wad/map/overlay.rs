@@ -58,8 +58,10 @@ use crate::geom::Pt;
 
 use prepared::Prepared;
 
-/// The model's name for "no texture here" on a [`Sidedef`] texture face.
-const NO_TEXTURE: &str = "-";
+/// The model's name for "no texture here" on a [`Sidedef`] texture face,
+/// shared from [`consts`](super::consts), re-exported for this module's
+/// children.
+pub(super) use super::consts::NO_TEXTURE;
 /// Half of `SAMPLE_SCALE`: turns an endpoint sum into the scaled midpoint.
 const SAMPLE_HALF: i128 = 0x8_0000;
 /// Side samples sit an eighth of a unit off the piece, along the unit

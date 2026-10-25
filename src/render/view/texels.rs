@@ -12,14 +12,13 @@
 //! samples, [`part`] the whole mapped run of one face, and [`edge`] and
 //! [`side`] the prepared forms of one linedef and one sidedef.
 
-use alloc::string::String;
-
 use super::projection::Fraction;
 use super::walk::{Edge, FacePlan, Part, Plane, Side, Slot, Surface, Visit};
-use super::{DIRECTION_SCALE, ONE_16, TEXTURE_NONE};
+use super::{DIRECTION_SCALE, ONE_16};
 use crate::fixed::{atan2, hypot};
 use crate::render::light::WallDir;
 use crate::render::scene::Scene;
+use crate::wad::map::consts::normalized_picture;
 use crate::wad::map::flags::{DONT_PEG_BOTTOM, DONT_PEG_TOP};
 use crate::wad::map::{Linedef, Map};
 
@@ -188,21 +187,6 @@ pub(super) fn wrap16(value: i128, size: i128) -> u32 {
     u32::try_from(wrapped.div_euclid(ONE_16)).unwrap_or(0)
 }
 
-/// The scene key of a texture or flat name: uppercase and trimmed.
-pub(super) fn picture_key(name: &str) -> String {
-    name.trim().to_ascii_uppercase()
-}
-
-/// The texture key of a sidedef name, `None` for the empty name and the
-/// `-` none-marker.
-pub(super) fn texture_key(name: &str) -> Option<String> {
-    let key = picture_key(name);
-    if key.is_empty() || key == TEXTURE_NONE {
-        return None;
-    }
-    Some(key)
-}
-
 /// The fake-contrast orientation of a linedef vector.
 pub(super) const fn wall_dir(ex: i64, ey: i64) -> WallDir {
     if ey == 0 {
@@ -261,9 +245,9 @@ pub(super) fn side<'scene>(
     scene.map.sectors.get(row.sector)?;
     Some(Side {
         plane: Plane::of(&scene.map, row.sector, scene, sky),
-        upper: texture_key(&row.upper),
-        lower: texture_key(&row.lower),
-        middle: texture_key(&row.middle),
+        upper: normalized_picture(&row.upper),
+        lower: normalized_picture(&row.lower),
+        middle: normalized_picture(&row.middle),
         x_offset: i64::from(row.x_offset),
         y_offset: i64::from(row.y_offset),
     })

@@ -71,6 +71,7 @@ use crate::tools::themes::theme_texture;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::DoorStyle;
 use crate::wad::name::LumpName;
 
@@ -106,9 +107,6 @@ fn wall_lost(wall: usize) -> CyberError {
 fn sector_lost() -> CyberError {
     CyberError::Internal("the door recess paint reported no sector (server bug)".to_owned())
 }
-
-/// The texture name meaning "nothing here".
-const NO_TEXTURE: &str = "-";
 
 /// The wall texture a carved strip's bare edges fall back to.
 const DEFAULT_WALL_TEXTURE: &str = "STARTAN3";

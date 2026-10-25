@@ -30,6 +30,7 @@ use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::geom::Pt;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{
     ACTIVATION_MASK, BLOCKING, FlagFamily, PLAYER_CROSS_BITS, REPEAT_SPECIAL, THING_SKILL_BITS,
 };
@@ -44,10 +45,6 @@ use super::doors::{DoorLineSetup, next_free_tag};
 /// 3-bit activation field plus the `repeatspecial` bit, so the border
 /// ends up exactly [`teleport_specials`] names.
 const TRIGGER_MASK: u32 = ACTIVATION_MASK | REPEAT_SPECIAL;
-/// The model's name for "no texture here" on a [`Sidedef`] texture face.
-///
-/// [`Sidedef`]: crate::wad::map::Sidedef
-const NO_TEXTURE: &str = "-";
 /// The `Doom` family's walk-over teleport line: `WR` teleport,
 /// repeatable, answering with the destination sector's tag.
 const DOOM_WR_TELEPORT: i32 = 97;

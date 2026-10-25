@@ -12,11 +12,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{Context, Issue, Severity, listed};
+use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
 use crate::wad::map::model::Map;
-
-/// The single-player start: without it no player can enter the map.
-const PLAYER1_START: i32 = 1;
 
 /// The cooperative starts a map without them cannot host `coop`.
 const COOP_STARTS: [i32; 3] = [2, 3, 4];

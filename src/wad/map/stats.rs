@@ -15,11 +15,9 @@ use serde::Serialize;
 use super::model::Map;
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{NO_TEXTURE, PLAYER_START_TYPES};
 use crate::wad::name::LumpName;
 
-/// The model's name for "no texture" / "no flat", left out of the used-name
-/// tallies.
-const NO_TEXTURE: &str = "-";
 /// Bytes in one vanilla `SEGS` record.
 const SEG_RECORD_BYTES: usize = 12;
 /// Bytes in one vanilla `SSECTORS` record.
@@ -30,8 +28,6 @@ const NODE_RECORD_BYTES: usize = 28;
 const MAGIC_LEN: usize = 4;
 /// Longest `things_by_type` list a summary carries.
 const THING_TYPE_ROWS: usize = 50;
-/// The `THINGS` types that mark a player start.
-const PLAYER_START_TYPES: [i32; 4] = [1, 2, 3, 4];
 
 /// How many of each editable element a map holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]

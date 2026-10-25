@@ -69,16 +69,16 @@ use specials::Effect;
 use specials::Inventory;
 use specials::LockLine;
 
-/// The shortest two-sided line a player can walk through: twice the 16-unit
-/// player radius. A line shorter than this is reported in
-/// [`Playability::narrow_lines`] instead of being a way through.
-pub const MIN_LINE_WIDTH: i32 = 32_i32;
-/// The height a player needs to stand in, and the smallest gap across any
-/// line they can cross.
-pub const PLAYER_HEIGHT: i32 = 56_i32;
-/// The highest ledge a player can walk up. Falling is free at any depth, so
-/// movement is directional and a drop is a one-way connection.
-pub const MAX_STEP_UP: i32 = 24_i32;
+/// The highest ledge a player can walk up (the shared
+/// [`MAX_STEP_HEIGHT`](crate::wad::map::consts::MAX_STEP_HEIGHT)):
+/// falling is free at any depth, so movement is directional and a drop is
+/// a one-way connection.
+pub use crate::wad::map::consts::MAX_STEP_HEIGHT as MAX_STEP_UP;
+/// The shortest two-sided line a player can walk through and the height
+/// they needs to stand in, shared from
+/// [`consts`](crate::wad::map::consts) and re-exported for the walk's
+/// readers.
+pub use crate::wad::map::consts::{MIN_LINE_WIDTH, PLAYER_HEIGHT};
 /// A sector no more than this far above its floor is a closed door: while
 /// its trigger is unreachable it is read as it stands, once the walk reaches
 /// a trigger it is read open.

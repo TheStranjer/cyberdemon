@@ -9,7 +9,7 @@
 
 use alloc::collections::BTreeMap;
 
-use super::{ConnectorInfo, Emitted, NO_NAME, region_label};
+use super::{ConnectorInfo, Emitted, NO_TEXTURE, region_label};
 use crate::error::CyberError;
 use crate::geom::label::Label;
 use crate::geom::{Piece, Pt};
@@ -150,9 +150,9 @@ fn outside_coordinates(point: Pt) -> CyberError {
 /// offsets `0`, nothing for the later formats.
 fn side(sector: usize) -> Sidedef {
     Sidedef {
-        upper: NO_NAME.to_owned(),
-        lower: NO_NAME.to_owned(),
-        middle: NO_NAME.to_owned(),
+        upper: NO_TEXTURE.to_owned(),
+        lower: NO_TEXTURE.to_owned(),
+        middle: NO_TEXTURE.to_owned(),
         sector,
         ..Default::default()
     }

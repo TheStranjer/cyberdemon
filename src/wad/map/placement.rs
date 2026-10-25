@@ -34,12 +34,11 @@ use alloc::vec::Vec;
 
 use crate::defs::Definitions;
 use crate::geom::Pt;
+use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{FlagFamily, blocks_players};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
 use crate::wad::map::model::{Linedef, Map};
 
-/// The thing type of the player 1 start.
-const PLAYER_ONE_START: i32 = 1_i32;
 /// The blocking radius assumed for a type the definitions do not list,
 /// as the plan builder's room fills use it.
 pub const DEFAULT_RADIUS: i64 = 16_i64;
@@ -339,7 +338,7 @@ pub fn occupants(map: &Map, definitions: &Definitions, unknown_radius: i64) -> V
 pub fn player_start(map: &Map) -> Option<Pt> {
     map.things
         .iter()
-        .find(|row| row.kind == PLAYER_ONE_START)
+        .find(|row| row.kind == PLAYER1_START)
         .map(|row| (i64::from(row.x), i64::from(row.y)))
 }
 

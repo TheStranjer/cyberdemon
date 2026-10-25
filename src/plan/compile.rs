@@ -39,11 +39,8 @@ use crate::plan::model::{ConnectionKind, Plan};
 use crate::plan::textures::{Scene, TextureRoles, apply_textures};
 use crate::plan::walls::build_walls;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::MAX_STEP_HEIGHT;
 use crate::wad::name::LumpName;
-
-/// The largest floor gap an opening, door or window may join; taller
-/// transitions should be stair runs, and [`compile`] warns about them.
-const MAX_STEPLESS_DIFF: i64 = 24_i64;
 
 /// Compile `plan` into a dressed [`CompiledPlan`].
 ///
@@ -175,7 +172,7 @@ fn covered_rooms(plan: &Plan, compiled: &CompiledPlan, notes: &mut Vec<String>) 
 }
 
 /// Warn about every opening, door or window joining floors more than
-/// [`MAX_STEPLESS_DIFF`] apart: the player cannot step over that.
+/// [`MAX_STEP_HEIGHT`] apart: the player cannot step over that.
 fn tall_steps(plan: &Plan, connectors: &[ConnectorGeometry], notes: &mut Vec<String>) {
     for connector in connectors {
         if !matches!(
@@ -191,9 +188,9 @@ fn tall_steps(plan: &Plan, connectors: &[ConnectorGeometry], notes: &mut Vec<Str
         let gap = i64::from(from.floor)
             .saturating_sub(i64::from(to.floor))
             .abs();
-        if gap > MAX_STEPLESS_DIFF {
+        if gap > i64::from(MAX_STEP_HEIGHT) {
             notes.push(format!(
-                "step taller than 24 between {} and {}; use stairs",
+                "step taller than {MAX_STEP_HEIGHT} between {} and {}; use stairs",
                 from.id, to.id
             ));
         }

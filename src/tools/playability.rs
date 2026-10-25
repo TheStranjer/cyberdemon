@@ -61,10 +61,7 @@ use crate::tools::playability::check::{CheckPlayabilityParams, check_run};
 use crate::tools::playability::describe::{DescribeMapParams, describe_run};
 use crate::tools::{fail, ok};
 use crate::wad::map::Map;
-
-/// The half-side assumed for thing types the definitions do not know, for
-/// the in-wall hint's distance: the pure stuck test's own monster default.
-const UNKNOWN_THING_RADIUS: i64 = 20;
+use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
 
 /// The map and definitions one check reads, out of the session lock.
 struct Prepared {

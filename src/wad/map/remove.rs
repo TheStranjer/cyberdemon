@@ -38,9 +38,9 @@ use cascade::{
 };
 use renumber::{Numbering, dropped, keep_linedefs, keep_sidedefs, listed, renumber};
 
-/// The model's name for "no texture here" on a
-/// [`Sidedef`](super::Sidedef) texture field.
-pub(super) const NO_TEXTURE: &str = "-";
+/// The model's name for "no texture here", shared from
+/// [`consts`](super::consts), re-exported for this module's children.
+pub(super) use super::consts::NO_TEXTURE;
 
 /// Map elements selected for removal, by original index.
 ///

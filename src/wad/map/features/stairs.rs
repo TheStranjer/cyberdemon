@@ -36,8 +36,9 @@ use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, app
 /// The gentleest step height the builder accepts, in map units.
 pub const MIN_STEP_HEIGHT: i32 = 1_i32;
 /// The steepest step height the builder accepts: the tallest step a
-/// `Doom` player climbs in one motion.
-pub const MAX_STEP_HEIGHT: i32 = 24_i32;
+/// `Doom` player climbs in one motion, shared from
+/// [`consts`](crate::wad::map::consts).
+pub use crate::wad::map::consts::MAX_STEP_HEIGHT;
 /// The clear space a player needs above a step's floor.
 pub const MIN_HEADROOM: i32 = 72_i32;
 /// How far the path may miss `steps * step_depth` when a fixed

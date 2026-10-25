@@ -27,6 +27,7 @@ use crate::tools::maps::common::load_map;
 use crate::tools::palette::load_palette;
 use crate::wad::game::Game;
 use crate::wad::map::Map;
+use crate::wad::map::consts::{SKY_FLAT, is_sky_flat, normalized_picture};
 use crate::wad::map::geometry;
 use crate::wad::name::LumpName;
 
@@ -34,10 +35,6 @@ use crate::wad::name::LumpName;
 const COLORMAP_RAW: [u8; 8] = *b"COLORMAP";
 /// The `PLAYPAL` entry the scene shades with.
 const PALETTE_NORMAL: usize = 0_usize;
-/// The texture/flat name that means "draw nothing here".
-const TEXTURE_NONE: &str = "-";
-/// The ceiling flat name that marks a sky ceiling.
-pub const SKY_FLAT: &str = "F_SKY1";
 /// `Doom`'s view height above the sector floor, in map units.
 pub const EYE_HEIGHT: i32 = 41;
 /// Pixels on a fallback image's edge.
@@ -249,13 +246,7 @@ fn sky_image(
 fn shows_sky(map: &Map) -> bool {
     map.sectors
         .iter()
-        .any(|sector| is_sky_plane(&sector.ceiling_flat) || is_sky_plane(&sector.floor_flat))
-}
-
-/// Whether a plane name is the sky marker, read the way scene keys read
-/// picture names.
-fn is_sky_plane(name: &str) -> bool {
-    picture_name(name).is_some_and(|key| key == SKY_FLAT)
+        .any(|sector| is_sky_flat(&sector.ceiling_flat) || is_sky_flat(&sector.floor_flat))
 }
 
 /// The picture a sky plane draws with: the texture definition named `name`
@@ -290,7 +281,7 @@ fn texture_names(map: &Map) -> BTreeSet<String> {
     map.sidedefs
         .iter()
         .flat_map(|side| [side.upper.clone(), side.lower.clone(), side.middle.clone()])
-        .filter_map(|name| picture_name(&name))
+        .filter_map(|name| normalized_picture(&name))
         .collect()
 }
 
@@ -299,18 +290,8 @@ fn flat_names(map: &Map) -> BTreeSet<String> {
     map.sectors
         .iter()
         .flat_map(|sector| [sector.floor_flat.clone(), sector.ceiling_flat.clone()])
-        .filter_map(|name| picture_name(&name))
+        .filter_map(|name| normalized_picture(&name))
         .collect()
-}
-
-/// The scene key of a texture or flat name: uppercase, trimmed, `None`
-/// for the empty name and the `"-"` none-marker.
-fn picture_name(name: &str) -> Option<String> {
-    let normalized = name.trim().to_ascii_uppercase();
-    if normalized.is_empty() || normalized == TEXTURE_NONE {
-        return None;
-    }
-    Some(normalized)
 }
 
 /// The sky texture name for map `map` of game `game`: `E#M#` episodes

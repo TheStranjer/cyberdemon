@@ -22,6 +22,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::defs::Definitions;
+use crate::wad::map::consts::is_sky_flat;
 use crate::wad::map::flags::{BLOCKING, Skill};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
 use crate::wad::map::model::{Linedef, Map};
@@ -44,8 +45,6 @@ use super::{
     SectorFacts,
 };
 
-/// The ceiling flat that means open sky, the name the renderer switches on.
-const SKY_FLAT: &str = "F_SKY1";
 /// The greatest headroom of a closed door band, map units.
 const CLOSED_BAND_HEIGHT: i32 = 8_i32;
 /// The smallest vertical light gap across a blocking boundary that reads
@@ -105,7 +104,7 @@ impl<'map> Describe<'map> {
             light: row.light,
             floor_flat: row.floor_flat.clone(),
             ceiling_flat: row.ceiling_flat.clone(),
-            sky: row.ceiling_flat == SKY_FLAT,
+            sky: is_sky_flat(&row.ceiling_flat),
             special: special_info(row.special, self.defs),
             tag: row.tag,
             wall_textures: wall_textures(self.map, sector),
@@ -243,7 +242,7 @@ impl<'map> Describe<'map> {
         if self.exits_here(sector) {
             found.insert(NAME_EXIT_ROOM.to_owned());
         }
-        if row.ceiling_flat == SKY_FLAT {
+        if is_sky_flat(&row.ceiling_flat) {
             found.insert(NAME_SKY.to_owned());
         }
         if is_stair_step(area, neighbours) {

@@ -14,6 +14,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::defs::Definitions;
+use crate::wad::map::consts::{MAX_STEP_HEIGHT, MIN_LINE_WIDTH, PLAYER_HEIGHT};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::playability::{Blocker, BlockerReason, Stuck, StuckReason, thing_spawns};
 
@@ -28,7 +29,7 @@ pub(super) fn blocker_hint(blocker: &Blocker) -> String {
             |line| format!("clear the impassable flag on line {line} (edit_linedef)"),
         ),
         BlockerReason::Narrow { .. } => {
-            "widen the opening to at least 32 units (move_vertex)".to_owned()
+            format!("widen the opening to at least {MIN_LINE_WIDTH} units (move_vertex)")
         }
         BlockerReason::Locked { color } => format!(
             "place a {} key in a reachable area (add_thing)",
@@ -39,7 +40,7 @@ pub(super) fn blocker_hint(blocker: &Blocker) -> String {
         }
         BlockerReason::StepTooHigh { .. } => step_hint(blocker),
         BlockerReason::TooLowSector { .. } | BlockerReason::NoHeadroom { .. } => {
-            "raise the ceiling (edit_sector) to at least floor + 56".to_owned()
+            format!("raise the ceiling (edit_sector) to at least floor + {PLAYER_HEIGHT}")
         }
         BlockerReason::Isolated => "connect it (create_sector_from_loop / add_door / \
                                     build_map_from_plan connection)"
@@ -53,8 +54,8 @@ pub(super) fn step_hint(blocker: &Blocker) -> String {
         || "add_stairs / add_lift or change floor heights (edit_sector)".to_owned(),
         |from| {
             format!(
-                "lower sector {}'s floor to no more than 24 above sector {from}, or add_stairs \
-                 / add_lift",
+                "lower sector {}'s floor to no more than {MAX_STEP_HEIGHT} above sector {from}, \
+                 or add_stairs / add_lift",
                 blocker.sector
             )
         },
@@ -91,10 +92,10 @@ pub(super) fn stuck_hint(a: &Analysis<'_>, stuck: &Stuck) -> String {
             "move it at least {} units away from line {line} (edit_thing)",
             body_radius(a.defs, kind)
         ),
-        StuckReason::LowCeiling { .. } => {
-            "raise the ceiling (edit_sector) to at least floor + 56, or move it (edit_thing)"
-                .to_owned()
-        }
+        StuckReason::LowCeiling { .. } => format!(
+            "raise the ceiling (edit_sector) to at least floor + {PLAYER_HEIGHT}, or move it \
+             (edit_thing)"
+        ),
         StuckReason::Overlaps { other } => format!(
             "move thing {} or thing {other} apart (edit_thing)",
             stuck.thing

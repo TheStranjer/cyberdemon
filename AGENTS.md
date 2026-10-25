@@ -57,14 +57,23 @@ src/
                   reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
                   bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
-                  adjust, `gfx/ops/alpha.rs` colour key and trim,
+                  adjust/grayscale, `gfx/ops/blur.rs` the separable alpha-weighted
+                  box blur behind `ImageOp::Blur`,
+                  `gfx/ops/alpha.rs` colour key and trim,
                   `gfx/ops/background.rs` the border-driven background
                   removal, `gfx/ops/threshold.rs` binarization plus the
+                  `thin_stroke` hairline opener, over the
                   `otsu_level`/`luminance_histogram`/`binary_mask` helpers
-                  the sketch tools reuse, `gfx/ops/dither.rs` the
+                  the sketch tools reuse, `gfx/ops/adaptive.rs` the
+                  background-flattening binarizer (local means from
+                  separable integer running sums) behind
+                  `adaptive_threshold`, `gfx/ops/dither.rs` the
                   `Dither`-knopped quantization (Floyd–Steinberg serpentine),
                   and `gfx/ops/tile.rs` the seam-blend behind
-                  `make_tileable`.
+                  `make_tileable`, and `gfx/ops/perspective.rs` the
+                  corner-quad-to-rectangle homography warp (16.16 DLT
+                  Gaussian solve, bilinear alpha-weighted sampling) behind
+                  `perspective_correct`.
   audio.rs        Audio core module root: sample-rate limits and the shared
                   unsigned-8-bit conversions.
   audio/          Audio building blocks (no MCP concerns): `audio/pcm.rs`
@@ -1347,7 +1356,8 @@ tests/
                     resizing, dither and override rules), `imports/raw.rs`
                     (`import_image_as_raw`), `imports/sprite.rs`
                     (`import_image_as_sprite` with its naming forms and mirror
-                    pair), `imports/process.rs` (`process_image` previews),
+                    pair), `imports/process.rs` (`process_image` previews with
+                    the photo-cleaning ops),
                     `imports/create_texture.rs` (`create_texture_from_image`),
                     `imports/create_flat.rs` (`create_flat_from_image`) and
                     `imports/create_sprite.rs` (`create_sprite_from_image`),
@@ -1451,7 +1461,9 @@ tests/
                     map), e2e_sketch/views.rs (the `render_topdown`
                     underlay and the `render_view` frame) and
                     e2e_sketch/save_and_lock.rs (`save_wad`/`open_wad` and
-                    the locked blue door), e2e_assets.rs,
+                    the locked blue door) and e2e_sketch/photo.rs (the
+                    ruled photo cleaned at library level and on the wire,
+                    tracing back as the drawn room), e2e_assets.rs,
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a
                     usability pass over hints and descriptions in

@@ -1,13 +1,17 @@
 //! Tonal image operations.
 //!
-//! [`crate::gfx::ops::ImageOp::AutoLevels`] and [`crate::gfx::ops::ImageOp::Adjust`],
-//! both integer lookups and per-channel arithmetic on `0..=255` values.
+//! [`crate::gfx::ops::ImageOp::AutoLevels`],
+//! [`crate::gfx::ops::ImageOp::Adjust`] and
+//! [`crate::gfx::ops::ImageOp::Grayscale`]: integer lookups and per-channel
+//! arithmetic on `0..=255` values.
+
+use alloc::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::threshold::{BINS, luminance_histogram};
+use crate::gfx::ops::threshold::{BINS, OPAQUE_ALPHA, luminance_histogram};
 use crate::gfx::ops::{arg_error, check_i32_range, clamp_u8, luminance};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
@@ -197,12 +201,60 @@ fn saturate_channel(value: u8, luma: u8, saturation: i32) -> u8 {
     clamp_u8(stretched.saturating_add(i32::from(luma)))
 }
 
+/// Replaces the colour channels of every opaque pixel with its
+/// [`luminance`], leaving every alpha untouched.
+///
+/// A pixel counts as opaque at [`OPAQUE_ALPHA`] or above; fainter pixels
+/// pass through unchanged so their premultiplied-looking colours never
+/// shift.
+pub(crate) fn grayscale(img: RgbaImage) -> (RgbaImage, Value) {
+    let before = distinct_opaque_colors(&img);
+    let mut out = img;
+    for chunk in out.pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
+        let pixel @ [_, _, _, alpha] = to_pixel(chunk);
+        if alpha < OPAQUE_ALPHA {
+            continue;
+        }
+        let shade = luminance(pixel);
+        chunk.copy_from_slice(&[shade, shade, shade, alpha]);
+    }
+    let after = distinct_opaque_colors(&out);
+    (
+        out,
+        json!({
+            "op": "grayscale",
+            "distinct_colors_before": before,
+            "distinct_colors_after": after,
+        }),
+    )
+}
+
+/// The number of distinct `RGBA` triples among the pixels at
+/// [`OPAQUE_ALPHA`] or above.
+fn distinct_opaque_colors(img: &RgbaImage) -> usize {
+    let mut colors = BTreeSet::new();
+    for chunk in img.pixels.chunks_exact(BYTES_PER_PIXEL) {
+        let pixel @ [_, _, _, alpha] = to_pixel(chunk);
+        if alpha >= OPAQUE_ALPHA {
+            colors.insert(pixel);
+        }
+    }
+    colors.len()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AdjustSpec, auto_levels, contrast_channel, saturate_channel};
+    use super::{AdjustSpec, auto_levels, contrast_channel, grayscale, saturate_channel};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::to_pixel;
+
+    /// A one-row image of the given pixels.
+    fn line(pixels: &[[u8; 4]]) -> RgbaImage {
+        let flat: Vec<u8> = pixels.iter().flatten().copied().collect();
+        let width = u32::try_from(pixels.len()).expect("fixture fits");
+        RgbaImage::new(width, 1, flat).expect("fixture is valid")
+    }
 
     /// A 1-row grey ramp from `from` to `to` inclusive, fully opaque.
     fn grey_ramp(from: u8, to: u8) -> RgbaImage {
@@ -359,5 +411,56 @@ mod tests {
             text.contains("ops[0].contrast") && text.contains("0..=400"),
             "contrast range error: {text}"
         );
+    }
+
+    #[test]
+    fn grayscale_luminances_opaque_pixels_and_keeps_every_alpha() {
+        let img = line(&[
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 127],
+            [255, 0, 0, 0],
+        ]);
+        let (out, step) = grayscale(img);
+        assert_eq!(
+            out.get(0, 0),
+            Some([76, 76, 76, 255]),
+            "red to its luminance"
+        );
+        assert_eq!(out.get(1, 0), Some([149, 149, 149, 255]), "green likewise");
+        assert_eq!(
+            out.get(2, 0),
+            Some([0, 0, 255, 127]),
+            "below the opaque threshold the colour stands"
+        );
+        assert_eq!(
+            out.get(3, 0),
+            Some([255, 0, 0, 0]),
+            "a transparent pixel is untouched"
+        );
+        assert_eq!(step["op"], "grayscale", "op name");
+        assert_eq!(step["distinct_colors_before"], 2_i32, "two opaque colours");
+        assert_eq!(step["distinct_colors_after"], 2_i32, "and two greys");
+    }
+
+    #[test]
+    fn grayscale_collapses_colours_that_share_a_luminance() {
+        let img = line(&[[255, 0, 0, 255], [76, 76, 76, 255]]);
+        let (out, step) = grayscale(img);
+        assert_eq!(
+            (out.get(0, 0), out.get(1, 0)),
+            (Some([76, 76, 76, 255]), Some([76, 76, 76, 255])),
+            "red lands exactly on its own grey"
+        );
+        assert_eq!(step["distinct_colors_before"], 2_i32, "two before");
+        assert_eq!(step["distinct_colors_after"], 1_i32, "one after");
+    }
+
+    #[test]
+    fn grayscale_of_a_fully_transparent_picture_counts_nothing() {
+        let img = line(&[[10, 200, 30, 1]]);
+        let (_out, step) = grayscale(img);
+        assert_eq!(step["distinct_colors_before"], 0_i32, "nothing opaque");
+        assert_eq!(step["distinct_colors_after"], 0_i32, "and nothing added");
     }
 }

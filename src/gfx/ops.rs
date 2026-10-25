@@ -3,16 +3,22 @@
 //!
 //! Operations run in order over one [`RgbaImage`]; each returns its result
 //! plus a `JSON` object of measurements, collected into an [`OpsReport`].
-//! Geometry (crop/fit/rotate/flip) lives in [`geometry`], size-changing
-//! sampling in [`resample`], tonal corrections in [`tone`], alpha handling
-//! in [`alpha`] and [`background`], seamless tiling in [`tile`],
-//! binarization in [`threshold`] and dithered quantization in [`dither`].
+//! Geometry (crop/fit/rotate/flip) lives in [`geometry`], the
+//! corner-quad-to-rectangle warp in [`perspective`], size-changing
+//! sampling in [`resample`], tonal corrections (including grayscale) in
+//! [`tone`], alpha handling in [`alpha`] and [`background`], seamless
+//! tiling in [`tile`], binarization in [`threshold`] (with the
+//! background-flattening uneven-light variant in [`adaptive`]), box blur in
+//! [`blur`] and dithered quantization in [`dither`].
 //! Everything here is pure: no MCP, no filesystem, no floats.
 
+pub mod adaptive;
 pub mod alpha;
 pub mod background;
+pub mod blur;
 pub mod dither;
 pub mod geometry;
+pub mod perspective;
 pub mod resample;
 pub mod threshold;
 pub mod tile;
@@ -24,6 +30,7 @@ use serde_json::Value;
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
+use crate::gfx::ops::perspective::Corner;
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
 /// Largest edge (pixels) an operation parameter may request and an
@@ -97,6 +104,19 @@ pub enum ImageOp {
         horizontal: bool,
         /// Mirror top-to-bottom.
         vertical: bool,
+    },
+    /// Warp a four-corner source quad onto a straight rectangle: the
+    /// destination's corner pixels sample exactly the given positions and
+    /// the projective map between is solved in `16.16` fixed point.
+    PerspectiveCorrect {
+        /// The quad's corners in source pixel coordinates, ordered
+        /// top-left, top-right, bottom-right, bottom-left; they may be
+        /// negative, but must stay distinct with no three on one line.
+        corners: [Corner; 4],
+        /// Destination width, `1..=4096`.
+        width: u32,
+        /// Destination height, `1..=4096`.
+        height: u32,
     },
     /// Stretch the [`luminance`] range of opaque pixels to full scale.
     AutoLevels {
@@ -172,6 +192,48 @@ pub enum ImageOp {
         #[serde(default)]
         invert: bool,
     },
+    /// Binarize against a flattened local background: the uneven-light
+    /// variant of [`ImageOp::Threshold`]. A pixel is ink when its
+    /// [`luminance`] sits `offset` or more below the mean of the
+    /// `(2r + 1) x (2r + 1)` window around it (clipped at the borders);
+    /// transparent pixels are paper.
+    AdaptiveThreshold {
+        /// Background window radius, `1..=128`; small for line art, a large
+        /// value (about `80`) for photographs.
+        radius: u32,
+        /// How far below the local mean counts as ink, `0..=255`;
+        /// default `15`.
+        #[serde(default = "default_adaptive_offset")]
+        offset: u8,
+        /// Swap the ink and paper classes: then pixels `offset` or more
+        /// above the local mean are the ink.
+        #[serde(default)]
+        invert: bool,
+    },
+    /// Replace the colour channels of every opaque pixel with its
+    /// [`luminance`], leaving every alpha untouched.
+    Grayscale,
+    /// Average every pixel over the `(2r + 1) x (2r + 1)` window around it,
+    /// colours weighted by alpha so transparent pixels never darken edges.
+    Blur {
+        /// Blur radius, `1..=256`.
+        radius: u32,
+    },
+    /// Drop hairline strokes: classify ink exactly like [`ImageOp::Threshold`]
+    /// and keep only ink that can hold the `(2r + 1) x (2r + 1)` square
+    /// (morphological opening), painted back as opaque black on opaque white.
+    ThinStrokeFilter {
+        /// Opening radius, `1..=16`; the result drops every stroke thinner
+        /// than the `2r + 1` square element.
+        radius: u32,
+        /// Cut-off `0..=255`; `None` (the default) picks the Otsu level,
+        /// the same convention as [`ImageOp::Threshold`].
+        #[serde(default)]
+        level: Option<u8>,
+        /// Swap the black and white classes.
+        #[serde(default)]
+        invert: bool,
+    },
 }
 
 /// Default [`ImageOp::AutoLevels::clip_percent`].
@@ -197,6 +259,11 @@ const fn default_background_tolerance() -> u8 {
 /// Default for [`ImageOp::MakeTileable`]'s axis switches.
 const fn default_true() -> bool {
     true
+}
+
+/// Default [`ImageOp::AdaptiveThreshold::offset`].
+const fn default_adaptive_offset() -> u8 {
+    15_u8
 }
 
 /// Measurements collected by [`apply_ops`]: one `JSON` object per op.
@@ -233,14 +300,19 @@ fn apply_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
         ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
-        | ImageOp::Flip { .. } => geometry_op(&img, index, op)?,
+        | ImageOp::Flip { .. }
+        | ImageOp::PerspectiveCorrect { .. } => geometry_op(&img, index, op)?,
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
         | ImageOp::Trim { .. }
         | ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
-        | ImageOp::Threshold { .. } => pixel_op(img, index, op)?,
+        | ImageOp::Threshold { .. }
+        | ImageOp::AdaptiveThreshold { .. }
+        | ImageOp::Grayscale
+        | ImageOp::Blur { .. }
+        | ImageOp::ThinStrokeFilter { .. } => pixel_op(img, index, op)?,
     };
     check_output_size(index, &out)?;
     Ok((out, step))
@@ -258,57 +330,115 @@ fn geometry_op(
             y,
             width,
             height,
-        } => geometry::crop(
-            img,
-            index,
-            &geometry::CropSpec {
-                x,
-                y,
-                width,
-                height,
-            },
-        )?,
+        } => crop_arm(img, index, (x, y, width, height))?,
         ImageOp::Fit {
             width,
             height,
             mode,
             filter,
             background,
-        } => geometry::fit(
-            img,
-            index,
-            &geometry::FitSpec {
-                width,
-                height,
-                mode,
-                filter,
-                background: background.as_deref(),
-            },
-        )?,
+        } => {
+            let rect = (width, height, mode, filter);
+            fit_arm(img, index, rect, background.as_deref())?
+        }
         ImageOp::Rotate { quarter_turns } => geometry::rotate(img, index, quarter_turns)?,
         ImageOp::Flip {
             horizontal,
             vertical,
-        } => geometry::flip(
-            img,
-            &geometry::FlipSpec {
-                horizontal,
-                vertical,
-            },
-        ),
+        } => flip_arm(img, (horizontal, vertical)),
+        ImageOp::PerspectiveCorrect {
+            corners,
+            width,
+            height,
+        } => perspective_arm(img, index, (corners, width, height))?,
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
         | ImageOp::Trim { .. }
         | ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
-        | ImageOp::Threshold { .. } => {
-            return Err(CyberError::Internal(format!(
-                "ops[{index}]: pixel op reached the geometric dispatcher"
-            )));
+        | ImageOp::Threshold { .. }
+        | ImageOp::AdaptiveThreshold { .. }
+        | ImageOp::Grayscale
+        | ImageOp::Blur { .. }
+        | ImageOp::ThinStrokeFilter { .. } => {
+            return Err(geometry_mispatch(index));
         }
     };
     Ok((out, step))
+}
+
+/// The `Crop` arm: spec assembled, run through [`geometry`].
+fn crop_arm(
+    img: &RgbaImage,
+    index: usize,
+    rect: (u32, u32, u32, u32),
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (x, y, width, height) = rect;
+    geometry::crop(
+        img,
+        index,
+        &geometry::CropSpec {
+            x,
+            y,
+            width,
+            height,
+        },
+    )
+}
+
+/// The `Fit` arm: spec assembled, run through [`geometry`].
+fn fit_arm(
+    img: &RgbaImage,
+    index: usize,
+    rect: (u32, u32, FitMode, Filter),
+    background: Option<&str>,
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (width, height, mode, filter) = rect;
+    let spec = geometry::FitSpec {
+        width,
+        height,
+        mode,
+        filter,
+        background,
+    };
+    geometry::fit(img, index, &spec)
+}
+
+/// The `Flip` arm: spec assembled, run through [`geometry`].
+fn flip_arm(img: &RgbaImage, axes: (bool, bool)) -> (RgbaImage, Value) {
+    let (horizontal, vertical) = axes;
+    geometry::flip(
+        img,
+        &geometry::FlipSpec {
+            horizontal,
+            vertical,
+        },
+    )
+}
+
+/// The `PerspectiveCorrect` arm: spec assembled, run through
+/// [`perspective`].
+fn perspective_arm(
+    img: &RgbaImage,
+    index: usize,
+    quad: ([Corner; 4], u32, u32),
+) -> Result<(RgbaImage, Value), CyberError> {
+    let (corners, width, height) = quad;
+    let spec = perspective::PerspectiveSpec {
+        corners,
+        width,
+        height,
+    };
+    perspective::correct(img, index, &spec)
+}
+
+/// The dispatch-bug error for a pixel op reaching [`geometry_op`]; any
+/// variant not routed to [`geometry`] is reported by name of the fault.
+fn geometry_mispatch(index: usize) -> CyberError {
+    CyberError::Internal(format!(
+        "ops[{index}]: pixel op reached the geometric dispatcher"
+    ))
 }
 
 /// Runs the ops that never change the image shape.
@@ -348,20 +478,37 @@ fn pixel_op(img: RgbaImage, index: usize, op: ImageOp) -> Result<(RgbaImage, Val
                 padding,
             },
         ),
+        ImageOp::Grayscale => Ok(tone::grayscale(img)),
+        ImageOp::Blur { radius } => blur::blur(img, index, radius),
+        ImageOp::AdaptiveThreshold {
+            radius,
+            offset,
+            invert,
+        } => {
+            let spec = adaptive::AdaptiveThresholdSpec {
+                radius,
+                offset,
+                invert,
+            };
+            adaptive::adaptive_threshold(img, index, &spec)
+        }
         ImageOp::RemoveBackground { .. }
         | ImageOp::MakeTileable { .. }
-        | ImageOp::Threshold { .. } => restoration_op(img, index, op),
+        | ImageOp::Threshold { .. }
+        | ImageOp::ThinStrokeFilter { .. } => restoration_op(img, index, op),
         ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
-        | ImageOp::Flip { .. } => Err(CyberError::Internal(format!(
+        | ImageOp::Flip { .. }
+        | ImageOp::PerspectiveCorrect { .. } => Err(CyberError::Internal(format!(
             "ops[{index}]: geometric op reached the pixel dispatcher"
         ))),
     }
 }
 
-/// Runs the restoration group: border background removal, seamless tiling
-/// and binarization; any other variant reaching it is a dispatch bug.
+/// Runs the restoration group: border background removal, seamless tiling,
+/// binarization and the hairline-opening filter; any other variant reaching
+/// it is a dispatch bug.
 fn restoration_op(
     img: RgbaImage,
     index: usize,
@@ -391,14 +538,30 @@ fn restoration_op(
             let spec = threshold::ThresholdSpec { level, invert };
             Ok(threshold::binarize(img, &spec))
         }
+        ImageOp::ThinStrokeFilter {
+            radius,
+            level,
+            invert,
+        } => {
+            let spec = threshold::ThinStrokeSpec {
+                radius,
+                level,
+                invert,
+            };
+            threshold::thin_stroke(img, index, &spec)
+        }
         ImageOp::AutoLevels { .. }
         | ImageOp::Adjust { .. }
         | ImageOp::ColorKey { .. }
         | ImageOp::Trim { .. }
+        | ImageOp::Grayscale
+        | ImageOp::Blur { .. }
+        | ImageOp::AdaptiveThreshold { .. }
         | ImageOp::Crop { .. }
         | ImageOp::Fit { .. }
         | ImageOp::Rotate { .. }
-        | ImageOp::Flip { .. } => Err(CyberError::Internal(format!(
+        | ImageOp::Flip { .. }
+        | ImageOp::PerspectiveCorrect { .. } => Err(CyberError::Internal(format!(
             "ops[{index}]: op reached the wrong pixel dispatcher"
         ))),
     }
@@ -543,8 +706,8 @@ pub(crate) fn clamp_u8(value: i32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Filter, FitMode, ImageOp, MAX_OP_DIMENSION, OpsReport, apply_ops, clamp_u8, div_ceil,
-        luminance, parse_hex_color, rounded_div,
+        Corner, Filter, FitMode, ImageOp, MAX_OP_DIMENSION, OpsReport, apply_ops, clamp_u8,
+        div_ceil, luminance, parse_hex_color, rounded_div,
     };
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
@@ -752,6 +915,54 @@ mod tests {
         assert_eq!(error.code(), "internal", "dispatch bugs are internal");
     }
 
+    /// The perspective warp's own square over the 2x2 test image.
+    fn straighten() -> ImageOp {
+        ImageOp::PerspectiveCorrect {
+            corners: [
+                Corner { x: 0, y: 0 },
+                Corner { x: 1, y: 0 },
+                Corner { x: 1, y: 1 },
+                Corner { x: 0, y: 1 },
+            ],
+            width: 2,
+            height: 2,
+        }
+    }
+
+    #[test]
+    fn perspective_correct_deserializes_and_runs_through_apply_ops() {
+        let text = r#"[{"op":"perspective_correct",
+            "corners":[{"x":0,"y":0},{"x":1,"y":0},{"x":1,"y":1},{"x":0,"y":1}],
+            "width":2,"height":2}]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(ops[0], straighten(), "the tag, corners and size parse");
+        let (out, report) = apply_ops(quad(), &ops).expect("the warp runs");
+        assert_eq!(
+            report.steps[0]["op"], "perspective_correct",
+            "the documented step name"
+        );
+        assert_eq!((out.width, out.height), (2, 2), "the target shape");
+        assert_eq!(
+            out.get(1, 0),
+            Some([0, 255, 0, 255]),
+            "the identity warp keeps pixels"
+        );
+    }
+
+    #[test]
+    fn the_pixel_dispatchers_reject_perspective_correct() {
+        let to_pixel = super::pixel_op(quad(), 2, straighten())
+            .expect_err("a warp never belongs to the pixel dispatcher");
+        assert_eq!(to_pixel.code(), "internal", "dispatch bugs are internal");
+        let to_restoration = super::restoration_op(quad(), 3, straighten())
+            .expect_err("a warp never belongs to the restoration dispatcher");
+        assert_eq!(
+            to_restoration.code(),
+            "internal",
+            "dispatch bugs are internal"
+        );
+    }
+
     #[test]
     fn invalid_parameters_name_the_op_index_and_field() {
         let ops = [
@@ -927,5 +1138,273 @@ mod tests {
             panic!("expected a Threshold op");
         };
         (level, invert)
+    }
+
+    #[test]
+    fn grayscale_and_blur_deserialize_from_their_documented_json() {
+        let text = r#"[
+            {"op":"grayscale"},
+            {"op":"blur","radius":2}
+        ]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(ops.len(), 2, "both new ops parse");
+        assert_eq!(
+            ops[0],
+            ImageOp::Grayscale,
+            "grayscale carries no parameters"
+        );
+        let ImageOp::Blur { radius } = ops[1].clone() else {
+            panic!("expected Blur at index 1");
+        };
+        assert_eq!(radius, 2_u32, "the blur radius carries through");
+    }
+
+    #[test]
+    fn grayscale_and_blur_run_through_the_pixel_dispatcher() {
+        let ops = [ImageOp::Grayscale, ImageOp::Blur { radius: 1 }];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report
+                .steps
+                .iter()
+                .map(|step| step["op"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["grayscale", "blur"],
+            "one named entry per op, in order"
+        );
+        assert_eq!(
+            report.steps[0]["distinct_colors_before"], 4_i32,
+            "the quad's four opaque colours"
+        );
+        assert_eq!(
+            report.steps[0]["distinct_colors_after"], 4_i32,
+            "76, 149, 29 and 255 greys stay distinct"
+        );
+        assert_eq!(report.steps[1]["radius"], 1_i32, "the radius echoes");
+        let uniform = out.get(0, 0).expect("in bounds");
+        for (x, y) in [(0_u32, 0_u32), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(out.get(x, y), Some(uniform), "({x},{y}) joins the blur");
+        }
+        assert_eq!(
+            [uniform[0], uniform[1], uniform[2]],
+            [128_u8, 128, 128],
+            "the whole 2x2 window is every pixel's window: the grey mean rounds to 128"
+        );
+        assert_eq!(uniform[3], 255, "opaque stays opaque");
+    }
+
+    #[test]
+    fn blur_radius_errors_name_the_op_index_and_field() {
+        let error = apply_ops(quad(), &[ImageOp::Grayscale, ImageOp::Blur { radius: 0 }])
+            .expect_err("radius 0 must fail");
+        let CyberError::InvalidArgument(message) = error else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(
+            message.contains("ops[1].radius") && message.contains("1..=256"),
+            "the parameter error names the field and range: {message}"
+        );
+    }
+
+    #[test]
+    fn thin_stroke_filter_deserializes_with_documented_defaults() {
+        let text = r#"[
+            {"op":"thin_stroke_filter","radius":1},
+            {"op":"thin_stroke_filter","radius":16,"level":128,"invert":true}
+        ]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(
+            thin_stroke_fields(&ops[0]),
+            (1_u32, None, false),
+            "level defaults to Otsu and invert to false"
+        );
+        assert_eq!(
+            thin_stroke_fields(&ops[1]),
+            (16_u32, Some(128), true),
+            "every explicit field carries through"
+        );
+    }
+
+    /// The `ThinStrokeFilter` fields of an op that must be one.
+    fn thin_stroke_fields(op: &ImageOp) -> (u32, Option<u8>, bool) {
+        let ImageOp::ThinStrokeFilter {
+            radius,
+            level,
+            invert,
+        } = op.clone()
+        else {
+            panic!("expected a ThinStrokeFilter op");
+        };
+        (radius, level, invert)
+    }
+
+    #[test]
+    fn thin_stroke_filter_runs_through_the_restoration_dispatcher() {
+        let ops = [
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+            ImageOp::ThinStrokeFilter {
+                radius: 1,
+                level: None,
+                invert: false,
+            },
+        ];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report.steps[1]["op"], "thin_stroke_filter",
+            "the documented step name"
+        );
+        assert_eq!(report.steps[1]["radius"], 1_i32, "the radius echoes");
+        assert_eq!(report.steps[1]["otsu"], true, "level None is Otsu's");
+        assert!(report.steps[1]["level"].is_number(), "the level reports");
+        assert_eq!(out.width, 2, "the op never changes the shape");
+    }
+
+    #[test]
+    fn thin_stroke_radius_errors_name_the_op_index_and_field() {
+        assert_thin_radius_rejected(0_u32);
+        assert_thin_radius_rejected(17_u32);
+    }
+
+    /// Applies a `thin_stroke_filter` with the out-of-range `radius` after a
+    /// leading op and checks the error names `ops[1].radius` and `1..=16`.
+    fn assert_thin_radius_rejected(radius: u32) {
+        let error = apply_ops(
+            quad(),
+            &[
+                ImageOp::Flip {
+                    horizontal: true,
+                    vertical: false,
+                },
+                ImageOp::ThinStrokeFilter {
+                    radius,
+                    level: Some(128),
+                    invert: false,
+                },
+            ],
+        )
+        .expect_err("a radius outside 1..=16 must fail");
+        let CyberError::InvalidArgument(message) = error else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(
+            message.contains("ops[1].radius") && message.contains("1..=16"),
+            "the parameter error names the field and range: {message}"
+        );
+    }
+
+    #[test]
+    fn adaptive_threshold_deserializes_with_documented_defaults() {
+        let text = r#"[
+            {"op":"adaptive_threshold","radius":4},
+            {"op":"adaptive_threshold","radius":128,"offset":200,"invert":true}
+        ]"#;
+        let ops: Vec<ImageOp> = serde_json::from_str(text).expect("the documented JSON layout");
+        assert_eq!(
+            adaptive_fields(&ops[0]),
+            (4_u32, 15_u8, false),
+            "offset defaults to 15 and invert to false"
+        );
+        assert_eq!(
+            adaptive_fields(&ops[1]),
+            (128_u32, 200_u8, true),
+            "every explicit field carries through"
+        );
+    }
+
+    /// The `AdaptiveThreshold` fields of an op that must be one.
+    fn adaptive_fields(op: &ImageOp) -> (u32, u8, bool) {
+        let ImageOp::AdaptiveThreshold {
+            radius,
+            offset,
+            invert,
+        } = op.clone()
+        else {
+            panic!("expected an AdaptiveThreshold op");
+        };
+        (radius, offset, invert)
+    }
+
+    #[test]
+    fn adaptive_threshold_runs_through_the_pixel_dispatcher() {
+        let ops = [
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+            ImageOp::AdaptiveThreshold {
+                radius: 1,
+                offset: 0,
+                invert: false,
+            },
+        ];
+        let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
+        assert_eq!(
+            report.steps[1]["op"], "adaptive_threshold",
+            "the documented step name"
+        );
+        assert_eq!(report.steps[1]["radius"], 1_i32, "the radius echoes");
+        assert_eq!(report.steps[1]["offset"], 0_i32, "the offset echoes");
+        assert_eq!(
+            report.steps[1]["otsu"], false,
+            "the local test never uses Otsu"
+        );
+        assert_eq!(
+            report.steps[1]["background_min"], 127_i32,
+            "every window is the whole 2x2 of the binarized corners: mean(0, 255, 0, 255) floors to 127"
+        );
+        assert_eq!(report.steps[1]["background_max"], 127_i32, "one mean");
+        assert_eq!(
+            report.steps[1]["ink_pixels"], 2_i32,
+            "the two black corners sit at or below the mean, the two white ones above"
+        );
+        assert_eq!(
+            out.get(0, 0),
+            Some([0, 0, 0, 255]),
+            "the black corner re-inks to opaque black"
+        );
+        assert_eq!(
+            out.get(1, 1),
+            Some([255, 255, 255, 255]),
+            "the white corner stays opaque paper"
+        );
+        assert_eq!(
+            (out.width, out.height),
+            (2, 2),
+            "the op never changes the shape"
+        );
+    }
+
+    #[test]
+    fn adaptive_radius_errors_name_the_op_index_and_field() {
+        for radius in [0_u32, 129_u32] {
+            let error = apply_ops(
+                quad(),
+                &[
+                    ImageOp::Flip {
+                        horizontal: true,
+                        vertical: false,
+                    },
+                    ImageOp::AdaptiveThreshold {
+                        radius,
+                        offset: 15,
+                        invert: false,
+                    },
+                ],
+            )
+            .expect_err("a radius outside 1..=128 must fail");
+            assert_eq!(
+                error.code(),
+                "invalid_argument",
+                "radius {radius} refuses by code"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("ops[1].radius") && message.contains("1..=128"),
+                "the parameter error names the field and range: {message}"
+            );
+        }
     }
 }

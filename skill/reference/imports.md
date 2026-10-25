@@ -332,6 +332,15 @@ canonical operation reference.
   `{ "op": "rotate", "quarter_turns": 1 }` (`1..=3`).
 - `flip` — mirror horizontally and/or vertically.
   `{ "op": "flip", "horizontal": true, "vertical": false }`.
+- `perspective_correct` — warp a four-corner source quad onto a straight
+  rectangle: `corners` are the quad's `{"x": .., "y": ..}` source pixel
+  positions ordered top-left, top-right, bottom-right, bottom-left (they
+  may be negative); each destination corner pixel samples exactly its
+  corner position and the projective map between is solved in fixed
+  point. `width`/`height` are `1..=4096`; repeated or collinear corners
+  are `invalid_argument`, and destination pixels whose source position
+  falls outside the picture come back transparent black.
+  `{ "op": "perspective_correct", "width": 256, "height": 256, "corners": [{"x": 20, "y": 10}, {"x": 230, "y": 4}, {"x": 250, "y": 240}, {"x": 12, "y": 232}] }`.
 - `auto_levels` — stretch the luminance range of opaque pixels to full
   scale. `clip_percent` (`0..=10`, default `1`) is the share of pixels
   allowed below the low and above the high cut.
@@ -362,6 +371,36 @@ canonical operation reference.
   luminance. `level` is `0..=255` or omitted for the Otsu-picked cut;
   `invert` swaps the two classes (default `false`).
   `{ "op": "threshold", "level": 128 }`.
+- `adaptive_threshold` — the uneven-light variant of `threshold`: binarize
+  each pixel against its own flattened background instead of one global
+  cut. The background of a pixel is the mean luminance of the
+  `(2r + 1) x (2r + 1)` window around it (borders clipped); it is ink when
+  it sits `offset` or more below that local mean, and — with `invert` —
+  `offset` or more above it. `radius` is the background window radius,
+  `1..=128` (small for line art, a large value, around `80`, for photos);
+  `offset` is `0..=255` (default `15`); `invert` defaults `false`.
+  Transparent pixels count as paper. Every output pixel ends opaque black
+  or white. Reports `radius`, `offset`, `background_min`/`background_max`
+  (the local-mean extremes: the measurable proof the gradient was
+  flattened) and `ink_pixels`.
+  `{ "op": "adaptive_threshold", "radius": 80, "offset": 15 }`.
+- `grayscale` — replace the colour channels of every opaque pixel (alpha
+  `128` or above) with its luminance; every alpha stays untouched. Reports
+  `distinct_colors_before` and `distinct_colors_after` counted over unique
+  opaque `RGBA` triples, so you can see how much colour the step collapsed.
+  `{ "op": "grayscale" }`.
+- `blur` — box-blur the picture: every pixel becomes the average of the
+  `(2r + 1) x (2r + 1)` window around it, clipped at the borders; colours
+  are weighted by alpha, so transparent pixels never darken an edge.
+  `radius` is `1..=256`. `{ "op": "blur", "radius": 2 }`.
+- `thin_stroke_filter` — drop hairline ruling. Binarize the picture the same
+  way as `threshold` (`level` omitted means Otsu; `invert` swaps the two
+  classes), then keep only the ink wide enough to contain the square
+  `(2r + 1) x (2r + 1)` element: strokes thinner than that element
+  (1 px rules, stray specks) are erased while walls `2r + 1` pixels or thicker
+  survive intact, and `erode`'s border convention keeps frame-touching ink.
+  `radius` is `1..=16`. Reports `level`, `otsu`, `removed_ink_pixels` and
+  `kept_ink_pixels`. `{ "op": "thin_stroke_filter", "radius": 1 }`.
 
 ## `process_image`
 

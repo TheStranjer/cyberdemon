@@ -18,9 +18,12 @@
 //! reachable before the door - an `imp` pinned at the red dot's centre, the
 //! player start in `start`, a `walk_over` exit feature and the `tech` theme -
 //! and [`build_the_traced_plan`] stands the whole chain up for every slice.
-//! The four slices are the topic modules: `trace` measures the drawing,
+//! The five slices are the topic modules: `trace` measures the drawing,
 //! `build` proves the built map plays, `views` looks at it from above and from
-//! the player start, and `save_and_lock` ships it and takes the key away.
+//! the player start, `save_and_lock` ships it and takes the key away, and
+//! `photo` proves the photo-of-a-sketch chain - the hairline-cleaning ops at
+//! library level and on the wire, and the cleaned sheet tracing back as the
+//! drawn room.
 
 use std::path::Path;
 
@@ -479,6 +482,10 @@ fn plan_request(report: &Value) -> Value {
 #[cfg(test)]
 #[path = "e2e_sketch/build.rs"]
 mod build;
+
+#[cfg(test)]
+#[path = "e2e_sketch/photo.rs"]
+mod photo;
 
 #[cfg(test)]
 #[path = "e2e_sketch/save_and_lock.rs"]

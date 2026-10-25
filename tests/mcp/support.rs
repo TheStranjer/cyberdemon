@@ -4,8 +4,9 @@
 //! (`ok`/`fail`) so those helpers are exercised end to end, not just
 //! compiled, small hand-written byte builders for the media files
 //! (`PNG`, `MIDI`, `WAV`) the guide recipes import, and the picture
-//! helpers (blank sheets, rectangle fills, `PNG` files and asset
-//! fetches) the image-chain tests draw their fixtures with.
+//! helpers (blank sheets, rectangle fills, the ruled photo sheet, `PNG`
+//! files and asset fetches) the image-chain tests draw their fixtures
+//! with.
 
 use core::time::Duration;
 use std::io::Write as _;
@@ -482,6 +483,173 @@ pub fn fill_rect(sheet: &mut RgbaImage, rect: (u32, u32, u32, u32), colour: [u8;
             assert!(sheet.set(column, row, colour), "test rect in bounds");
         }
     }
+}
+
+/// The room drawn into [`ruled_photo_sheet`]: the outer corners of the
+/// wall box, `(x0, y0, x1, y1)`, inset from the frame of a 600x400 sheet
+/// by at least 90 px on every side.
+pub const PHOTO_ROOM: (u32, u32, u32, u32) = (120_u32, 90_u32, 420_u32, 300_u32);
+
+/// The thickness of every wall bar of [`PHOTO_ROOM`], in pixels: three,
+/// so the walls survive the sketch tools' 3x3 morphological opening.
+pub const PHOTO_WALL_PX: u32 = 3_u32;
+
+/// The near-black ink of the room's walls and tick: luminance 18 under
+/// `(299 r + 587 g + 114 b) / 1000`.
+pub const PHOTO_INK: [u8; 4] = [18_u8, 18, 20, 255];
+
+/// The pale blue of the ruling: luminance 196, 59 levels under the
+/// paper, far above the ~12 levels a 1 px line needs to read at all.
+pub const PHOTO_RULING: [u8; 4] = [180_u8, 200, 224, 255];
+
+/// The vertical period of the ruling, in pixels.
+pub const PHOTO_RULING_PERIOD: u32 = 8_u32;
+
+/// The first ruled row: every `y` with `y % 8 == 3` carries one pixel of
+/// [`PHOTO_RULING`] across the full width.
+pub const PHOTO_RULING_PHASE: u32 = 3_u32;
+
+/// The number of top rows the multiply-style shadow ramp covers.
+pub const PHOTO_SHADOW_ROWS: u32 = 160_u32;
+
+/// The short tick inside the room, just off the top-left corner: 12x3,
+/// so both its edges sit within 3 * stroke + 8 = 17 px and the sketch
+/// tools read it as a mark, never as a wall.
+pub const PHOTO_TICK: (u32, u32, u32, u32) = (160_u32, 150_u32, 172_u32, 153_u32);
+
+/// One channel of a pixel multiplied by `factor / 255` in integer math.
+fn scale_channel(channel: u8, factor: u32) -> u8 {
+    u8::try_from(
+        u32::from(channel)
+            .checked_mul(factor)
+            .expect("a test channel product fits")
+            .checked_div(255_u32)
+            .expect("the scale divisor is not zero"),
+    )
+    .expect("a scaled channel fits a u8")
+}
+
+/// `pixel` with every colour channel multiplied by `factor / 255`, the
+/// alpha byte kept.
+fn scale_pixel(pixel: [u8; 4], factor: u32) -> [u8; 4] {
+    [
+        scale_channel(pixel[0], factor),
+        scale_channel(pixel[1], factor),
+        scale_channel(pixel[2], factor),
+        pixel[3],
+    ]
+}
+
+/// Multiplies every pixel of `rect` by `factor / 255`: the
+/// darken-what-is-already-there step the shadow and the vignette use.
+///
+/// # Panics
+///
+/// Panics if a pixel of the rectangle falls outside `sheet` (test
+/// rectangles always fit).
+fn multiply_rect(sheet: &mut RgbaImage, rect: (u32, u32, u32, u32), factor: u32) {
+    let (x0, y0, x1, y1) = rect;
+    for row in y0..y1 {
+        for column in x0..x1 {
+            let pixel = sheet
+                .get(column, row)
+                .expect("test pixels are inside the sheet");
+            assert!(
+                sheet.set(column, row, scale_pixel(pixel, factor)),
+                "test rect in bounds"
+            );
+        }
+    }
+}
+
+/// A ruled photo sheet: white paper under a pale blue 1 px ruling, a
+/// 3 px near-black room box with an interior tick, a multiply-style
+/// vertical shadow over the top rows and a two-step corner vignette.
+///
+/// The fixture stands in for an imported photograph whose structure the
+/// measurement tools can still read. Every number is that contract,
+/// tuned against `adaptive_threshold` at `radius: 6, offset: 10` (a
+/// pixel is ink when its luminance sits at least 10 below the mean of
+/// its clipped 13x13 window):
+///
+/// - a hard luminance step above ~20 levels prints a 3-4 px black band
+///   on its darker side that a 3x3 opening keeps; so the vignette is
+///   two nested blocks, each a further multiply by 246/255 (a max single
+///   step of 9 levels), and the shadow ramp falls exactly 1 level per
+///   row. At the clipped top border a ramp of slope `s` puts the centre
+///   about `4 * s` below its window mean, and that gap must stay under
+///   10 or the sheet grows a permanent black edge line;
+/// - a 1 px line needs ~12+ levels of contrast to be seen at all: the
+///   ruling's 59 ([`PHOTO_RULING`] at luminance 196 against paper 255)
+///   is ample;
+/// - walls must be at least [`PHOTO_WALL_PX`] = 3 px to survive the 3x3
+///   opening, and [`PHOTO_TICK`] keeps both edges within 3 * stroke +
+///   8 = 17 px so it reads as a mark and the room stays one clean
+///   rectangle.
+///
+/// Draws in order: paper, the [`PHOTO_RULING_PERIOD`]-period ruling at
+/// phase [`PHOTO_RULING_PHASE`], the [`PHOTO_ROOM`] bars plus its tick,
+/// the shadow over rows `0..PHOTO_SHADOW_ROWS` with
+/// `factor = 255 - (PHOTO_SHADOW_ROWS - y)`, then the nested corner
+/// vignette blocks `(0, 0, 84, 44)` / `(0, 0, 56, 28)` and their
+/// right-hand mirrors.
+///
+/// # Panics
+///
+/// Panics unless `width >= 600 && height >= 400`, or if a drawn
+/// coordinate or factor does not fit (test sizes always fit).
+#[must_use]
+#[inline]
+pub fn ruled_photo_sheet(width: u32, height: u32) -> RgbaImage {
+    assert!(
+        width >= 600_u32 && height >= 400_u32,
+        "a ruled photo sheet is at least 600x400 px"
+    );
+    let mut sheet = paper_sheet(width, height);
+
+    // The ruling: one row every PHOTO_RULING_PERIOD at the phase.
+    let mut row = PHOTO_RULING_PHASE;
+    while row < height {
+        let next = row.checked_add(1_u32).expect("a test row fits");
+        fill_rect(&mut sheet, (0_u32, row, width, next), PHOTO_RULING);
+        row = row
+            .checked_add(PHOTO_RULING_PERIOD)
+            .expect("a test row fits");
+    }
+
+    // The room: four bars along the edges of PHOTO_ROOM, plus the tick.
+    let (x0, y0, x1, y1) = PHOTO_ROOM;
+    let left = x0.checked_add(PHOTO_WALL_PX).expect("a test wall fits");
+    let right = x1.checked_sub(PHOTO_WALL_PX).expect("a test wall fits");
+    let top = y0.checked_add(PHOTO_WALL_PX).expect("a test wall fits");
+    let bottom = y1.checked_sub(PHOTO_WALL_PX).expect("a test wall fits");
+    fill_rect(&mut sheet, (x0, y0, x1, top), PHOTO_INK);
+    fill_rect(&mut sheet, (x0, bottom, x1, y1), PHOTO_INK);
+    fill_rect(&mut sheet, (x0, y0, left, y1), PHOTO_INK);
+    fill_rect(&mut sheet, (right, y0, x1, y1), PHOTO_INK);
+    fill_rect(&mut sheet, PHOTO_TICK, PHOTO_INK);
+
+    // The shadow: rows 0..PHOTO_SHADOW_ROWS multiplied by
+    // 255 - (PHOTO_SHADOW_ROWS - row), a ramp of one level per row.
+    for ramp in 0_u32..PHOTO_SHADOW_ROWS {
+        let decay = PHOTO_SHADOW_ROWS
+            .checked_sub(ramp)
+            .expect("a ramp row is inside the shadow");
+        let factor = 255_u32.checked_sub(decay).expect("the ramp fits");
+        let next = ramp.checked_add(1_u32).expect("a test row fits");
+        multiply_rect(&mut sheet, (0_u32, ramp, width, next), factor);
+    }
+
+    // The vignette: nested blocks at both top corners, each a further
+    // multiply by 246/255, so no single step is above 9 levels.
+    let corner = 246_u32;
+    multiply_rect(&mut sheet, (0_u32, 0_u32, 84_u32, 44_u32), corner);
+    multiply_rect(&mut sheet, (0_u32, 0_u32, 56_u32, 28_u32), corner);
+    let outer_x = width.checked_sub(84_u32).expect("the sheet is 600+ wide");
+    let inner_x = width.checked_sub(56_u32).expect("the sheet is 600+ wide");
+    multiply_rect(&mut sheet, (outer_x, 0_u32, width, 44_u32), corner);
+    multiply_rect(&mut sheet, (inner_x, 0_u32, width, 28_u32), corner);
+    sheet
 }
 
 /// Encodes `sheet` as a `PNG` file named `name` inside `dir` and returns

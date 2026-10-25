@@ -1,13 +1,18 @@
 //! The preview pipeline `process_image`: ops with the quantized and
-//! `quantize: false` shapes, the op-index errors, and the
+//! `quantize: false` shapes, the `grayscale`/`blur` building blocks, the
+//! `threshold`-then-`thin_stroke_filter` hairline pass, the
+//! `adaptive_threshold` uneven-light binarization, the
+//! `perspective_correct` quad straightening, the op-index errors, and the
 //! default-dither preview keeping an asymmetric picture unmirrored.
+
+use std::path::Path;
 
 use cyberdemon::gfx::codec::encode_png;
 use cyberdemon::gfx::image::RgbaImage;
 use serde_json::{Value, json};
 
-use crate::imports::{fetch_asset, flat_png, iwad_client, source_args, write_file};
-use crate::support::{call, call_err};
+use crate::imports::{PIXELS, SIDE, fetch_asset, flat_png, iwad_client, source_args, write_file};
+use crate::support::{asset_png, call, call_err, fill_rect, paper_sheet};
 
 /// The `RGBA` bytes of the published asset at `url`.
 async fn asset_png_dimensions(url: &str) -> (u64, u64) {
@@ -112,6 +117,270 @@ async fn process_image_without_quantize_publishes_one_picture() {
         report["steps"].as_array().expect("steps").is_empty(),
         "no ops"
     );
+}
+
+/// A `SIDE` x `SIDE` opaque PNG of one colour.
+fn solid_png(color: [u8; 4]) -> Vec<u8> {
+    let pixels: Vec<u8> = (0..PIXELS).flat_map(|_| color).collect();
+    let img = RgbaImage::new(SIDE, SIDE, pixels).expect("test shape is valid");
+    encode_png(&img, None).expect("test PNG encodes")
+}
+
+/// `process_image` with `grayscale` then `blur`: both steps report
+/// their measures, and a single-colour opaque picture — the red,
+/// luminance `124` — stays that exact grey through both.
+#[tokio::test]
+async fn process_image_grayscale_and_blur_keep_a_flat_picture_flat() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(dir.path(), "FLATRED.png", &solid_png([200, 100, 50, 255]));
+    let report = call(
+        &client,
+        "process_image",
+        source_args(
+            &file,
+            json!({
+                "ops": [
+                    { "op": "grayscale" },
+                    { "op": "blur", "radius": 2_u64 },
+                ],
+            }),
+        ),
+    )
+    .await;
+    let steps = report["steps"].as_array().expect("a step list");
+    assert_eq!(steps.len(), 2_usize, "grayscale then blur reported");
+    assert_eq!(steps[0]["op"], json!("grayscale"), "in order");
+    assert_eq!(
+        steps[0]["distinct_colors_before"],
+        json!(1_u64),
+        "one colour"
+    );
+    assert_eq!(steps[0]["distinct_colors_after"], json!(1_u64), "one grey");
+    assert_eq!(steps[1]["op"], json!("blur"), "the blur step");
+    assert_eq!(steps[1]["radius"], json!(2_u64), "the radius echoes");
+    let url = report["processed"]["url"]
+        .as_str()
+        .expect("a processed URL");
+    let bytes = fetch_asset(url).await;
+    let image = cyberdemon::gfx::codec::decode_image(&bytes).expect("the asset is a PNG");
+    assert_eq!((image.width, image.height), (SIDE, SIDE), "no shape change");
+    assert!(
+        image
+            .pixels
+            .chunks_exact(4)
+            .all(|pixel| pixel == [124_u8, 124, 124, 255]),
+        "the uniform luminance-124 grey stays exact through both ops",
+    );
+}
+
+/// A `blur` radius outside `1..=256` refuses through `process_image`,
+/// naming `ops[0].radius`.
+#[tokio::test]
+async fn process_image_names_the_field_of_a_blur_out_of_range() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(dir.path(), "FLATRED.png", &solid_png([200, 100, 50, 255]));
+    let (code, message, _) = call_err(
+        &client,
+        "process_image",
+        source_args(&file, json!({ "ops": [{ "op": "blur", "radius": 0_u64 }] })),
+    )
+    .await;
+    assert_eq!(code, "invalid_argument", "radius 0 refuses");
+    assert!(
+        message.contains("ops[0].radius") && message.contains("1..=256"),
+        "the message names the field and range: {message}"
+    );
+}
+
+/// A `12` x `12` opaque `PNG`: white paper carrying a `1` px grey row
+/// (row `2`) and a `4` px grey band (rows `5..=8`).
+fn ruling_png() -> Vec<u8> {
+    let mut img =
+        RgbaImage::new(12_u32, 12_u32, vec![255_u8; 576_usize]).expect("a 12x12 RGBA8 is valid");
+    let hairline = (0..12_u32).map(|x| (x, 2_u32));
+    let band = (0..12_u32).flat_map(|x| (5..9_u32).map(move |y| (x, y)));
+    for (x, y) in hairline.chain(band) {
+        assert!(img.set(x, y, [100_u8, 100, 100, 255]), "fixture in bounds");
+    }
+    encode_png(&img, None).expect("test PNG encodes")
+}
+
+/// `process_image` with `threshold` then `thin_stroke_filter` at radius
+/// `1`: the hairline row comes back white paper, the `4` px band black
+/// ink, and the step carries the two ink counts.
+#[tokio::test]
+async fn process_image_thin_stroke_filter_drops_the_hairline_row() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(dir.path(), "RULING.png", &ruling_png());
+    let report = call(
+        &client,
+        "process_image",
+        source_args(
+            &file,
+            json!({
+                "ops": [
+                    { "op": "threshold" },
+                    { "op": "thin_stroke_filter", "radius": 1_u64 },
+                ],
+            }),
+        ),
+    )
+    .await;
+    let steps = report["steps"].as_array().expect("a step list");
+    assert_eq!(steps.len(), 2_usize, "threshold then the filter");
+    assert_eq!(steps[1]["op"], json!("thin_stroke_filter"), "the op name");
+    assert_eq!(steps[1]["radius"], json!(1_u64), "the radius echoes");
+    assert_eq!(steps[1]["otsu"], json!(true), "level omitted is Otsu");
+    assert_eq!(
+        steps[1]["removed_ink_pixels"],
+        json!(12_u64),
+        "the 12-pixel hairline was dropped"
+    );
+    assert_eq!(
+        steps[1]["kept_ink_pixels"],
+        json!(48_u64),
+        "the 4 px band kept its 48 ink pixels"
+    );
+    let url = report["processed"]["url"]
+        .as_str()
+        .expect("a processed URL");
+    let image = asset_png(url).await;
+    assert_eq!(
+        (image.width, image.height),
+        (12_u32, 12_u32),
+        "no shape change"
+    );
+    assert!(
+        (0..12_u32).all(|x| image.get(x, 2) == Some([255_u8, 255, 255, 255])),
+        "the hairline row is white paper now"
+    );
+    assert!(
+        (0..12_u32)
+            .flat_map(|x| (5..9_u32).map(move |y| (x, y)))
+            .all(|(x, y)| image.get(x, y) == Some([0_u8, 0, 0, 255])),
+        "the 4 px band is black ink still"
+    );
+    assert_eq!(
+        image.get(0, 0),
+        Some([255_u8, 255, 255, 255]),
+        "paper stays paper"
+    );
+}
+
+/// The fixture's grey at `(x, y)`: the square's `20` inside
+/// `13..=17 x 8..=12`, the `3`-per-column white-to-grey ramp elsewhere.
+fn gradient_level(x: u32, y: u32) -> u8 {
+    let inside = (13..=17_u32).contains(&x) && (8..=12_u32).contains(&y);
+    let stepped = x.checked_mul(3).expect("fixture fits");
+    let ramp = 255_u32.saturating_sub(stepped);
+    let value = if inside { 20_u32 } else { ramp };
+    u8::try_from(value).expect("ramp fits u8")
+}
+
+/// A `40` x `24` opaque `PNG`: a horizontal white-to-grey luminance
+/// ramp (`255` at the left edge, `138` at the right) carrying a
+/// `5` x `5` dark square (luminance `20`) at columns `13..=17`,
+/// rows `8..=12`.
+fn gradient_rect_png() -> Vec<u8> {
+    let mut img =
+        RgbaImage::new(40_u32, 24_u32, vec![255_u8; 3_840_usize]).expect("a 40x24 RGBA8 is valid");
+    let points = (0..24_u32).flat_map(|y| (0..40_u32).map(move |x| (x, y)));
+    for (x, y) in points {
+        let shade = gradient_level(x, y);
+        assert!(
+            img.set(x, y, [shade, shade, shade, 255_u8]),
+            "fixture in bounds"
+        );
+    }
+    encode_png(&img, None).expect("test PNG encodes")
+}
+
+/// Asserts on the processed gradient picture: the `5 x 5` square is
+/// opaque black ink everywhere, from the gradient's bright end to its
+/// dark one, and the sampled background pixels are opaque white paper.
+fn assert_adaptive_ink_and_paper(image: &RgbaImage) {
+    let square = (8..=12_u32).flat_map(|y| (13..=17_u32).map(move |x| (x, y)));
+    let unpicked: Vec<(u32, u32)> = square
+        .filter(|&(x, y)| image.get(x, y) != Some([0_u8, 0, 0, 255]))
+        .collect();
+    assert!(
+        unpicked.is_empty(),
+        "the whole square is ink, at the bright and the dark end alike: {unpicked:?}"
+    );
+    let sampled = [
+        (0_u32, 0_u32),
+        (39, 0),
+        (0, 23),
+        (39, 23),
+        (12, 10),
+        (18, 12),
+        (15, 7),
+    ];
+    let inked: Vec<(u32, u32)> = sampled
+        .iter()
+        .copied()
+        .filter(|&(x, y)| image.get(x, y) != Some([255_u8, 255, 255, 255]))
+        .collect();
+    assert!(
+        inked.is_empty(),
+        "the sampled gradient pixels stay opaque paper: {inked:?}"
+    );
+}
+
+/// `process_image` with the uneven-light binarizer: `adaptive_threshold`
+/// at radius `4`, offset `10` inks the whole `5 x 5` square even where
+/// the gradient darkens beneath it, reports the flattened background's
+/// extremes (`144..=249` against the raw `138..=255`), and leaves every
+/// gradient pixel opaque white paper.
+#[tokio::test]
+async fn process_image_adaptive_threshold_inks_a_square_on_a_gradient() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(dir.path(), "GRADIENT.png", &gradient_rect_png());
+    let report = call(
+        &client,
+        "process_image",
+        source_args(
+            &file,
+            json!({
+                "ops": [
+                    { "op": "adaptive_threshold", "radius": 4_u64, "offset": 10_u64 },
+                ],
+            }),
+        ),
+    )
+    .await;
+    let steps = report["steps"].as_array().expect("a step list");
+    assert_eq!(steps.len(), 1_usize, "one op ran");
+    let step = &steps[0];
+    assert_eq!(step["op"], json!("adaptive_threshold"), "the op name");
+    assert_eq!(step["radius"], json!(4_u64), "the radius echoes");
+    assert_eq!(step["offset"], json!(10_u64), "the offset echoes");
+    assert_eq!(step["otsu"], json!(false), "the test is local, never Otsu");
+    assert_eq!(step["ink_pixels"], json!(25_u64), "exactly the 5x5 square");
+    assert_eq!(
+        step["background_min"],
+        json!(144_u64),
+        "the flattened dark end: mean(150, 147, 144, 141, 138)"
+    );
+    assert_eq!(
+        step["background_max"],
+        json!(249_u64),
+        "the flattened bright end: mean(255, 252, 249, 246, 243)"
+    );
+    let url = report["processed"]["url"]
+        .as_str()
+        .expect("a processed URL");
+    let image = asset_png(url).await;
+    assert_eq!(
+        (image.width, image.height),
+        (40_u32, 24_u32),
+        "no shape change"
+    );
+    assert_adaptive_ink_and_paper(&image);
 }
 
 /// A bad op parameter fails with `invalid_argument` naming the op
@@ -225,5 +494,86 @@ async fn process_image_dithering_keeps_the_picture_left_weighted() {
         unweighted_rows(&image.pixels),
         Vec::<usize>::new(),
         "every row of the quantized preview stays left-weighted"
+    );
+}
+
+/// An `8x8` picture of four solid colour blocks: red top-left, lime
+/// top-right, blue bottom-right, black bottom-left.
+fn quadrant_png() -> Vec<u8> {
+    let mut sheet = paper_sheet(SIDE, SIDE);
+    fill_rect(&mut sheet, (0, 0, 4, 4), [255_u8, 0, 0, 255]);
+    fill_rect(&mut sheet, (4, 0, SIDE, 4), [0_u8, 255, 0, 255]);
+    fill_rect(&mut sheet, (4, 4, SIDE, SIDE), [0_u8, 0, 255, 255]);
+    fill_rect(&mut sheet, (0, 4, 4, SIDE), [0_u8, 0, 0, 255]);
+    encode_png(&sheet, None).expect("test PNG encodes")
+}
+
+/// Arguments straightening the corner quad of [`quadrant_png`] into an
+/// `8x8` rectangle.
+fn straighten_args(file: &Path) -> Value {
+    source_args(
+        file,
+        json!({
+            "ops": [{
+                "op": "perspective_correct",
+                "corners": [
+                    { "x": 1_i64, "y": 1_i64 },
+                    { "x": 6_i64, "y": 1_i64 },
+                    { "x": 6_i64, "y": 6_i64 },
+                    { "x": 1_i64, "y": 5_i64 },
+                ],
+                "width": 8_u64,
+                "height": 8_u64,
+            }],
+        }),
+    )
+}
+
+/// `process_image` with `perspective_correct`: the skewed quad of
+/// four corner colours is straightened to `8x8` and each corner
+/// colour lands exactly on its rectangle corner.
+#[tokio::test]
+async fn process_image_perspective_corrects_a_skewed_quad_to_a_rectangle() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(dir.path(), "SKEW.png", &quadrant_png());
+    let report = call(&client, "process_image", straighten_args(&file)).await;
+    assert_eq!(report["width"], json!(8_u64), "the rectangle's width");
+    assert_eq!(report["height"], json!(8_u64), "the rectangle's height");
+    let step = &report["steps"][0];
+    assert_eq!(step["op"], json!("perspective_correct"), "the step name");
+    assert_eq!(
+        step["corners"],
+        json!([
+            [1_i64, 1_i64],
+            [6_i64, 1_i64],
+            [6_i64, 6_i64],
+            [1_i64, 5_i64]
+        ]),
+        "the corner pairs echo"
+    );
+    let url = report["processed"]["url"]
+        .as_str()
+        .expect("a processed URL");
+    let image = asset_png(url).await;
+    assert_eq!(
+        image.get(0, 0),
+        Some([255_u8, 0, 0, 255]),
+        "the top-left corner straightens to red"
+    );
+    assert_eq!(
+        image.get(7, 0),
+        Some([0_u8, 255, 0, 255]),
+        "the top-right corner straightens to lime"
+    );
+    assert_eq!(
+        image.get(7, 7),
+        Some([0_u8, 0, 255, 255]),
+        "the bottom-right corner straightens to blue"
+    );
+    assert_eq!(
+        image.get(0, 7),
+        Some([0_u8, 0, 0, 255]),
+        "the bottom-left corner straightens to black"
     );
 }

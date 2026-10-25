@@ -1,6 +1,7 @@
 //! Server behavior as seen by a real MCP client: identity, tool listing,
-//! the `version` tool, protocol errors, the real binary over stdio, and
-//! the round trip of every `support` picture helper.
+//! the `version` tool, protocol errors, the real binary over stdio, the
+//! round trip of every `support` picture helper, and the raw structure of
+//! the ruled photo sheet fixture.
 
 #[cfg(test)]
 mod tests {
@@ -8,6 +9,7 @@ mod tests {
     use std::process::Stdio;
 
     use cyberdemon::gfx::codec::decode_image;
+    use cyberdemon::gfx::image::RgbaImage;
     use rmcp::ServiceExt as _;
     use rmcp::model::{CallToolRequestParams, ErrorCode, Tool};
     use rmcp::service::ServiceError;
@@ -17,7 +19,9 @@ mod tests {
 
     use crate::fixtures::iwad;
     use crate::support::{
-        asset_png, call, call_err, connect, connect_probe, fill_rect, paper_sheet, write_png,
+        PHOTO_INK, PHOTO_ROOM, PHOTO_RULING, PHOTO_RULING_PERIOD, PHOTO_RULING_PHASE,
+        PHOTO_SHADOW_ROWS, PHOTO_TICK, PHOTO_WALL_PX, asset_png, call, call_err, connect,
+        connect_probe, fill_rect, paper_sheet, ruled_photo_sheet, write_png,
     };
 
     const EXPECTED_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
@@ -723,5 +727,223 @@ mod tests {
             Some([1_u8, 254, 1, 255]),
             "the fixture flat's colour over HTTP"
         );
+    }
+
+    /// The `(299 r + 587 g + 114 b) / 1000` luminance of a pixel.
+    fn luminance(pixel: [u8; 4]) -> u32 {
+        let red = 299_u32
+            .checked_mul(u32::from(pixel[0]))
+            .expect("a test product");
+        let green = 587_u32
+            .checked_mul(u32::from(pixel[1]))
+            .expect("a test product");
+        let blue = 114_u32
+            .checked_mul(u32::from(pixel[2]))
+            .expect("a test product");
+        red.checked_add(green)
+            .expect("a test sum")
+            .checked_add(blue)
+            .expect("a test sum")
+            .checked_div(1_000_u32)
+            .expect("the divisor is constant")
+    }
+
+    /// The sheet's shadow factor at `row`: `255 - (160 - row)` on the
+    /// ramp and 255 below it.
+    fn shadow_factor(row: u32) -> u32 {
+        255_u32
+            .checked_sub(PHOTO_SHADOW_ROWS.saturating_sub(row))
+            .expect("the ramp fits")
+    }
+
+    /// `base` through the sheet's shadow at `row`: every colour channel
+    /// times `shadow_factor(row) / 255`, the alpha byte kept.
+    fn shaded(base: [u8; 4], row: u32) -> [u8; 4] {
+        let factor = shadow_factor(row);
+        let channel = |value: u8| {
+            u8::try_from(
+                u32::from(value)
+                    .checked_mul(factor)
+                    .expect("a test product")
+                    .checked_div(255_u32)
+                    .expect("the divisor is constant"),
+            )
+            .expect("a scaled channel fits a u8")
+        };
+        [
+            channel(base[0]),
+            channel(base[1]),
+            channel(base[2]),
+            base[3],
+        ]
+    }
+
+    /// Down a paper column, the rows at the ruling's phase and every
+    /// `PHOTO_RULING_PERIOD` after carry the shadowed blue exactly, and
+    /// every row between carries shadowed paper exactly.
+    fn assert_ruling(sheet: &RgbaImage, column: u32) {
+        let paper: [u8; 4] = [255_u8, 255, 255, 255];
+        let height = usize::try_from(sheet.height).expect("a test height");
+        let phase = usize::try_from(PHOTO_RULING_PHASE).expect("a test phase");
+        let period = usize::try_from(PHOTO_RULING_PERIOD).expect("a test period");
+        assert!(phase < height, "the sheet carries ruled rows");
+        let mut ruled = vec![false; height];
+        for row in (phase..height).step_by(period) {
+            ruled[row] = true;
+        }
+        for (row, was_ruled) in ruled.iter().enumerate() {
+            let y = u32::try_from(row).expect("a test row");
+            let pixel = sheet.get(column, y).expect("a sheet pixel");
+            let base = [paper, PHOTO_RULING][usize::from(*was_ruled)];
+            assert_eq!(pixel, shaded(base, y), "column {column} at row {y}");
+        }
+    }
+
+    /// Whether the pixel at `(column, row)` is the blue of the ruling
+    /// rather than the grey of paper: shadow and vignette scale the blue
+    /// channel hardest, so blue over red tells them apart at any depth.
+    fn is_ruled(sheet: &RgbaImage, column: u32, row: u32) -> bool {
+        let pixel = sheet.get(column, row).expect("a sheet pixel");
+        pixel[2] > pixel[0]
+    }
+
+    /// The paper's luminance never decreases down the sheet, every
+    /// adjacent paper-row step stays at 2 levels or under, and row 0 is
+    /// clearly grey rather than white.
+    fn assert_shadow_ramp(sheet: &RgbaImage, column: u32) {
+        let paper: Vec<(u32, u32)> = (0..sheet.height)
+            .filter(|&row| !is_ruled(sheet, column, row))
+            .map(|row| {
+                (
+                    row,
+                    luminance(sheet.get(column, row).expect("a sheet pixel")),
+                )
+            })
+            .collect();
+        assert!(paper.len() >= 2, "the column carries paper rows");
+        for pair in paper.windows(2) {
+            assert!(pair.len() >= 2, "the windows have two rows");
+            let (before_row, before) = pair[0];
+            let (row, after) = pair[1];
+            assert!(after >= before, "the ramp never darkens at row {row}");
+            let step = after.saturating_sub(before);
+            assert!(
+                step <= 2_u32,
+                "the ramp steps {step} levels between rows {before_row} and {row}"
+            );
+        }
+        let top = luminance(sheet.get(column, 0_u32).expect("a sheet pixel"));
+        assert!(
+            (64_u32..=160_u32).contains(&top),
+            "row 0 is a clear grey, neither white nor ink: {top}"
+        );
+    }
+
+    /// Both top corner vignettes sit darker than the paper beside them,
+    /// and by no more than 20 levels: two shallow steps, no hard edge.
+    fn assert_vignettes(sheet: &RgbaImage) {
+        let row = 10_u32; // paper, on the ramp, inside the 28-row blocks
+        let beside = luminance(sheet.get(500_u32, row).expect("a sheet pixel"));
+        let left = luminance(sheet.get(30_u32, row).expect("a sheet pixel"));
+        let right_column = sheet.width.saturating_sub(31_u32);
+        let right = luminance(sheet.get(right_column, row).expect("a sheet pixel"));
+        for (corner, value) in [("left", left), ("right", right)] {
+            assert!(value < beside, "the {corner} corner is shaded");
+            let step = beside.saturating_sub(value);
+            assert!(step <= 20_u32, "the {corner} vignette drops {step} levels");
+        }
+    }
+
+    /// The four wall bars and the interior tick print the shadowed ink
+    /// exactly, the top bar is exactly the wall width thick, the tick is
+    /// 12x3 and the ink is near-black.
+    fn assert_walls_and_tick(sheet: &RgbaImage) {
+        let (x0, y0, x1, y1) = PHOTO_ROOM;
+        let centre_x = x0
+            .checked_add(x1)
+            .expect("a test span")
+            .checked_div(2_u32)
+            .expect("halved");
+        let centre_y = y0
+            .checked_add(y1)
+            .expect("a test span")
+            .checked_div(2_u32)
+            .expect("halved");
+        let wall = |column: u32, row: u32| {
+            let pixel = sheet.get(column, row).expect("a sheet pixel");
+            assert_eq!(
+                pixel,
+                shaded(PHOTO_INK, row),
+                "the ink at ({column}, {row})"
+            );
+        };
+        wall(centre_x, y0.checked_add(1_u32).expect("a test row")); // top
+        wall(centre_x, y1.saturating_sub(1_u32)); // bottom
+        wall(x0.checked_add(1_u32).expect("a test column"), centre_y); // left
+        wall(x1.saturating_sub(1_u32), centre_y); // right
+        let (tx0, ty0, tx1, ty1) = PHOTO_TICK;
+        wall(
+            tx0.checked_add(tx1)
+                .expect("a test span")
+                .checked_div(2_u32)
+                .expect("halved"),
+            ty0.checked_add(ty1)
+                .expect("a test span")
+                .checked_div(2_u32)
+                .expect("halved"),
+        ); // the tick
+        let outside = y0.checked_add(PHOTO_WALL_PX).expect("a test wall fits");
+        assert_eq!(
+            sheet.get(centre_x, outside).expect("a sheet pixel"),
+            shaded([255_u8, 255, 255, 255], outside),
+            "the top bar is exactly PHOTO_WALL_PX thick"
+        );
+        assert_eq!(
+            (tx1.saturating_sub(tx0), ty1.saturating_sub(ty0)),
+            (12_u32, 3_u32),
+            "the tick is 12x3"
+        );
+        assert!(luminance(PHOTO_INK) <= 64_u32, "the ink is near-black");
+    }
+
+    /// No pixel darker than luminance 64 lies within 90 px of any frame
+    /// edge: the drawing keeps the sheet's border clean.
+    fn assert_margin_is_clean(sheet: &RgbaImage) {
+        let inset = 90_u32;
+        let right = sheet.width.saturating_sub(inset);
+        let bottom = sheet.height.saturating_sub(inset);
+        let count = sheet.width.checked_mul(sheet.height).expect("a test sheet");
+        for index in 0_u32..count {
+            let column = index.checked_rem(sheet.width).expect("a test width");
+            let row = index.checked_div(sheet.width).expect("a test width");
+            let margin = column < inset || column >= right || row < inset || row >= bottom;
+            let pixel = sheet.get(column, row).expect("a sheet pixel");
+            let light = luminance(pixel) >= 64_u32;
+            assert!(
+                !margin || light,
+                "the margin stays light at ({column}, {row})"
+            );
+        }
+    }
+
+    /// Reads the raw `ruled_photo_sheet` structure without any client:
+    /// the ruling against the paper, the shadow ramp, both corner
+    /// vignettes, the wall bars with their tick and the clean frame
+    /// margin, every one of them the contract the sketch fixtures rely
+    /// on.
+    #[test]
+    fn ruled_photo_sheet_carries_its_documented_layout() {
+        let sheet = ruled_photo_sheet(600_u32, 400_u32);
+        assert_eq!(
+            (sheet.width, sheet.height),
+            (600_u32, 400_u32),
+            "the built sheet's shape"
+        );
+        let column = 500_u32; // clear of the room box and both vignettes
+        assert_ruling(&sheet, column);
+        assert_shadow_ramp(&sheet, column);
+        assert_vignettes(&sheet);
+        assert_walls_and_tick(&sheet);
+        assert_margin_is_clean(&sheet);
     }
 }

@@ -1,8 +1,9 @@
 //! `render_view`' first-person frame: the camera echo and the hall it paints,
 //! pitch moving the horizon down the frame, a room-side camera taking an
 //! explicit eye height, `doom` lighting darkening the far wall below the
-//! fullbright one, the floor textured with its flat on the world grid, the
-//! `SKY1` texture over a sky ceiling (and the background colour with the sky
+//! fullbright one, the session `gamma` landing on the frame exactly once at
+//! encode, the floor textured with its flat on the world grid, the `SKY1`
+//! texture over a sky ceiling (and the background colour with the sky
 //! switch off) and the masked grate showing the far flat through its hole.
 //! The fixture camera of [`view_args`], the fullbright switch of
 //! [`fullbright`] and [`sky_room_client`] serve the `view_sprites` topic too.
@@ -10,6 +11,7 @@
 use std::path::Path;
 
 use cyberdemon::gfx::image::RgbaImage;
+use cyberdemon::render::gamma_table;
 use serde_json::{Value, json};
 
 use crate::fixtures::iwad_view_textures;
@@ -201,6 +203,98 @@ async fn render_view_doom_lighting_darkens_the_far_wall() {
         [156_u8, 99, 156, 255],
         "light 192 at depth 448 lands on table 7 of the fixture ramp: \
          index 100 + 56, darker than the fullbright wall's (108, 147, 108)"
+    );
+}
+
+/// The `level` gamma table's entry for one 8-bit `channel`.
+fn gamma_lift(level: u8, channel: u8) -> u8 {
+    *gamma_table(level)
+        .get(usize::from(channel))
+        .expect("a gamma table covers the u8 range")
+}
+
+/// `color` with `level`'s curve run over its three colour channels: the
+/// single encode-time step `Canvas::apply_gamma` does on the finished frame.
+fn lifted(level: u8, color: [u8; 4]) -> [u8; 4] {
+    [
+        gamma_lift(level, color[0]),
+        gamma_lift(level, color[1]),
+        gamma_lift(level, color[2]),
+        color[3],
+    ]
+}
+
+/// The pixels of `bright` that are *not* `plain`'s with `level`'s table
+/// applied exactly once, in scan order.
+fn unlifted(plain: &RgbaImage, bright: &RgbaImage, level: u8) -> Vec<(u32, u32)> {
+    (0..bright.height)
+        .flat_map(|row| (0..bright.width).map(move |column| (column, row)))
+        .filter(|&(column, row)| {
+            bright.get(column, row).expect("a pixel")
+                != lifted(level, plain.get(column, row).expect("a pixel"))
+        })
+        .collect()
+}
+
+/// The pixels `level`'s curve actually moved between the two frames.
+fn corrected(plain: &RgbaImage, bright: &RgbaImage) -> usize {
+    (0..bright.height)
+        .flat_map(|row| (0..bright.width).map(move |column| (column, row)))
+        .filter(|&(column, row)| bright.get(column, row) != plain.get(column, row))
+        .count()
+}
+
+#[tokio::test]
+async fn render_view_applies_the_session_gamma_once_at_encode() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    fullbright(&client).await;
+    let plain = rendered_image(&call(&client, "render_view", view_args(&Value::Null)).await).await;
+    call(&client, "set_render_options", json!({ "gamma": 2_u64 })).await;
+    let report = call(&client, "render_view", view_args(&Value::Null)).await;
+    assert_eq!(
+        report["camera"],
+        json!({
+            "x": 64_i64, "y": 128_i64, "z": 41_i64, "angle": 0_i64,
+            "pitch": 0_i64, "fov": 90_u64, "sector": 0_u64,
+        }),
+        "the same camera, so only the gamma differs"
+    );
+    let gamma2 = rendered_image(&report).await;
+    let wall = plain.get(80, 50).expect("a pixel");
+    assert_eq!(
+        wall,
+        [108_u8, 147, 108, 255],
+        "the hall's far wall through the open step line, at the session's default \
+         gamma 0"
+    );
+    let once = lifted(2, wall);
+    let twice = lifted(2, once);
+    assert_eq!(
+        once,
+        [123_u8, 162, 123, 255],
+        "the gamma-2 table's one lift of that wall colour"
+    );
+    assert_ne!(
+        twice, once,
+        "a second lift lands on {twice:?}, so the checks below tell one application \
+         from two"
+    );
+    assert_eq!(
+        gamma2.get(80, 50).expect("a pixel"),
+        once,
+        "the known wall pixel is the gamma-0 pixel corrected once"
+    );
+    assert_eq!(
+        unlifted(&plain, &gamma2, 2),
+        Vec::new(),
+        "no pixel of the frame may be the gamma-0 one left alone or lifted twice \
+         (each coordinate listed differs from the gamma-2 table applied once)"
+    );
+    let moved = corrected(&plain, &gamma2);
+    assert!(
+        moved > 1_000,
+        "gamma 2 lifts the mid-tones all over the frame, not one pixel: {moved}"
     );
 }
 

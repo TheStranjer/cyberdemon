@@ -17,7 +17,7 @@ tools set and read the defaults every render starts from;
 | `show_sprites`  | `true`     | sprites in the 3D view                                                         |
 | `sky`           | `true`     | draw the sky texture; off means the `background` colour                        |
 | `fov`           | `90`       | horizontal field of view, `10..=170` degrees                                   |
-| `gamma`         | `0`        | `0..=4` (Doom gamma levels); applied to every output channel                   |
+| `gamma`         | `0`        | `0..=4` (Doom gamma levels); applied once to every output channel at encode    |
 | `topdown_style` | `"editor"` | `"editor"` or `"automap"`                                                      |
 | `background`    | `"#000000"` | `#RRGGBB` hex colour (either case)                                            |
 
@@ -65,10 +65,11 @@ then, for walls:  east-west lines (dy = 0) -1, north-south lines (dx = 0) +1,
 ```
 
 The `doom` rule approximates the game's diminishing light: four tables
-brighter at the camera, one table darker every 128 map units. The final
-colour is `PALETTE[COLORMAP[table][index]]` with the `gamma` curve
-applied to each channel. Tables 32/33 (invulnerability, all-black) are
-not selected by this formula.
+brighter at the camera, one table darker every 128 map units. The published
+colour is `PALETTE[COLORMAP[table][index]]` with the `gamma` curve applied
+to each channel exactly once, over the finished frame when it is encoded;
+no texel is corrected a second time on its way in. Tables 32/33
+(invulnerability, all-black) are not selected by this formula.
 
 How the view gets its pictures: the scene loads every wall texture the
 map names (composited from `TEXTURE1`/`TEXTURE2` definitions, `TEXTURE2`

@@ -102,10 +102,13 @@ pub(super) fn reject_run(session: &Session, request: &Request) -> Read<RejectRep
     let publish = (request.detail == Detail::Full)
         .then(|| {
             let rows: Vec<String> = (0..reject.sectors).map(|index| reject.row(index)).collect();
-            json_bytes(&RejectAsset {
-                sectors: reject.sectors,
-                rows,
-            })
+            json_bytes(
+                &RejectAsset {
+                    sectors: reject.sectors,
+                    rows,
+                },
+                "asset",
+            )
             .map(|data| Publish {
                 filename: format!("{name}_reject.{JSON_EXTENSION}"),
                 data,
@@ -200,7 +203,7 @@ pub(super) fn blockmap_run(session: &Session, request: &Request) -> Read<Blockma
     let report = blockmap_summary(name, data.len(), &parsed);
     let publish = (request.detail == Detail::Full)
         .then(|| {
-            json_bytes(&parsed).map(|body| Publish {
+            json_bytes(&parsed, "asset").map(|body| Publish {
                 filename: format!("{name}_blockmap.{JSON_EXTENSION}"),
                 data: body,
             })

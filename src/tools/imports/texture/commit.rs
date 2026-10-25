@@ -143,8 +143,8 @@ pub(in crate::tools) fn layer_label(session: &Session, index: usize) -> String {
     session.layers().get(index).map_or_else(
         || format!("layer {index}"),
         |layer| match layer.role {
-            LayerRole::Iwad => "the IWAD".to_owned(),
-            LayerRole::Resource => format!("resource layer {index}"),
+            LayerRole::Iwad => format!("the {}", layer.role.label()),
+            LayerRole::Resource => format!("{} layer {index}", layer.role.label()),
         },
     )
 }

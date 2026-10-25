@@ -29,12 +29,11 @@ use crate::gfx::quantize::{
 };
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{
     DEFAULT_PALETTE, TransparencyParams, parse_transparency,
 };
-use crate::tools::ok;
 use crate::tools::palette::load_palette;
+use crate::tools::reply;
 
 use rmcp::ErrorData;
 use rmcp::model::CallToolResult;
@@ -251,10 +250,7 @@ pub(in crate::tools) async fn process_image_run(
     state: &AppState,
     args: &ProcessImageParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match process_image_build(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(process_image_build(state, args).await)
 }
 
 /// The measured body of [`process_image_run`].

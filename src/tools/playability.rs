@@ -49,44 +49,12 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
 
-use crate::defs::{Definitions, session_definitions};
-use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::Scope;
-use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
-use crate::tools::graphics::session_game;
-use crate::tools::maps::common;
+use crate::tools::maps::common::load;
 use crate::tools::playability::check::{CheckPlayabilityParams, check_run};
 use crate::tools::playability::describe::{DescribeMapParams, describe_run};
-use crate::tools::{fail, ok};
-use crate::wad::map::Map;
+use crate::tools::reply;
 use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
-
-/// The map and definitions one check reads, out of the session lock.
-struct Prepared {
-    /// The map to walk, from the merged view.
-    map: Map,
-    /// The session's definitions: custom `DECORATE`/`DEHACKED` things
-    /// included, exactly what the sprite renderers dress from.
-    defs: Definitions,
-}
-
-/// Read the check's inputs under the session lock.
-///
-/// # Errors
-///
-/// [`common::resolve_map_name`] and [`common::load_map`]'s errors, and the
-/// definition-collection errors of [`session_definitions`].
-fn load(state: &AppState, requested: Option<&str>) -> Result<Prepared, CyberError> {
-    state.with_session(|session| {
-        let name = common::resolve_map_name(session, requested)?;
-        let map = common::load_map(session, name, Scope::Merged)?;
-        let (sources, _notes) = custom_sources(session)?;
-        let defs = session_definitions(session_game(session), &sources)?;
-        Ok(Prepared { map, defs })
-    })
-}
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -102,10 +70,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<CheckPlayabilityParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match check_run(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(check_run(self.state(), &args).await)
     }
 
     /// Describes a map's sectors as measured rows of facts, roles and
@@ -117,9 +82,6 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<DescribeMapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match describe_run(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(describe_run(self.state(), &args).await)
     }
 }

@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::server::AssetRef;
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::fixed::midpoint;
 use crate::gfx::codec::encode_png;
@@ -18,9 +18,8 @@ use crate::render::{
 };
 use crate::session::Scope;
 use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
-use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
+use crate::tools::maps::params::PointParam;
 use crate::tools::palette::load_palette;
 use crate::wad::map::Map;
 
@@ -44,24 +43,13 @@ const MINIMAP_SUFFIX: &str = "_minimap.png";
 /// The minimap background: black, as the in-game automap draws it.
 const MINIMAP_BACKGROUND: Rgba = [0, 0, 0, 255];
 
-/// Arguments for `render_minimap`' `center` and `player` parameters: one
-/// world point.
-#[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct PointParams {
-    /// World `x`.
-    pub(super) x: i64,
-    /// World `y`.
-    pub(super) y: i64,
-}
-
 /// Arguments for `render_minimap`' `player` parameter: the automap player
-/// marker's position and facing.
+/// marker's position (the shared `{x, y}` point) and facing.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct PlayerParams {
-    /// World `x` of the marker.
-    x: i64,
-    /// World `y` of the marker.
-    y: i64,
+    /// The marker's world position.
+    #[serde(flatten)]
+    at: PointParam,
     /// Facing in degrees, counter-clockwise from east.
     angle: i64,
 }
@@ -80,7 +68,7 @@ pub(super) struct RenderMinimapParams {
     size: Option<u32>,
     /// World point the square window centres on (default: the map centre).
     #[serde(default)]
-    center: Option<PointParams>,
+    center: Option<PointParam>,
     /// Map units from the centre to a window edge, `1..=65536` (default:
     /// fit the whole map).
     #[serde(default)]
@@ -215,11 +203,11 @@ pub(super) fn resolve_radius(requested: Option<u32>, map: &Map) -> Result<i64, C
 ///
 /// [`minimap_needs_window`] for an empty map without a given centre.
 pub(super) fn resolve_centre(
-    requested: Option<&PointParams>,
+    requested: Option<&PointParam>,
     map: &Map,
 ) -> Result<(i64, i64), CyberError> {
     if let Some(point) = requested {
-        return Ok((point.x, point.y));
+        return Ok(point.to_wide());
     }
     let (min_x, min_y, max_x, max_y) = map.bounds().ok_or_else(|| minimap_needs_window(map))?;
     Ok((
@@ -252,10 +240,13 @@ pub(super) fn resolve_minimap(
     let size = resolve_size(args.size)?;
     let radius = resolve_radius(args.radius, map)?;
     let (centre_x, centre_y) = resolve_centre(args.center.as_ref(), map)?;
-    let player = args.player.as_ref().map(|mark| PlayerMark {
-        x: mark.x,
-        y: mark.y,
-        angle: mark.angle,
+    let player = args.player.as_ref().map(|mark| {
+        let wide = mark.at.to_wide();
+        PlayerMark {
+            x: wide.0,
+            y: wide.1,
+            angle: mark.angle,
+        }
     });
     Ok(Minimap {
         size,
@@ -285,13 +276,12 @@ pub(super) fn paint_minimap(map: &Map, defs: &Definitions, request: &Minimap) ->
 /// # Errors
 ///
 /// [`common::resolve_map_name`] and [`common::load_map`]'s errors, and the
-/// definition-collection errors of [`session_definitions`].
+/// definition-collection errors of [`crate::session::Session::definitions`].
 fn load_minimap(state: &AppState, requested: Option<&str>) -> Result<PreparedMinimap, CyberError> {
     state.with_session(|session| {
         let name = common::resolve_map_name(session, requested)?;
         let map = common::load_map(session, name, Scope::Merged)?;
-        let (sources, _notes) = custom_sources(session)?;
-        let defs = session_definitions(session_game(session), &sources)?;
+        let defs = session.definitions()?;
         Ok(PreparedMinimap {
             map,
             defs,

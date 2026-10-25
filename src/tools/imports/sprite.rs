@@ -25,13 +25,12 @@ use crate::error::CyberError;
 use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
 use crate::session::{Scope, Session};
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{
     ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched, build_patch, parse_import,
     put_lump,
 };
 use crate::tools::lumps::rows::build_rows;
-use crate::tools::ok;
+use crate::tools::reply;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
@@ -537,10 +536,7 @@ pub(super) async fn sprite_imported(
     state: &AppState,
     args: &ImportSpriteParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match import_sprite_run(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(import_sprite_run(state, args).await)
 }
 
 #[cfg(test)]

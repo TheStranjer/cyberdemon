@@ -56,7 +56,7 @@ use crate::session::{Scope, Session};
 use crate::tools::edit_vertices::moves::{check_vertices, join, move_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{IndexSelector, edit_result_fragment};
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
@@ -355,17 +355,6 @@ fn remove_run(
     })
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -380,7 +369,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddVertexParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(self.state().with_session(|session| add_run(session, &args)))
+        reply(self.state().with_session(|session| add_run(session, &args)))
     }
 
     /// Moves one vertex, or a whole group of them, in one undoable edit.
@@ -391,7 +380,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<MoveVertexParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| move_run(session, &args)),
         )
@@ -405,7 +394,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RemoveVertexParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| remove_run(session, &args)),
         )

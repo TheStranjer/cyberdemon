@@ -17,11 +17,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::defs::dehacked_edit::{self, Block, Field, Section};
 use crate::error::CyberError;
-use crate::session::{LayerRole, Session, Source};
+use crate::session::{Scope, Session, Source};
 use crate::tools::lumps::rows::LumpRow;
 use crate::wad::name::LumpName;
 
-use super::{find_lump, lump_name, parse_scope};
+use super::{find_lump, lump_name};
 
 /// Arguments for [`Cyberdemon::get_dehacked`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -134,17 +134,9 @@ fn layer_entry(session: &Session, index: usize) -> SourceEntry {
         };
     };
     SourceEntry {
-        kind: role_kind(layer.role),
+        kind: layer.role.as_str(),
         index: Some(index),
         path: Some(layer.path.display().to_string()),
-    }
-}
-
-/// The report word for a layer's role.
-const fn role_kind(role: LayerRole) -> &'static str {
-    match role {
-        LayerRole::Iwad => "iwad",
-        LayerRole::Resource => "resource",
     }
 }
 
@@ -181,7 +173,7 @@ fn section_entry(section: &Section) -> SectionEntry {
 ///
 /// # Errors
 ///
-/// [`lump_name`] and [`parse_scope`] refusals,
+/// [`lump_name`] and [`Scope::parse_or_merged`] refusals,
 /// [`crate::tools::lumps::rows::build_rows`]' and [`find_lump`]'s errors
 /// for the scope.
 pub(super) fn get_run(
@@ -189,7 +181,7 @@ pub(super) fn get_run(
     args: &GetDehackedParams,
 ) -> Result<GetReport, CyberError> {
     let name = lump_name(args.name.as_deref())?;
-    let scope = parse_scope(args.scope.as_deref())?;
+    let scope = Scope::parse_or_merged(args.scope.as_deref())?;
     let row = find_lump(session, name, scope)?;
     let text = String::from_utf8_lossy(&row.lump.data).into_owned();
     let patch = dehacked_edit::parse(&text);

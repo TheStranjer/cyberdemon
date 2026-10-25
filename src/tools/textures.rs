@@ -38,8 +38,6 @@ use rmcp::{ErrorData, tool, tool_router};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{MergedLump, Session, Source};
-use crate::tools::fail;
-use crate::tools::ok;
 use crate::tools::textures::build::{
     BuildTextureParams, RemoveTextureParams, build_texture_run, remove_texture_run,
 };
@@ -48,6 +46,7 @@ use crate::tools::textures::list::{
 };
 use crate::tools::textures::pnames::EditPnamesParams;
 use crate::tools::textures::pnames_rewrite::{edit_pnames_run, pick_operation};
+use crate::tools::{Page, fail, reply};
 use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::name::glob_match;
@@ -258,52 +257,9 @@ fn push_rows(rows: &mut Vec<TextureRow>, entry: Option<&(TextureLump, Source)>, 
     }
 }
 
-/// The validated page request of the listing tools.
-#[derive(Debug)]
-struct Page {
-    /// Rows to skip before the page.
-    offset: usize,
-    /// Maximum rows on the page.
-    limit: usize,
-}
-
-/// The `{offset, limit}` pair a listing tool was given.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for a `limit` outside `1..=2000`.
-fn parse_page(offset: Option<usize>, limit: Option<usize>) -> Result<Page, CyberError> {
-    let value = match limit {
-        None => DEFAULT_LIMIT,
-        Some(value) if value == 0 || value > MAX_LIMIT => {
-            return Err(CyberError::InvalidArgument(format!(
-                "limit {value} is out of range: pass a value between 1 and {MAX_LIMIT}"
-            )));
-        }
-        Some(value) => value,
-    };
-    Ok(Page {
-        offset: offset.unwrap_or(0_usize),
-        limit: value,
-    })
-}
-
 /// Whether `name` passes the optional glob filter.
 fn passes(name: &str, pattern: Option<&str>) -> bool {
     pattern.is_none_or(|glob| glob_match(name.as_bytes(), glob))
-}
-
-/// Keeps the matching rows of `matched` on `page` and counts all matches.
-fn page_rows<T>(matched: Vec<T>, page: &Page) -> (usize, Vec<T>) {
-    let total = matched.len();
-    (
-        total,
-        matched
-            .into_iter()
-            .skip(page.offset)
-            .take(page.limit)
-            .collect(),
-    )
 }
 
 #[expect(
@@ -320,17 +276,14 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ListTexturesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let page = match parse_page(args.offset, args.limit) {
+        let page = match Page::parse(args.offset, args.limit, DEFAULT_LIMIT, MAX_LIMIT) {
             Ok(page) => page,
             Err(error) => return fail(&error),
         };
         let report = self
             .state()
             .with_session(|session| list_textures_run(session, &page, args.pattern.as_deref()));
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Lists the merged `PNAMES` patch-name index.
@@ -341,17 +294,14 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ListPnamesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let page = match parse_page(args.offset, args.limit) {
+        let page = match Page::parse(args.offset, args.limit, DEFAULT_LIMIT, MAX_LIMIT) {
             Ok(page) => page,
             Err(error) => return fail(&error),
         };
         let report = self
             .state()
             .with_session(|session| list_pnames_run(session, &page, args.pattern.as_deref()));
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Edits `PNAMES` and renumbers every texture reference.
@@ -369,10 +319,7 @@ impl Cyberdemon {
         let report = self.state().with_session(|session| {
             edit_pnames_run(session, operation, args.force.unwrap_or(false))
         });
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Defines a composite texture record in `TEXTURE1`/`TEXTURE2`.
@@ -386,10 +333,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| build_texture_run(session, &args));
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 
     /// Removes one texture definition from whichever `TEXTUREx` holds it.
@@ -403,10 +347,7 @@ impl Cyberdemon {
         let report = self
             .state()
             .with_session(|session| remove_texture_run(session, &args));
-        match report {
-            Ok(success) => ok(&success),
-            Err(error) => fail(&error),
-        }
+        reply(report)
     }
 }
 

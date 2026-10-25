@@ -1,7 +1,7 @@
 //! `list_sprites`: the sprite region grouped by sprite, frame and rotation.
 //!
 //! [`list_sprites_run`] walks the merged view's sprites region (again with
-//! [`last_wins`] and [`page_rows`]) and folds every grammar-matching name
+//! [`last_wins`] and [`Page::take`]) and folds every grammar-matching name
 //! into [`Groups`] with [`collect_sprite`], which records a pair name's
 //! second rotation as a mirrored entry through [`push_rotation`]; a name the
 //! grammar rejects is kept by [`shows_invalid`] when the caller's prefix
@@ -18,9 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::CyberError;
 use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
 use crate::session::Session;
-use crate::tools::graphics::{
-    Page, SPRITE_PREFIX_LEN, in_namespace, last_wins, merged_rows, page_rows,
-};
+use crate::tools::Page;
+use crate::tools::graphics::{SPRITE_PREFIX_LEN, in_namespace, last_wins, merged_rows};
 use crate::wad::classify::Namespace;
 
 /// Arguments for [`Cyberdemon::list_sprites`].
@@ -207,7 +206,7 @@ pub(super) fn list_sprites_run(
             None => {}
         }
     }
-    let (total, sprites) = page_rows(sprite_rows(groups), page);
+    let (total, sprites) = page.take(sprite_rows(groups));
     Ok(SpritesReport {
         total,
         sprites,

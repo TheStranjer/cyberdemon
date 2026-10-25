@@ -26,11 +26,10 @@ use crate::gfx::quantize::{
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::fail;
 use crate::tools::imports::image_pipeline::{DEFAULT_PALETTE, LumpWrite, chosen_name, put_lump};
 use crate::tools::imports::processed::dither_or_default;
-use crate::tools::ok;
 use crate::tools::palette::load_palette;
+use crate::tools::reply;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
@@ -347,8 +346,5 @@ pub(super) async fn flat_imported(
     state: &AppState,
     args: &ImportFlatParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match import_flat_run(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(import_flat_run(state, args).await)
 }

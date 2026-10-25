@@ -4,11 +4,12 @@
 
 use serde_json::from_str;
 
-use crate::tools::features::door::{DoorPointParam, Target, target_of};
+use crate::tools::features::door::{Target, target_of};
 use crate::tools::features::wall::choose_between;
 use crate::tools::features::window::{
     AddWindowParams, BuiltWindow, WindowSkins, WindowSpec, build_window,
 };
+use crate::tools::maps::params::PointParam;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::WindowHeights;
 use crate::wad::map::{Linedef, Map};
@@ -221,7 +222,7 @@ fn add_window_params_read_the_wire_shape() {
                 "sill": 48, "lintel": 0, "map": "MAP01"}"#,
     );
     assert_eq!(full.between, Some([0_usize, 1_usize]));
-    assert_eq!(full.at, Some(DoorPointParam { x: 64, y: 0 }));
+    assert_eq!(full.at, Some(PointParam { x: 64, y: 0 }));
     assert_eq!(full.width, Some(96_i32));
     assert_eq!(full.sill, Some(48_i32));
     assert_eq!(full.lintel, Some(0_i32));

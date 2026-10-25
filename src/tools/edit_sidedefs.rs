@@ -32,7 +32,7 @@ use crate::tools::maps::common;
 use crate::tools::maps::params::{
     IndexSelector, check_index, edit_result_fragment, validate_texture_name,
 };
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::Sidedef;
@@ -485,17 +485,6 @@ fn remove_run(
     })
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -510,7 +499,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddSidedefParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(self.state().with_session(|session| add_run(session, &args)))
+        reply(self.state().with_session(|session| add_run(session, &args)))
     }
 
     /// Changes one or several sidedefs in a single undoable edit.
@@ -521,7 +510,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<EditSidedefParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| edit_run(session, &args)),
         )
@@ -535,7 +524,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RemoveSidedefParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| remove_run(session, &args)),
         )

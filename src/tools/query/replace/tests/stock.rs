@@ -8,7 +8,7 @@ use serde_json::{from_value, json};
 use crate::session::Session;
 use crate::tools::query::replace::{
     Stock, ThingRef, parse_terms, require_defined_thing, require_target, resolve_thing_ref,
-    run_replacement, thing_definitions,
+    run_replacement,
 };
 use crate::wad::map::bulk::{Face, Surface, replace_textures};
 
@@ -170,7 +170,9 @@ fn resolve_thing_ref_refuses_unknown_and_ambiguous_names() {
 
 #[test]
 fn require_defined_thing_checks_the_session_tables_and_names_the_escape() {
-    let definitions = thing_definitions(&Session::default()).expect("the default tables read");
+    let definitions = Session::default()
+        .definitions()
+        .expect("the default tables read");
     require_defined_thing(&definitions, 3002_i32).expect("the Demon is defined");
     require_defined_thing(&definitions, 1_i32).expect("the player start is defined");
     let missing = require_defined_thing(&definitions, 99999_i32).expect_err("nothing here");

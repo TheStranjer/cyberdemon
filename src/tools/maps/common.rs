@@ -1,13 +1,19 @@
 //! The shared map helpers behind every tool that acts on a map: name
-//! resolution and one map block read.
+//! resolution, one map block read and the one locked read of a merged-view
+//! map with the session's definitions.
 //!
 //! `resolve_map_name` picks the map a call works on; `load_map`
 //! decodes one block out of a scope, through the `Directory` wrapper
 //! around a scope's classified listing. Every later map tool takes an
-//! optional `map` parameter and starts with these two.
+//! optional `map` parameter and starts with these two. `load` adds
+//! [`Session::definitions`] in the same lock and answers with the
+//! `Prepared` pair the analysing tools (`find_elements`,
+//! `check_playability`, `describe_map`) read from.
 
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::session::{MergedLump, Scope, Session};
+use crate::state::AppState;
 use crate::wad::archive::Lump;
 use crate::wad::classify::{Analysis, MapBlock, analyze};
 use crate::wad::lumps;
@@ -152,28 +158,49 @@ pub(crate) fn load_map(session: &Session, name: LumpName, scope: Scope) -> Resul
 
 /// The `not_found` refusal for a map a scope does not hold.
 pub(in crate::tools) fn missing_map(name: LumpName, scope: Scope) -> CyberError {
-    CyberError::NotFound(format!(
-        "no map block named {name} in the {} scope",
-        scope_label(scope)
-    ))
-    .with_hint(MAP_LIST_HINT)
+    CyberError::NotFound(format!("no map block named {name} in the {scope} scope"))
+        .with_hint(MAP_LIST_HINT)
 }
 
-/// The scope's wire name, for messages.
-fn scope_label(scope: Scope) -> String {
-    match scope {
-        Scope::Merged => "merged".to_owned(),
-        Scope::Working => "working".to_owned(),
-        Scope::Layer(index) => format!("layer:{index}"),
-    }
+/// The map and the session's definitions, read together out of one
+/// session lock: what the analysing tools (`find_elements`,
+/// `check_playability`, `describe_map`) run on.
+#[derive(Debug)]
+pub(crate) struct Prepared {
+    /// The map to read, decoded from the merged view; its `name` carries
+    /// what the call resolved.
+    pub(crate) map: Map,
+    /// The session's definitions: custom `DECORATE`/`DEHACKED` things
+    /// included, exactly what the sprite renderers dress from.
+    pub(crate) defs: Definitions,
+}
+
+/// Read the map named by an optional `map` parameter (or the session's
+/// default) from the merged view together with the session's definitions,
+/// all under the session lock.
+///
+/// # Errors
+///
+/// [`resolve_map_name`] and [`load_map`]'s errors and
+/// [`Session::definitions`]' collection errors.
+pub(crate) fn load(state: &AppState, requested: Option<&str>) -> Result<Prepared, CyberError> {
+    state.with_session(|session| {
+        let name = resolve_map_name(session, requested)?;
+        let map = load_map(session, name, Scope::Merged)?;
+        Ok(Prepared {
+            map,
+            defs: session.definitions()?,
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Directory, directory, load_map, resolve_map_name};
+    use super::{Directory, directory, load, load_map, resolve_map_name};
     use crate::session::{Layer, LayerRole, Scope, Session};
+    use crate::state::AppState;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::classify::MapFormat;
     use crate::wad::name::LumpName;
@@ -338,6 +365,30 @@ mod tests {
             load_map(&session, name("MAP02"), Scope::Layer(0)).expect("the named block reads");
         assert_eq!(loaded.name, name("MAP02"), "the codec got the name");
         assert_eq!(loaded.format, MapFormat::Doom, "and the format");
+    }
+
+    #[test]
+    fn load_reads_the_map_with_the_session_definitions_under_one_lock() {
+        let state = AppState::default();
+        state
+            .with_session(|session| {
+                session.set_iwad(base(doom_block("MAP01")));
+                Ok(())
+            })
+            .expect("seeding the base layer");
+        let prepared = load(&state, None).expect("the one map resolves");
+        assert_eq!(prepared.map.name, name("MAP01"), "the resolved map");
+        assert_eq!(
+            prepared.defs.game,
+            crate::wad::game::Game::Doom2,
+            "an unidentified session stands for DOOM II"
+        );
+        let missing = load(&state, Some("MAP09")).expect_err("no MAP09 here");
+        assert_eq!(
+            missing.code(),
+            "not_found",
+            "the missing-map refusal surfaces"
+        );
     }
 
     #[test]

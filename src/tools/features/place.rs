@@ -16,15 +16,13 @@
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Value};
 
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::plan::things::presence_flags;
 use crate::session::{Scope, Session};
-use crate::tools::defs::collect;
 use crate::tools::edit_things::{check_binary_ranges, check_doom_plain};
 use crate::tools::maps::common;
 use crate::tools::maps::params::edit_result_fragment;
-use crate::wad::game::Game;
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::placement::{
     Area, DistributeSpec, Distribution, Facing, distribute, player_start, split_proportional,
@@ -252,23 +250,6 @@ fn coordinate_refusal(axis: &str, value: i64) -> CyberError {
     ))
 }
 
-/// The definitions game the tool reads: the session's detected game, an
-/// unidentified session standing for DOOM II (as the plan and validate
-/// tools do).
-fn place_game(found: Game) -> Game {
-    if found == Game::Unknown {
-        return Game::Doom2;
-    }
-    found
-}
-
-/// The thing definitions `place_things` resolves names against: the
-/// detected game's tables overlaid with the merged view's customs.
-fn place_definitions(session: &Session) -> Result<Definitions, CyberError> {
-    let (sources, _notes) = collect::custom_sources(session)?;
-    session_definitions(place_game(session.game()), &sources)
-}
-
 /// The edit fragment of a dry run: the map it inspected, nothing written.
 pub(super) fn dry_edit(name: LumpName) -> JsonMap<String, Value> {
     [
@@ -287,7 +268,7 @@ pub(super) fn place_things_run(
     session: &mut Session,
     args: &PlaceThingsParams,
 ) -> Result<PlaceReport, CyberError> {
-    let definitions = place_definitions(session)?;
+    let definitions = session.definitions()?;
     let request = place_request(args, &definitions)?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     if args.dry_run.get() {

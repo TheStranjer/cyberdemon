@@ -40,11 +40,10 @@ use crate::error::CyberError;
 use crate::gfx::ops::FitMode;
 use crate::state::AppState;
 use crate::themes::Role;
-use crate::tools::fail;
 use crate::tools::imports::create_flat::build::create_flat_build;
 use crate::tools::imports::processed::ProcessParams;
 use crate::tools::imports::{DEFAULT_FLAT_SIZE, parse_flat_size};
-use crate::tools::ok;
+use crate::tools::reply;
 use crate::wad::name::LumpName;
 
 /// The vanilla flat edge: the default square side this tool writes, and
@@ -176,10 +175,7 @@ pub(in crate::tools) async fn create_flat_run(
     state: &AppState,
     args: &CreateFlatParams,
 ) -> Result<CallToolResult, ErrorData> {
-    match create_flat_build(state, args).await {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    reply(create_flat_build(state, args).await)
 }
 
 #[cfg(test)]

@@ -391,7 +391,7 @@ pub(super) fn nodes_run(session: &Session, request: &Request) -> Read<NodesRepor
     let publish = match parsed {
         Some(set) if request.detail == Detail::Full => Some(Publish {
             filename: format!("{name}_nodes.{JSON_EXTENSION}"),
-            data: json_bytes(&nodes_asset_body(&set))?,
+            data: json_bytes(&nodes_asset_body(&set), "asset")?,
         }),
         Some(_) | None => None,
     };

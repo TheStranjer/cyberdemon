@@ -13,7 +13,7 @@ use crate::tools::nodes::get_nodes::{
 use crate::tools::nodes::get_tables::{
     blockmap_run, blockmap_summary, empty_blockmap_report, reject_run,
 };
-use crate::tools::nodes::{Detail, json_bytes, parse_detail, parse_scope};
+use crate::tools::nodes::{Detail, json_bytes, parse_detail};
 use crate::wad::bytes::Writer;
 use crate::wad::classify::{MapBlock, analyze};
 use crate::wad::map::{Blockmap, Map};
@@ -24,12 +24,12 @@ use super::{
 
 #[test]
 fn parse_scope_defaults_to_the_merged_view() {
-    assert_eq!(parse_scope(None).expect("absent"), Scope::Merged);
+    assert_eq!(Scope::parse_or_merged(None).expect("absent"), Scope::Merged);
     assert_eq!(
-        parse_scope(Some("WORKING")).expect("working"),
+        Scope::parse_or_merged(Some("WORKING")).expect("working"),
         Scope::Working
     );
-    let error = parse_scope(Some("nope")).expect_err("not a scope");
+    let error = Scope::parse_or_merged(Some("nope")).expect_err("not a scope");
     assert_eq!(error.code(), "invalid_argument", "bad scope code");
 }
 
@@ -356,7 +356,7 @@ fn blockmap_reports_summarize_share_and_empty_blocks() {
     assert_eq!(report.empty_blocks, 1, "the empty cell");
     assert_eq!(report.origin.x, -128, "the origin object");
     assert_eq!(report.origin.y, -256, "on both axes");
-    let json = json_bytes(&parsed).expect("the asset serializes");
+    let json = json_bytes(&parsed, "asset").expect("the asset serializes");
     assert!(
         String::from_utf8_lossy(&json).contains("\"blocks\""),
         "the full body carries the lists",

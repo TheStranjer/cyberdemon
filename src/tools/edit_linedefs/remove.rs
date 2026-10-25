@@ -16,7 +16,7 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::params::{IndexSelector, PointParam, check_index, edit_result_fragment};
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
 };
@@ -38,15 +38,6 @@ pub(super) struct RemoveLinedefParams {
     /// references any more (default `true`).
     #[serde(default)]
     pub(super) prune_vertices: Option<bool>,
-}
-
-/// An `X`/`Y` point parameter, one endpoint of the `from`/`to` form.
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
-pub(super) struct PointParam {
-    /// `X` coordinate in map units.
-    pub(super) x: i32,
-    /// `Y` coordinate in map units.
-    pub(super) y: i32,
 }
 
 /// Arguments for [`Cyberdemon::split_linedef`].

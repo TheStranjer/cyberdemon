@@ -190,6 +190,24 @@ pub(in crate::tools) struct UnitsParam {
     pub(in crate::tools) flip_y: bool,
 }
 
+impl UnitsParam {
+    /// The [`Units`] this wire object stands for under the caller's snap
+    /// `grid`: the one field the `units` object does not carry. The values
+    /// themselves are only *checked* by [`Units::check`]; this mapping
+    /// cannot fail.
+    #[must_use]
+    pub(in crate::tools) const fn to_units(self, grid: i64) -> Units {
+        Units {
+            scale_num: self.scale_num,
+            scale_den: self.scale_den,
+            origin_x: self.origin_x,
+            origin_y: self.origin_y,
+            grid,
+            flip_y: self.flip_y,
+        }
+    }
+}
+
 impl Default for UnitsParam {
     /// The documented identity defaults: scale `1/1`, both origins `0`,
     /// no mirror.
@@ -252,15 +270,7 @@ impl BuildPlanParams {
     /// values themselves are only *checked* there; this mapping cannot
     /// fail.
     pub(super) fn to_units(&self) -> Units {
-        let wire = self.units.unwrap_or_default();
-        Units {
-            scale_num: wire.scale_num,
-            scale_den: wire.scale_den,
-            origin_x: wire.origin_x,
-            origin_y: wire.origin_y,
-            grid: self.grid,
-            flip_y: wire.flip_y,
-        }
+        self.units.unwrap_or_default().to_units(self.grid)
     }
 
     /// The rooms, each converted under its own plan path.

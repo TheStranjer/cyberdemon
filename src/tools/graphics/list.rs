@@ -3,7 +3,7 @@
 //!
 //! Both read the merged view's rows through [`merged_rows`], keep one row
 //! per name with [`last_wins`], filter with [`passes`] and cut the page with
-//! [`page_rows`]. [`flat_row`] measures a flat as its `PNG` `IHDR` shape or
+//! [`Page::take`]. [`flat_row`] measures a flat as its `PNG` `IHDR` shape or
 //! the shape its raw byte count implies; [`patch_row`] sniffs `PNG` first
 //! and the `Doom` header second, so [`png_patch_shape`] and
 //! [`doom_patch_shape`] split those two branches and [`shape_pair`] and
@@ -22,7 +22,8 @@ use crate::gfx::flat::flat_shape;
 use crate::gfx::grab::read_grab;
 use crate::gfx::patch::{PatchHeader, patch_header};
 use crate::session::{Session, Source};
-use crate::tools::graphics::{Page, in_namespace, last_wins, merged_rows, page_rows, passes};
+use crate::tools::Page;
+use crate::tools::graphics::{in_namespace, last_wins, merged_rows, passes};
 use crate::tools::lumps::rows::LumpRow;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::lumps;
@@ -131,7 +132,7 @@ pub(super) fn list_flats_run(
     .filter(|row| passes(row.name, pattern))
     .map(flat_row)
     .collect();
-    let (total, flats) = page_rows(matched, page);
+    let (total, flats) = page.take(matched);
     Ok(FlatsReport { total, flats })
 }
 
@@ -295,6 +296,6 @@ pub(super) fn list_patches_run(
     .filter(|row| !in_pnames_only || pnames.contains(&row.name))
     .map(|row| patch_row(row, &pnames))
     .collect();
-    let (total, patches) = page_rows(matched, page);
+    let (total, patches) = page.take(matched);
     Ok(PatchesReport { total, patches })
 }

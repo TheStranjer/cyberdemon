@@ -28,7 +28,7 @@ use crate::wad::classify::{Analysis, MapBlock, MapFormat, analyze};
 use crate::wad::map::{Map, write_map};
 use crate::wad::name::{LumpName, NAME_LEN};
 
-use super::{parse_format, parse_scope, resolve_namespace};
+use super::{parse_format, resolve_namespace};
 
 pub(super) use runs::{
     CopyReport, CreateReport, RemoveReport, RenameReport, copy_run, create_run, remove_run,
@@ -165,7 +165,7 @@ pub(super) fn plan_copy(args: &CopyMapParams) -> Result<CopyPlan, CyberError> {
     Ok(CopyPlan {
         from: LumpName::parse(&args.from)?,
         to: LumpName::parse(&args.to)?,
-        scope: parse_scope(args.scope.as_deref())?,
+        scope: Scope::parse_or_merged(args.scope.as_deref())?,
         replace: args.replace,
     })
 }

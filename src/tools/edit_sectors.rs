@@ -56,7 +56,7 @@ use crate::tools::edit_sectors::edit::{
     AddSectorParams, EditSectorParams, RemoveSectorParams, add_run, edit_run, remove_run,
 };
 use crate::tools::maps::params::validate_texture_name;
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Sector;
 use crate::wad::map::consts::NO_TEXTURE;
@@ -225,17 +225,6 @@ fn check_sector(format: MapFormat, sector: &Sector) -> Result<(), CyberError> {
     check_height_order(sector)
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -250,7 +239,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddSectorParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(self.state().with_session(|session| add_run(session, &args)))
+        reply(self.state().with_session(|session| add_run(session, &args)))
     }
 
     /// Changes one or several sectors in a single undoable edit.
@@ -261,7 +250,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<EditSectorParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| edit_run(session, &args)),
         )
@@ -275,7 +264,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RemoveSectorParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| remove_run(session, &args)),
         )
@@ -289,7 +278,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<CreateSectorFromLoopParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| create_run(session, &args)),
         )
@@ -303,7 +292,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<CarveVoidParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| carve_run(session, &args)),
         )

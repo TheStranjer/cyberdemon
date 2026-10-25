@@ -25,7 +25,7 @@ use crate::geom::Pt;
 use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
+use crate::tools::maps::params::{PointParam, edit_result_fragment, validate_texture_name};
 use crate::tools::themes::theme_texture;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
@@ -47,7 +47,7 @@ pub(super) struct CreateSectorFromLoopParams {
     /// The polygon's corners as points `{x, y}` (at least 3, implicitly
     /// closed): exactly one of `points` and `vertices`.
     #[serde(default)]
-    pub(super) points: Option<Vec<LoopPointParam>>,
+    pub(super) points: Option<Vec<PointParam>>,
     /// The polygon's corners as existing vertex indices (at least 3):
     /// exactly one of `points` and `vertices`.
     #[serde(default)]
@@ -104,20 +104,11 @@ pub(super) struct CarveVoidParams {
     /// The polygon's corners as points `{x, y}` (at least 3, implicitly
     /// closed): exactly one of `points` and `vertices`.
     #[serde(default)]
-    points: Option<Vec<LoopPointParam>>,
+    points: Option<Vec<PointParam>>,
     /// The polygon's corners as existing vertex indices (at least 3):
     /// exactly one of `points` and `vertices`.
     #[serde(default)]
     vertices: Option<Vec<usize>>,
-}
-
-/// One loop corner of [`Cyberdemon::create_sector_from_loop`].
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
-pub(super) struct LoopPointParam {
-    /// `X` coordinate in map units.
-    x: i32,
-    /// `Y` coordinate in map units.
-    y: i32,
 }
 
 /// The `outer_sector` parameter: an existing sector index or a mode name.
@@ -182,7 +173,7 @@ fn loop_form_refusal() -> CyberError {
 /// range; [`CyberError::NotFound`] for a vertex index the map does not
 /// hold.
 pub(super) fn polygon_of(
-    points: Option<&Vec<LoopPointParam>>,
+    points: Option<&Vec<PointParam>>,
     vertices: Option<&Vec<usize>>,
     map: &Map,
 ) -> Result<Vec<Pt>, CyberError> {
@@ -199,7 +190,7 @@ pub(super) fn polygon_of(
 ///
 /// [`CyberError::InvalidArgument`] through [`check_points`] when a
 /// coordinate leaves the binary `i16` range.
-fn points_of(format: MapFormat, points: &[LoopPointParam]) -> Result<Vec<Pt>, CyberError> {
+fn points_of(format: MapFormat, points: &[PointParam]) -> Result<Vec<Pt>, CyberError> {
     if format != MapFormat::Udmf {
         check_points(points)?;
     }
@@ -235,7 +226,7 @@ fn vertices_of(map: &Map, indices: &[usize]) -> Result<Vec<Pt>, CyberError> {
 }
 
 /// Refuses every point corner an `i16` binary `VERTEXES` column cannot hold.
-fn check_points(points: &[LoopPointParam]) -> Result<(), CyberError> {
+fn check_points(points: &[PointParam]) -> Result<(), CyberError> {
     for corner in points {
         fits_coord("x", corner.x)?;
         fits_coord("y", corner.y)?;

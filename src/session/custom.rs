@@ -1,5 +1,7 @@
-//! Collecting the custom definition lump texts from the session's merged
-//! view.
+//! Session building block: collecting the custom definition lump texts
+//! from the session's merged view, behind [`crate::session::Session`]’s
+//! [`custom_sources`](Session::custom_sources) and
+//! [`definitions`](Session::definitions) reads.
 //!
 //! [`custom_sources`] gathers the texts [`crate::defs::session_definitions`]
 //! overlays: every `DEHACKED`, `DECORATE` and `ZSCRIPT` lump and every
@@ -270,7 +272,7 @@ fn include_names(text: &str, stream: Stream, notes: &mut Vec<String>) -> Vec<Lum
 ///
 /// [`Session::lumps_in`]'s error for the merged scope (a poisoned lock can
 /// not reach here; the merged scope itself never fails).
-pub(in crate::tools) fn custom_sources(
+pub(super) fn custom_sources(
     session: &Session,
 ) -> Result<(CustomSources, Vec<String>), CyberError> {
     let view = session.lumps_in(Scope::Merged)?;

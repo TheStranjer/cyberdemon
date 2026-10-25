@@ -1,4 +1,4 @@
-//! The three listings over the fixture session: [`super::parse_page`]'s
+//! The three listings over the fixture session: [`Page::parse`]'s
 //! defaults and refusals, [`super::last_wins`] on the repeated flat, the
 //! shapes, formats, offsets, `PNAMES` flags and namespaces the rows report,
 //! the sprite groups with their mirrored rotations and invalid names, the
@@ -8,11 +8,12 @@ use alloc::collections::BTreeSet;
 
 use crate::gfx::sprite_name::parse_sprite_name;
 use crate::session::{Session, Source};
+use crate::tools::Page;
 use crate::tools::graphics::list::{list_flats_run, list_patches_run, patch_row};
 use crate::tools::graphics::list_sprites::{
     Groups, collect_sprite, list_sprites_run, parse_prefix, sprite_rows,
 };
-use crate::tools::graphics::{in_namespace, last_wins, parse_page};
+use crate::tools::graphics::{DEFAULT_LIMIT, MAX_LIMIT, in_namespace, last_wins};
 use crate::tools::lumps::rows::LumpRow;
 use crate::wad::archive::Lump;
 use crate::wad::classify::Namespace;
@@ -22,15 +23,18 @@ use super::{candidates, code, fixture, header, name, page, row_named, rows};
 
 #[test]
 fn pages_default_and_reject_out_of_range_limits() {
-    let fresh = parse_page(None, None).expect("defaults");
+    let fresh = Page::parse(None, None, DEFAULT_LIMIT, MAX_LIMIT).expect("defaults");
     assert_eq!((fresh.offset, fresh.limit), (0, 200), "documented defaults");
     assert_eq!(
-        parse_page(Some(3), Some(2000)).expect("max").limit,
+        Page::parse(Some(3), Some(2000), DEFAULT_LIMIT, MAX_LIMIT)
+            .expect("max")
+            .limit,
         2000,
         "the cap"
     );
     for bad in [0_usize, 2001] {
-        let error = parse_page(None, Some(bad)).expect_err("out of range");
+        let error =
+            Page::parse(None, Some(bad), DEFAULT_LIMIT, MAX_LIMIT).expect_err("out of range");
         assert_eq!(code(&error), "invalid_argument", "limit {bad} code");
     }
 }

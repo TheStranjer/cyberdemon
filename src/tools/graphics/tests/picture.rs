@@ -13,7 +13,7 @@ use crate::tools::graphics::picture::{
     AssetFormat, ImageParams, Prepared, grab_of, parse_options, scale_offset,
 };
 use crate::tools::graphics::thing_sprite::{
-    missing_thing_sprite, parse_thing_rotation, prepare_thing_sprite, session_game, thing_request,
+    missing_thing_sprite, parse_thing_rotation, prepare_thing_sprite, thing_request,
     thing_sprite_def,
 };
 use crate::wad::archive::Lump;
@@ -206,7 +206,10 @@ fn thing_sprite_arguments_default_and_refuse_odd_selections() {
 #[test]
 fn thing_definitions_follow_the_session_game_and_custom_sources() {
     assert_eq!(
-        session_game(&Session::default()),
+        Session::default()
+            .definitions()
+            .expect("the default tables")
+            .game,
         Game::Doom2,
         "an unidentified session stands for DOOM II"
     );

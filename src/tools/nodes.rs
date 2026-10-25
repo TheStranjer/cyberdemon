@@ -74,7 +74,7 @@ use crate::tools::nodes::get_nodes::{GetNodesParams, attach_nodes, nodes_run};
 use crate::tools::nodes::get_tables::{
     GetBlockmapParams, GetRejectParams, attach_blockmap, attach_reject, blockmap_run, reject_run,
 };
-use crate::tools::{fail, ok};
+use crate::tools::{json_bytes, reply};
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapBlock;
 use crate::wad::map::{Map, read_map};
@@ -109,15 +109,6 @@ struct Request {
     detail: Detail,
 }
 
-/// The accepted `scope` text, the merged view being the default.
-///
-/// # Errors
-///
-/// [`Scope::parse`]'s [`CyberError::InvalidArgument`] for any other name.
-fn parse_scope(text: Option<&str>) -> Result<Scope, CyberError> {
-    text.map_or(Ok(Scope::Merged), Scope::parse)
-}
-
 /// The accepted `detail` text, `summary` being the default.
 ///
 /// # Errors
@@ -143,7 +134,7 @@ fn parse_detail(text: Option<&str>) -> Result<Detail, CyberError> {
 ///
 /// # Errors
 ///
-/// [`parse_scope`]'s and [`parse_detail`]'s refusals.
+/// [`Scope::parse_or_merged`]'s and [`parse_detail`]'s refusals.
 fn resolve_request(
     map: Option<String>,
     scope: Option<&str>,
@@ -151,7 +142,7 @@ fn resolve_request(
 ) -> Result<Request, CyberError> {
     Ok(Request {
         map,
-        scope: parse_scope(scope)?,
+        scope: Scope::parse_or_merged(scope)?,
         detail: parse_detail(detail)?,
     })
 }
@@ -187,16 +178,6 @@ fn find_lump(lumps: &[Lump], wanted: LumpName) -> Option<&Lump> {
 /// The payload of the last lump named `wanted`; empty when absent.
 fn lump_bytes(lumps: &[Lump], wanted: LumpName) -> &[u8] {
     find_lump(lumps, wanted).map_or(b"", |lump| lump.data.as_ref())
-}
-
-/// Serializes any asset body to pretty `JSON`.
-///
-/// # Errors
-///
-/// [`CyberError::Internal`] when serialization fails (a server bug).
-fn json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CyberError> {
-    serde_json::to_vec_pretty(value)
-        .map_err(|error| CyberError::Internal(format!("the asset does not serialize: {error}")))
 }
 
 /// A `JSON` body held back until the session lock is released.
@@ -250,25 +231,10 @@ where
     T: Serialize,
     F: FnOnce(&mut T, AssetRef),
 {
-    let outcome = request.and_then(|resolved| {
+    reply(request.and_then(|resolved| {
         let (report, publish) = state.with_session(|session| work(session, &resolved))?;
         deliver(state, report, publish, attach)
-    });
-    match outcome {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
-}
-
-/// Hand a builder's outcome to the client as the documented result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(report) => ok(&report),
-        Err(error) => fail(&error),
-    }
+    }))
 }
 
 #[expect(
@@ -333,7 +299,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BuildBlockmapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| blockmap_build_run(session, &args)),
         )
@@ -347,7 +313,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BuildRejectParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| reject_build_run(session, &args)),
         )
@@ -361,7 +327,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BuildNodesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| nodes_build_run(session, &args)),
         )
@@ -375,7 +341,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BuildAllNodesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| all_nodes_run(session, &args)),
         )

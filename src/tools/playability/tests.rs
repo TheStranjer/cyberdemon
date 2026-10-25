@@ -4,12 +4,12 @@
 
 use super::check::{Analysis, CheckPlayabilityParams, check_run, parse_skill};
 use super::describe::{
-    DESCRIBE_DEFAULT_LIMIT, DESCRIBE_MAX_LIMIT, DescribeMapParams, describe_run, page_rows,
-    parse_limit, sector_selection,
+    DESCRIBE_DEFAULT_LIMIT, DESCRIBE_MAX_LIMIT, DescribeMapParams, describe_run, sector_selection,
 };
 use super::hints::{blocker_hint, step_hint, stuck_hint};
 use crate::defs::definitions_for;
 use crate::state::AppState;
+use crate::tools::{Page, parse_limit};
 use crate::wad::game::Game;
 use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::playability::{self, Blocker, BlockerReason, KeyColor, Stuck, StuckReason};
@@ -200,19 +200,20 @@ async fn check_run_refuses_a_bad_skill_and_the_empty_session() {
 
 #[test]
 fn parse_limit_defaults_to_a_page_and_names_the_range_when_refusing() {
+    let shared = |value| parse_limit(value, DESCRIBE_DEFAULT_LIMIT, DESCRIBE_MAX_LIMIT, "limit");
     assert_eq!(
-        parse_limit(None).expect("absent"),
+        shared(None).expect("absent"),
         DESCRIBE_DEFAULT_LIMIT,
         "the default pages a hundred and fifty rows"
     );
-    assert_eq!(parse_limit(Some(1)).expect("one"), 1, "one row is legal");
+    assert_eq!(shared(Some(1)).expect("one"), 1, "one row is legal");
     assert_eq!(
-        parse_limit(Some(DESCRIBE_MAX_LIMIT)).expect("max"),
+        shared(Some(DESCRIBE_MAX_LIMIT)).expect("max"),
         DESCRIBE_MAX_LIMIT,
         "the cap itself is legal"
     );
     for bad in [0_usize, DESCRIBE_MAX_LIMIT.checked_add(1).expect("small")] {
-        let error = parse_limit(Some(bad)).expect_err("this cap is out of range");
+        let error = shared(Some(bad)).expect_err("this cap is out of range");
         assert_eq!(error.code(), "invalid_argument", "bad limit code");
         assert!(
             error.to_string().contains("between 1 and 500"),
@@ -262,20 +263,20 @@ fn sector_selection_refuses_past_the_end_with_the_valid_range() {
 #[test]
 fn page_rows_windows_the_selection_and_points_at_the_rest() {
     let all: Vec<usize> = (0..5).collect();
-    let (first, next) = page_rows(&all, 0, 2);
+    let (first, next) = Page::new(0, 2).window(&all);
     assert_eq!(first, vec![0_usize, 1], "the head of the list");
     assert_eq!(next, Some(2), "and where the rest continues");
-    let (tail, done) = page_rows(&all, 3, 500);
+    let (tail, done) = Page::new(3, 500).window(&all);
     assert_eq!(
         tail,
         vec![3_usize, 4],
         "a page longer than the rest stops at it"
     );
     assert_eq!(done, None, "with nothing left behind");
-    let (nothing, past) = page_rows(&all, 9, 2);
+    let (nothing, past) = Page::new(9, 2).window(&all);
     assert!(nothing.is_empty(), "an offset past the end is no error");
     assert_eq!(past, None, "and it has no next page");
-    let (empty, empty_next) = page_rows(&[], 0, DESCRIBE_DEFAULT_LIMIT);
+    let (empty, empty_next) = Page::new(0, DESCRIBE_DEFAULT_LIMIT).window(&[]);
     assert!(empty.is_empty(), "nothing selected, nothing paged");
     assert_eq!(empty_next, None, "and no next offset to chase");
 }

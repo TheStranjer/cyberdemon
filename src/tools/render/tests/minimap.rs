@@ -8,9 +8,10 @@ use crate::render::{AutomapColors, PlayerMark};
 use crate::wad::game::Game;
 use crate::wad::map::Map;
 
+use crate::tools::maps::params::PointParam;
 use crate::tools::render::minimap::{
-    MINIMAP_FIT_PAD, PointParams, RenderMinimapParams, paint_minimap, resolve_centre,
-    resolve_minimap, resolve_radius, resolve_size,
+    MINIMAP_FIT_PAD, RenderMinimapParams, paint_minimap, resolve_centre, resolve_minimap,
+    resolve_radius, resolve_size,
 };
 
 use super::{fixture_palette, two_rooms};
@@ -78,7 +79,7 @@ fn minimap_centre_defaults_to_the_map_midpoint() {
         (256_i64, 128),
         "midpoint of both spans"
     );
-    let point = PointParams { x: -100, y: 40 };
+    let point = PointParam { x: -100, y: 40 };
     assert_eq!(
         resolve_centre(Some(&point), &map).expect("an explicit centre"),
         (-100_i64, 40),

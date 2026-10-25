@@ -8,14 +8,12 @@
 use serde::Serialize;
 
 use crate::assets::server::AssetRef;
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::render::{Canvas, RenderSettings, gamma_table};
 use crate::session::Scope;
 use crate::state::AppState;
-use crate::tools::defs::collect::custom_sources;
-use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::wad::map::Map;
 
@@ -162,13 +160,12 @@ pub(super) struct TransformReport {
 /// # Errors
 ///
 /// [`common::resolve_map_name`] and [`common::load_map`]'s errors, and the
-/// definition-collection errors of [`session_definitions`].
+/// definition-collection errors of [`crate::session::Session::definitions`].
 fn load_scene(state: &AppState, requested: Option<&str>) -> Result<Prepared, CyberError> {
     state.with_session(|session| {
         let name = common::resolve_map_name(session, requested)?;
         let map = common::load_map(session, name, Scope::Merged)?;
-        let (sources, _notes) = custom_sources(session)?;
-        let defs = session_definitions(session_game(session), &sources)?;
+        let defs = session.definitions()?;
         Ok(Prepared {
             map,
             defs,

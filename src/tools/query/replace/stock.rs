@@ -23,12 +23,10 @@ use alloc::vec::Vec;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::defs::{Definitions, session_definitions};
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::plan::things::resolve_thing_kind;
 use crate::session::Session;
-use crate::tools::defs::collect::custom_sources;
-use crate::tools::graphics::session_game;
 use crate::tools::maps::params::validate_texture_name;
 use crate::tools::themes::inventory;
 use crate::wad::classify::MapFormat;
@@ -188,20 +186,6 @@ pub enum ThingRef {
     Name(String),
 }
 
-/// The session's thing definitions: the tables of [`session_game`]'s
-/// game overlaid with the merged view's `DEHACKED`/`DECORATE`/`ZScript`
-/// custom sources — the same one-lock read as `tools/query.rs::load`.
-///
-/// # Errors
-///
-/// [`custom_sources`]' merged-scope read errors and
-/// [`session_definitions`]' refusal for malformed embedded tables.
-#[inline]
-pub(in crate::tools) fn thing_definitions(session: &Session) -> Result<Definitions, CyberError> {
-    let (sources, _notes) = custom_sources(session)?;
-    session_definitions(session_game(session), &sources)
-}
-
 /// The doomednum as a stored thing-type number, or the refusal for one
 /// above the signed 32-bit range the map models carry.
 fn stored_kind(number: u32) -> Result<i32, CyberError> {
@@ -233,7 +217,7 @@ pub(in crate::tools) fn resolve_thing_ref(
     match value.clone() {
         ThingRef::Number(number) => stored_kind(number),
         ThingRef::Name(text) => {
-            let definitions = thing_definitions(session)?;
+            let definitions = session.definitions()?;
             let resolved = resolve_thing_kind(&definitions, &text).map_err(|problem| {
                 CyberError::InvalidArgument(problem).with_hint("get_thing_types with a search term")
             })?;

@@ -70,7 +70,7 @@ use crate::tools::render::minimap::{RenderMinimapParams, minimap_report};
 use crate::tools::render::params::RenderTopdownParams;
 use crate::tools::render::topdown::topdown_report;
 use crate::tools::render::view::{RenderViewParams, view_report};
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 
 // The marks and the overview run the `playability` group drives, kept at
 // the paths it already imports; both live in `topdown`.
@@ -251,10 +251,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SetRenderResolutionParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match resolution_report(self.state(), args.width, args.height) {
-            Ok(settings) => ok(&settings),
-            Err(error) => fail(&error),
-        }
+        reply(resolution_report(self.state(), args.width, args.height))
     }
 
     /// Changes the session's render options, field by field.
@@ -265,10 +262,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SetRenderOptionsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match options_report(self.state(), &args) {
-            Ok(settings) => ok(&settings),
-            Err(error) => fail(&error),
-        }
+        reply(options_report(self.state(), &args))
     }
 
     /// Reports the session's render settings.
@@ -276,13 +270,10 @@ impl Cyberdemon {
         description = "Returns the session's render settings as one object: width, height, lighting, show_things, show_sprites, sky, fov, gamma, topdown_style and background. They belong to the connection: new_wad, open_wad, merge_wad and undo never change them and no archive holds them."
     )]
     fn get_render_settings(&self) -> Result<CallToolResult, ErrorData> {
-        match self
-            .state()
-            .with_session(|session| Ok(session.render_settings().clone()))
-        {
-            Ok(settings) => ok(&settings),
-            Err(error) => fail(&error),
-        }
+        reply(
+            self.state()
+                .with_session(|session| Ok(session.render_settings().clone())),
+        )
     }
 
     /// Renders a map overview as a `PNG` asset.
@@ -293,10 +284,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RenderTopdownParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match topdown_report(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(topdown_report(self.state(), &args).await)
     }
 
     /// Renders a compact automap-style view as a `PNG` asset.
@@ -307,10 +295,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RenderMinimapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match minimap_report(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(minimap_report(self.state(), &args))
     }
 
     /// Renders a first-person 3D view as a `PNG` asset.
@@ -321,10 +306,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RenderViewParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match view_report(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(view_report(self.state(), &args))
     }
 }
 

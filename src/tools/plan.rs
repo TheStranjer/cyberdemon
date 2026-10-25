@@ -76,7 +76,6 @@ use alloc::collections::BTreeMap;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
-use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::plan::features::FeatureDress;
@@ -87,8 +86,8 @@ use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::plan::build::build_run;
 use crate::tools::plan::params::{BuildPlanParams, ConnectionParam, FeatureParam};
+use crate::tools::reply;
 use crate::tools::themes::theme_roles;
-use crate::tools::{fail, ok};
 use crate::wad::map::consts::NO_TEXTURE;
 
 /// Error rows the finalized result lists at most; the counts stay exact.
@@ -258,17 +257,6 @@ fn feature_names(feature: &FeatureParam) -> [Option<&str>; 4] {
     ]
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -283,7 +271,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BuildPlanParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| build_run(session, &args)),
         )

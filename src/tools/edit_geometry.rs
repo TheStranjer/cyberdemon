@@ -47,7 +47,6 @@ mod transform;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
-use serde::Serialize;
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
@@ -58,7 +57,7 @@ use crate::tools::edit_geometry::delete::{DeleteGeometryParams, delete_run};
 use crate::tools::edit_geometry::transform::{TransformSelectionParams, transform_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::edit_result_fragment;
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::map::Map;
 use crate::wad::name::LumpName;
 
@@ -87,17 +86,6 @@ fn untouched_fragment(name: LumpName) -> JsonMap<String, Value> {
     })
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -112,7 +100,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<DeleteGeometryParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| delete_run(session, &args)),
         )
@@ -126,7 +114,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<TransformSelectionParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| transform_run(session, &args)),
         )

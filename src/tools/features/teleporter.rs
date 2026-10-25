@@ -31,8 +31,9 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportBuild, TeleportSpec, build_teleporter};
 use crate::wad::map::ops::Point;
 
-use super::door::{DoorPointParam, point_of};
+use super::door::point_of;
 use super::{current_map, invalid, theme_wall};
+use crate::tools::maps::params::PointParam;
 
 /// Arguments for [`Cyberdemon::add_teleporter`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -43,7 +44,7 @@ pub(super) struct AddTeleporterParams {
     pub(super) map: Option<String>,
     /// The centre of the pad the player walks onto, `{x, y}`.
     #[serde(default)]
-    pub(super) pad: Option<DoorPointParam>,
+    pub(super) pad: Option<PointParam>,
     /// The centre of the destination the player arrives in, `{x, y}`,
     /// with the facing `angle` in degrees (default 0).
     #[serde(default)]

@@ -40,7 +40,7 @@ use crate::session::Session;
 use crate::tools::edit_things::edit::{EditThingParams, edit_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{FlagsInput, IndexSelector, check_index, edit_result_fragment};
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::flags;
 use crate::wad::map::flags::{
@@ -351,17 +351,6 @@ fn remove_run(session: &mut Session, args: &RemoveThingParams) -> Result<RemoveR
     })
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -376,7 +365,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddThingParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(self.state().with_session(|session| add_run(session, &args)))
+        reply(self.state().with_session(|session| add_run(session, &args)))
     }
 
     /// Changes one or several things in a single undoable edit.
@@ -387,7 +376,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<EditThingParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| edit_run(session, &args)),
         )
@@ -401,7 +390,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<RemoveThingParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| remove_run(session, &args)),
         )

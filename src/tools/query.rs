@@ -49,7 +49,7 @@ use crate::tools::query::replace_tools::{
     ReplaceFlatParams, ReplaceTextureParams, ReplaceThingTypeParams, flat_run, texture_run,
     thing_type_run,
 };
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 
 /// Default row cap for the `indices` and `rows` lists.
 const DEFAULT_LIMIT: usize = 200;
@@ -76,10 +76,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<FindElementsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match find_run(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(find_run(self.state(), &args))
     }
 
     /// Applies one field-edit set to every element of a query selection.
@@ -90,10 +87,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BulkEditParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match bulk_run(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(bulk_run(self.state(), &args))
     }
 
     /// Swaps wall texture names across whole maps in one undoable step.
@@ -104,13 +98,10 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ReplaceTextureParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match self
-            .state()
-            .with_session(|session| texture_run(session, &args))
-        {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(
+            self.state()
+                .with_session(|session| texture_run(session, &args)),
+        )
     }
 
     /// Swaps flat names across whole maps in one undoable step.
@@ -121,13 +112,10 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ReplaceFlatParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match self
-            .state()
-            .with_session(|session| flat_run(session, &args))
-        {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(
+            self.state()
+                .with_session(|session| flat_run(session, &args)),
+        )
     }
 
     /// Rewrites thing type numbers across whole maps in one undoable step.
@@ -138,13 +126,10 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ReplaceThingTypeParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match self
-            .state()
-            .with_session(|session| thing_type_run(session, &args))
-        {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(
+            self.state()
+                .with_session(|session| thing_type_run(session, &args)),
+        )
     }
 }
 

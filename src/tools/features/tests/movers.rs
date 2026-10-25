@@ -4,7 +4,6 @@
 
 use serde_json::from_str;
 
-use crate::tools::features::door::DoorPointParam;
 use crate::tools::features::lift::{
     AddLiftParams, lift_platform_of, lift_style_name, lift_style_names, lift_style_of,
 };
@@ -12,6 +11,7 @@ use crate::tools::features::stairs::{AddStairsParams, stair_spec};
 use crate::tools::features::teleporter::{
     AddTeleporterParams, TeleportDestinationParam, TeleportSkins, teleport_spec,
 };
+use crate::tools::maps::params::PointParam;
 use crate::wad::map::features::{
     DEFAULT_PAD_SIZE, LiftPlatform, LiftStyle, StairSpec, build_stairs,
 };
@@ -49,8 +49,8 @@ fn add_stairs_params_read_the_wire_shape() {
                 "width": 96, "step_height": 12, "step_depth": 48,
                 "floor_from": 0, "floor_to": 64, "map": "MAP01"}"#,
     );
-    assert_eq!(full.from, DoorPointParam { x: 64, y: 128 });
-    assert_eq!(full.to, DoorPointParam { x: 448, y: 128 });
+    assert_eq!(full.from, PointParam { x: 64, y: 128 });
+    assert_eq!(full.to, PointParam { x: 448, y: 128 });
     assert_eq!(full.width, Some(96_i32));
     assert_eq!(full.step_height, Some(12_i32));
     assert_eq!(full.step_depth, Some(48_i32));
@@ -209,7 +209,7 @@ fn add_teleporter_params_read_the_wire_shape() {
         r#"{"pad": {"x": 64, "y": 64}, "destination": {"x": 384, "y": 64, "angle": 90},
                 "pad_size": 128, "two_way": true, "map": "MAP01"}"#,
     );
-    assert_eq!(full.pad, Some(DoorPointParam { x: 64, y: 64 }));
+    assert_eq!(full.pad, Some(PointParam { x: 64, y: 64 }));
     assert_eq!(
         full.destination,
         Some(TeleportDestinationParam {

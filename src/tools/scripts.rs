@@ -38,7 +38,7 @@ use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
-use crate::tools::{fail, ok};
+use crate::tools::{fail, reply};
 use crate::wad::name::LumpName;
 
 use edit_dehacked::{EditDehackedParams, edit_run, plan, resolve};
@@ -63,24 +63,6 @@ fn lump_name(text: Option<&str>) -> Result<LumpName, CyberError> {
     LumpName::parse(text.unwrap_or(DEFAULT_LUMP))
 }
 
-/// The read scope, the merged view being the default.
-///
-/// # Errors
-///
-/// [`Scope::parse`]'s [`CyberError::InvalidArgument`] for any other name.
-fn parse_scope(text: Option<&str>) -> Result<Scope, CyberError> {
-    text.map_or(Ok(Scope::Merged), Scope::parse)
-}
-
-/// The `name` parameter as text, for scope labels in messages.
-fn scope_label(scope: Scope) -> String {
-    match scope {
-        Scope::Merged => "merged".to_owned(),
-        Scope::Working => "working".to_owned(),
-        Scope::Layer(index) => format!("layer:{index}"),
-    }
-}
-
 /// The row of the last working- or scope-directory copy of `name`.
 ///
 /// # Errors
@@ -94,8 +76,7 @@ fn find_lump(session: &Session, name: LumpName, scope: Scope) -> Result<LumpRow,
         .ok_or_else(|| {
             CyberError::NotFound(format!(
                 "lump {name} not found in {scope}: merge an archive that holds it, or run \
-                 edit_dehacked (set creates the lump in the working archive)",
-                scope = scope_label(scope)
+                 edit_dehacked (set creates the lump in the working archive)"
             ))
         })
 }
@@ -115,10 +96,7 @@ impl Cyberdemon {
         Parameters(args): Parameters<GetDehackedParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let outcome = self.state().with_session(|session| get_run(session, &args));
-        match outcome {
-            Ok(found) => ok(&found),
-            Err(error) => fail(&error),
-        }
+        reply(outcome)
     }
 
     /// Edits one DeHackEd/BEX patch lump as one undoable write.
@@ -144,10 +122,7 @@ impl Cyberdemon {
         let outcome = self
             .state()
             .with_session(|session| edit_run(session, name, body));
-        match outcome {
-            Ok(found) => ok(&found),
-            Err(error) => fail(&error),
-        }
+        reply(outcome)
     }
 
     /// Edits one `DECORATE` script lump as text, as one undoable write.

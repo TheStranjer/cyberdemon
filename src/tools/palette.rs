@@ -35,7 +35,7 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::palette::set::{SetPaletteParams, set_palette_run};
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::lumps;
 
 /// Bytes one palette occupies inside `PLAYPAL` (256 RGB triples).
@@ -194,10 +194,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetPaletteParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match get_palette_run(self.state(), args.index.unwrap_or(0_usize)) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(get_palette_run(self.state(), args.index.unwrap_or(0_usize)))
     }
 
     /// Replaces `PLAYPAL` palettes, optionally rebuilding tints and `COLORMAP`.
@@ -208,10 +205,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SetPaletteParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match set_palette_run(self.state(), &args).await {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(set_palette_run(self.state(), &args).await)
     }
 }
 

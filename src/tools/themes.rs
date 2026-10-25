@@ -33,8 +33,8 @@ use crate::tools::maps::common;
 use crate::tools::maps::params::{
     IndexSelector, check_index, edit_result_fragment, validate_texture_name,
 };
+use crate::tools::reply;
 use crate::tools::textures::TextureSet;
-use crate::tools::{fail, ok};
 use crate::wad::classify::{LumpKind, MapFormat, Namespace};
 use crate::wad::game::Game;
 use crate::wad::map::Map;
@@ -609,17 +609,6 @@ fn side_lines(map: &Map, sector: usize) -> BTreeSet<usize> {
         .collect()
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -631,7 +620,7 @@ impl Cyberdemon {
         description = "Reads the session's texture theme: the effective theme name, the themes the detected game offers, and every role (wall, floor, ceiling, door, door_track, switch, exit_switch, step, lift, window, teleport, liquid and the rest) with the texture standing for it now and how it matched. Use it before set_texture_theme; build_map_from_plan and auto_texture resolve roles against this table."
     )]
     fn get_texture_theme(&self) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| Ok(reported_view(&theme_view(session, None)?))),
         )
@@ -645,7 +634,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SetThemeParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(self.state().with_session(|session| set_run(session, &args)))
+        reply(self.state().with_session(|session| set_run(session, &args)))
     }
 
     /// Fills missing textures or repaints a map with the theme.
@@ -656,7 +645,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AutoTextureParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| auto_run(session, &args)),
         )
@@ -670,7 +659,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AlignTexturesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| align_run(session, &args)),
         )

@@ -1,8 +1,6 @@
 //! Definitions tools: the game reference tables the server ships with,
 //! overlaid with the custom thing definitions of the loaded archives
-//! ([`crate::tools::defs::collect`] collects the lump texts).
-
-pub(in crate::tools) mod collect;
+//! ([`crate::session::Session::custom_sources`] collects the lump texts).
 
 use alloc::collections::BTreeMap;
 
@@ -21,7 +19,7 @@ use crate::defs::{
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::state::AppState;
-use crate::tools::{fail, ok};
+use crate::tools::reply;
 use crate::wad::game::Game;
 
 /// Arguments for [`Cyberdemon::get_thing_types`].
@@ -326,12 +324,7 @@ fn parse_game(text: &str) -> Result<Game, CyberError> {
 /// [`AppState::with_session`]'s [`CyberError::Internal`] on a poisoned
 /// session lock.
 fn detected_game(state: &AppState) -> Result<Game, CyberError> {
-    let found = state.with_session(|session| Ok(session.game()))?;
-    Ok(if found == Game::Unknown {
-        Game::Doom2
-    } else {
-        found
-    })
+    state.with_session(|session| Ok(session.effective_game()))
 }
 
 /// The game to serve: the parsed `game` parameter, or the session default.
@@ -477,7 +470,7 @@ fn thing_types_report(
 ) -> Result<ThingTypesReport, CyberError> {
     let game = resolve_game(state, args.game.as_deref())?;
     let defs = if args.include_custom.unwrap_or(true) {
-        let (sources, notes) = state.with_session(|session| collect::custom_sources(session))?;
+        let (sources, notes) = state.with_session(|session| session.custom_sources())?;
         let mut overlaid = session_definitions(game, &sources)?;
         overlaid.warnings.extend(notes);
         overlaid
@@ -587,10 +580,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetThingTypesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match thing_types_report(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(thing_types_report(self.state(), &args))
     }
 
     /// Lists the linedef specials known for a game, decoding Boom generalized values.
@@ -601,10 +591,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetLinedefSpecialsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match linedef_specials_report(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(linedef_specials_report(self.state(), &args))
     }
 
     /// Lists the sector types known for a game, decoding Boom sector values.
@@ -615,10 +602,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<GetSectorSpecialsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match sector_specials_report(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(sector_specials_report(self.state(), &args))
     }
 }
 

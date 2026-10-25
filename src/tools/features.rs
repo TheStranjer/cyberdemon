@@ -26,7 +26,7 @@
 //! [`place_params`] and [`place`] the `place_things` wire parsing and
 //! distribution run. This root keeps the shared refusal helpers, the map
 //! read ([`current_map`]), the theme helpers ([`theme_wall`], [`skin`]
-//! and [`theme_skin`]), the result handoff ([`reported`]) and the
+//! and [`theme_skin`]), the result handoff ([`reply`]) and the
 //! router; the group's unit tests live in `features/tests.rs`.
 
 mod door;
@@ -46,7 +46,6 @@ mod tests;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
-use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
@@ -67,8 +66,8 @@ use crate::tools::features::teleporter::{AddTeleporterParams, add_teleporter_run
 use crate::tools::features::window::{AddWindowParams, add_window_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::validate_texture_name;
+use crate::tools::reply;
 use crate::tools::themes::theme_texture;
-use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::consts::NO_TEXTURE;
@@ -168,17 +167,6 @@ fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
     }
 }
 
-/// Hand an outcome to the client as the documented structured result.
-fn reported<T>(outcome: Result<T, CyberError>) -> Result<CallToolResult, ErrorData>
-where
-    T: Serialize,
-{
-    match outcome {
-        Ok(value) => ok(&value),
-        Err(error) => fail(&error),
-    }
-}
-
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
@@ -193,7 +181,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddDoorParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_door_run(session, &args)),
         )
@@ -207,7 +195,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddWindowParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_window_run(session, &args)),
         )
@@ -221,7 +209,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddStairsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_stairs_run(session, &args)),
         )
@@ -235,7 +223,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddLiftParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_lift_run(session, &args)),
         )
@@ -249,7 +237,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddTeleporterParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_teleporter_run(session, &args)),
         )
@@ -263,7 +251,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddSwitchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_switch_run(session, &args)),
         )
@@ -277,7 +265,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<AddExitParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| add_exit_run(session, &args)),
         )
@@ -291,7 +279,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<MarkSecretParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| mark_secret_run(session, &args)),
         )
@@ -305,7 +293,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SetLightParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| set_light_run(session, &args)),
         )
@@ -319,7 +307,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<PlaceThingsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reported(
+        reply(
             self.state()
                 .with_session(|session| place_things_run(session, &args)),
         )

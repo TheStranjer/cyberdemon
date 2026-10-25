@@ -30,8 +30,8 @@ use crate::tools::themes::theme_texture;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{LiftBuild, LiftPlatform, LiftSpec, LiftStyle, build_lift};
 
-use super::door::DoorPointParam;
 use super::{current_map, invalid};
+use crate::tools::maps::params::PointParam;
 
 /// The `add_lift` default trigger style name.
 const DEFAULT_LIFT_STYLE: &str = "use_wall";
@@ -82,7 +82,7 @@ const fn default_lift_repeatable() -> bool {
 pub(super) struct LiftPlatformParam {
     /// The polygon's corners, `{x, y}`, in order (at least three; the
     /// last corner closes the ring).
-    pub(super) points: Vec<DoorPointParam>,
+    pub(super) points: Vec<PointParam>,
 }
 
 /// The theme-resolved textures a lift wears.

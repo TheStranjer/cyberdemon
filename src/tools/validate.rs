@@ -17,15 +17,14 @@ use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::defs::{Definitions, definitions_for, session_definitions};
+use crate::defs::{Definitions, definitions_for};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
-use crate::tools::defs::collect;
 use crate::tools::maps::common;
 use crate::tools::textures::TextureSet;
-use crate::tools::{fail, ok};
+use crate::tools::{parse_limit, reply};
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::game::Game;
 use crate::wad::lumps;
@@ -94,16 +93,6 @@ impl Tables {
     }
 }
 
-/// The game a validation run treats the session as: the detected one, with
-/// an unidentified session standing for DOOM II (as the defs tools do).
-fn detected_game(session: &Session) -> Game {
-    let found = session.game();
-    if found == Game::Unknown {
-        return Game::Doom2;
-    }
-    found
-}
-
 /// Read `session`'s validation tables: the detected game's definitions
 /// overlaid with the merged view's DEHACKED, DECORATE, `ZScript` and
 /// MAPINFO customs, plus the built-in `Hexen` specials. Shared with
@@ -111,12 +100,11 @@ fn detected_game(session: &Session) -> Game {
 ///
 /// # Errors
 ///
-/// [`collect::custom_sources`]'s read errors and [`session_definitions`]'
-/// and [`definitions_for`]' refusals for malformed definition data.
+/// [`Session::definitions`]' read errors and [`definitions_for`]' refusal
+/// for malformed definition data.
 pub(in crate::tools) fn session_tables(session: &Session) -> Result<Tables, CyberError> {
-    let (sources, _notes) = collect::custom_sources(session)?;
     Ok(Tables {
-        definitions: session_definitions(detected_game(session), &sources)?,
+        definitions: session.definitions()?,
         hexen_specials: definitions_for(Game::Hexen)?,
     })
 }
@@ -167,15 +155,6 @@ pub(in crate::tools) fn resource_index(session: &Session) -> Result<ResourceInde
         .textures
         .extend(TextureSet::load(session)?.widths().into_keys());
     Ok(index)
-}
-
-/// Which archive to read: the parsed `scope`, the merged view by default.
-///
-/// # Errors
-///
-/// [`Scope::parse`]'s [`CyberError::InvalidArgument`] for any other name.
-fn parse_scope(text: Option<&str>) -> Result<Scope, CyberError> {
-    text.map_or(Ok(Scope::Merged), Scope::parse)
 }
 
 /// The severity floor `min_severity` names, [`Severity::Info`] (keep
@@ -233,24 +212,6 @@ fn parse_codes(wanted: Option<&[String]>) -> Result<Option<BTreeSet<&'static str
         )));
     }
     Ok(Some(selected))
-}
-
-/// The row cap `limit` asks for, [`DEFAULT_LIMIT`] when unset.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for `0` or anything above
-/// [`MAX_LIMIT`].
-fn parse_limit(value: Option<usize>) -> Result<usize, CyberError> {
-    let Some(limit) = value else {
-        return Ok(DEFAULT_LIMIT);
-    };
-    if limit == 0 || limit > MAX_LIMIT {
-        return Err(CyberError::InvalidArgument(format!(
-            "limit {limit} is out of range: pass a value between 1 and {MAX_LIMIT}"
-        )));
-    }
-    Ok(limit)
 }
 
 /// How many issues of each severity the enabled checks found. Shared
@@ -340,8 +301,8 @@ fn validate_run(
 ) -> Result<ValidationReport, CyberError> {
     let min_severity = parse_min_severity(args.min_severity.as_deref())?;
     let enabled = parse_codes(args.codes.as_deref())?;
-    let limit = parse_limit(args.limit)?;
-    let scope = parse_scope(args.scope.as_deref())?;
+    let limit = parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
+    let scope = Scope::parse_or_merged(args.scope.as_deref())?;
     state.with_session(|session| {
         let name = common::resolve_map_name(session, args.map.as_deref())?;
         let map = common::load_map(session, name, scope)?;
@@ -366,18 +327,15 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<ValidateMapParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        match validate_run(self.state(), &args) {
-            Ok(report) => ok(&report),
-            Err(error) => fail(&error),
-        }
+        reply(validate_run(self.state(), &args))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Counts, DEFAULT_LIMIT, MAX_LIMIT, ValidateMapParams, detected_game, parse_codes,
-        parse_limit, parse_min_severity, parse_scope, resource_index, validate_run, viewed,
+        Counts, DEFAULT_LIMIT, MAX_LIMIT, ValidateMapParams, parse_codes, parse_limit,
+        parse_min_severity, resource_index, validate_run, viewed,
     };
     use crate::defs::definitions_for;
     use crate::session::{Layer, LayerRole, Scope, Session};
@@ -474,11 +432,12 @@ mod tests {
 
     #[test]
     fn parse_limits_pages_the_report_between_one_and_five_thousand() {
-        assert_eq!(parse_limit(None).expect("absent"), DEFAULT_LIMIT);
-        assert_eq!(parse_limit(Some(1)).expect("one"), 1);
-        assert_eq!(parse_limit(Some(MAX_LIMIT)).expect("max"), MAX_LIMIT);
+        let shared = |value| parse_limit(value, DEFAULT_LIMIT, MAX_LIMIT, "limit");
+        assert_eq!(shared(None).expect("absent"), DEFAULT_LIMIT);
+        assert_eq!(shared(Some(1)).expect("one"), 1);
+        assert_eq!(shared(Some(MAX_LIMIT)).expect("max"), MAX_LIMIT);
         for bad in [0, MAX_LIMIT.checked_add(1).expect("small")] {
-            let error = parse_limit(Some(bad)).expect_err("this cap is out of range");
+            let error = shared(Some(bad)).expect_err("this cap is out of range");
             assert_eq!(error.code(), "invalid_argument", "bad limit code");
             assert!(
                 error.to_string().contains("between 1 and 5000"),
@@ -488,14 +447,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_scope_defaults_to_the_merged_view() {
-        assert_eq!(parse_scope(None).expect("absent"), Scope::Merged);
+    fn scope_names_parse_or_default_to_merged() {
         assert_eq!(
-            parse_scope(Some("WORKING")).expect("working"),
+            Scope::parse_or_merged(None).expect("absent"),
+            Scope::Merged,
+            "validate_map's default scope"
+        );
+        assert_eq!(
+            Scope::parse_or_merged(Some("WORKING")).expect("working"),
             Scope::Working,
             "case-insensitive like every scope"
         );
-        let error = parse_scope(Some("nope")).expect_err("not a scope");
+        let error = Scope::parse_or_merged(Some("nope")).expect_err("not a scope");
         assert_eq!(error.code(), "invalid_argument", "bad scope code");
     }
 
@@ -537,40 +500,6 @@ mod tests {
         );
         let none = Counts::of(&[]);
         assert_eq!((none.error, none.warning, none.info), (0, 0, 0), "empty");
-    }
-
-    #[test]
-    fn detected_game_falls_back_to_doom_ii_only_when_unidentified() {
-        let mut session = Session::default();
-        assert_eq!(
-            detected_game(&session),
-            Game::Doom2,
-            "no archives: DOOM II rows"
-        );
-        session.set_iwad(layer_named(&["PLAYPAL"]));
-        assert_eq!(
-            detected_game(&session),
-            Game::Doom2,
-            "an unidentifiable IWAD also stands for DOOM II"
-        );
-        session.set_iwad(layer_named(&["TITLE", "WINNOWR"]));
-        assert_eq!(detected_game(&session), Game::Hexen, "a detected game wins");
-    }
-
-    /// A base layer whose directory holds exactly `names`.
-    fn layer_named(names: &[&str]) -> Layer {
-        let lumps: Vec<Lump> = names
-            .iter()
-            .map(|text| Lump::marker(LumpName::parse(text).expect("test names are valid")))
-            .collect();
-        Layer::new(
-            std::path::PathBuf::from("base.wad"),
-            LayerRole::Iwad,
-            Wad {
-                kind: WadKind::Iwad,
-                lumps,
-            },
-        )
     }
 
     /// A base layer whose directory holds exactly `lumps`.

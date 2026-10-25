@@ -9,7 +9,11 @@
 //! light. The door wiring: a blue-key plan's `features` row matching the
 //! written block, its lines carrying special `26` and the band's tag with
 //! fronts facing their rooms, validation staying error-free and one `undo`
-//! taking it all back. And the block's own lifecycle: the active map adoption,
+//! taking it all back. The raw `SIDEDEFS` bytes: every texture field of the
+//! written block stores a name, an untextured face carrying `"-"`
+//! (`2D 00 00 00 00 00 00 00`) rather than the all-`NUL` field a vanilla
+//! engine quits on, each field matching what the model reads back. And the
+//! block's own lifecycle: the active map adoption,
 //! `already_exists` for a working-archive block without `replace` and its
 //! overwrite keeping one block, the one-step `undo` that takes the whole block
 //! back, and the plan-path-named refusals - a flat rectangle, both or neither
@@ -462,5 +466,106 @@ async fn rooms_that_do_not_touch_refuse_with_the_connection_path() {
     assert!(
         message.contains("connections[0]") && message.contains("do not touch"),
         "the path and the compiler's words: {message}"
+    );
+}
+
+/// The raw bytes of the working archive's `SIDEDEFS` lump, read back through
+/// `get_lump`'s `hex` window.
+async fn working_sidedef_bytes(client: &Client) -> Vec<u8> {
+    let read = call(
+        client,
+        "get_lump",
+        json!({
+            "name": "SIDEDEFS",
+            "scope": "working",
+            "format": "hex",
+            "start": 0_u64,
+            "length": 4096_u64
+        }),
+    )
+    .await;
+    read["hex"]
+        .as_str()
+        .expect("a hex window")
+        .split_whitespace()
+        .map(|pair| u8::from_str_radix(pair, 16).expect("a whole hex pair"))
+        .collect()
+}
+
+/// The upper, lower and middle texture fields of one 30-byte `SIDEDEFS`
+/// record, in stored order, each with the `assemble_map` field that names
+/// it.
+fn texture_fields(record: &[u8]) -> [(&[u8], &str); 3] {
+    assert!(record.len() >= 28, "one record holds three name fields");
+    [
+        (&record[4..12], "upper"),
+        (&record[12..20], "lower"),
+        (&record[20..28], "middle"),
+    ]
+}
+
+/// Checks one written `SIDEDEFS` record against the model row read back
+/// from it: no texture field is all-`NUL`, every `2D`-padded field reads
+/// as the model's `"-"` and every other field reads as a dressed name.
+/// Whether the record's middle is the untextured one.
+fn assert_fields_match_model(record: &[u8], row: &Value) -> bool {
+    let index = row["index"].as_u64().expect("a sidedef index");
+    let blank = [0_u8; 8];
+    let dash = *b"-\0\0\0\0\0\0\0";
+    let mut untextured_middle = false;
+    for (field, name) in texture_fields(record) {
+        assert_ne!(
+            field,
+            &blank[..],
+            "sidedef {index} {name}: an all-NUL field makes vanilla \
+             R_CheckTextureNumForName search for the empty name and quit the load"
+        );
+        let model = row[name].as_str().expect("a texture name");
+        if field == dash {
+            assert_eq!(
+                model, "-",
+                "sidedef {index} {name}: a 2D-padded field reads as the model's \"-\""
+            );
+            untextured_middle = name == "middle";
+        } else {
+            assert_ne!(
+                model, "-",
+                "sidedef {index} {name} reads {model:?} from a dressed field"
+            );
+        }
+    }
+    untextured_middle
+}
+
+#[tokio::test]
+async fn an_untextured_face_stores_dash_for_the_vanilla_texture_lookup() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    call(&client, "build_map_from_plan", plan_for("MAP05")).await;
+    let data = working_sidedef_bytes(&client).await;
+    let records: Vec<&[u8]> = data.chunks_exact(30).collect();
+    assert!(
+        data.chunks_exact(30).remainder().is_empty() && records.len() > 4,
+        "the block holds several whole sidedef records, not {} bytes",
+        data.len()
+    );
+    let graph = call(
+        &client,
+        "assemble_map",
+        json!({"map": "MAP05", "scope": "working", "include": ["sidedefs"]}),
+    )
+    .await;
+    let rows = graph["sidedefs"].as_array().expect("sidedefs is an array");
+    assert_eq!(rows.len(), records.len(), "every record reads back");
+    let untextured_middles = records
+        .iter()
+        .zip(rows)
+        .filter(|&(record, row)| assert_fields_match_model(record, row))
+        .count();
+    assert!(
+        untextured_middles > 0,
+        "the plan leaves the two-sided lines' middles untextured, and each of those \
+         {} faces stores 2D 00 00 00 00 00 00 00, not an empty field",
+        records.len()
     );
 }

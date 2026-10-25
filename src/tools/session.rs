@@ -142,7 +142,7 @@ impl Cyberdemon {
 
     /// Opens a file as the editable working archive.
     #[tool(
-        description = "Reads the WAD at an absolute path and adopts it as the editable working archive, forgetting the previous archive's undo history. Refuses with conflict while the current working archive is dirty unless discard_dirty: true. Use it to continue work on an existing mod; merge_wad stacks extra read-only layers instead."
+        description = "Reads the WAD at an absolute path and adopts it as the editable working archive, forgetting the previous archive's undo history. Refuses with conflict while the current working archive is dirty unless discard_changes: true. Use it to continue work on an existing mod; merge_wad stacks extra read-only layers instead."
     )]
     fn open_wad(
         &self,
@@ -157,7 +157,7 @@ impl Cyberdemon {
 
     /// Starts a fresh empty working archive.
     #[tool(
-        description = "Replaces the working archive with an empty PWAD that has no file behind it yet (save_wad gives it one). Refuses with conflict while unsaved edits exist unless discard_dirty: true, and clears the undo history and active map. Use it to start a fresh mod once open_iwad has loaded the game data."
+        description = "Replaces the working archive with an empty PWAD that has no file behind it yet (save_wad gives it one). Refuses with conflict while unsaved edits exist unless discard_changes: true, and clears the undo history and active map. Use it to start a fresh mod once open_iwad has loaded the game data."
     )]
     fn new_wad(
         &self,
@@ -183,7 +183,7 @@ impl Cyberdemon {
 
     /// Writes the working archive or the whole merged view to a file.
     #[tool(
-        description = "Saves the session to a file: mode pwad (default) writes the working archive to path (or the path it was opened from), mode merged flattens the IWAD, resource layers and working overrides into one archive. Paths must be absolute and the write is atomic. Reports path and bytes; undo history survives a pwad save."
+        description = "Saves the session to a file: mode pwad (default) writes the working archive to path (or the path it was opened from), mode full flattens the IWAD, resource layers and working overrides into one archive. Paths must be absolute and the write is atomic. Reports path and bytes; undo history survives a pwad save."
     )]
     fn save_wad(
         &self,

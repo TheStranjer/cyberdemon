@@ -552,34 +552,57 @@ src/
                   it turns the parameters into a `wad::map::convert::Target`
                   and runs the pure conversion as one `Session::convert_map`
                   step (`dry_run` converts a copy and only reports);
-                  `tools/features.rs` is the `features` group: `add_door`
-                  composes the `wad::map::features` door core and the
-                  overlay engine into one `Session::edit_map` step
-                  (void strip, recess paint, `apply_door`; `add_window`
+                  `tools/features.rs` is the `features` group: its root
+                  keeps the shared refusal helpers, the `current_map`
+                  read, the theme helpers (`theme_wall`, `skin`,
+                  `theme_skin`), the result handoff (`reported`) and the
+                  router, the work split by tool into
+                  `features/wall.rs` (the wall choice and void-strip
+                  machinery `add_door` and `add_window` share:
+                  `choose_wall`, `carve_strip`, `strip_wall`,
+                  `place_rect` and the integer point maths),
+                  `features/door.rs` (the door parameters, the shared
+                  `Target`, `Chosen`, `Placed`, skins, spec and report
+                  beside the whole build: `add_door` composes the
+                  `wad::map::features` door core and the overlay engine
+                  into one `Session::edit_map` step - void strip, recess
+                  paint, `apply_door`), `features/window.rs` (`add_window`
                   reuses the door placement engines and the
-                  `features::window` core for its raised blocking strip;
-                  `add_stairs` runs the `features::stairs` core (plan,
-                  then bottom-up `Paint::Sector` paints) as one step;
-                  `add_lift` runs the `features::lift` core (an existing
-                  or overlay-drawn platform, its lower-facing edges
-                  turned front-down and tagged) as one step;
-                  `add_teleporter` runs the `features::teleport` core (the
-                  pad and destination squares, the type-14 destination
-                  things and their outward-facing border actions, one-way
-                  or `two_way`) as one step;
-                  the `add_switch`/`add_exit` tools are one step over the
-                  `features::switches` mount core (`build_switch`'s panel
-                  fit, `split_linedef` isolation, tag resolution and
-                  dressing; `build_walk_over_exit`'s sector-boundary level
-                  ends), and
-                  the `mark_secret`/`set_light_effect` tools are the two
-                  special-bit steps over `features::specials`, and the
-                  `place_things` tool runs the pure `wad::map::placement`
-                  engine (name-resolved type, sector/bbox/circle areas,
-                  proportional or per-sector counts, centred clearance
-                  grids spread centre-outward, snapped facings with an
-                  optional seeded xorshift32) as one step, sharing that
-                  engine with the plan builder's room fills);
+                  `features::window` core for its raised blocking strip),
+                  `features/stairs.rs` (`add_stairs` runs the
+                  `features::stairs` core - plan, then bottom-up
+                  `Paint::Sector` paints - as one step),
+                  `features/lift.rs` (`add_lift` runs the
+                  `features::lift` core: an existing or overlay-drawn
+                  platform, its lower-facing edges turned front-down and
+                  tagged) as one step, `features/teleporter.rs` (the
+                  `add_teleporter` step over the `features::teleport`
+                  core: the pad and destination squares, the type-14
+                  destination things and their outward-facing border
+                  actions, one-way or `two_way`),
+                  `features/switches.rs` (the `add_switch`/`add_exit`
+                  tools, each one step over the shared `run_switch_step`
+                  body and the `features::switches` mount core:
+                  `build_switch`'s panel fit, `split_linedef` isolation,
+                  tag resolution and dressing;
+                  `build_walk_over_exit`'s sector-boundary level ends),
+                  `features/specials.rs` (the `mark_secret`/
+                  `set_light_effect` special-bit steps over
+                  `features::specials`) and `features/place_params.rs`
+                  with `features/place.rs` (the `place_things` wire
+                  parsing beside the run over the pure
+                  `wad::map::placement` engine: name-resolved type,
+                  sector/bbox/circle areas, proportional or per-sector
+                  counts, centred clearance grids spread centre-outward,
+                  snapped facings with an optional seeded xorshift32,
+                  sharing that engine with the plan builder's room
+                  fills); the group's tests are `features/tests.rs` (the
+                  shared fixture maps and records) plus
+                  `features/tests/door.rs`, `features/tests/window.rs`,
+                  `features/tests/switches.rs`,
+                  `features/tests/specials.rs`,
+                  `features/tests/movers.rs` and
+                  `features/tests/place.rs`;
                   `tools/inspect.rs`' `diff_wads` resolves side strings
                   ("working", "merged", "base", "layer:N" or an absolute
                   WAD path) onto `crate::wad::diff`, and its `optimize_wad`

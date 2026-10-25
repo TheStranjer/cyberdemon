@@ -1231,6 +1231,24 @@ tests/
                     beside the picture tools' missing-picture and argument
                     refusals) and `graphics/sprites.rs` (`get_sprite` with its
                     mirror rotations, `decode_patch` and `get_thing_sprite`),
+                    the `imports` group's shared helpers in `imports.rs` (the
+                    fixture-`IWAD` client, the palette-colour and
+                    palette-cycling `PNG` builders, the `source` argument
+                    builder, the asset fetcher, the stored `RGBA` readers, the
+                    report checkers, the pixel readers and the refusal runner)
+                    with its tests in `imports/patch.rs` (the
+                    `import_image_as_patch` pipeline, its alias, colour key,
+                    offsets, `PNAMES` and undo), `imports/patch_sources.rs`
+                    (filename naming, the refusal catalogue, the missing
+                    `PLAYPAL` and the uploaded asset `URL` source),
+                    `imports/flat.rs` (`import_image_as_flat` with its
+                    resizing, dither and override rules), `imports/raw.rs`
+                    (`import_image_as_raw`), `imports/sprite.rs`
+                    (`import_image_as_sprite` with its naming forms and mirror
+                    pair), `imports/process.rs` (`process_image` previews),
+                    `imports/create_texture.rs` (`create_texture_from_image`),
+                    `imports/create_flat.rs` (`create_flat_from_image`) and
+                    `imports/create_sprite.rs` (`create_sprite_from_image`),
                     the `render` group's shared helpers in `render.rs` (the
                     fixture-`IWAD` client, the `{"path": ...}` argument, the
                     fitted top-down `transform` and its pixel mapping, the

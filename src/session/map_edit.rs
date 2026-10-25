@@ -27,13 +27,10 @@ use crate::session::MergedLump;
 use crate::session::cow::copy_map_block;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{Analysis, MapBlock, analyze};
+use crate::wad::lumps;
 use crate::wad::map::model::Map;
 use crate::wad::map::{read_map, write_map};
 use crate::wad::name::LumpName;
-
-/// The generated node lumps of a binary block: kept as (empty) placeholders
-/// through an invalidation because the vanilla readers require them.
-const NODE_LUMPS: [&[u8]; 5] = [b"SEGS", b"SSECTORS", b"NODES", b"REJECT", b"BLOCKMAP"];
 
 /// The geometry a node build reads from one linedef.
 type LineRef = (usize, usize, Option<usize>, Option<usize>);
@@ -132,11 +129,11 @@ fn locate(analysis: &Analysis, map: LumpName) -> Result<&MapBlock, CyberError> {
 /// the `UDMF` `ZNODES` run: after this the map carries no node data.
 fn clear_node_lumps(model: &mut Map) {
     for lump in &mut model.other {
-        if NODE_LUMPS.contains(&lump.name.as_bytes()) {
+        if lumps::BINARY_NODE_LUMPS.contains(&lump.name) {
             *lump = Lump::marker(lump.name);
         }
     }
-    model.other.retain(|lump| lump.name.as_bytes() != b"ZNODES");
+    model.other.retain(|lump| lump.name != lumps::ZNODES);
 }
 
 /// Runs one map edit against `wad`: the body of a
@@ -427,7 +424,7 @@ mod tests {
     /// a fixture that carries no node lumps, which would make the test below
     /// check nothing.
     fn strip_nodes(map: &mut Map) -> Result<(), CyberError> {
-        let is_node = |lump: &Lump| crate::wad::map::convert::is_node_lump(lump.name.as_bytes());
+        let is_node = |lump: &Lump| crate::wad::map::convert::is_node_lump(lump.name);
         if !map.other.iter().any(is_node) {
             return Err(CyberError::InvalidArgument(
                 "the fixture carries no node lump to strip".to_owned(),

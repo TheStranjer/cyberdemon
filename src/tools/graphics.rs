@@ -72,8 +72,6 @@ pub(in crate::tools) use crate::tools::graphics::thing_sprite::session_game;
 const DEFAULT_LIMIT: usize = 200;
 /// Largest page any listing tool will return.
 const MAX_LIMIT: usize = 2000;
-/// Raw directory bytes of the patch-name lump.
-const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
 /// Characters of the four-character sprite prefix `list_sprites` filters by.
 const SPRITE_PREFIX_LEN: usize = 4;
 /// Default `PLAYPAL` entry the image tools colour a picture with.

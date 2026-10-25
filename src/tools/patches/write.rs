@@ -17,14 +17,13 @@ use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{LumpWrite, parse_import, put_lump};
 use crate::tools::imports::{PnamesPlan, current_pnames, pnames_plan};
-use crate::tools::textures::put_global;
 use crate::wad::archive::Lump;
 use crate::wad::classify::{LumpKind, Namespace, analyze};
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 
 use super::{
-    AddPatchParams, PNAMES_RAW, PatchOutcome, ReplaceOutcome, ReplacePatchParams, Staged,
-    resolve_staged,
+    AddPatchParams, PatchOutcome, ReplaceOutcome, ReplacePatchParams, Staged, resolve_staged,
 };
 
 /// Whether the working archive's `patches` region already holds `name`.
@@ -128,7 +127,7 @@ pub(super) fn located_patch(
 /// # Errors
 ///
 /// [`put_lump`]' placement and `already_exists` errors and
-/// [`put_global`]' stale-index [`CyberError::Internal`].
+/// [`crate::wad::archive::Wad::put_global`]' stale-index [`CyberError::Internal`].
 fn commit_patch(
     session: &mut Session,
     staged: Staged,
@@ -144,7 +143,7 @@ fn commit_patch(
         };
         put_lump(wad, &write)?;
         if let Some(list) = plan.as_ref().and_then(|entry| entry.bytes.as_ref()) {
-            put_global(wad, LumpName::from_raw(PNAMES_RAW), list.clone())?;
+            wad.put_global(lumps::PNAMES, list.clone())?;
         }
         Ok(PatchOutcome {
             name: staged.name,

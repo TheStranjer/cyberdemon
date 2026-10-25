@@ -16,6 +16,7 @@ use core::slice::ChunksExact;
 use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::bytes::{Reader, Writer};
+use crate::wad::lumps;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::model::{Sector, Sidedef, Vertex};
 use crate::wad::name::{LumpName, NAME_LEN};
@@ -40,12 +41,12 @@ const NONE_FIELD: [u8; NAME_LEN] = *b"-\0\0\0\0\0\0\0";
 /// names the map layout that needs the member.
 pub(super) fn member_data<'members>(
     members: &'members [Lump],
-    wanted: &str,
+    wanted: LumpName,
     format: &str,
 ) -> Result<&'members [u8], CyberError> {
     members
         .iter()
-        .find(|lump| lump.name.as_bytes() == wanted.as_bytes())
+        .find(|lump| lump.name == wanted)
         .map(|lump| lump.data.as_ref())
         .ok_or_else(|| {
             CyberError::Format(format!(
@@ -72,19 +73,17 @@ pub(super) fn records<'data>(
     )))
 }
 
-/// Whether `name` is one of the five editable binary map lumps.
-pub(super) const fn is_editable(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"THINGS" | b"LINEDEFS" | b"SIDEDEFS" | b"VERTEXES" | b"SECTORS"
-    )
+/// Whether `name` is one of the five editable binary map lumps,
+/// [`lumps::EDITABLE_MAP_LUMPS`].
+pub(super) fn is_editable(name: LumpName) -> bool {
+    lumps::EDITABLE_MAP_LUMPS.contains(&name)
 }
 
 /// The members that are not editable lumps, in original order.
 pub(super) fn other_lumps(members: &[Lump]) -> Vec<Lump> {
     members
         .iter()
-        .filter(|lump| !is_editable(lump.name.as_bytes()))
+        .filter(|lump| !is_editable(lump.name))
         .cloned()
         .collect()
 }

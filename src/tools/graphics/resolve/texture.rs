@@ -11,6 +11,7 @@ use crate::gfx::image::IndexedImage;
 use crate::session::Session;
 use crate::tools::textures::TextureSet;
 use crate::wad::classify::Namespace;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::textures::{TextureDef, parse_pnames};
 
@@ -54,7 +55,7 @@ pub(crate) fn load_texture(session: &Session, name: LumpName) -> Result<Composit
 /// empty when none exists or it does not decode (a texture component
 /// index then has no name to resolve).
 fn patch_name_list(session: &Session) -> Vec<String> {
-    lump_bytes(session, LumpName::from_raw(*b"PNAMES\0\0"))
+    lump_bytes(session, lumps::PNAMES)
         .ok()
         .and_then(|bytes| parse_pnames(&bytes).ok())
         .unwrap_or_default()

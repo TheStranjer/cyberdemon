@@ -22,11 +22,10 @@ use crate::gfx::flat::flat_shape;
 use crate::gfx::grab::read_grab;
 use crate::gfx::patch::{PatchHeader, patch_header};
 use crate::session::{Session, Source};
-use crate::tools::graphics::{
-    PNAMES_RAW, Page, in_namespace, last_wins, merged_rows, page_rows, passes,
-};
+use crate::tools::graphics::{Page, in_namespace, last_wins, merged_rows, page_rows, passes};
 use crate::tools::lumps::rows::LumpRow;
 use crate::wad::classify::{LumpKind, Namespace};
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::textures::parse_pnames;
 
@@ -179,7 +178,7 @@ pub(super) struct PatchesReport {
 ///
 /// [`parse_pnames`]' [`CyberError::Format`] for a malformed lump.
 pub(super) fn pnames_of(session: &Session) -> Result<BTreeSet<LumpName>, CyberError> {
-    let Some(entry) = session.find(LumpName::from_raw(PNAMES_RAW), None) else {
+    let Some(entry) = session.find_global(lumps::PNAMES) else {
         return Ok(BTreeSet::new());
     };
     Ok(parse_pnames(&entry.lump.data)?

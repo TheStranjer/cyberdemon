@@ -387,6 +387,16 @@ impl Session {
         views::find(self, name, namespace)
     }
 
+    /// The merged view's last lump named `name`, wherever it sits: the
+    /// read of a global engine lump such as `PLAYPAL`, `COLORMAP`,
+    /// `PNAMES` or `TEXTURE1`, which lives outside any namespace region
+    /// and is answered by the winning copy alone.
+    #[must_use]
+    #[inline]
+    pub fn find_global(&self, name: LumpName) -> Option<MergedLump> {
+        views::find(self, name, None)
+    }
+
     /// Copies the map block `map` from a read-only layer into the working
     /// archive so it can be edited: the session's copy-on-write entry point.
     ///

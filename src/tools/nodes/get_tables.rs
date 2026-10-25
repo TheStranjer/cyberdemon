@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets::server::AssetRef;
 use crate::session::Session;
+use crate::wad::lumps;
 use crate::wad::map::{Blockmap, Reject};
 use crate::wad::name::LumpName;
 
@@ -86,7 +87,7 @@ struct RejectAsset {
 /// `get_reject`'s work under the session lock.
 pub(super) fn reject_run(session: &Session, request: &Request) -> Read<RejectReport> {
     let (name, _dir, _block, map) = open_map(session, request)?;
-    let bits = lump_bytes(&map.other, b"REJECT");
+    let bits = lump_bytes(&map.other, lumps::REJECT);
     let reject = Reject::new(map.sectors.len(), bits);
     let report = RejectReport {
         map: name,
@@ -191,7 +192,7 @@ pub(super) fn empty_blockmap_report(name: LumpName) -> BlockmapReport {
 /// `get_blockmap`'s work under the session lock.
 pub(super) fn blockmap_run(session: &Session, request: &Request) -> Read<BlockmapReport> {
     let (name, _dir, _block, map) = open_map(session, request)?;
-    let data = lump_bytes(&map.other, b"BLOCKMAP");
+    let data = lump_bytes(&map.other, lumps::BLOCKMAP);
     if data.is_empty() {
         return Ok((empty_blockmap_report(name), None));
     }

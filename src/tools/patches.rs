@@ -22,7 +22,7 @@
 //! decide where a patch is written, [`mod@remove`] the `remove_patch` work
 //! with the working scan and the guarded lump deletion. This root keeps
 //! what the three share - the parameters, the staged bytes and their
-//! staging, the result reports, the `PNAMES` constant and the router
+//! staging, the result reports and the router
 //! methods - and the group's unit tests live in `patches/tests.rs`.
 
 mod remove;
@@ -48,9 +48,6 @@ use crate::tools::patches::remove::remove_patch_run;
 use crate::tools::patches::write::{add_patch_run, replace_patch_run};
 use crate::wad::classify::is_doom_patch;
 use crate::wad::name::LumpName;
-
-/// Raw directory bytes of the patch-name lump.
-const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
 
 /// Arguments for [`Cyberdemon::add_patch`].
 #[derive(Debug, Deserialize, JsonSchema)]

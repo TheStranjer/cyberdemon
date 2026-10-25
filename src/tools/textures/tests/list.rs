@@ -1,13 +1,14 @@
 //! The two listings over the fixture set: what [`TextureSet::load`] decodes
 //! from the winning lumps, what [`TextureSet::find`] answers with, the rows
 //! [`list_textures_run`] and [`list_pnames_run`] filter and page, the
-//! [`Page`] bounds [`parse_page`] refuses and the lumps [`find_global`]
-//! locates.
+//! [`Page`] bounds [`parse_page`] refuses and the lumps
+//! [`crate::session::Session::find_global`] locates.
 
 use crate::session::{Session, Source};
 use crate::tools::textures::list::{PnamesReport, list_pnames_run, list_textures_run};
-use crate::tools::textures::{TextureSet, WhichLump, find_global, parse_page};
+use crate::tools::textures::{TextureSet, WhichLump, parse_page};
 use crate::wad::archive::Lump;
+use crate::wad::lumps;
 use crate::wad::textures::{TextureLayout, TextureLump, write_texture_lump};
 
 use super::{code, def, name, page, pnames_lump, session, set_of, texture1_lump};
@@ -64,7 +65,7 @@ fn find_global_returns_the_last_copy_of_the_merged_view() {
             Ok(())
         })
         .expect("plain append");
-    let found = find_global(&session, crate::tools::textures::PNAMES_RAW).expect("found");
+    let found = session.find_global(lumps::PNAMES).expect("found");
     assert_eq!(found.source, Source::Working, "the working copy wins");
     let loaded = set_of(&session);
     assert_eq!(loaded.pnames, vec!["ONLY".to_owned()], "loaded the winner");

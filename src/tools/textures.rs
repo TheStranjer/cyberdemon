@@ -20,8 +20,9 @@
 //! reusable removal, `textures/build` the two single-texture tools with the
 //! definition steps the texture import shares, and `textures/tests` the
 //! group's unit tests. This root keeps the constants, the [`TextureSet`]
-//! loader with its decode and paging helpers, `put_global`, the re-exports
-//! the other groups import and the router methods.
+//! loader with its decode and paging helpers, the re-exports the other
+//! groups import and the router methods; every global-lump write these
+//! tools run goes through [`crate::wad::archive::Wad::put_global`].
 
 mod build;
 mod list;
@@ -29,7 +30,6 @@ mod pnames;
 mod pnames_rewrite;
 
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -48,8 +48,9 @@ use crate::tools::textures::list::{
 };
 use crate::tools::textures::pnames::EditPnamesParams;
 use crate::tools::textures::pnames_rewrite::{edit_pnames_run, pick_operation};
-use crate::wad::archive::{Lump, Wad};
-use crate::wad::name::{LumpName, glob_match};
+use crate::wad::lumps;
+use crate::wad::name::LumpName;
+use crate::wad::name::glob_match;
 use crate::wad::textures::{TextureDef, TextureLump, parse_pnames, parse_texture_lump};
 
 // The `PNAMES` rewrite and the definition steps behind
@@ -68,12 +69,6 @@ const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 2000;
 /// Largest texture width or height `build_texture` accepts.
 const MAX_TEXTURE_SIZE: u16 = 4096;
-/// Raw directory bytes of the patch-name lump.
-const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
-/// Raw directory bytes of the first texture lump.
-const TEXTURE1_RAW: [u8; 8] = *b"TEXTURE1";
-/// Raw directory bytes of the second texture lump.
-const TEXTURE2_RAW: [u8; 8] = *b"TEXTURE2";
 
 /// The lump a listed texture came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,11 +88,11 @@ impl WhichLump {
         }
     }
 
-    /// The eight raw directory bytes of this lump's name.
-    pub(in crate::tools) const fn as_raw(self) -> [u8; 8] {
+    /// The name this lump carries.
+    pub(in crate::tools) const fn name(self) -> LumpName {
         match self {
-            Self::Texture1 => TEXTURE1_RAW,
-            Self::Texture2 => TEXTURE2_RAW,
+            Self::Texture1 => lumps::TEXTURE1,
+            Self::Texture2 => lumps::TEXTURE2,
         }
     }
 
@@ -140,7 +135,7 @@ impl TextureSet {
     /// decodes neither as the `Doom` nor as the `Strife` layout.
     #[inline]
     pub fn load(session: &Session) -> Result<Self, CyberError> {
-        let pnames_lump = find_global(session, PNAMES_RAW);
+        let pnames_lump = session.find_global(lumps::PNAMES);
         let pnames = match pnames_lump.as_ref() {
             Some(entry) => parse_pnames(&entry.lump.data)?,
             None => Vec::new(),
@@ -151,8 +146,8 @@ impl TextureSet {
             usize::MAX
         };
         Ok(Self {
-            texture1: decode_texture_lump(find_global(session, TEXTURE1_RAW), bound)?,
-            texture2: decode_texture_lump(find_global(session, TEXTURE2_RAW), bound)?,
+            texture1: decode_texture_lump(session.find_global(lumps::TEXTURE1), bound)?,
+            texture2: decode_texture_lump(session.find_global(lumps::TEXTURE2), bound)?,
             pnames,
         })
     }
@@ -225,11 +220,6 @@ fn first_match<'lump>(
         .textures
         .iter()
         .find(|def| def.name.eq_ignore_ascii_case(name))
-}
-
-/// The merged view's last lump with the raw directory name `raw`.
-fn find_global(session: &Session, raw: [u8; 8]) -> Option<MergedLump> {
-    session.find(LumpName::from_raw(raw), None)
 }
 
 /// One texture lump decoded together with the archive it came from.
@@ -314,24 +304,6 @@ fn page_rows<T>(matched: Vec<T>, page: &Page) -> (usize, Vec<T>) {
             .take(page.limit)
             .collect(),
     )
-}
-
-/// Writes `data` as the working archive's global lump `name`: over the
-/// last working copy in place, or appended as a new override. Shared with
-/// the palette tools, which copy-on-write `PLAYPAL` and `COLORMAP` the
-/// same way.
-pub(crate) fn put_global(wad: &mut Wad, name: LumpName, data: Vec<u8>) -> Result<(), CyberError> {
-    if let Some(index) = wad.find_last(name) {
-        let Some(lump) = wad.lumps.get_mut(index) else {
-            return Err(CyberError::Internal(format!(
-                "no lump at index {index} of the working archive: {name} was expected there"
-            )));
-        };
-        lump.data = Arc::from(data);
-        return Ok(());
-    }
-    wad.lumps.push(Lump::new(name, data));
-    Ok(())
 }
 
 #[expect(

@@ -24,12 +24,11 @@ use crate::gfx::palette::Palette;
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::textures::put_global;
-use crate::wad::name::LumpName;
+use crate::wad::lumps;
 
 use super::{
-    COLORMAP_RAW, FIRST_TINT, GOLD_LAST, GOLD_OFFSET, ONE, PALETTE_BYTES, PALETTE_COLORS,
-    PLAYPAL_RAW, RED_LAST, VANILLA_PALETTES, ZERO, find_global,
+    FIRST_TINT, GOLD_LAST, GOLD_OFFSET, ONE, PALETTE_BYTES, PALETTE_COLORS, RED_LAST,
+    VANILLA_PALETTES, ZERO,
 };
 
 /// Arguments for [`Cyberdemon::set_palette`]: exactly one of `colors` and
@@ -289,7 +288,9 @@ fn regenerate_colormap(data: &[u8]) -> Result<Vec<u8>, CyberError> {
 /// The merged view's winning `PLAYPAL` bytes, empty when no loaded
 /// archive holds one (a `set_palette` call may then create it).
 fn current_playpal(session: &Session) -> Vec<u8> {
-    find_global(session, PLAYPAL_RAW).map_or_else(Vec::new, |entry| entry.lump.data.to_vec())
+    session
+        .find_global(lumps::PLAYPAL)
+        .map_or_else(Vec::new, |entry| entry.lump.data.to_vec())
 }
 
 /// Write the payload onto a copy of the base `PLAYPAL`, recording which
@@ -356,9 +357,9 @@ pub(super) fn commit_palette(
     let maps = colormap.then(|| regenerate_colormap(&data)).transpose()?;
     let palettes = data.chunks_exact(PALETTE_BYTES).count();
     session.edit("set_palette", |wad| {
-        put_global(wad, LumpName::from_raw(PLAYPAL_RAW), data.clone())?;
+        wad.put_global(lumps::PLAYPAL, data.clone())?;
         if let Some(bytes) = maps.as_ref() {
-            put_global(wad, LumpName::from_raw(COLORMAP_RAW), bytes.clone())?;
+            wad.put_global(lumps::COLORMAP, bytes.clone())?;
         }
         Ok(())
     })?;

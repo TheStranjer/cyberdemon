@@ -9,6 +9,7 @@ use crate::session::Session;
 use crate::tools::nodes::build_nodes::{Implemented, Variant, nodes_build_run};
 use crate::tools::nodes::get_nodes::{NodeData, read_node_data};
 use crate::tools::nodes::{BuildNodesParams, find_lump};
+use crate::wad::lumps;
 use crate::wad::map::nodes;
 use serde_json::json;
 
@@ -99,9 +100,9 @@ fn nodes_build_run_writes_the_vanilla_run_and_is_undoable() {
     );
     let map = working_map(&session);
     assert_eq!(map.vertices.len(), 7, "the split vertex joined VERTEXES");
-    let run = find_lump(&map.other, b"NODES").expect("NODES kept");
+    let run = find_lump(&map.other, lumps::NODES).expect("NODES kept");
     assert_eq!(run.size(), 28, "one node record");
-    let segs = find_lump(&map.other, b"SEGS").expect("SEGS kept");
+    let segs = find_lump(&map.other, lumps::SEGS).expect("SEGS kept");
     assert_eq!(segs.size(), 84, "seven seg records");
     let again = nodes_build_run(&mut session, &build_params(None, Some("CLASSIC"), None))
         .expect("a rebuild runs");
@@ -135,7 +136,7 @@ fn a_geometry_edit_after_a_build_strips_the_split_vertices() {
         "the split vertex went with the invalidated nodes"
     );
     assert_eq!(
-        find_lump(&after.other, b"NODES")
+        find_lump(&after.other, lumps::NODES)
             .expect("placeholder kept")
             .size(),
         0,
@@ -202,16 +203,18 @@ fn assert_binary_lump(session: &Session, magic: &[u8], lump_size: usize) {
         6,
         "the split vertex did NOT join VERTEXES"
     );
-    let run = find_lump(&map.other, b"NODES").expect("NODES kept");
+    let run = find_lump(&map.other, lumps::NODES).expect("NODES kept");
     assert!(run.data.starts_with(magic), "the extended magic leads");
     assert_eq!(run.size(), lump_size, "the lump holds what was written");
     assert_eq!(
-        find_lump(&map.other, b"SEGS").expect("SEGS kept").size(),
+        find_lump(&map.other, lumps::SEGS)
+            .expect("SEGS kept")
+            .size(),
         0,
         "SEGS is emptied: ZDoom ignores it when NODES is extended"
     );
     assert_eq!(
-        find_lump(&map.other, b"SSECTORS")
+        find_lump(&map.other, lumps::SSECTORS)
             .expect("SSECTORS kept")
             .size(),
         0,
@@ -301,7 +304,7 @@ fn extended_build_on_udmf_writes_znodes_between_the_markers() {
     );
     assert_eq!(report.body.subsectors, 2, "the same tree");
     let map = working_map(&session);
-    let run = find_lump(&map.other, b"ZNODES").expect("ZNODES written");
+    let run = find_lump(&map.other, lumps::ZNODES).expect("ZNODES written");
     assert!(run.data.starts_with(b"XNOD"), "the raw magic leads");
     assert!(
         map.other

@@ -11,6 +11,7 @@
 
 use crate::wad::archive::Lump;
 use crate::wad::bytes::{u16_at, u32_at};
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 
 use super::namespaces::is_marker_name;
@@ -36,7 +37,7 @@ pub(super) fn classify(
             LumpKind::MapData
         };
     }
-    if let Some(kind) = kind_by_name(bytes, lump.size()) {
+    if let Some(kind) = kind_by_name(lump.name, lump.size()) {
         return kind;
     }
     if namespace == Some(Namespace::Colormaps) {
@@ -49,18 +50,21 @@ pub(super) fn classify(
 }
 
 /// The kind implied by a well-known lump name, `None` for anything else.
-const fn kind_by_name(name: &[u8], size: usize) -> Option<LumpKind> {
+/// Every name is the [`crate::wad::lumps`] constant for it.
+const fn kind_by_name(name: LumpName, size: usize) -> Option<LumpKind> {
     match name {
-        b"PLAYPAL" => Some(LumpKind::Palette),
-        b"COLORMAP" => Some(LumpKind::Colormap),
-        b"PNAMES" => Some(LumpKind::Pnames),
-        b"TEXTURE1" | b"TEXTURE2" => Some(LumpKind::TextureDefs),
-        b"ENDOOM" if size == ENDOOM_LEN => Some(LumpKind::Endoom),
-        b"DEMO1" | b"DEMO2" | b"DEMO3" | b"DEMO4" => Some(LumpKind::Demo),
-        b"DEHACKED" => Some(LumpKind::Dehacked),
-        b"DECORATE" => Some(LumpKind::Decorate),
-        b"ZSCRIPT" => Some(LumpKind::Zscript),
-        b"MAPINFO" | b"ZMAPINFO" | b"UMAPINFO" | b"EMAPINFO" => Some(LumpKind::Mapinfo),
+        lumps::PLAYPAL => Some(LumpKind::Palette),
+        lumps::COLORMAP => Some(LumpKind::Colormap),
+        lumps::PNAMES => Some(LumpKind::Pnames),
+        lumps::TEXTURE1 | lumps::TEXTURE2 => Some(LumpKind::TextureDefs),
+        lumps::ENDOOM if size == ENDOOM_LEN => Some(LumpKind::Endoom),
+        lumps::DEMO1 | lumps::DEMO2 | lumps::DEMO3 | lumps::DEMO4 => Some(LumpKind::Demo),
+        lumps::DEHACKED => Some(LumpKind::Dehacked),
+        lumps::DECORATE => Some(LumpKind::Decorate),
+        lumps::ZSCRIPT => Some(LumpKind::Zscript),
+        lumps::MAPINFO | lumps::ZMAPINFO | lumps::UMAPINFO | lumps::EMAPINFO => {
+            Some(LumpKind::Mapinfo)
+        }
         _ => None,
     }
 }

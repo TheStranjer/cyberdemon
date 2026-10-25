@@ -8,6 +8,7 @@ use crate::tools::nodes::build_all::{AllPlan, BuildAllNodesParams, all_nodes_run
 use crate::tools::nodes::build_nodes::{DEFAULT_SPLIT_COST, Variant};
 use crate::tools::nodes::{apply_all, find_lump};
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::build_reject::RejectMode;
 use serde_json::json;
@@ -146,15 +147,9 @@ fn apply_all_reports_the_node_body_as_plan_finalize_json() {
         body.get("reject").is_none() && body.get("blockmap").is_none(),
         "the plan result carries the nodes body only"
     );
-    for wanted in [
-        b"SEGS".as_slice(),
-        b"SSECTORS",
-        b"NODES",
-        b"REJECT",
-        b"BLOCKMAP",
-    ] {
+    for wanted in lumps::BINARY_NODE_LUMPS {
         assert!(
-            map.other.iter().any(|lump| lump.name.as_bytes() == wanted),
+            map.other.iter().any(|lump| lump.name == wanted),
             "apply_all installed {wanted:?} into the model",
         );
     }
@@ -190,13 +185,7 @@ fn all_nodes_run_writes_tree_reject_and_blockmap_in_one_undoable_step() {
         "all three lumps are one step"
     );
     let map = working_map(&session);
-    for wanted in [
-        b"SEGS".as_slice(),
-        b"SSECTORS",
-        b"NODES",
-        b"REJECT",
-        b"BLOCKMAP",
-    ] {
+    for wanted in lumps::BINARY_NODE_LUMPS {
         assert!(
             find_lump(&map.other, wanted).is_some_and(|lump| !lump.data.is_empty()),
             "{wanted:?} was written",
@@ -270,7 +259,7 @@ fn all_nodes_udmf_run_writes_znodes_only_unless_asked_for_a_reject() {
     );
     let map = working_map(&session);
     assert!(
-        find_lump(&map.other, b"REJECT").is_some_and(|lump| lump.size() == 1),
+        find_lump(&map.other, lumps::REJECT).is_some_and(|lump| lump.size() == 1),
         "one sector's matrix landed in the block",
     );
     assert_eq!(session.undo_labels().len(), 2, "two builds, two steps");

@@ -15,13 +15,14 @@ use alloc::collections::BTreeMap;
 
 use crate::error::CyberError;
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 use crate::wad::udmf::{decimal_to_rounded_int, has_fraction};
 
 use super::plan::Plan;
 use super::{
-    BEHAVIOR, Conversion, DOOM_NAMESPACE, HEXEN_NAMESPACE, KindCounts, MAX_BYTE, MAX_NAMESPACE_LEN,
+    Conversion, DOOM_NAMESPACE, HEXEN_NAMESPACE, KindCounts, MAX_BYTE, MAX_NAMESPACE_LEN,
     SET_IDENTIFICATION, is_node_lump,
 };
 
@@ -76,7 +77,7 @@ pub(super) fn into_binary(map: &mut Map, plan: &Plan, conversion: &mut Conversio
 
 /// Removes every generated node lump from `map`'s block lumps.
 pub(super) fn strip_node_lumps(map: &mut Map) {
-    map.other.retain(|lump| !is_node_lump(lump.name.as_bytes()));
+    map.other.retain(|lump| !is_node_lump(lump.name));
 }
 
 /// Drops the `BEHAVIOR` lump of a block rewritten as binary `Doom`: that
@@ -84,7 +85,7 @@ pub(super) fn strip_node_lumps(map: &mut Map) {
 /// keeping it would convert the map to a layout nobody asked for.
 fn strip_behavior(map: &mut Map, conversion: &mut Conversion) {
     let before = map.other.len();
-    map.other.retain(|lump| lump.name.as_bytes() != BEHAVIOR);
+    map.other.retain(|lump| lump.name != lumps::BEHAVIOR);
     if map.other.len() != before {
         conversion.warnings.push(
             "the BEHAVIOR lump was dropped: a binary Doom block that carries one reads back as \

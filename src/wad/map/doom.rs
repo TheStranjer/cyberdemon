@@ -26,9 +26,10 @@ use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::bytes::{Reader, Writer};
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::common::{
-    Element, carried, is_editable, member_data, other_lumps, read_sectors, read_side,
-    read_sidedefs, read_vertices, records, write_sectors, write_sidedefs, write_vertexes,
+    Element, carried, member_data, other_lumps, read_sectors, read_side, read_sidedefs,
+    read_vertices, records, write_sectors, write_sidedefs, write_vertexes,
 };
 use crate::wad::map::model::{Linedef, Map, Thing};
 use crate::wad::name::LumpName;
@@ -60,11 +61,11 @@ pub fn read_doom_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
         name,
         format: MapFormat::Doom,
         udmf_namespace: None,
-        things: read_things(member_data(members, "THINGS", "Doom")?)?,
-        vertices: read_vertices(member_data(members, "VERTEXES", "Doom")?)?,
-        linedefs: read_linedefs(member_data(members, "LINEDEFS", "Doom")?)?,
-        sidedefs: read_sidedefs(member_data(members, "SIDEDEFS", "Doom")?)?,
-        sectors: read_sectors(member_data(members, "SECTORS", "Doom")?)?,
+        things: read_things(member_data(members, lumps::THINGS, "Doom")?)?,
+        vertices: read_vertices(member_data(members, lumps::VERTEXES, "Doom")?)?,
+        linedefs: read_linedefs(member_data(members, lumps::LINEDEFS, "Doom")?)?,
+        sidedefs: read_sidedefs(member_data(members, lumps::SIDEDEFS, "Doom")?)?,
+        sectors: read_sectors(member_data(members, lumps::SECTORS, "Doom")?)?,
         other: other_lumps(members),
     })
 }
@@ -93,48 +94,30 @@ pub fn read_doom_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
 pub fn write_doom_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
     let mut lumps = Vec::with_capacity(11_usize.saturating_add(map.other.len()));
     lumps.push(Lump::marker(map.name));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"THINGS\0\0"),
-        write_things(&map.things)?,
-    ));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"LINEDEFS"),
-        write_linedefs(&map.linedefs)?,
-    ));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"SIDEDEFS"),
-        write_sidedefs(&map.sidedefs)?,
-    ));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"VERTEXES"),
-        write_vertexes(&map.vertices)?,
-    ));
-    for raw in [*b"SEGS\0\0\0\0", *b"SSECTORS", *b"NODES\0\0\0"] {
-        lumps.push(carried(&map.other, LumpName::from_raw(raw)));
+    lumps.push(Lump::new(lumps::THINGS, write_things(&map.things)?));
+    lumps.push(Lump::new(lumps::LINEDEFS, write_linedefs(&map.linedefs)?));
+    lumps.push(Lump::new(lumps::SIDEDEFS, write_sidedefs(&map.sidedefs)?));
+    lumps.push(Lump::new(lumps::VERTEXES, write_vertexes(&map.vertices)?));
+    for node in lumps::CLASSIC_NODE_RUN_LUMPS {
+        lumps.push(carried(&map.other, node));
     }
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"SECTORS\0"),
-        write_sectors(&map.sectors)?,
-    ));
-    for raw in [*b"REJECT\0\0", *b"BLOCKMAP"] {
-        lumps.push(carried(&map.other, LumpName::from_raw(raw)));
+    lumps.push(Lump::new(lumps::SECTORS, write_sectors(&map.sectors)?));
+    for trailing in [lumps::REJECT, lumps::BLOCKMAP] {
+        lumps.push(carried(&map.other, trailing));
     }
     lumps.extend(
         map.other
             .iter()
-            .filter(|lump| !is_standard(lump.name.as_bytes()))
+            .filter(|lump| !is_standard(lump.name))
             .cloned(),
     );
     Ok(lumps)
 }
 
-/// Whether `name` is one of the ten lumps [`write_doom_map`] emits itself.
-const fn is_standard(name: &[u8]) -> bool {
-    is_editable(name)
-        || matches!(
-            name,
-            b"SEGS" | b"SSECTORS" | b"NODES" | b"REJECT" | b"BLOCKMAP"
-        )
+/// Whether `name` is one of the ten lumps [`write_doom_map`] emits
+/// itself, [`lumps::STANDARD_DOOM_MAP_LUMPS`].
+fn is_standard(name: LumpName) -> bool {
+    lumps::STANDARD_DOOM_MAP_LUMPS.contains(&name)
 }
 
 /// Reads the `THINGS` records: x, y, angle and the u16 type/flags.

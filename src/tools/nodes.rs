@@ -180,15 +180,12 @@ fn open_map(session: &Session, request: &Request) -> Result<Opened, CyberError> 
 
 /// The last lump of `lumps` named `wanted`, engines reading the last
 /// copy of a run.
-fn find_lump<'lumps>(lumps: &'lumps [Lump], wanted: &[u8]) -> Option<&'lumps Lump> {
-    lumps
-        .iter()
-        .rev()
-        .find(|lump| lump.name.as_bytes() == wanted)
+fn find_lump(lumps: &[Lump], wanted: LumpName) -> Option<&Lump> {
+    lumps.iter().rev().find(|lump| lump.name == wanted)
 }
 
 /// The payload of the last lump named `wanted`; empty when absent.
-fn lump_bytes<'lumps>(lumps: &'lumps [Lump], wanted: &[u8]) -> &'lumps [u8] {
+fn lump_bytes(lumps: &[Lump], wanted: LumpName) -> &[u8] {
     find_lump(lumps, wanted).map_or(b"", |lump| lump.data.as_ref())
 }
 

@@ -26,13 +26,12 @@ use crate::tools::graphics::resolve::{load_flat, load_texture};
 use crate::tools::maps::common::load_map;
 use crate::tools::palette::load_palette;
 use crate::wad::game::Game;
+use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::consts::{SKY_FLAT, is_sky_flat, normalized_picture};
 use crate::wad::map::geometry;
 use crate::wad::name::LumpName;
 
-/// Raw directory bytes of the `COLORMAP` lump.
-const COLORMAP_RAW: [u8; 8] = *b"COLORMAP";
 /// The `PLAYPAL` entry the scene shades with.
 const PALETTE_NORMAL: usize = 0_usize;
 /// `Doom`'s view height above the sector floor, in map units.
@@ -169,7 +168,7 @@ fn scene_colormaps(
     problems: &mut Vec<String>,
 ) -> Vec<[u8; TABLE_BYTES]> {
     session
-        .find(LumpName::from_raw(COLORMAP_RAW), None)
+        .find_global(lumps::COLORMAP)
         .and_then(|entry| colormaps_from_bytes(&entry.lump.data))
         .unwrap_or_else(|| {
             problems.push("generated COLORMAP".to_owned());

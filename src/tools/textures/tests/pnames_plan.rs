@@ -1,6 +1,6 @@
 //! `edit_pnames`' plan and its parts: [`plan_edit`]'s `rename` and
 //! `replace_all` outcomes, [`name_mapping`]'s renumbering, the
-//! [`EditPnamesParams`] reader [`pick_operation`], the [`put_global`] lump
+//! [`EditPnamesParams`] reader [`pick_operation`], the [`Wad::put_global`] lump
 //! write and the merged rows the set is read through.
 
 use crate::session::{Scope, Session};
@@ -8,7 +8,6 @@ use crate::tools::textures::pnames::{
     EditPnamesParams, Operation, RenamePair, RenameRow, name_mapping, plan_edit,
 };
 use crate::tools::textures::pnames_rewrite::{edit_pnames_run, pick_operation};
-use crate::tools::textures::put_global;
 use crate::wad::archive::{Lump, Wad, WadKind};
 
 use super::{code, name, run, session, set_of, texture1_lump};
@@ -158,7 +157,8 @@ fn put_global_overwrites_the_last_working_copy_in_place() {
             Lump::new(name("PNAMES"), vec![3_u8]),
         ],
     };
-    put_global(&mut wad, name("PNAMES"), vec![9_u8]).expect("the overwrite runs");
+    wad.put_global(name("PNAMES"), vec![9_u8])
+        .expect("the overwrite runs");
     assert_eq!(wad.lumps.len(), 3, "no lump grew in");
     assert_eq!(
         wad.lumps.last().expect("the last PNAMES").data.to_vec(),
@@ -175,7 +175,8 @@ fn put_global_overwrites_the_last_working_copy_in_place() {
 #[test]
 fn put_global_appends_a_lump_the_archive_lacks() {
     let mut wad = Wad::default();
-    put_global(&mut wad, name("TEXTURE1"), vec![7_u8]).expect("the append runs");
+    wad.put_global(name("TEXTURE1"), vec![7_u8])
+        .expect("the append runs");
     assert_eq!(wad.lumps.len(), 1, "one lump arrived");
     assert_eq!(
         wad.lumps.first().expect("one lump").name,

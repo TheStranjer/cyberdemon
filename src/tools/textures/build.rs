@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::session::Session;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::textures::{
     PatchRef, TextureDef, TextureLayout, TextureLump, write_pnames, write_texture_lump,
@@ -25,7 +26,7 @@ use crate::wad::textures::{
 
 use super::list::present_lump_names;
 use super::pnames::{position_of, usize_to_u16};
-use super::{MAX_TEXTURE_SIZE, PNAMES_RAW, TextureSet, WhichLump, put_global};
+use super::{MAX_TEXTURE_SIZE, TextureSet, WhichLump};
 
 /// One patch placement of [`BuildTextureParams::patches`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -49,9 +50,8 @@ pub(in crate::tools) struct Placement {
     pub(in crate::tools) y: i16,
 }
 
-/// One texture lump one edit rewrites: the raw directory name and the new
-/// bytes.
-type LumpRewrite = ([u8; 8], Vec<u8>);
+/// One texture lump one edit rewrites: the lump's name and the new bytes.
+type LumpRewrite = (LumpName, Vec<u8>);
 
 /// Arguments for [`Cyberdemon::build_texture`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -368,16 +368,13 @@ pub(super) fn build_texture_run(
     let pnames_bytes = (!pnames_added.is_empty())
         .then(|| write_pnames(&pnames))
         .transpose()?;
-    let created = session
-        .working()
-        .find_last(LumpName::from_raw(target.as_raw()))
-        .is_none();
+    let created = session.working().find_last(target.name()).is_none();
     let label = format!("build_texture {name}");
     session.edit(&label, |wad| {
         if let Some(bytes) = pnames_bytes.as_ref() {
-            put_global(wad, LumpName::from_raw(PNAMES_RAW), bytes.clone())?;
+            wad.put_global(lumps::PNAMES, bytes.clone())?;
         }
-        put_global(wad, LumpName::from_raw(target.as_raw()), lump_bytes)?;
+        wad.put_global(target.name(), lump_bytes)?;
         Ok(())
     })?;
     Ok(BuildReport {
@@ -422,12 +419,12 @@ pub(super) fn remove_texture_run(
         if lump.textures.len() == before {
             continue;
         }
-        rewrites.push((which.as_raw(), write_texture_lump(&lump)?));
+        rewrites.push((which.name(), write_texture_lump(&lump)?));
     }
     let label = format!("remove_texture {name}");
     session.edit(&label, |wad| {
         for rewrite in rewrites.as_slice() {
-            put_global(wad, LumpName::from_raw(rewrite.0), rewrite.1.clone())?;
+            wad.put_global(rewrite.0, rewrite.1.clone())?;
         }
         Ok(())
     })?;

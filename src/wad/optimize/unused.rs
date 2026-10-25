@@ -13,6 +13,7 @@ use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
 use crate::wad::classify::{LumpKind, Namespace};
+use crate::wad::lumps;
 use crate::wad::map::read_map;
 use crate::wad::name::LumpName;
 use crate::wad::textures::{
@@ -21,10 +22,7 @@ use crate::wad::textures::{
 };
 
 use super::redundant::{is_global, last_global};
-use super::{
-    Action, Context, Draft, Operation, PNAMES_ENTRY_LEN, PNAMES_RAW, Rewrite, TEXTURE1_RAW,
-    TEXTURE2_RAW, Target,
-};
+use super::{Action, Context, Draft, Operation, PNAMES_ENTRY_LEN, Rewrite, Target};
 use crate::wad::map::consts::NO_TEXTURE;
 
 /// The working `PNAMES` to trim: the last global copy, `None` when the
@@ -35,7 +33,7 @@ fn trimmable_pnames(context: &Context<'_>, draft: &Draft) -> Option<usize> {
         .working_info
         .iter()
         .rev()
-        .find(|entry| entry.name == LumpName::from_raw(PNAMES_RAW) && is_global(entry))?;
+        .find(|entry| entry.name == lumps::PNAMES && is_global(entry))?;
     (!draft.remove.contains(&info.index)).then_some(info.index)
 }
 
@@ -46,7 +44,7 @@ fn trimmable_pnames(context: &Context<'_>, draft: &Draft) -> Option<usize> {
 ///
 /// [`CyberError::Format`] for a malformed `PNAMES`.
 fn merged_pnames(context: &Context<'_>) -> Result<Option<Vec<String>>, CyberError> {
-    let wanted = LumpName::from_raw(PNAMES_RAW);
+    let wanted = lumps::PNAMES;
     let Some(lump) = last_global(context.merged, context.merged_info, wanted) else {
         return Ok(None);
     };
@@ -67,8 +65,7 @@ fn merged_textures(
     pnames_len: usize,
 ) -> Result<DecodedTextures, CyberError> {
     let mut out = Vec::new();
-    for raw in [TEXTURE1_RAW, TEXTURE2_RAW] {
-        let name = LumpName::from_raw(raw);
+    for name in lumps::TEXTURE_DEF_LUMPS {
         let Some(lump) = last_global(context.merged, context.merged_info, name) else {
             continue;
         };
@@ -146,7 +143,7 @@ fn rewrite_merged_textures(
     mapping: &PatchMapping,
     rewrite: &mut Rewrite,
 ) -> Result<(), CyberError> {
-    let texture1 = LumpName::from_raw(TEXTURE1_RAW);
+    let texture1 = lumps::TEXTURE1;
     for (name, lump) in merged_textures(context, mapping.len())? {
         let mut edited = lump;
         if remap_patches(&mut edited, mapping) == 0 {

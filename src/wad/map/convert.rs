@@ -86,9 +86,11 @@ use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::model::Map;
 use crate::wad::map::write_map;
 use crate::wad::map::xlat::{self, FieldReport, LinesReport, Untranslated};
+use crate::wad::name::LumpName;
 use layout::{into_binary, into_udmf, namespace_name, parse_format, strip_node_lumps};
 use plan::{Direction, Plan};
 
@@ -100,8 +102,6 @@ const MAX_BYTE: i32 = 255_i32;
 const DOOM_NAMESPACE: &str = "doom";
 /// The `UDMF` namespace a `Hexen` family map declares when the caller names none.
 const HEXEN_NAMESPACE: &str = "zdoom";
-/// The `BEHAVIOR` lump, which only a binary `Hexen` block may carry.
-const BEHAVIOR: &[u8] = b"BEHAVIOR";
 /// Longest accepted `UDMF` namespace name, in characters.
 const MAX_NAMESPACE_LEN: usize = 32;
 /// The most [`Untranslated`] lines one result lists; past it one warning
@@ -198,15 +198,13 @@ pub const fn format_name(format: MapFormat) -> &'static str {
 }
 
 /// Whether `name` is a generated node lump, whose layout is tied to the map
-/// format: the vanilla `SEGS`/`SSECTORS`/`NODES`/`REJECT`/`BLOCKMAP` run or
-/// the `UDMF` `ZNODES` run.
+/// format: [`lumps::FORMAT_BOUND_NODE_LUMPS`], the vanilla
+/// `SEGS`/`SSECTORS`/`NODES`/`REJECT`/`BLOCKMAP` run or the `UDMF`
+/// `ZNODES` lump.
 #[must_use]
 #[inline]
-pub const fn is_node_lump(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"SEGS" | b"SSECTORS" | b"NODES" | b"REJECT" | b"BLOCKMAP" | b"ZNODES"
-    )
+pub fn is_node_lump(name: LumpName) -> bool {
+    lumps::FORMAT_BOUND_NODE_LUMPS.contains(&name)
 }
 
 /// Converts `map` in place into `target` and reports what that cost.

@@ -10,6 +10,7 @@ use crate::error::CyberError;
 use crate::session::{MergedLump, Scope, Session};
 use crate::wad::archive::Lump;
 use crate::wad::classify::{Analysis, MapBlock, analyze};
+use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::read_map;
 use crate::wad::name::LumpName;
@@ -68,10 +69,12 @@ impl Directory {
     }
 }
 
-/// Whether a block member is node data.
+/// Whether a block member is node data: a name from
+/// [`lumps::NODE_DATA_LUMPS`], where `ZNODES` counts by mere presence
+/// and `NODES` only when it carries bytes (an empty one is an
+/// invalidated placeholder).
 fn is_node_lump(lump: &Lump) -> bool {
-    let name = lump.name.as_bytes();
-    name == b"ZNODES" || (name == b"NODES" && lump.size() > 0)
+    lumps::NODE_DATA_LUMPS.contains(&lump.name) && (lump.name == lumps::ZNODES || lump.size() > 0)
 }
 
 /// Read `scope` into a [`Directory`].

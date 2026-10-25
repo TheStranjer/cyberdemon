@@ -13,6 +13,7 @@ use crate::wad::map::common::fixtures::two_room_map;
 use crate::wad::map::convert::layout::family_of;
 use crate::wad::map::convert::{Conversion, Target, convert_map, format_name, is_node_lump};
 use crate::wad::map::flags::FlagFamily;
+use crate::wad::name::LumpName;
 
 #[test]
 fn cross_family_requests_refuse_nothing() {
@@ -177,12 +178,14 @@ fn families_names_and_node_lumps_are_the_documented_ones() {
     );
     assert_eq!(format_name(MapFormat::Udmf), "udmf", "the wire spelling");
     for lump_name in ["SEGS", "SSECTORS", "NODES", "REJECT", "BLOCKMAP", "ZNODES"] {
-        assert!(
-            is_node_lump(lump_name.as_bytes()),
-            "{lump_name} is node data"
-        );
+        assert!(is_node_lump(name(lump_name)), "{lump_name} is node data");
     }
     for lump_name in ["THINGS", "BEHAVIOR", "SCRIPTS", "TEXTMAP", "ENDMAP"] {
-        assert!(!is_node_lump(lump_name.as_bytes()), "{lump_name} is not");
+        assert!(!is_node_lump(name(lump_name)), "{lump_name} is not");
     }
+}
+
+/// Parses a fixture lump name; they are all valid.
+fn name(text: &str) -> LumpName {
+    LumpName::parse(text).expect("test names are valid")
 }

@@ -6,18 +6,19 @@
 //! [`rewrite_textures`] renumbered) and [`write_pnames_rewrite`] commits it,
 //! so a caller that also deletes a patch lump takes both into ONE
 //! [`crate::session::Session::edit`]. [`edit_pnames_run`] is the tool's own
-//! path: it plans with [`plan_edit`], commits through [`put_global`] and
+//! path: it plans with [`plan_edit`], commits through
+//! [`crate::wad::archive::Wad::put_global`] and
 //! answers with [`report_of`]; [`pick_operation`] reads the one operation
 //! the arguments carry.
 
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::wad::archive::Wad;
-use crate::wad::name::LumpName;
+use crate::wad::lumps;
 use crate::wad::textures::{PatchMapping, remap_patches, write_pnames, write_texture_lump};
 
+use super::TextureSet;
 use super::pnames::{EditPnamesParams, EditReport, Operation, Plan, plan_edit};
-use super::{PNAMES_RAW, TEXTURE1_RAW, TEXTURE2_RAW, TextureSet, put_global};
 
 /// The re-encoded texture lumps of one edit.
 #[derive(Debug, Default)]
@@ -131,21 +132,17 @@ pub(in crate::tools) fn plan_pnames_removal(
 ///
 /// # Errors
 ///
-/// [`put_global`]'s [`CyberError::Internal`] for a vanished lump slot.
+/// [`Wad::put_global`]'s [`CyberError::Internal`] for a vanished lump slot.
 pub(in crate::tools) fn write_pnames_rewrite(
     wad: &mut Wad,
     rewrite: &PnamesRewrite,
 ) -> Result<(), CyberError> {
-    put_global(
-        wad,
-        LumpName::from_raw(PNAMES_RAW),
-        rewrite.pnames_bytes.clone(),
-    )?;
+    wad.put_global(lumps::PNAMES, rewrite.pnames_bytes.clone())?;
     if let Some(bytes) = rewrite.texture1.as_ref() {
-        put_global(wad, LumpName::from_raw(TEXTURE1_RAW), bytes.clone())?;
+        wad.put_global(lumps::TEXTURE1, bytes.clone())?;
     }
     if let Some(bytes) = rewrite.texture2.as_ref() {
-        put_global(wad, LumpName::from_raw(TEXTURE2_RAW), bytes.clone())?;
+        wad.put_global(lumps::TEXTURE2, bytes.clone())?;
     }
     Ok(())
 }
@@ -183,12 +180,12 @@ pub(super) fn edit_pnames_run(
     }
     let label = format!("edit_pnames {}", operation.name());
     session.edit(&label, |wad| {
-        put_global(wad, LumpName::from_raw(PNAMES_RAW), pnames_bytes.clone())?;
+        wad.put_global(lumps::PNAMES, pnames_bytes.clone())?;
         if let Some(bytes) = rewritten.texture1.as_ref() {
-            put_global(wad, LumpName::from_raw(TEXTURE1_RAW), bytes.clone())?;
+            wad.put_global(lumps::TEXTURE1, bytes.clone())?;
         }
         if let Some(bytes) = rewritten.texture2.as_ref() {
-            put_global(wad, LumpName::from_raw(TEXTURE2_RAW), bytes.clone())?;
+            wad.put_global(lumps::TEXTURE2, bytes.clone())?;
         }
         Ok(())
     })?;

@@ -49,6 +49,19 @@ impl LumpName {
         Self(name)
     }
 
+    /// Builds a name from the eight raw directory bytes, which must
+    /// already meet the stored invariant: uppercase `ASCII` letters and
+    /// `NUL` padding from the first `NUL` on. `const` so the well-known
+    /// names in [`crate::wad::lumps`] can be compile-time constants;
+    /// bytes read from a file go through [`LumpName::from_raw`] and user
+    /// text through [`LumpName::parse`] instead, which establish the
+    /// invariant rather than assume it.
+    #[must_use]
+    #[inline]
+    pub(crate) const fn padded(raw: [u8; NAME_LEN]) -> Self {
+        Self(raw)
+    }
+
     /// Parses user input into a name, strictly: 1 to 8 `ASCII` graphic
     /// characters (`0x21..=0x7E`), lowercase accepted and uppercased.
     ///
@@ -255,6 +268,25 @@ mod tests {
             &[0xFF, 0x01, b'A', b'_'],
             "high and control bytes are kept as they are, ASCII letters uppercased"
         );
+    }
+
+    #[test]
+    fn padded_stores_the_bytes_it_is_given_exactly() {
+        let name = LumpName::padded(*b"PLAYPAL\0");
+        assert_eq!(name.raw(), *b"PLAYPAL\0", "the bytes are stored as given");
+        assert_eq!(name.as_bytes(), b"PLAYPAL", "the padding reads off");
+        assert_eq!(
+            LumpName::from_raw(*b"playpal\0"),
+            name,
+            "a padded name meets the from_raw form of the same word"
+        );
+        let full = LumpName::padded(*b"TEXTURE1");
+        assert_eq!(
+            full.raw(),
+            *b"TEXTURE1",
+            "an eight-byte name needs no padding"
+        );
+        assert_eq!(full.len(), NAME_LEN, "and reads at full length");
     }
 
     #[test]

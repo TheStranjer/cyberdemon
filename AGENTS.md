@@ -325,7 +325,8 @@ src/
   session.rs      The per-connection editing session: an optional IWAD layer and
                   read-only resource layers under one editable working archive,
                   the merged view, the layer-only `base_lumps` view, `Scope`
-                  reads and `Session::edit`: `LayerRole`, `Layer` and the one
+                  reads, the `find`/`find_global` engine lookups and
+                  `Session::edit`: `LayerRole`, `Layer` and the one
                   `impl Session` every tool reaches through, its read-view
                   methods delegating to `session/views.rs`.
   session/        Session building blocks (no MCP concerns):
@@ -504,8 +505,7 @@ src/
                   request types beside its source resolution and commit
                   steps) and `palette/tests.rs` (that group's unit tests),
                   `tools/patches.rs` (the parameters, the staged bytes and
-                  their staging, the result reports, the `PNAMES` constant
-                  and the router) with `patches/write.rs` (the `add_patch`
+                  their staging, the result reports and the router) with `patches/write.rs` (the `add_patch`
                   and `replace_patch` runs beside their merged-view scans
                   and one-edit commits), `patches/remove.rs` (the
                   `remove_patch` run with its working scan, the guarded
@@ -760,10 +760,11 @@ src/
                   `palette/tests.rs`;
                   `tools/textures.rs` is the `textures` group: its root keeps
                   the constants, the merged view's `TextureSet` loader with
-                  its `WhichLump`, decode and paging helpers, `put_global`
-                  (the global-lump write the `palette`, `patches` and
-                  `imports` groups reuse), the re-exports those groups import
-                  and the router methods, over `textures/list.rs` (the
+                  its `WhichLump` (whose `name` is one of the
+                  `wad::lumps` texture constants), decode and paging
+                  helpers, the re-exports those groups import and the
+                  router methods; every global-lump write these tools
+                  commit is `Wad::put_global`, over `textures/list.rs` (the
                   `list_textures` and `list_pnames` arguments, rows and runs),
                   `textures/pnames.rs` (the `edit_pnames` arguments, the
                   `Operation` they carry and the `Plan` `plan_edit` computes),
@@ -779,7 +780,7 @@ src/
                   `textures/tests/pnames_edit.rs` (the adds and removes as one
                   undoable step and the reusable rewrite),
                   `textures/tests/pnames_plan.rs` (the rename and replace_all
-                  plans, the picker, the mapping and `put_global`) and
+                  plans, the picker, the mapping and the global write) and
                   `textures/tests/build.rs` (the builds, the removals and
                   their refusals);
                   `tools/themes.rs` is the `themes` group plus the shared
@@ -890,16 +891,27 @@ src/
                   painted overlays), `render/tests/minimap.rs` (the
                   minimap arguments) and `render/tests/view.rs` (the
                   sprite pass);
-  wad.rs          WAD format core module root: lump names, byte access, the
-                  in-memory archive, the map module tree and the texture
-                  definition codecs.
+  wad.rs          WAD format core module root: lump names and the well-known
+                  name constants, byte access, the in-memory archive, the map
+                  module tree and the texture definition codecs.
   wad/            Format building blocks (no MCP concerns): `wad/name.rs` the
                   eight-byte uppercase `LumpName` with glob matching,
+                  `wad/lumps.rs` the well-known `LumpName` constants
+                  (`PLAYPAL`, `PNAMES`, the map members, ...) built by the
+                  `LumpName::padded` const constructor, each named set the
+                  engine semantics key on (the editable five, the binary
+                  node run, the classic trio, the standard `Doom` and
+                  `Hexen` members, the block members, the format-bound and
+                  node-data node sets, the superseded `UDMF` run, the
+                  texture-def pair and the `UDMF` block members) and the
+                  constants' byte test,
                   `wad/bytes.rs` bounds-checked little-endian `Reader` and
                   `Writer` plus the checked usize/u32 casts,
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization (canonical and payload-deduplicating),
-                  lookup and atomic I/O on `wad/archive/directory.rs` (the
+                  lookup, the one `put_global` global-lump write every
+                  copy-on-write edit shares, and atomic I/O on
+                  `wad/archive/directory.rs` (the
                   raw `DirectoryEntry`, the parse walk and the two header
                   checks) and `wad/archive/io.rs` (the staging file and the
                   path errors `write_file_atomic` reports), with that

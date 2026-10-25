@@ -11,36 +11,21 @@
 //! the root.
 
 use crate::wad::archive::Lump;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 
 use super::namespaces::is_marker_name;
 use super::{MapBlock, MapFormat};
 
-/// The member lump names of a binary `Doom`/`Hexen` map block.
-const MAP_MEMBERS: [&[u8]; 15] = [
-    b"THINGS",
-    b"LINEDEFS",
-    b"SIDEDEFS",
-    b"VERTEXES",
-    b"SEGS",
-    b"SSECTORS",
-    b"NODES",
-    b"SECTORS",
-    b"REJECT",
-    b"BLOCKMAP",
-    b"BEHAVIOR",
-    b"SCRIPTS",
-    b"LEAFS",
-    b"LIGHTS",
-    b"MACROS",
-];
-
 /// The member lump names of a `GL` node block.
 const GL_MEMBERS: [&[u8]; 5] = [b"GL_VERT", b"GL_SEGS", b"GL_SSECT", b"GL_NODES", b"GL_PVS"];
+/// The `GL_VERT` first member every `GL` block starts with.
+const GL_VERT: LumpName = LumpName::padded(*b"GL_VERT\0");
 
-/// Whether `name` is a member of a binary map block.
-fn is_map_member(name: &[u8]) -> bool {
-    MAP_MEMBERS.contains(&name)
+/// Whether `name` is a member of a binary map block, a name from
+/// [`lumps::BINARY_BLOCK_MEMBERS`].
+fn is_map_member(name: LumpName) -> bool {
+    lumps::BINARY_BLOCK_MEMBERS.contains(&name)
 }
 
 /// Whether `name` is a member of a `GL` node block.
@@ -49,10 +34,10 @@ fn is_gl_member(name: &[u8]) -> bool {
 }
 
 /// Whether the lump after `index` is named exactly `wanted`.
-fn matches_next(lumps: &[Lump], index: usize, wanted: &[u8]) -> bool {
+fn matches_next(lumps: &[Lump], index: usize, wanted: LumpName) -> bool {
     lumps
         .get(index.saturating_add(1))
-        .is_some_and(|lump| lump.name.as_bytes() == wanted)
+        .is_some_and(|lump| lump.name == wanted)
 }
 
 /// Whether the lump at `index` starts a binary or `UDMF` map block.
@@ -63,7 +48,7 @@ fn is_map_header(lumps: &[Lump], index: usize) -> bool {
     if is_marker_name(head.name.as_bytes()) {
         return false;
     }
-    matches_next(lumps, index, b"THINGS") || matches_next(lumps, index, b"TEXTMAP")
+    matches_next(lumps, index, lumps::THINGS) || matches_next(lumps, index, lumps::TEXTMAP)
 }
 
 /// Whether the lump at `index` starts a `GL` node block: a `GL_`-prefixed
@@ -73,7 +58,7 @@ fn is_gl_header(lumps: &[Lump], index: usize) -> bool {
         return false;
     };
     let name = head.name.as_bytes();
-    name.starts_with(b"GL_") && !is_gl_member(name) && matches_next(lumps, index, b"GL_VERT")
+    name.starts_with(b"GL_") && !is_gl_member(name) && matches_next(lumps, index, GL_VERT)
 }
 
 /// Finds the map blocks in directory order, recording warnings.
@@ -107,7 +92,7 @@ fn scan_map(lumps: &[Lump], header: usize, warnings: &mut Vec<String>) -> (usize
     let start = header.saturating_add(1);
     if lumps
         .get(start)
-        .is_some_and(|lump| lump.name.as_bytes() == b"TEXTMAP")
+        .is_some_and(|lump| lump.name == lumps::TEXTMAP)
     {
         udmf_range(lumps, start, warnings)
     } else {
@@ -118,17 +103,14 @@ fn scan_map(lumps: &[Lump], header: usize, warnings: &mut Vec<String>) -> (usize
 /// The end of a binary member run starting at `start`, plus its format.
 fn binary_range(lumps: &[Lump], start: usize) -> (usize, MapFormat) {
     let mut end = start;
-    while lumps
-        .get(end)
-        .is_some_and(|lump| is_map_member(lump.name.as_bytes()))
-    {
+    while lumps.get(end).is_some_and(|lump| is_map_member(lump.name)) {
         end = end.saturating_add(1);
     }
     let hexen = lumps
         .iter()
         .skip(start)
         .take(end.saturating_sub(start))
-        .any(|lump| lump.name.as_bytes() == b"BEHAVIOR");
+        .any(|lump| lump.name == lumps::BEHAVIOR);
     let format = if hexen {
         MapFormat::Hexen
     } else {
@@ -144,7 +126,7 @@ fn udmf_range(lumps: &[Lump], textmap: usize, warnings: &mut Vec<String>) -> (us
     let found = lumps
         .iter()
         .skip(body)
-        .position(|lump| lump.name.as_bytes() == b"ENDMAP");
+        .position(|lump| lump.name == lumps::ENDMAP);
     let end = found.map_or_else(
         || {
             warnings.push(format!(

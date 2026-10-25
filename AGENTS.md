@@ -1045,16 +1045,33 @@ src/
                   (`secret_edit`'s per-family secret bit, `light_special`'s
                   per-family light effect — each keeping every bit outside
                   its field — and the `boom_note` vanilla-Doom warning the
-                  `mark_secret` tool and the plan secret step share), `map/xlat.rs` the pure
-                  Doom↔ZDoom linedef-special translation tables
-                  (`XlatFlags`, `XlatRow`, `parse_xlat_table` and the
-                  embedded-table lookups `xlat_rows`, `rows_for_doom` and
-                  `rows_for_zspecial`) and the cross-family stages the
-                  conversion's `ToHexen`/`FromHexen` directions run:
+                  `mark_secret` tool and the plan secret step share),
+                  `map/xlat.rs` + `map/xlat/` the pure
+                  Doom↔ZDoom linedef-special translation tables and the
+                  cross-family stages the conversion's
+                  `ToHexen`/`FromHexen` directions run: the root the
+                  `FieldReport`, `Untranslated` and `LinesReport` shapes
+                  beside the helpers every stage shares (`move_field`,
+                  `count_if`, `count_bit`, `show_indices` with
+                  `GROUP_LIST_LIMIT`, `HexenDrops` and the two field masks),
+                  on `xlat/table.rs` (`XlatFlags`, `XlatRow`,
+                  `parse_xlat_table` and the embedded-table lookups
+                  `xlat_rows`, `rows_for_doom` and `rows_for_zspecial`),
+                  `xlat/things.rs` and `xlat/sectors.rs` the
+                  `things_to_hexen`/`things_from_hexen` and
+                  `sectors_to_hexen`/`sectors_from_hexen` stages returning
+                  `FieldReport`, and `xlat/lines_to.rs` and
+                  `xlat/lines_from.rs` the two directions of
                   `linedefs_to_hexen`/`linedefs_from_hexen` returning
-                  `LinesReport`, and `things_to_hexen`,
-                  `things_from_hexen`, `sectors_to_hexen`,
-                  `sectors_from_hexen` returning `FieldReport`, and
+                  `LinesReport`, with the stages' tests in `xlat/tests.rs`
+                  (the shared row, map and trip builders) plus
+                  `xlat/tests/table.rs` (the shipped rows and the parsing
+                  refusals), `xlat/tests/things_sectors.rs` (the thing and
+                  sector stages with the report wire shapes),
+                  `xlat/tests/lines_restore.rs` (the round trips),
+                  `xlat/tests/lines_warnings.rs` (the grouped loss warnings
+                  with the byte vetoes) and `xlat/tests/lines_tags.rs` (the
+                  tag and line-id rules with the whole-table trip), and
                   `map/validate.rs` +
                   `map/validate/` the pure map-health checks behind
                   `validate_map`: `validate.rs` the `Issue`/`Severity`

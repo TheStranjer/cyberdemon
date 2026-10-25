@@ -87,14 +87,6 @@ fn no_room() -> CyberError {
     ))
 }
 
-/// The `invalid_argument` for `kind` `index` past the map's `count`.
-fn out_of_range(kind: &str, index: usize, count: usize) -> CyberError {
-    invalid(&format!(
-        "{kind} {index} is out of range: the map holds {count} of them; re-read the map \
-         and pass current indices"
-    ))
-}
-
 /// The server-bug refusal for a paint that lost the door wall.
 fn wall_lost(wall: usize) -> CyberError {
     CyberError::Internal(format!(

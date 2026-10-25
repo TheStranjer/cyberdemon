@@ -35,6 +35,22 @@ pub(super) async fn refuse_secret(client: &Client, args: Value, needle: &str) {
     );
 }
 
+/// Requires `mark_secret` to reject `args` naming a missing sector with
+/// the shared `not_found` index refusal mentioning `needle`.
+pub(super) async fn refuse_missing_secret(client: &Client, args: Value, needle: &str) {
+    let note = args.to_string();
+    let (code, message, hint) = call_err(client, "mark_secret", args).await;
+    assert_eq!(code, "not_found", "index-refusal code for {note}");
+    assert!(
+        message.contains(needle) && message.contains("does not exist"),
+        "the refusal for {note} must mention {needle:?}: {message}"
+    );
+    assert_eq!(
+        hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
+}
+
 #[tokio::test]
 async fn a_secret_mark_follows_the_doom_flag_family() {
     let dir = tempfile::tempdir().expect("temp dir");

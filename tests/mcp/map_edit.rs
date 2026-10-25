@@ -12,7 +12,8 @@ mod tests {
     use cyberdemon::error::CyberError;
     use cyberdemon::session::{Layer, LayerRole, Session};
     use cyberdemon::tools::maps::params::{
-        FlagsInput, IndexSelector, check_index, edit_result_fragment, validate_texture_name,
+        ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+        validate_texture_name,
     };
     use cyberdemon::wad::classify::MapFormat;
     use cyberdemon::wad::map::{FlagFamily, FlagKind, Map, read_map};
@@ -182,7 +183,7 @@ mod tests {
             vec![1_usize, 3],
             "sorted and deduplicated"
         );
-        let error = check_index("linedef", 12, 7).expect_err("12 is out of range");
+        let error = check_index(ElementKind::Linedefs, 12, 7).expect_err("12 is out of range");
         assert_eq!(error.code(), "not_found", "out of range code");
         assert_eq!(
             error.message(),

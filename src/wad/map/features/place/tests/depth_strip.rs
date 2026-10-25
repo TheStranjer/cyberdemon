@@ -188,17 +188,21 @@ fn void_strip_bevels_an_l_shared_boundary_into_one_polygon() {
 fn void_strip_refuses_empty_thin_and_broken_boundaries() {
     let map = wide_wall_map();
     let empty = void_strip(&map, &[], 16_i32).expect_err("nothing to thicken");
-    assert!(refuses(empty, "longest_boundary"), "the fix is named");
+    assert!(refuses(&empty, "longest_boundary"), "the fix is named");
     let thin = void_strip(&map, &[0_usize], 0_i32).expect_err("no such thickness");
-    assert!(refuses(thin, "positive"), "the rule is named");
+    assert!(refuses(&thin, "positive"), "the rule is named");
     let missing = void_strip(&map, &[9_usize], 16_i32).expect_err("no linedef 9");
-    assert!(refuses(missing, "linedef 9"), "the index is named");
+    assert_eq!(missing.code(), "not_found", "a missing line is not_found");
+    assert!(
+        refuses(&missing, "boundary linedef 9 does not exist"),
+        "the role and the index are named"
+    );
     let flat = Map {
         vertices: vec![vertex(0, 0), vertex(0, 0)],
         ..wide_wall_map()
     };
     let degenerate = void_strip(&flat, &[0_usize], 16_i32).expect_err("a point, not a wall");
-    assert!(refuses(degenerate, "zero-length"), "the degenerate line");
+    assert!(refuses(&degenerate, "zero-length"), "the degenerate line");
     let broken = Map {
         vertices: vec![
             vertex(0, 0),
@@ -210,7 +214,7 @@ fn void_strip_refuses_empty_thin_and_broken_boundaries() {
         ..wide_wall_map()
     };
     let apart = void_strip(&broken, &[0_usize, 1], 16_i32).expect_err("two runs");
-    assert!(refuses(apart, "void_strip call"), "carve each run apart");
+    assert!(refuses(&apart, "void_strip call"), "carve each run apart");
 }
 
 #[test]

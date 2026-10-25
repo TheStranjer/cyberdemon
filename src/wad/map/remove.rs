@@ -32,6 +32,7 @@ use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::wad::map::model::Map;
+use crate::wad::map::query::{ElementKind, check_index};
 use cascade::{
     add_lines_of_removed_vertices, add_orphaned_sides, add_orphaned_vertices, add_sideless_lines,
     add_sides_of_removed_sectors,
@@ -217,24 +218,27 @@ pub fn apply_removal(map: &mut Map, removal: &Removal) -> Result<RemovalReport, 
 
 /// The `NotFound` when any removal set names an index at or past its block.
 fn check_present(map: &Map, removal: &Removal) -> Result<(), CyberError> {
-    check_highest("vertex", &removal.vertices, map.vertices.len())?;
-    check_highest("linedef", &removal.linedefs, map.linedefs.len())?;
-    check_highest("sidedef", &removal.sidedefs, map.sidedefs.len())?;
-    check_highest("sector", &removal.sectors, map.sectors.len())?;
-    check_highest("thing", &removal.things, map.things.len())
+    check_highest(ElementKind::Vertices, &removal.vertices, map)?;
+    check_highest(ElementKind::Linedefs, &removal.linedefs, map)?;
+    check_highest(ElementKind::Sidedefs, &removal.sidedefs, map)?;
+    check_highest(ElementKind::Sectors, &removal.sectors, map)?;
+    check_highest(ElementKind::Things, &removal.things, map)
 }
 
-/// The `NotFound` when `removal`'s highest `kind` index is past `count`.
-fn check_highest(kind: &str, removal: &BTreeSet<usize>, count: usize) -> Result<(), CyberError> {
-    removal
-        .iter()
-        .next_back()
-        .filter(|highest| **highest >= count)
-        .map_or(Ok(()), |highest| {
-            Err(CyberError::NotFound(format!(
-                "cannot remove {kind} {highest}: the map holds {count} of them"
-            )))
-        })
+/// Refuse when `removal`'s highest `kind` index is past its block of
+/// `map`, keeping the removal context on the shared [`check_index`]
+/// message.
+///
+/// [`check_index`]: crate::wad::map::query::check_index
+fn check_highest(
+    kind: ElementKind,
+    removal: &BTreeSet<usize>,
+    map: &Map,
+) -> Result<(), CyberError> {
+    removal.iter().next_back().map_or(Ok(()), |highest| {
+        check_index(kind, *highest, kind.count_on(map))
+            .map_err(|error| error.map_message(|message| format!("cannot remove: {message}")))
+    })
 }
 
 /// The linedefs using each removed vertex, keyed by vertex index.

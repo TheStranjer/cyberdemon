@@ -19,7 +19,9 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{FlagsInput, IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::params::{
+    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+};
 use crate::wad::map::{FlagFamily, FlagKind, Map, Thing};
 
 use super::{DEGREES, EditRow, check_binary_ranges, check_doom_plain, edit_row};
@@ -221,7 +223,7 @@ pub(super) fn edited_thing(current: &Thing, plan: &EditPlan<'_>) -> Result<Thing
 /// `edit_thing`'s step: rewrite every selected thing and report the rows.
 fn edit_in_place(map: &mut Map, plan: &EditPlan<'_>) -> Result<Vec<EditRow>, CyberError> {
     for index in &plan.indices {
-        check_index("thing", *index, map.things.len())?;
+        check_index(ElementKind::Things, *index, map.things.len())?;
     }
     let family = map.flag_family();
     let format = map.format;

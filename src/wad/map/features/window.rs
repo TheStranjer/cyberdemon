@@ -23,6 +23,7 @@ use crate::error::CyberError;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::model::{Linedef, Map, Sector};
+use crate::wad::map::query::{ElementKind, check_index, missing_index};
 
 /// The smallest window opening the builder accepts, in map units: the
 /// clear glass band between the sill and the lintel.
@@ -76,36 +77,22 @@ struct RoomPlan {
     window_side: usize,
 }
 
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
-}
-
-/// `InvalidArgument` naming the reference `kind`, its out-of-range
-/// `index` and how many the map holds.
-fn range_error(kind: &str, index: usize, len: usize) -> CyberError {
-    invalid(&format!(
-        "{kind} {index} is out of range: the map holds {len} of them; re-read the map \
-         and pass current indices"
-    ))
-}
-
-/// The `InvalidArgument` for a trim that pushes a window height out of
+/// `InvalidArgument` for a trim that pushes a window height out of
 /// the representable range.
 fn overflow(axis: &str, value: i32) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "the {axis} of {value} map units puts the window outside the representable \
          height range: keep sill and lintel within a few thousand map units"
     ))
 }
 
-/// The floor and ceiling of sector `index`, refused with an out-of-range
-/// instruction when the map does not hold it.
+/// The floor and ceiling of sector `index`, refused with the shared
+/// index guard when the map does not hold it.
 fn room_state(map: &Map, index: usize) -> Result<(i32, i32), CyberError> {
     map.sectors
         .get(index)
         .map(|row| (row.floor_height, row.ceiling_height))
-        .ok_or_else(|| range_error("sector", index, map.sectors.len()))
+        .ok_or_else(|| missing_index(ElementKind::Sectors, index, map.sectors.len()))
 }
 
 /// The window's `(floor, ceiling)` between rooms `a` and `b` under
@@ -118,9 +105,10 @@ fn room_state(map: &Map, index: usize) -> Result<(i32, i32), CyberError> {
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] for an out-of-range sector, a trim
-/// that overflows the height range, or an opening under [`MIN_OPENING`];
-/// the opening refusal states the minimum.
+/// [`CyberError::NotFound`] for an out-of-range sector, and
+/// [`CyberError::InvalidArgument`] for a trim that overflows the height
+/// range or an opening under [`MIN_OPENING`]; the opening refusal states
+/// the minimum.
 #[inline]
 pub fn window_heights(
     map: &Map,
@@ -140,7 +128,7 @@ pub fn window_heights(
         .ok_or_else(|| overflow("lintel", trim.lintel))?;
     let opening = ceiling.saturating_sub(floor);
     if opening < MIN_OPENING {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "the window opening between these rooms would be {opening} map units: a \
              window needs at least {MIN_OPENING} between its floor ({floor}) and its \
              ceiling ({ceiling}); lower the sill, lower the lintel, or pick taller \
@@ -213,12 +201,12 @@ pub fn boundary_lines(map: &Map, window: usize) -> Vec<usize> {
 /// Resolve one room line: two-sided, both side references live, and
 /// exactly one side belongs to the window sector.
 fn plan_room_line(map: &Map, line: usize, window: usize) -> Result<RoomPlan, CyberError> {
-    let linedef = map
-        .linedefs
-        .get(line)
-        .ok_or_else(|| range_error("room linedef", line, map.linedefs.len()))?;
+    let linedef = map.linedefs.get(line).ok_or_else(|| {
+        missing_index(ElementKind::Linedefs, line, map.linedefs.len())
+            .map_message(|message| format!("room {message}"))
+    })?;
     let (Some(front), Some(back)) = (linedef.front, linedef.back) else {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "room linedef {line} is not two-sided: a window view line needs the window \
              sector on one side and its room on the other"
         )));
@@ -238,7 +226,7 @@ fn plan_room_line(map: &Map, line: usize, window: usize) -> Result<RoomPlan, Cyb
             room_side: back,
             window_side: front,
         }),
-        (true, true) | (false, false) => Err(invalid(&format!(
+        (true, true) | (false, false) => Err(CyberError::invalid(&format!(
             "room linedef {line} does not separate a room from window sector {window}: \
              exactly one of its sides must belong to the window"
         ))),
@@ -248,13 +236,8 @@ fn plan_room_line(map: &Map, line: usize, window: usize) -> Result<RoomPlan, Cyb
 /// Check every [`WindowSides`] reference against `map` before anything
 /// is written.
 fn plan_window(map: &Map, sides: &WindowSides) -> Result<Vec<RoomPlan>, CyberError> {
-    if map.sectors.get(sides.window_sector).is_none() {
-        return Err(range_error(
-            "window sector",
-            sides.window_sector,
-            map.sectors.len(),
-        ));
-    }
+    check_index(ElementKind::Sectors, sides.window_sector, map.sectors.len())
+        .map_err(|error| error.map_message(|message| format!("window {message}")))?;
     sides
         .room_lines
         .iter()
@@ -299,10 +282,11 @@ fn dress_room_line(map: &mut Map, room: RoomPlan, textures: &WindowTextures) {
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] when `sides.window_sector` is not a
-/// sector of the map, when a line index is not a linedef, when a line is
-/// not two-sided, when a line does not separate a room from the window,
-/// or when a side reference dangles.
+/// [`CyberError::NotFound`] when `sides.window_sector` is not a sector
+/// of the map or a line index is not a linedef, and
+/// [`CyberError::InvalidArgument`] when a line is not two-sided, when a
+/// line does not separate a room from the window, or when a side
+/// reference dangles.
 #[inline]
 pub fn apply_window(
     map: &mut Map,
@@ -471,6 +455,12 @@ mod tests {
         error.to_string()
     }
 
+    /// The message of a refusal that must be a `NotFound`.
+    fn missing(error: &CyberError) -> String {
+        assert_eq!(code(error), "not_found", "index-refusal code");
+        error.to_string()
+    }
+
     /// `line`'s row of `map`.
     fn line_of(map: &Map, line: usize) -> &Linedef {
         map.linedefs.get(line).expect("the linedef")
@@ -554,8 +544,14 @@ mod tests {
     #[test]
     fn heights_refuse_bad_sectors_and_overflowing_trims() {
         let map = windowed();
-        let missing = refuse(&window_heights(&map, 9_usize, 0_usize, trim()).unwrap_err());
-        assert!(missing.contains("sector 9 is out of range"), "{missing}");
+        let gone = missing(&window_heights(&map, 9_usize, 0_usize, trim()).unwrap_err());
+        assert!(
+            gone.contains(
+                "sector 9 does not exist (the map has 3 sectors, valid indices are \
+                            0..=2)"
+            ),
+            "{gone}"
+        );
         let sill = refuse(
             &window_heights(&map, 0_usize, 1_usize, sill_lintel(i32::MAX, 0_i32)).unwrap_err(),
         );
@@ -566,7 +562,7 @@ mod tests {
         assert!(lintel.contains("lintel"), "{lintel}");
         assert_eq!(
             code(&window_record(&map, 9_usize, 0_usize, trim()).unwrap_err()),
-            "invalid_argument",
+            "not_found",
             "the record checks through window_heights"
         );
     }
@@ -691,17 +687,17 @@ mod tests {
         let mut sectorless = sides();
         sectorless.window_sector = 9_usize;
         let sector_message =
-            refuse(&apply_window(&mut base, &sectorless, &textures()).unwrap_err());
+            missing(&apply_window(&mut base, &sectorless, &textures()).unwrap_err());
         assert!(
-            sector_message.contains("window sector 9 is out of range"),
+            sector_message.contains("window sector 9 does not exist"),
             "{sector_message}"
         );
 
         let mut linless = sides();
         linless.room_lines = vec![77_usize];
-        let line_message = refuse(&apply_window(&mut base, &linless, &textures()).unwrap_err());
+        let line_message = missing(&apply_window(&mut base, &linless, &textures()).unwrap_err());
         assert!(
-            line_message.contains("room linedef 77 is out of range"),
+            line_message.contains("room linedef 77 does not exist"),
             "{line_message}"
         );
         assert_eq!(base, windowed(), "every refusal left the one map alone");

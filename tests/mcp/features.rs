@@ -180,6 +180,23 @@ async fn refuse_with(client: &Client, args: Value, needle: &str) {
     );
 }
 
+/// Requires `add_door` to reject `args` naming an element the map does
+/// not hold with the shared `not_found` index refusal, mentioning
+/// `needle`.
+async fn refuse_missing_with(client: &Client, args: Value, needle: &str) {
+    let note = args.to_string();
+    let (code, message, hint) = call_err(client, "add_door", args).await;
+    assert_eq!(code, "not_found", "index-refusal code for {note}");
+    assert!(
+        message.contains(needle) && message.contains("does not exist"),
+        "the refusal for {note} must mention {needle:?}: {message}"
+    );
+    assert_eq!(
+        hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
+}
+
 /// The indices of an `add_door` result list field.
 fn index_list(result: &Value, field: &str) -> Vec<usize> {
     result[field]

@@ -26,6 +26,22 @@ async fn refuse_switch(client: &Client, args: Value, needle: &str) {
     );
 }
 
+/// Requires `add_switch` to reject `args` naming a missing element with
+/// the shared `not_found` index refusal mentioning `needle`.
+async fn refuse_missing_switch(client: &Client, args: Value, needle: &str) {
+    let note = args.to_string();
+    let (code, message, hint) = call_err(client, "add_switch", args).await;
+    assert_eq!(code, "not_found", "index-refusal code for {note}");
+    assert!(
+        message.contains(needle) && message.contains("does not exist"),
+        "the refusal for {note} must mention {needle:?}: {message}"
+    );
+    assert_eq!(
+        hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
+}
+
 /// The index of the one-sided working linedef running between the
 /// map points `(x1, y1)` and `(x2, y2)` in either direction.
 async fn solid_wall(client: &Client, map: &str, a: (i64, i64), b: (i64, i64)) -> usize {
@@ -246,16 +262,16 @@ async fn switch_arguments_are_validated() {
         "open_door, exit, secret_exit, raise_floor, lower_floor",
     )
     .await;
-    refuse_switch(
+    refuse_missing_switch(
         &client,
         json!({"linedef": 999_i32, "action": "exit"}),
-        "linedef 999 is out of range",
+        "linedef 999 does not exist",
     )
     .await;
-    refuse_switch(
+    refuse_missing_switch(
         &client,
         json!({"linedef": 0_i32, "action": "raise_floor", "target_sector": 99_i32}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
     refuse_switch(

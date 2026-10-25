@@ -162,17 +162,12 @@ struct EdgePlan {
     flip: bool,
 }
 
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
-}
-
 /// Refuses a `pad_size` that is no square side.
 fn check_size(spec: &TeleportSpec) -> Result<(), CyberError> {
     if spec.pad_size > 0_i32 {
         return Ok(());
     }
-    Err(invalid(&format!(
+    Err(CyberError::invalid(&format!(
         "pad_size {} is no side length: pass a positive number of map units \
          (the default {DEFAULT_PAD_SIZE})",
         spec.pad_size
@@ -183,7 +178,7 @@ fn check_size(spec: &TeleportSpec) -> Result<(), CyberError> {
 /// when the map holds no sector there.
 fn centre_sector(map: &Map, point: Point, role: &str) -> Result<usize, CyberError> {
     point_in_sector(map, i64::from(point.x), i64::from(point.y)).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "the {role} point {}, {} lies in no sector: pass a point inside the \
              room the {role} stands in (get_map_summary lists the rooms)",
             point.x, point.y
@@ -193,7 +188,7 @@ fn centre_sector(map: &Map, point: Point, role: &str) -> Result<usize, CyberErro
 
 /// The refusal for a square whose border no player can walk across.
 fn no_borders(sector: usize) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "sector {sector} has no two-sided border a player can cross: a teleporter \
          square must sit inside (or across) walkable rooms, not float in solid rock; \
          move its point onto a room (get_map_summary lists the rooms)"

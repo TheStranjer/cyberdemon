@@ -23,8 +23,11 @@ use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, Paint, WallTextures};
 use crate::wad::map::{Linedef, Map};
 
+use crate::tools::maps::params::ElementKind;
+use crate::wad::map::query::{check_index, missing_index};
+
 use super::door::{Chosen, DoorSpec, MAX_DEPTH, Placed, Target};
-use super::{invalid, no_room, out_of_range, wall_lost};
+use super::{invalid, no_room, wall_lost};
 
 /// The void strip `add_door` and `add_window` carve between touching
 /// rooms, in map units.
@@ -96,12 +99,8 @@ pub(super) fn choose_between(
     b: usize,
     at: Option<Point>,
 ) -> Result<Chosen, CyberError> {
-    if map.sectors.get(a).is_none() {
-        return Err(out_of_range("sector", a, map.sectors.len()));
-    }
-    if map.sectors.get(b).is_none() {
-        return Err(out_of_range("sector", b, map.sectors.len()));
-    }
+    check_index(ElementKind::Sectors, a, map.sectors.len())?;
+    check_index(ElementKind::Sectors, b, map.sectors.len())?;
     let boundary = longest_boundary(map, a, b).ok_or_else(|| {
         invalid(&format!(
             "sectors {a} and {b} share no two-sided boundary: draw the rooms touching (or \
@@ -153,9 +152,10 @@ pub(super) fn choose_linedef(
     line: usize,
     at: Option<Point>,
 ) -> Result<Chosen, CyberError> {
-    let Some(def) = map.linedefs.get(line) else {
-        return Err(out_of_range("linedef", line, map.linedefs.len()));
-    };
+    let def = map
+        .linedefs
+        .get(line)
+        .ok_or_else(|| missing_index(ElementKind::Linedefs, line, map.linedefs.len()))?;
     match map.line_sectors(def) {
         (Some(a), Some(b)) if a != b => Ok(Chosen {
             room_a: a,

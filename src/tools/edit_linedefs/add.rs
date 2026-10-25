@@ -22,7 +22,7 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{FlagsInput, check_index, edit_result_fragment};
+use crate::tools::maps::params::{ElementKind, FlagsInput, check_index, edit_result_fragment};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::{FlagKind, Linedef, Map, Sidedef};
 
@@ -233,13 +233,13 @@ fn place_side(
     created: &mut Vec<usize>,
 ) -> Result<Option<usize>, CyberError> {
     if let Some(existing) = reference {
-        check_index("sidedef", existing, map.sidedefs.len())?;
+        check_index(ElementKind::Sidedefs, existing, map.sidedefs.len())?;
         return Ok(Some(existing));
     }
     let Some(new) = side else {
         return Ok(None);
     };
-    check_index("sector", new.sector, map.sectors.len())?;
+    check_index(ElementKind::Sectors, new.sector, map.sectors.len())?;
     let created_side = new_sidedef(new, map.format)?;
     check_binary_offsets(map.format, &created_side)?;
     let index = map.sidedefs.len();

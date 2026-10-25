@@ -10,6 +10,7 @@ use crate::gfx::ops::parse_hex_color;
 use crate::plan::Units;
 use crate::render::{RenderSettings, Rgba, Switch};
 use crate::state::AppState;
+use crate::tools::maps::params::{ElementKind, check_index};
 use crate::tools::plan::params::UnitsParam;
 use crate::wad::map::Map;
 
@@ -348,15 +349,25 @@ pub(super) fn resolve_highlight(
     let wanted = requested.unwrap_or(&absent);
     Ok(Highlights {
         linedefs: checked_indices(
-            "linedef",
+            ElementKind::Linedefs,
             wanted.linedefs.as_deref(),
             map.linedefs.len(),
             map,
         )?,
-        sectors: checked_indices("sector", wanted.sectors.as_deref(), map.sectors.len(), map)?,
-        things: checked_indices("thing", wanted.things.as_deref(), map.things.len(), map)?,
+        sectors: checked_indices(
+            ElementKind::Sectors,
+            wanted.sectors.as_deref(),
+            map.sectors.len(),
+            map,
+        )?,
+        things: checked_indices(
+            ElementKind::Things,
+            wanted.things.as_deref(),
+            map.things.len(),
+            map,
+        )?,
         vertices: checked_indices(
-            "vertex",
+            ElementKind::Vertices,
             wanted.vertices.as_deref(),
             map.vertices.len(),
             map,
@@ -364,13 +375,17 @@ pub(super) fn resolve_highlight(
     })
 }
 
-/// `wanted` when every index names an element of `len`, else the refusal.
+/// `wanted` when every index names an element of `len`, else the refusal:
+/// the shared [`check_index`] message with the map and the parameter as
+/// context.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] naming the index and the element count.
+///
+/// [`check_index`]: crate::tools::maps::params::check_index
 fn checked_indices(
-    kind: &str,
+    kind: ElementKind,
     wanted: Option<&[usize]>,
     len: usize,
     map: &Map,
@@ -379,12 +394,9 @@ fn checked_indices(
         return Ok(Vec::new());
     };
     for index in indices {
-        if *index >= len {
-            return Err(CyberError::NotFound(format!(
-                "highlight {kind} index {index} is out of range: {} has {len} {kind}s",
-                map.name
-            )));
-        }
+        check_index(kind, *index, len).map_err(|error| {
+            error.map_message(|message| format!("highlight on map {}: {message}", map.name))
+        })?;
     }
     Ok(indices.to_vec())
 }

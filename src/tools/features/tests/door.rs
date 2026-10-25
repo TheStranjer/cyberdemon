@@ -9,7 +9,6 @@ use crate::tools::features::door::{
     AddDoorParams, Chosen, DoorSkins, DoorSpec, Dress, Groups, Placed, Target, build_door,
     door_groups, door_record, dress_door, style_name, style_names, style_of, target_of, track_role,
 };
-use crate::tools::features::out_of_range;
 use crate::tools::features::wall::{
     centroid, choose_between, choose_linedef, half_axis, outward_normal, recess_depth,
     strip_face_lost, strip_wall,
@@ -20,7 +19,9 @@ use crate::wad::map::features::DoorStyle;
 use crate::wad::map::features::door_wall;
 use crate::wad::map::ops::Point;
 
-use super::{code, one_room, open_line, refuse, room_and_hall, solid_line, two_rooms, vertex};
+use super::{
+    code, missing, one_room, open_line, refuse, room_and_hall, solid_line, two_rooms, vertex,
+};
 
 /// A request parsed from `json`.
 fn args(json: &str) -> AddDoorParams {
@@ -108,19 +109,29 @@ fn exactly_one_of_between_and_linedef_resolves() {
 #[test]
 fn choose_validates_sector_and_linedef_indices() {
     let map = two_rooms();
-    let second = refuse(&choose_between(&map, 0, 99, None).unwrap_err());
-    assert!(second.contains("sector 99 is out of range"), "{second}");
-    let first = refuse(&choose_between(&map, 99, 0, None).unwrap_err());
-    assert!(first.contains("sector 99 is out of range"), "{first}");
-    let wall = refuse(&choose_linedef(&map, 99, None).unwrap_err());
-    assert!(wall.contains("linedef 99 is out of range"), "{wall}");
+    let second = missing(&choose_between(&map, 0, 99, None).unwrap_err());
+    assert!(
+        second.contains(
+            "sector 99 does not exist (the map has 2 sectors, valid indices are \
+                        0..=1)"
+        ),
+        "{second}"
+    );
+    let first = missing(&choose_between(&map, 99, 0, None).unwrap_err());
+    assert!(first.contains("sector 99 does not exist"), "{first}");
+    let wall_error = choose_linedef(&map, 99, None).unwrap_err();
+    assert!(
+        missing(&wall_error).contains("linedef 99 does not exist"),
+        "code: {:?}",
+        code(&wall_error)
+    );
+    assert_eq!(
+        wall_error.hint(),
+        "describe_map or find_elements returns indices",
+        "the shared hint names the index-listing tools"
+    );
     let self_pair = refuse(&choose_between(&map, 0, 0, None).unwrap_err());
     assert!(self_pair.contains("no two-sided boundary"), "{self_pair}");
-    assert_eq!(
-        code(&out_of_range("sector", 9, 2)),
-        "invalid_argument",
-        "the shared refusal's code"
-    );
 }
 
 #[test]

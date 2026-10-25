@@ -12,6 +12,7 @@
 use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
+use crate::wad::map::query::{ElementKind, check_indices};
 
 use super::super::geometry::{point_in_sector, sector_boundary};
 use super::super::model::{Linedef, Map};
@@ -54,32 +55,13 @@ pub fn expand_selection(map: &Map, request: &SelectionRequest) -> Result<Selecti
     refuse_empty(Selection { vertices, things })
 }
 
-/// Refuse unless every index `request` names exists in its block.
+/// Refuse unless every index `request` names exists in its block,
+/// through the shared [`check_indices`] guard.
 fn check_requested(map: &Map, request: &SelectionRequest) -> Result<(), CyberError> {
-    check_kind("vertex", "vertices", &request.vertices, map.vertices.len())?;
-    check_kind("linedef", "linedefs", &request.linedefs, map.linedefs.len())?;
-    check_kind("sector", "sectors", &request.sectors, map.sectors.len())?;
-    check_kind("thing", "things", &request.things, map.things.len())
-}
-
-/// Refuse the first index of `kind` at or past `count`, phrased the way the
-/// shared validator phrases it (`"vertex 9 does not exist (the map has 6
-/// vertices, valid indices are 0..=5)"`), with the index-listing hint.
-/// `plural` is spelled per kind because `"vertex"` takes no plain `s`.
-fn check_kind(kind: &str, plural: &str, indices: &[usize], count: usize) -> Result<(), CyberError> {
-    for index in indices {
-        if *index >= count {
-            let range = count.checked_sub(1).map_or_else(
-                || format!("the map has no {plural}"),
-                |last| format!("the map has {count} {plural}, valid indices are 0..={last}"),
-            );
-            return Err(
-                CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
-                    .with_hint("describe_map or find_elements returns indices"),
-            );
-        }
-    }
-    Ok(())
+    check_indices(ElementKind::Vertices, &request.vertices, map)?;
+    check_indices(ElementKind::Linedefs, &request.linedefs, map)?;
+    check_indices(ElementKind::Sectors, &request.sectors, map)?;
+    check_indices(ElementKind::Things, &request.things, map)
 }
 
 /// Add a resolvable linedef's two endpoints, skipping references that

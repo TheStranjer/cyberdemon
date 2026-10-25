@@ -585,7 +585,8 @@ src/
                   with the session's definitions (`Prepared`) the analysing
                   tools share, and `tools/maps/params.rs` the shared
                   editing parameter types (`FlagsInput`, `IndexSelector`,
-                  `PointParam`, `check_index`, `validate_texture_name`,
+                  `PointParam`, the re-exported `check_index` guard,
+                  `validate_texture_name`,
                   `edit_result_fragment`) every map edit tool builds on; `tools/maps/manage.rs`
                   the block-level machinery behind `create_map`,
                   `copy_map`, `rename_map` and `remove_map` (the plans,
@@ -1286,8 +1287,11 @@ src/
                   `QueryContext` carrying the flag family and the game
                   definitions the derived fields read, and answering the
                   ascending matching indices; the root keeps those shapes,
-                  the resolved `Bounds` of a `within` clause and
-                  `side_sector`, `query/fields.rs` the `FieldType`
+                  the resolved `Bounds` of a `within` clause,
+                  `side_sector` and the shared element-index guard
+                  `check_index` (with `missing_index` and the kinds'
+                  spelled singular and plural names) every indexed
+                  refusal site runs through, `query/fields.rs` the `FieldType`
                   classification, every kind's field table and the `FValue`
                   a read widens to, `query/engine.rs` the `Prepared` filter
                   beside the `Engine` with its lazily built derived reads
@@ -1298,7 +1302,9 @@ src/
                   fixture maps) plus `query/tests/filters.rs` (every op,
                   the derived fields and the two bounds) and
                   `query/tests/checks.rs` (the `AND`ing, every refusal,
-                  the family tables and the wire shape).
+                  the family tables and the wire shape) and
+                  `query/tests/index.rs` (the index guard's spelled
+                  plurals, range wording and hint).
                   `map/flags.rs` names the two families' flag bits once:
                   every linedef and thing bit, activation field value and
                   flag mask is a named constant there, the name tables

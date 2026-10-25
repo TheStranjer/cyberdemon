@@ -16,10 +16,12 @@ use crate::wad::map::model::{Linedef, Map, Sector};
 use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, apply_overlay};
 
 use super::super::doors::{DoorLineSetup, next_free_tag};
+use crate::wad::map::query::{ElementKind, check_index};
+
 use super::{
     Edge, EdgeProbe, LiftBuild, LiftPlatform, LiftSpec, MIN_LIFT_DROP, MIN_PLATFORM_CORNERS,
-    NO_TEXTURE, Side, TRIGGER_MASK, centre_lost, invalid, isolated, lift_specials, no_edges,
-    no_way_down, paint_lost, range_error, shrink_note,
+    NO_TEXTURE, Side, TRIGGER_MASK, centre_lost, isolated, lift_specials, no_edges, no_way_down,
+    paint_lost, shrink_note,
 };
 
 /// The mean of one axis of the polygon's corners, rounded to the
@@ -74,7 +76,7 @@ fn draw_platform(
     side: &str,
 ) -> Result<(usize, Vec<String>), CyberError> {
     if polygon.len() < MIN_PLATFORM_CORNERS {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "platform.points needs at least three corners: pass the ordered outline of \
              the new platform (its last corner closes it)",
         ));
@@ -206,8 +208,9 @@ fn dress_edges(map: &mut Map, edges: &[Edge], setup: &DoorLineSetup, side: &str)
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] for an out-of-range platform sector,
-/// a polygon with fewer than three corners or a
+/// [`CyberError::NotFound`] for an out-of-range platform sector,
+/// [`CyberError::InvalidArgument`] for a polygon with fewer than three
+/// corners or a
 /// centre in no sector, a platform with no neighbour and no explicit
 /// `low_floor`, a low floor not below the platform's, or a platform no
 /// edge of which faces a lower sector; [`CyberError::Internal`] when a
@@ -221,9 +224,7 @@ fn dress_edges(map: &mut Map, edges: &[Edge], setup: &DoorLineSetup, side: &str)
 pub fn build_lift(map: &mut Map, spec: &LiftSpec) -> Result<LiftBuild, CyberError> {
     let (platform_sector, mut notes) = match spec.platform.clone() {
         LiftPlatform::Existing(index) => {
-            if map.sectors.get(index).is_none() {
-                return Err(range_error("sector", index, map.sectors.len()));
-            }
+            check_index(ElementKind::Sectors, index, map.sectors.len())?;
             (index, Vec::new())
         }
         LiftPlatform::Draw(polygon) => draw_platform(map, &polygon, &spec.side)?,

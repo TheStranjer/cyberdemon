@@ -22,11 +22,12 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{ElementKind, edit_result_fragment};
 use crate::wad::map::Map;
 use crate::wad::map::features::{LightEffect, SecretEdit, boom_note, light_special, secret_edit};
+use crate::wad::map::query::missing_index;
 
-use super::{invalid, out_of_range};
+use super::invalid;
 
 /// The lowest light level the vanilla range allows.
 pub(super) const LIGHT_MIN: i32 = 0_i32;
@@ -162,13 +163,13 @@ pub(super) struct LightStep {
     pub(super) family: &'static str,
 }
 
-/// The `(special, light)` pair of sector `index`, or the `invalid_argument`
-/// naming the index past the map's sectors.
+/// The `(special, light)` pair of sector `index`, or the shared
+/// `not_found` index refusal naming the index past the map's sectors.
 fn sector_state(map: &Map, index: usize) -> Result<(i32, i32), CyberError> {
     map.sectors
         .get(index)
         .map(|row| (row.special, row.light))
-        .ok_or_else(|| out_of_range("sector", index, map.sectors.len()))
+        .ok_or_else(|| missing_index(ElementKind::Sectors, index, map.sectors.len()))
 }
 
 /// Store `special` in sector `index`, reporting whether the row changed.

@@ -13,7 +13,7 @@
 use alloc::collections::BTreeMap;
 
 use crate::error::CyberError;
-use crate::tools::maps::params::check_index;
+use crate::tools::maps::params::{ElementKind, check_index};
 use crate::wad::map::{Map, Vertex};
 
 use super::add::AddLinedefParams;
@@ -121,8 +121,8 @@ fn zero_endpoint(v1: usize, v2: usize) -> CyberError {
 pub(super) fn place_endpoints(map: &mut Map, spec: &EndpointSpec<'_>) -> Result<Ends, CyberError> {
     let mut ends = match *spec {
         EndpointSpec::Indices { v1, v2 } => {
-            check_index("vertex", v1, map.vertices.len())?;
-            check_index("vertex", v2, map.vertices.len())?;
+            check_index(ElementKind::Vertices, v1, map.vertices.len())?;
+            check_index(ElementKind::Vertices, v2, map.vertices.len())?;
             Ends {
                 v1,
                 v2,

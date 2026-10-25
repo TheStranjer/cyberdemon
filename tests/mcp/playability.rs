@@ -828,19 +828,26 @@ mod tests {
         );
     }
 
-    /// An index at the sector count refuses `not_found` with the range
-    /// and the parameter named.
+    /// An index at the sector count refuses `not_found` with the range,
+    /// the parameter and the map named.
     async fn expect_index_refused(client: &Client, count: u64) {
-        let (code, message, _) = call_err(
+        let (code, message, hint) = call_err(
             client,
             "describe_map",
             json!({"map": "MAP12", "sectors": [count]}),
         )
         .await;
         assert_eq!(code, "not_found", "one past the last sector refuses");
+        let last = count.checked_sub(1).expect("a sector count above one");
         assert!(
-            message.contains(&format!("0..{count}")) && message.contains("`sectors`"),
-            "the message names the valid range and the parameter: {message}"
+            message.contains(&format!("valid indices are 0..={last}"))
+                && message.contains("`sectors`")
+                && message.contains("MAP12"),
+            "the message names the parameter, the map and the range: {message}"
+        );
+        assert_eq!(
+            hint, "describe_map or find_elements returns indices",
+            "the shared index hint names the readers"
         );
     }
 

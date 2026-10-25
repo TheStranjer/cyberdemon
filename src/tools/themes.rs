@@ -31,7 +31,7 @@ use crate::themes::table;
 use crate::themes::{self, Available, Matched, Resolved, Role};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    IndexSelector, check_index, edit_result_fragment, validate_texture_name,
+    ElementKind, IndexSelector, check_index, edit_result_fragment, validate_texture_name,
 };
 use crate::tools::reply;
 use crate::tools::textures::TextureSet;
@@ -394,7 +394,7 @@ fn selected_sectors(map: &Map, requested: Option<&[usize]>) -> Result<BTreeSet<u
         ));
     }
     for index in indices {
-        check_index("sector", *index, map.sectors.len())?;
+        check_index(ElementKind::Sectors, *index, map.sectors.len())?;
     }
     Ok(indices.iter().copied().collect())
 }
@@ -583,12 +583,12 @@ fn target_lines(map: &Map, args: &AlignTexturesParams) -> Result<BTreeSet<usize>
     if let Some(selector) = args.linedefs.as_ref() {
         let indices = selector.clone().indices()?;
         for index in &indices {
-            check_index("linedef", *index, map.linedefs.len())?;
+            check_index(ElementKind::Linedefs, *index, map.linedefs.len())?;
         }
         return Ok(indices.into_iter().collect());
     }
     if let Some(sector) = args.sector {
-        check_index("sector", sector, map.sectors.len())?;
+        check_index(ElementKind::Sectors, sector, map.sectors.len())?;
         return Ok(side_lines(map, sector));
     }
     Ok((0..map.linedefs.len()).collect())

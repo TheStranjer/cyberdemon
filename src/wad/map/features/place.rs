@@ -17,7 +17,7 @@
 //! Everything is a function of the [`Map`] model and plain integers:
 //! distances compare as exact `i128` fractions, hit points round to
 //! whole map units, and every refusal is a
-//! [`CyberError::InvalidArgument`] saying what to do next. Like the
+//! [`CyberError`](crate::error::CyberError) saying what to do next. Like the
 //! sibling engines in [`crate::wad::map::ops`] and
 //! [`crate::wad::map::overlay`], nothing here mutates the map and no
 //! `MCP` type appears.
@@ -35,7 +35,6 @@ pub use cut::{door_rect, door_segment, door_wall, project_onto_line};
 pub use depth::outward_depth;
 pub use strip::void_strip;
 
-use crate::error::CyberError;
 use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};
 use crate::geom::Pt;
 use crate::geom::segment::{Delta, cross, delta, dot};
@@ -238,9 +237,4 @@ fn moved(vertex: Point, offset: Delta) -> Point {
         i128::from(vertex.x).saturating_add(offset.0),
         i128::from(vertex.y).saturating_add(offset.1),
     )
-}
-
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
 }

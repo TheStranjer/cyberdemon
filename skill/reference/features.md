@@ -33,7 +33,8 @@ in, the use action and the dressing, as one `undo` step.
 **Where**: pass exactly one of
 
 - `between: [sectorA, sectorB]` — the two rooms the door joins. They
-  must share a two-sided boundary (both sector indices must exist, else
+  must share a two-sided boundary (a missing sector index is
+  `not_found`, a boundary the sectors do not share is
   `invalid_argument`). The door cuts the shared line nearest `at`, or the
   longest one when no `at` is given. Sector A lends the recess its floor
   and ceiling heights.
@@ -234,7 +235,7 @@ or `add walk_trigger lift`). The player starts the ride from **below**.
 `invalid_argument`):
 
 - `sector: N` — an existing sector that already stands at the high
-  floor. Out of range is `invalid_argument` naming it.
+  floor. Out of range is `not_found` naming it.
 - `platform: {points: [{x, y}, ...]}` — draw a **new** platform: at
   least three corners, implicitly closed, painted with the same overlay
   engine as `create_sector_from_loop`. It copies the floor, ceiling,
@@ -370,8 +371,8 @@ the theme's switch texture on its front middle, and installs a
 use-activated special that acts on a tagged sector — all in one `undo`
 step. This is the trigger a `remote` `add_door` waits for.
 
-**The wall**: `linedef: N` is required and must exist (`invalid_argument`
-naming it otherwise). `at: {x, y}` optionally centres the panel there (a
+**The wall**: `linedef: N` is required and must exist (its absence is
+`invalid_argument`, a missing line `not_found`, naming it). `at: {x, y}` optionally centres the panel there (a
 point off the wall is projected onto it); without it the panel sits at
 the wall's midpoint. `width` (default 32, positive) is the panel; a wall
 too short for it fails `invalid_argument` naming the available length.
@@ -395,7 +396,7 @@ fails `invalid_argument` listing all five:
 
 **Targets**: the three sector-moving actions (`open_door`, `raise_floor`,
 `lower_floor`) require `target_sector` — the index of the sector they act
-on (missing or out of range is `invalid_argument`). The line answers with
+on (missing is `invalid_argument`, out of range `not_found`). The line answers with
 that sector's existing tag; an **untagged** sector (`tag 0`) is stamped
 with a fresh unused tag and the result's `tag` reports it. So `add_door`'s
 `remote` door is wired by passing its reported `door_sector` here — the
@@ -434,14 +435,16 @@ wall or as lines the player crosses. `kind` (required, case-insensitive)
 picks the trigger; `secret` (default false) picks the map's secret exit.
 
 **`kind: "switch"`** is exactly `add_switch` with the `exit` (or
-`secret_exit`) action: `linedef` (required — missing or out of range is
-`invalid_argument` naming it) is the wall the panel mounts on, at the
+`secret_exit`) action: `linedef` (required — its absence is
+`invalid_argument`, an index the map does not hold is `not_found` naming
+it) is the wall the panel mounts on, at the
 default 32-unit width, wearing the theme's `exit_switch` texture. The
 Doom family gets `S1` 11 (51); the Hexen family gets `Portal` 243 (244)
 with `playeruse` activation. `sector` is ignored.
 
 **`kind: "walk_over"`** dresses a whole sector: `sector` (required —
-missing or out of range is `invalid_argument` naming it) — **every
+its absence is `invalid_argument`, an index the map does not hold is
+`not_found` naming it) — **every
 two-sided linedef with the sector on either side** becomes a level-end
 line. A sector with no two-sided boundary is refused with a hint. The
 Doom family gets `W1` 52 (124); such a line's tag is the destination map
@@ -475,7 +478,7 @@ geometry, no textures, no tags, so `nodes_invalidated` is `false`.
 
 **Where**: `sectors` is the list of sector indices to change (duplicates
 collapse; an empty list is `invalid_argument`). An index the map does not
-hold is `invalid_argument` naming it, and then nothing at all is written.
+hold is `not_found` naming it, and then nothing at all is written.
 `secret` (default `true`) marks; `secret: false` clears. `map` defaults to
 the active map.
 

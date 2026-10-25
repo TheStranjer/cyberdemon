@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::state::AppState;
+use crate::tools::maps::params::{ElementKind, check_index};
 use crate::tools::render::{OverviewMarks, playability_overview};
 use crate::tools::{Page, parse_limit};
 use crate::wad::map::describe::{Describe, MapOverview, SectorFacts};
@@ -70,8 +71,8 @@ pub(super) struct DescribeMapParams {
 ///
 /// # Errors
 ///
-/// [`CyberError::NotFound`] naming the offending index, the valid
-/// `0..count` range and the `sectors` parameter.
+/// [`CyberError::NotFound`] naming the offending index, the valid range
+/// and the `sectors` parameter.
 pub(super) fn sector_selection(
     wanted: Option<&[usize]>,
     count: usize,
@@ -82,12 +83,9 @@ pub(super) fn sector_selection(
     };
     let mut chosen: BTreeSet<usize> = BTreeSet::new();
     for index in indices {
-        if *index >= count {
-            return Err(CyberError::NotFound(format!(
-                "sector index {index} is out of range for map {map}: it holds {count} sectors, \
-                 so `sectors` accepts indices 0..{count} (get_map_summary shows the count)"
-            )));
-        }
+        check_index(ElementKind::Sectors, *index, count).map_err(|error| {
+            error.map_message(|message| format!("`sectors` for map {map}: {message}"))
+        })?;
         chosen.insert(*index);
     }
     Ok(chosen.into_iter().collect())

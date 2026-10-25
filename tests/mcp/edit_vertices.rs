@@ -15,7 +15,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, pwad_map_formats};
+    use crate::fixtures::{iwad, pwad_empty_map, pwad_map_formats};
     use crate::support::{call, call_err, connect};
 
     /// A connected client for one test.
@@ -346,7 +346,7 @@ mod tests {
     async fn move_vertex_reports_a_missing_index_and_an_unstorable_result() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message, _) = call_err(
+        let (code, message, hint) = call_err(
             &client,
             "move_vertex",
             json!({"index": 99_i32, "dx": 1_i32}),
@@ -359,6 +359,10 @@ mod tests {
             ),
             "the message counts the vertices: {message}"
         );
+        assert_eq!(
+            hint, "describe_map or find_elements returns indices",
+            "the refusal carries the index-listing hint"
+        );
         refuse(
             &client,
             "move_vertex",
@@ -366,6 +370,40 @@ mod tests {
         )
         .await;
         assert_untouched(&client).await;
+    }
+
+    #[tokio::test]
+    async fn a_vertex_edit_on_an_empty_map_says_the_map_has_no_vertices() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let empty = pwad_empty_map(dir.path());
+        call(
+            &client,
+            "open_iwad",
+            json!({"path": empty.display().to_string()}),
+        )
+        .await;
+        expect_no_vertices(&client, "move_vertex", json!({"dx": 1_i32})).await;
+        expect_no_vertices(&client, "remove_vertex", json!({})).await;
+    }
+
+    /// Requires `tool` to refuse index `0` on the empty fixture map with
+    /// the shared guard's spelled-plural "no vertices" refusal, `extra`
+    /// merged into the arguments.
+    async fn expect_no_vertices(client: &Client, tool: &str, extra: Value) {
+        let mut args = extra.as_object().expect("test extras are objects").clone();
+        args.insert("map".to_owned(), json!("MAP01"));
+        args.insert("index".to_owned(), json!(0_i32));
+        let (code, message, hint) = call_err(client, tool, json!(args)).await;
+        assert_eq!(code, "not_found", "{tool} on the empty map");
+        assert!(
+            message.contains("the map has no vertices"),
+            "{tool} says the block is empty, never \"vertexs\": {message}"
+        );
+        assert_eq!(
+            hint, "describe_map or find_elements returns indices",
+            "{tool} carries the index-listing hint"
+        );
     }
 
     #[tokio::test]

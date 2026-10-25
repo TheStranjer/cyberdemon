@@ -17,8 +17,9 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{ElementKind, edit_result_fragment};
 use crate::wad::map::Map;
+use crate::wad::map::query::check_indices;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
 };
@@ -130,41 +131,17 @@ pub(super) fn cascade_options(args: &DeleteGeometryParams) -> CascadeOptions {
     }
 }
 
-/// Refuses unless every index of one kind exists, naming the first that
-/// does not the way the shared validator phrases it (`"vertex 9 does not
-/// exist (map has 6 vertices)"`). `plural` is spelled per kind because
-/// [`check_index`] only ever appends an `s`, which "vertex" does not take.
-///
-/// [`check_index`]: crate::tools::maps::params::check_index
-fn check_kind(
-    kind: &str,
-    plural: &str,
-    indices: &BTreeSet<usize>,
-    count: usize,
-) -> Result<(), CyberError> {
-    for index in indices {
-        if *index >= count {
-            let range = count.checked_sub(1).map_or_else(
-                || format!("the map has no {plural}"),
-                |last| format!("the map has {count} {plural}, valid indices are 0..={last}"),
-            );
-            return Err(
-                CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
-                    .with_hint("describe_map or find_elements returns indices"),
-            );
-        }
-    }
-    Ok(())
-}
-
 /// Refuses unless every selected index exists in its block of `map`,
-/// kinds in vertex, linedef, sidedef, sector, thing order.
+/// kinds in vertex, linedef, sidedef, sector, thing order, through the
+/// shared [`check_indices`] guard.
+///
+/// [`check_indices`]: crate::wad::map::query::check_indices
 pub(super) fn check_selection(map: &Map, removal: &Removal) -> Result<(), CyberError> {
-    check_kind("vertex", "vertices", &removal.vertices, map.vertices.len())?;
-    check_kind("linedef", "linedefs", &removal.linedefs, map.linedefs.len())?;
-    check_kind("sidedef", "sidedefs", &removal.sidedefs, map.sidedefs.len())?;
-    check_kind("sector", "sectors", &removal.sectors, map.sectors.len())?;
-    check_kind("thing", "things", &removal.things, map.things.len())
+    check_indices(ElementKind::Vertices, &removal.vertices, map)?;
+    check_indices(ElementKind::Linedefs, &removal.linedefs, map)?;
+    check_indices(ElementKind::Sidedefs, &removal.sidedefs, map)?;
+    check_indices(ElementKind::Sectors, &removal.sectors, map)?;
+    check_indices(ElementKind::Things, &removal.things, map)
 }
 
 /// The deletion step: check the selection, grow it with the always-on

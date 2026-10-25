@@ -243,23 +243,9 @@ struct EdgeProbe {
     floor: i32,
 }
 
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
-}
-
-/// `InvalidArgument` naming the reference `kind`, its out-of-range
-/// `index` and how many the map holds.
-fn range_error(kind: &str, index: usize, len: usize) -> CyberError {
-    invalid(&format!(
-        "{kind} {index} is out of range: the map holds {len} of them; re-read the map \
-         and pass current indices"
-    ))
-}
-
 /// The refusal for a platform with nothing beside it to lower towards.
 fn isolated(sector: usize) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "sector {sector} has no neighbouring sector to take a low floor from: pass an \
          explicit low_floor or draw the platform beside a lower area"
     ))
@@ -267,7 +253,7 @@ fn isolated(sector: usize) -> CyberError {
 
 /// The refusal for a platform that is not the high floor of its drop.
 fn no_way_down(sector: usize, floor: i32, low_floor: i32) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "sector {sector} stands at floor {floor}, not above its lift floor {low_floor}: \
          the platform is the high floor that comes down; pick the higher sector or pass \
          a lower low_floor"
@@ -276,7 +262,7 @@ fn no_way_down(sector: usize, floor: i32, low_floor: i32) -> CyberError {
 
 /// The refusal for a platform with no wall the lower area can trigger.
 fn no_edges(sector: usize) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "no edge of sector {sector} faces a lower sector: the activation lines are the \
          platform's walls a player reaches from below; draw the polygon so its centre \
          stands on the high side of the height change, or pick the sector above its \
@@ -286,7 +272,7 @@ fn no_edges(sector: usize) -> CyberError {
 
 /// The refusal for a platform polygon whose centre is in the void.
 fn centre_lost(centre: Pt) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "the platform's centre {}, {} lies in no sector: draw the polygon across the \
          map so its centre sits on the floor the platform starts at",
         centre.0, centre.1

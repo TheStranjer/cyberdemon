@@ -20,7 +20,7 @@ use crate::wad::map::features::{
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::ops::Point;
 
-use super::{one_room, refuse, two_rooms};
+use super::{missing, one_room, refuse, two_rooms};
 
 /// A `add_switch` request parsed from `json`.
 fn switch_args(json: &str) -> AddSwitchParams {
@@ -210,8 +210,8 @@ fn targeted_actions_demand_their_sector() {
         target_sector: Some(99_usize),
         ..switch_spec(0)
     };
-    let message = refuse(&build_switch(&mut map, &spec).unwrap_err());
-    assert!(message.contains("sector 99 is out of range"), "{message}");
+    let message = missing(&build_switch(&mut map, &spec).unwrap_err());
+    assert!(message.contains("sector 99 does not exist"), "{message}");
 }
 
 #[test]
@@ -231,8 +231,8 @@ fn exits_ignore_their_parameters() {
 #[test]
 fn a_switch_names_the_wall_it_cannot_take() {
     let mut far_map = two_rooms();
-    let far = refuse(&build_switch(&mut far_map, &switch_spec(99)).unwrap_err());
-    assert!(far.contains("linedef 99 is out of range"), "{far}");
+    let far = missing(&build_switch(&mut far_map, &switch_spec(99)).unwrap_err());
+    assert!(far.contains("linedef 99 does not exist"), "{far}");
     let mut broken_map = two_rooms();
     broken_map.linedefs.get_mut(0).expect("the wall").v1 = 99;
     let broken = refuse(&build_switch(&mut broken_map, &switch_spec(0)).unwrap_err());
@@ -256,9 +256,9 @@ fn a_switch_names_the_wall_it_cannot_take() {
 #[test]
 fn switch_cut_and_span_check_the_wall_before_the_door_engine() {
     let map = two_rooms();
-    let message = refuse(&switch_span(&map, 99).unwrap_err());
+    let message = missing(&switch_span(&map, 99).unwrap_err());
     assert!(
-        message.contains("linedef 99 is out of range") && !message.contains("door"),
+        message.contains("linedef 99 does not exist") && !message.contains("door"),
         "switch words: {message}"
     );
     let spec = switch_spec(2);
@@ -433,8 +433,8 @@ fn a_hexen_walk_over_exit_sets_the_cross_activation() {
 #[test]
 fn walk_over_exits_refuse_bad_sectors_and_bare_rooms() {
     let mut map = two_rooms();
-    let missing = refuse(&build_walk_over_exit(&mut map, 99_usize, false).unwrap_err());
-    assert!(missing.contains("sector 99 is out of range"), "{missing}");
+    let gone = missing(&build_walk_over_exit(&mut map, 99_usize, false).unwrap_err());
+    assert!(gone.contains("sector 99 does not exist"), "{gone}");
     let mut lonely = one_room();
     let bare = refuse(&build_walk_over_exit(&mut lonely, 0_usize, false).unwrap_err());
     assert!(

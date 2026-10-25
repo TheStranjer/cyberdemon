@@ -39,7 +39,9 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::tools::edit_things::edit::{EditThingParams, edit_run};
 use crate::tools::maps::common;
-use crate::tools::maps::params::{FlagsInput, IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::params::{
+    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::flags;
@@ -337,7 +339,7 @@ fn remove_run(session: &mut Session, args: &RemoveThingParams) -> Result<RemoveR
     let label = format!("remove {} things", indices.len());
     let (removed, report) = session.edit_map(name, &label, |map| {
         for index in &indices {
-            check_index("thing", *index, map.things.len())?;
+            check_index(ElementKind::Things, *index, map.things.len())?;
         }
         let removal = Removal {
             things: indices.iter().copied().collect(),

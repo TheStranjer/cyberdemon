@@ -247,16 +247,22 @@ fn sector_selection_sorts_dedupes_and_defaults_to_every_sector() {
 fn sector_selection_refuses_past_the_end_with_the_valid_range() {
     let error = sector_selection(Some(&[5_usize]), 5, test_name()).expect_err("5 is not below 5");
     assert_eq!(error.code(), "not_found", "a past-the-end index refuses");
-    let message = error.to_string();
-    assert!(
-        message.contains("0..5") && message.contains("`sectors`"),
-        "the message names the valid range and the parameter: {message}"
+    assert_eq!(
+        error.message(),
+        "`sectors` for map MAP01: sector 5 does not exist (the map has 5 sectors, \
+         valid indices are 0..=4)",
+        "the message names the parameter, the map and the valid range"
+    );
+    assert_eq!(
+        error.hint(),
+        "describe_map or find_elements returns indices",
+        "the shared index hint rides along"
     );
     let empty =
         sector_selection(Some(&[0_usize]), 0, test_name()).expect_err("nothing to index into");
     assert!(
-        empty.to_string().contains("0..0"),
-        "an empty map's range is empty too: {empty}"
+        empty.to_string().contains("the map has no sectors"),
+        "an empty map says so: {empty}"
     );
 }
 

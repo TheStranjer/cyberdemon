@@ -16,7 +16,9 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{IndexSelector, PointParam, check_index, edit_result_fragment};
+use crate::tools::maps::params::{
+    ElementKind, IndexSelector, PointParam, check_index, edit_result_fragment,
+};
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
 };
@@ -121,7 +123,7 @@ pub(super) fn remove_in_place(
     indices: &[usize],
 ) -> Result<RemovalReport, CyberError> {
     for index in indices {
-        check_index("linedef", *index, map.linedefs.len())?;
+        check_index(ElementKind::Linedefs, *index, map.linedefs.len())?;
     }
     let removal = Removal {
         linedefs: indices.iter().copied().collect(),

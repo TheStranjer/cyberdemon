@@ -37,6 +37,33 @@ async fn refuse_lift(client: &Client, args: Value, needle: &str) {
     );
 }
 
+/// Requires `add_lift` to reject `args` naming a missing sector with
+/// the shared `not_found` index refusal mentioning `needle`, leaving
+/// the working archive empty too.
+async fn refuse_missing_lift(client: &Client, args: Value, needle: &str) {
+    let note = args.to_string();
+    let (code, message, hint) = call_err(client, "add_lift", args).await;
+    assert_eq!(code, "not_found", "index-refusal code for {note}");
+    assert!(
+        message.contains(needle) && message.contains("does not exist"),
+        "the refusal for {note} must mention {needle:?}: {message}"
+    );
+    assert_eq!(
+        hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
+    let (missing, _, _) = call_err(
+        client,
+        "assemble_map",
+        json!({"map": "MAP01", "scope": "working", "include": ["sectors"]}),
+    )
+    .await;
+    assert_eq!(
+        missing, "not_found",
+        "the refused lift did not even copy the block into the working archive"
+    );
+}
+
 /// The fixture's step straddled by a new platform's outline: its
 /// centre (272, 128) sits on the raised room.
 fn platform_points() -> Value {
@@ -376,10 +403,10 @@ async fn the_platform_parameter_needs_exactly_one_form() {
 async fn lift_requests_name_their_fix() {
     let dir = tempfile::tempdir().expect("temp dir");
     let client = features_loaded(dir.path()).await;
-    refuse_lift(
+    refuse_missing_lift(
         &client,
         json!({"sector": 99_i32}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
     refuse_lift(

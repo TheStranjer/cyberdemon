@@ -167,10 +167,11 @@ fn highlight_indices_must_exist_and_the_refusal_names_them() {
         assert_eq!(error.code(), "not_found", "{field} code");
         let message = error.to_string();
         assert!(
-            message.contains(kind)
+            message.contains("highlight on map")
+                && message.contains(kind)
                 && message.contains(&value.to_string())
-                && message.contains("out of range"),
-            "the message names the element, index and rule: {message}"
+                && message.contains("does not exist"),
+            "the message names the parameter, element, index and rule: {message}"
         );
     }
 }

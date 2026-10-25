@@ -56,6 +56,13 @@ pub enum CyberError {
 }
 
 impl CyberError {
+    /// The `InvalidArgument` with an actionable `message`.
+    #[must_use]
+    #[inline]
+    pub fn invalid(message: &str) -> Self {
+        Self::InvalidArgument(message.to_owned())
+    }
+
     /// The stable machine-readable code for this error variant.
     ///
     /// Clients see this as the `error` field of a failed structured tool result.

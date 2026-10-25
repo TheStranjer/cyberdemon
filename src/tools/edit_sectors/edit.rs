@@ -24,7 +24,7 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::params::{ElementKind, IndexSelector, check_index, edit_result_fragment};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
@@ -307,7 +307,7 @@ pub(super) fn planned_edits(
     indices: &[usize],
 ) -> Result<Vec<PlannedEdit>, CyberError> {
     for index in indices {
-        check_index("sector", *index, map.sectors.len())?;
+        check_index(ElementKind::Sectors, *index, map.sectors.len())?;
     }
     let format = map.format;
     let mut planned = Vec::with_capacity(indices.len());
@@ -388,7 +388,7 @@ pub(super) fn remove_in_place(
     indices: &[usize],
 ) -> Result<RemovalReport, CyberError> {
     for index in indices {
-        check_index("sector", *index, map.sectors.len())?;
+        check_index(ElementKind::Sectors, *index, map.sectors.len())?;
     }
     let removal = sector_removal(indices);
     if !args.cascade {

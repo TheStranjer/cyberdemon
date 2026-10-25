@@ -12,6 +12,22 @@ use crate::features::{
 };
 use crate::support::{call, call_err};
 
+/// Requires `add_window` to reject `args` naming a missing element with
+/// the shared `not_found` index refusal mentioning `needle`.
+async fn refuse_missing_window(client: &Client, args: Value, needle: &str) {
+    let note = args.to_string();
+    let (code, message, hint) = call_err(client, "add_window", args).await;
+    assert_eq!(code, "not_found", "index-refusal code for {note}");
+    assert!(
+        message.contains(needle) && message.contains("does not exist"),
+        "the refusal for {note} must mention {needle:?}: {message}"
+    );
+    assert_eq!(
+        hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
+}
+
 /// Requires `add_window` to reject `args` with `invalid_argument`
 /// naming `needle`.
 async fn refuse_window(client: &Client, args: Value, needle: &str) {
@@ -144,16 +160,16 @@ async fn the_window_wall_parameter_needs_exactly_one_form() {
         "exactly one",
     )
     .await;
-    refuse_window(
+    refuse_missing_window(
         &client,
         json!({"between": [0_i32, 99_i32]}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
-    refuse_window(
+    refuse_missing_window(
         &client,
         json!({"linedef": 999_i32}),
-        "linedef 999 is out of range",
+        "linedef 999 does not exist",
     )
     .await;
     let (code, _, _) = call_err(

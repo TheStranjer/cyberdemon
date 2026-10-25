@@ -130,7 +130,7 @@ fn indices_the_blocks_do_not_hold_are_not_found() {
     assert!(
         error
             .to_string()
-            .contains("sector 2 does not exist (the map holds 2 sectors)"),
+            .contains("sector 2 does not exist (the map has 2 sectors, valid indices are 0..=1)"),
         "the message counts the block: {error}"
     );
     let vertex_error = apply(

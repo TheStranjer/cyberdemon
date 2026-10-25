@@ -297,7 +297,7 @@ fn remove_in_place(
     args: &RemoveVertexParams,
     indices: &[usize],
 ) -> Result<RemovalReport, CyberError> {
-    check_vertices(indices, map.vertices.len())?;
+    check_vertices(indices, map)?;
     let removal = vertex_removal(indices);
     if !args.cascade {
         let uses = dependents(map, &removal).linedefs_using_vertices;

@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::error::CyberError;
 use crate::wad::map::flags::from_names;
 use crate::wad::map::model::Map;
-use crate::wad::map::query::ElementKind;
+use crate::wad::map::query::{ElementKind, check_indices};
 
 use super::access::{bounds, wrong_family, wrong_family_error};
 use super::commit::{
@@ -182,21 +182,14 @@ impl Job<'_> {
         )))
     }
 
-    /// The sorted, deduplicated selection, refused past the block's end.
+    /// The sorted, deduplicated selection, refused past the block's end
+    /// with the shared [`check_indices`] phrasing.
     pub(super) fn selection(
         &self,
         map: &Map,
         indices: &[usize],
     ) -> Result<BTreeSet<usize>, CyberError> {
-        let count = self.kind.count_on(map);
-        if let Some(past) = indices.iter().find(|index| **index >= count) {
-            return Err(CyberError::NotFound(format!(
-                "{} {past} does not exist (the map holds {count} {}): pass \
-                 existing indices, as find_elements answers with",
-                self.plan.thing,
-                self.kind.as_str()
-            )));
-        }
+        check_indices(self.kind, indices, map)?;
         Ok(indices.iter().copied().collect())
     }
 

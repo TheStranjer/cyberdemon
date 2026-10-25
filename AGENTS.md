@@ -770,7 +770,31 @@ src/
                   conversions), `plan/params/tests/features.rs` (the
                   feature rows and a room's dressing) and
                   `plan/params/tests/units_things.rs` (the `units`
-                  mapping, the snap grid and the thing rows);
+                  mapping, the snap grid and the thing rows),
+                  `tools/nodes.rs` (the `JSON`-extension and lump-magic
+                  constants, the shared scope, detail and request, the
+                  map-open and lump lookups, the held-back publish plumbing
+                  and the router) with `nodes/get_nodes.rs` (the
+                  `get_nodes` parameter, the node run's three shapes, the
+                  attached `GL` run's counts and the parsed asset),
+                  `nodes/get_tables.rs` (the `get_reject` and
+                  `get_blockmap` parameters, reports and runs),
+                  `nodes/build_tables.rs` (the two side-lump builders'
+                  parameters, the canonical neighbour lists, `install_lump`
+                  and the two edit steps and runs), `nodes/build_nodes.rs`
+                  (the `build_nodes` parameter, the variant names and plan,
+                  the classic and extended installs, the build bodies and
+                  run), `nodes/build_gl.rs` (the `gl` build's lumps, marker
+                  names and the `GL_*` splice) and `nodes/build_all.rs` (the
+                  `build_all_nodes` parameter, the `AllPlan` defaults
+                  `plan`'s `finalize` runs, the combined step and its
+                  report); that group's tests are `nodes/tests.rs` (the
+                  shared lump, map and session builders) plus
+                  `nodes/tests/inspect.rs` (the three readers),
+                  `nodes/tests/build_tables.rs` (the two side-lump builds),
+                  `nodes/tests/build_nodes.rs` (the classic and extended
+                  tree builds), `nodes/tests/build_gl.rs` and
+                  `nodes/tests/build_all.rs` (the whole-set build);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

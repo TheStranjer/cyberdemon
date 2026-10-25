@@ -11,14 +11,8 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::themes::Available;
+use crate::wad::map::consts::{MAX_STEP_HEIGHT, NO_TEXTURE, is_sky_flat};
 use crate::wad::map::{Linedef, Map, Sector, Sidedef};
-
-/// The texture name meaning "nothing here".
-const NO_TEXTURE: &str = "-";
-/// The sky flat: always valid, never a gap to fill.
-pub const SKY_FLAT: &str = "F_SKY1";
-/// The largest floor step that still reads as a step, in map units.
-pub const MAX_STEP_HEIGHT: i32 = 24_i32;
 
 /// What an `auto_texture` call should do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,7 +206,7 @@ fn upper_choice(side: &Side<'_>, other: &Sector, plan: &AutoPlan<'_>) -> Option<
     let this = side.this;
     let shows_gap = side.data.upper == NO_TEXTURE
         && other.ceiling_height < this.ceiling_height
-        && !(this.ceiling_flat == SKY_FLAT && other.ceiling_flat == SKY_FLAT);
+        && !(is_sky_flat(&this.ceiling_flat) && is_sky_flat(&other.ceiling_flat));
     if !shows_gap {
         return None;
     }
@@ -383,7 +377,7 @@ fn flat_wanted(
     wanted: &str,
     is_ceiling: bool,
 ) -> Option<String> {
-    if is_ceiling && current == SKY_FLAT {
+    if is_ceiling && is_sky_flat(current) {
         return None;
     }
     match plan.mode {
@@ -399,9 +393,10 @@ fn flat_wanted(
 mod tests {
     use alloc::collections::BTreeSet;
 
-    use super::{AutoMode, AutoPlan, SKY_FLAT, ThemeTextures, apply};
+    use super::{AutoMode, AutoPlan, ThemeTextures, apply};
     use crate::themes::Available;
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::consts::SKY_FLAT;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
 
     /// The resolved theme names used across these tests.

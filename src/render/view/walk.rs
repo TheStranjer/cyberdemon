@@ -14,14 +14,14 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use super::MaskedMiddle;
 use super::projection::Fraction;
-use super::texels::picture_key;
-use super::{MaskedMiddle, SKY_CEILING};
 use crate::gfx::image::IndexedImage;
 use crate::render::canvas::{Canvas, Rgba};
 use crate::render::light::WallDir;
 use crate::render::scene::Scene;
 use crate::wad::map::Map;
+use crate::wad::map::consts::{is_sky_flat, normalized_picture};
 
 /// One linedef prepared for casting.
 pub(super) struct Edge {
@@ -124,7 +124,7 @@ impl<'scene> Plane<'scene> {
             light: sector.light,
             floor_surface,
             ceil_surface: plane_surface(scene, ceiling_flat, sky),
-            ceil_sky: picture_key(ceiling_flat) == SKY_CEILING,
+            ceil_sky: is_sky_flat(ceiling_flat),
         }
     }
 }
@@ -137,11 +137,10 @@ fn plane_surface<'scene>(
     name: &str,
     sky: Option<Surface<'scene>>,
 ) -> Option<Surface<'scene>> {
-    let key = picture_key(name);
-    if key == SKY_CEILING {
+    if is_sky_flat(name) {
         return sky;
     }
-    scene.flats.get(&key).map(Surface::Flat)
+    normalized_picture(name).and_then(|key| scene.flats.get(&key).map(Surface::Flat))
 }
 
 /// One sorted ray/linedef intersection.

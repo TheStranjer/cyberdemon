@@ -26,16 +26,11 @@ use crate::plan::connectors::{ConnectorGeometry, final_layers};
 use crate::plan::model::{ConnectionKind, Plan};
 use crate::plan::walls::Walls;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{NO_TEXTURE, SKY_FLAT};
 use crate::wad::map::{Map, Sector};
 use crate::wad::name::LumpName;
 use lines::{connector_info, push_linedefs, room_sector_map};
 use sectors::{connector_sector, room_sector};
-
-/// The model's name for "draw nothing here" on a texture or flat face.
-const NO_NAME: &str = "-";
-
-/// The ceiling flat [`emit`] gives an `outdoor` room's sector.
-const SKY_FLAT: &str = "F_SKY1";
 
 /// The identity of the map [`emit`] produces: the block-header name and
 /// the layout its rows will be written in.

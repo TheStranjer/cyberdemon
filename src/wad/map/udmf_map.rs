@@ -61,8 +61,9 @@ const NAMESPACE: &str = "namespace";
 const DEFAULT_LIGHT: i32 = 160_i32;
 /// The `sideback` and `id` number that means "absent".
 const NO_REFERENCE: i32 = -1_i32;
-/// The texture and flat name that means "none".
-const NO_TEXTURE: &str = "-";
+/// The texture and flat name that means "none", shared from
+/// [`consts`](super::consts), re-exported for this module's children.
+pub(super) use super::consts::NO_TEXTURE;
 
 /// `UDMF` linedef trigger booleans of the `Hexen` family: the name, the
 /// activation field value it stands for, and whether the name also

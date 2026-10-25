@@ -56,9 +56,10 @@ const fn default_sill() -> i32 {
     32_i32
 }
 
-/// Default [`ConnectionKind::Window::lintel`].
+/// Default [`ConnectionKind::Window::lintel`]: the shared
+/// [`DEFAULT_LINTEL`](crate::wad::map::consts::DEFAULT_LINTEL).
 const fn default_lintel() -> i32 {
-    24_i32
+    crate::wad::map::consts::DEFAULT_LINTEL
 }
 
 /// Default [`ConnectionKind::Stairs::step_height`].

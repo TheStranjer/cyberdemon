@@ -31,7 +31,7 @@ use crate::wad::map::ops::Point;
 
 use super::checks::remote_door;
 use super::teleporters::to_map_point;
-use super::{FeatureDress, FeatureRow, FeatureRun, NO_NAME, invalid, room_sectors_of};
+use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sectors_of};
 
 /// The switch step: mount every `switch` row's panel on its room's wall
 /// — the one its `wall` side and `at` point pick — firing the remote
@@ -176,7 +176,7 @@ fn wall_middle(map: &Map, linedef: usize) -> String {
         .get(linedef)
         .and_then(|line| line.front)
         .and_then(|side| map.sidedefs.get(side))
-        .map_or_else(|| NO_NAME.to_owned(), |side| side.middle.clone())
+        .map_or_else(|| NO_TEXTURE.to_owned(), |side| side.middle.clone())
 }
 
 /// The exit step: end the level where every `exit` row stands, in plan

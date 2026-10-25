@@ -31,10 +31,11 @@ pub use apply::{apply_door, face_room_line};
 use crate::wad::map::flags::{FlagFamily, MONSTER_ACTIVATE, PLAYER_USE_BITS, REPEAT_SPECIAL};
 use crate::wad::map::model::Map;
 
-/// The model's name for "no texture here" on a [`Sidedef`] texture face.
+/// The model's name for "no texture here" on a [`Sidedef`] texture face,
+/// shared from [`consts`](crate::wad::map::consts).
 ///
 /// [`Sidedef`]: crate::wad::map::Sidedef
-const NO_TEXTURE: &str = "-";
+pub(super) use crate::wad::map::consts::NO_TEXTURE;
 /// `playeruse` plus `repeatspecial`: the line keeps working after use.
 pub(super) const USE_REPEAT: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL;
 /// `playeruse`, `repeatspecial` and `monsteractivate`: monsters, too.

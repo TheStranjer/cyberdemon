@@ -956,7 +956,13 @@ src/
                   (no map model, no MCP).
   wad/map.rs      Map layer root: the `read_map`/`write_map` format
                   dispatcher and the model re-exports.
-  wad/map/        Map data (no MCP concerns): `map/model.rs` the
+  wad/map/        Map data (no MCP concerns): `map/consts.rs` the names
+                  and limits the whole layer shares (`NO_TEXTURE`,
+                  `SKY_FLAT`, `is_sky_flat`, `normalized_picture`, the
+                  player's `MAX_STEP_HEIGHT`/`PLAYER_HEIGHT`/
+                  `MIN_LINE_WIDTH`, `DEFAULT_LINTEL`,
+                  `UNKNOWN_THING_RADIUS`, `PLAYER_START_TYPES` and
+                  `PLAYER1_START`), `map/model.rs` the
                   format-neutral `Map` model (`Thing`, `Vertex`,
                   `Linedef`, `Sidedef`, `Sector`, `extra` side-bags),
                   `map/doom.rs` the binary Doom map reader/writer

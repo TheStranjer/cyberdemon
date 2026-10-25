@@ -138,6 +138,26 @@ fn unused_flats_drops_only_what_no_merged_sector_uses() {
 }
 
 #[test]
+fn a_sector_wearing_the_dash_placeholder_marks_no_flat_as_used() {
+    // The sector's floor is the `"-"` none-marker, so `add_flat_name` skips
+    // it: the `used` set holds only `FLOOR1`, and a flat lump of either name
+    // is dropped even though a byte-for-byte `-` flat sits in the archive.
+    let base = flat_map("MAP01", "-", "FLOOR1");
+    let working = vec![
+        marker("F_START"),
+        lump("FLOOR1", b"used"),
+        lump("-", b"placeholder"),
+        marker("F_END"),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedFlats]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["-".to_owned()],
+        "the `\"-\"` flat is a placeholder, never a used name"
+    );
+}
+
+#[test]
 fn unused_flats_refuses_when_a_merged_map_cannot_decode() {
     let mut base = flat_map("MAP01", "FLOOR1", "FLOOR1");
     if let Some(slot) = base.iter_mut().find(|entry| entry.name == name("THINGS")) {

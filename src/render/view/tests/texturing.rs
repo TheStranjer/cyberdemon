@@ -9,9 +9,10 @@ use crate::render::light::WallDir;
 use crate::render::view::ViewCamera;
 use crate::render::view::projection::Projection;
 use crate::render::view::texels::{
-    flat_texel, masked_tex_top, sky_column, tex_top, texture_key, texture_u16, wall_dir, wrap16,
+    flat_texel, masked_tex_top, sky_column, tex_top, texture_u16, wall_dir, wrap16,
 };
 use crate::render::view::walk::{Edge, FacePlan, Plane, Side, Slot, Visit};
+use crate::wad::map::consts::normalized_picture;
 
 #[test]
 fn flat_texels_wrap_the_world_grid() {
@@ -279,10 +280,10 @@ fn wrapped_texture_coordinates_stay_in_the_image() {
 }
 
 #[test]
-fn texture_keys_trim_uppercase_and_drop_the_none_marker() {
-    assert_eq!(texture_key(" wall1 "), Some("WALL1".to_owned()));
-    assert_eq!(texture_key("-"), None, "the none-marker");
-    assert_eq!(texture_key("  "), None, "an empty name");
+fn picture_names_trim_uppercase_and_drop_the_none_marker() {
+    assert_eq!(normalized_picture(" wall1 ").as_deref(), Some("WALL1"));
+    assert_eq!(normalized_picture("-"), None, "the none-marker");
+    assert_eq!(normalized_picture("  "), None, "an empty name");
 }
 
 #[test]

@@ -36,12 +36,11 @@ use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::Sidedef;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };
 
-/// The name of an empty texture field, `"-"` for no texture.
-const NO_TEXTURE: &str = "-";
 /// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
 const OFFSET_MIN: i32 = -0x8000_i32;
 /// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).

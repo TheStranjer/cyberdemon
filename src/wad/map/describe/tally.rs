@@ -18,6 +18,7 @@ use alloc::string::ToString as _;
 use alloc::vec::Vec;
 
 use crate::defs::{Definitions, ThingDef};
+use crate::wad::map::consts::{NO_TEXTURE, PLAYER_START_TYPES};
 use crate::wad::map::geometry::{point_in_sector, sector_boundary};
 use crate::wad::map::model::Map;
 use crate::wad::map::playability::{Playability, Stuck, StuckReason};
@@ -25,14 +26,9 @@ use crate::wad::map::stats::ElementCounts;
 
 use super::{PlayerStart, SpecialInfo, ThingCount};
 
-/// The model's name for "no texture on this side".
-const NO_TEXTURE: &str = "-";
-
 /// The rows `MapOverview::top_wall_textures` and `MapOverview::top_flats`
 /// answer with.
 const TOP_ROWS: usize = 10_usize;
-/// The thing types that stand a player in the map.
-const PLAYER_START_KINDS: [i32; 4] = [1_i32, 2_i32, 3_i32, 4_i32];
 /// The overview's note when no player start resolves to a sector.
 const NO_START_SENTENCE: &str = "No player 1 start: nothing can be reached.";
 /// The overview's note when a non-secret exit stands on a reached side.
@@ -53,13 +49,13 @@ pub(super) fn element_counts(map: &Map) -> ElementCounts {
     }
 }
 
-/// The things typed [`PLAYER_START_KINDS`], in thing order.
+/// The things typed [`PLAYER_START_TYPES`], in thing order.
 pub(super) fn player_starts(map: &Map) -> Vec<PlayerStart> {
     map.things
         .iter()
         .enumerate()
         .filter_map(|(index, row)| {
-            PLAYER_START_KINDS
+            PLAYER_START_TYPES
                 .contains(&row.kind)
                 .then_some(PlayerStart {
                     thing: index,

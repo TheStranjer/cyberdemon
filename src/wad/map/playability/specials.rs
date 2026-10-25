@@ -30,6 +30,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::KeyColor;
+use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{
     ACTIVATION_MASK, ACTIVATION_SHIFT, FlagFamily, PLAYER_USE, Skill, THING_DOOM_NOT_SINGLE,
     THING_HEXEN_SINGLE,
@@ -38,8 +39,6 @@ use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Linedef, Map};
 use tables::{KEY_THINGS, RowEffect, Trigger};
 
-/// The thing type of the player 1 start.
-const PLAYER_START: i32 = 1_i32;
 /// The `Doom` family's teleport destination thing.
 const TELEPORT_DEST: i32 = 14_i32;
 /// The thing types a `Hexen` teleporter accepts as its destination.
@@ -252,7 +251,7 @@ pub(super) fn start_thing(map: &Map, family: FlagFamily, skill: Skill) -> Option
     map.things
         .iter()
         .enumerate()
-        .find(|entry| entry.1.kind == PLAYER_START && spawns(entry.1.flags, family, skill))
+        .find(|entry| entry.1.kind == PLAYER1_START && spawns(entry.1.flags, family, skill))
         .map(|entry| entry.0)
 }
 
@@ -279,7 +278,7 @@ pub(super) fn start_sector(
         .things
         .iter()
         .enumerate()
-        .filter(|entry| entry.1.kind == PLAYER_START && spawns(entry.1.flags, family, skill))
+        .filter(|entry| entry.1.kind == PLAYER1_START && spawns(entry.1.flags, family, skill))
         .count();
     if extra > 1_usize {
         warnings.push(format!(

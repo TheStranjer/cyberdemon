@@ -52,12 +52,6 @@ use crate::render::sprites;
 pub const MIN_PITCH: i32 = -60;
 /// Highest accepted pitch, in degrees.
 pub const MAX_PITCH: i32 = 60;
-/// The texture name that means "draw nothing here".
-const TEXTURE_NONE: &str = "-";
-/// The flat that means "sky" for a ceiling or a floor;
-/// [`crate::render::scene::SKY_FLAT`] spells the same constant for scene
-/// builders.
-const SKY_CEILING: &str = "F_SKY1";
 /// One whole map unit or pixel in raw 16.16. Also the divisor the
 /// transparent pass uses to floor its carried depths and texture rows
 /// out of raw positions.

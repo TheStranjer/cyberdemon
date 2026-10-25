@@ -45,8 +45,6 @@ const TEXTURE1_RAW: [u8; NAME_LEN] = *b"TEXTURE1";
 const TEXTURE2_RAW: [u8; NAME_LEN] = *b"TEXTURE2";
 /// Bytes one `PNAMES` list entry occupies.
 const PNAMES_ENTRY_LEN: usize = 8;
-/// The sector flat field that stores "no flat".
-const NONE_FLAT: &[u8] = b"-";
 
 /// The global lump names the `ZDoom` family concatenates: every copy in
 /// the load order contributes its definitions, so no copy of one of these

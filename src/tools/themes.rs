@@ -26,7 +26,7 @@ use crate::server::Cyberdemon;
 use crate::session::map_edit::MapEditReport;
 use crate::session::{Scope, Session};
 use crate::themes::align::{self, AlignPlan};
-use crate::themes::auto::{self, AutoChange, AutoMode, AutoPlan, SKY_FLAT, ThemeTextures};
+use crate::themes::auto::{self, AutoChange, AutoMode, AutoPlan, ThemeTextures};
 use crate::themes::table;
 use crate::themes::{self, Available, Matched, Resolved, Role};
 use crate::tools::maps::common;
@@ -38,6 +38,7 @@ use crate::tools::{fail, ok};
 use crate::wad::classify::{LumpKind, MapFormat, Namespace};
 use crate::wad::game::Game;
 use crate::wad::map::Map;
+use crate::wad::map::consts::{NO_TEXTURE, SKY_FLAT};
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::name::LumpName;
 
@@ -45,8 +46,6 @@ use crate::wad::name::LumpName;
 const AUTO_LABEL: &str = "auto_texture";
 /// The `align_textures` step label prefix.
 const ALIGN_LABEL: &str = "align_textures";
-/// The override value that removes an override.
-const CLEAR: &str = "-";
 
 /// What the merged view provides, precomputed for role resolution. The
 /// bulk-edit machinery (`crate::tools::query::replace::Stock`) reads
@@ -298,14 +297,14 @@ fn set_run(session: &mut Session, args: &SetThemeParams) -> Result<ThemeReport, 
     for (key, value) in args.overrides.clone().unwrap_or_default() {
         let role = Role::parse(&key)?;
         let name = validate_texture_name(&value, MapFormat::Doom)?;
-        if name != CLEAR && !stock.available.names_for(role).contains(&name) {
+        if name != NO_TEXTURE && !stock.available.names_for(role).contains(&name) {
             return Err(CyberError::NotFound(format!(
                 "override {role} = {name} does not exist in the merged view: list_textures / \
                  list_flats show what is there (build_texture or the import tools add more); \
                  pass \"-\" to clear this override instead"
             )));
         }
-        planned.push((role, (name != CLEAR).then_some(name)));
+        planned.push((role, (name != NO_TEXTURE).then_some(name)));
     }
     let theme = session.texture_theme_mut();
     if let Some(text) = args.theme.as_ref() {

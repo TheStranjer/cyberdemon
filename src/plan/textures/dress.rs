@@ -16,15 +16,9 @@ use crate::geom::label::Label;
 use crate::plan::connectors::ConnectorGeometry;
 use crate::plan::model::ConnectionKind;
 use crate::plan::textures::{Scene, TextureRole, TextureRoles};
+use crate::wad::map::consts::{NO_TEXTURE, is_sky_flat};
 use crate::wad::map::flags::{BLOCKING, DONT_PEG_BOTTOM, TWO_SIDED};
 use crate::wad::map::{Map, Sector};
-
-/// The model's name for "draw nothing here" on a texture or flat face.
-const NO_NAME: &str = "-";
-
-/// The ceiling flat an `outdoor` room's sector already carries: the sky
-/// draws itself, so no role texture goes there.
-const SKY_FLAT: &str = "F_SKY1";
 
 /// Which plan layer owns a piece face's region label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +119,7 @@ impl RoleNames {
 fn role_name(roles: &dyn TextureRoles, role: TextureRole) -> String {
     roles
         .texture(role)
-        .map_or_else(|| NO_NAME.to_owned(), str::to_uppercase)
+        .map_or_else(|| NO_TEXTURE.to_owned(), str::to_uppercase)
 }
 
 /// Dress `map` - the emission behind `scene` - in the names `roles`
@@ -235,7 +229,7 @@ impl<'scene> Dresser<'scene> {
             owner,
             floor: space.floor_height,
             ceiling: space.ceiling_height,
-            sky: space.ceiling_flat.eq_ignore_ascii_case(SKY_FLAT),
+            sky: is_sky_flat(&space.ceiling_flat),
         })
     }
 
@@ -317,10 +311,10 @@ fn dress_room_flats(dress: &Dresser<'_>, map: &mut Map, index: usize) {
     let Some(space) = map.sectors.get_mut(sector) else {
         return;
     };
-    if space.floor_flat == NO_NAME {
+    if space.floor_flat == NO_TEXTURE {
         space.floor_flat.clone_from(&dress.names.floor);
     }
-    if space.ceiling_flat == NO_NAME {
+    if space.ceiling_flat == NO_TEXTURE {
         space.ceiling_flat.clone_from(&dress.names.ceiling);
     }
 }
@@ -608,10 +602,10 @@ fn fill_side(map: &mut Map, this: &Face, other: &Face, wall: &str) {
     let Some(row) = map.sidedefs.get_mut(this.side) else {
         return;
     };
-    if other.floor > this.floor && row.lower == NO_NAME {
+    if other.floor > this.floor && row.lower == NO_TEXTURE {
         wall.clone_into(&mut row.lower);
     }
-    if other.ceiling < this.ceiling && !(this.sky && other.sky) && row.upper == NO_NAME {
+    if other.ceiling < this.ceiling && !(this.sky && other.sky) && row.upper == NO_TEXTURE {
         wall.clone_into(&mut row.upper);
     }
 }

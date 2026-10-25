@@ -62,8 +62,6 @@ const DEFAULT_LIGHT: i32 = 160_i32;
 const DEFAULT_WIDTH: i64 = 64_i64;
 /// The [`crate::plan::model::ConnectionKind::Window`] sill the wire default carries.
 const DEFAULT_SILL: i32 = 32_i32;
-/// The [`crate::plan::model::ConnectionKind::Window`] lintel the wire default carries.
-const DEFAULT_LINTEL: i32 = 24_i32;
 /// The [`crate::plan::model::ConnectionKind::Stairs`] step height the wire default carries.
 const DEFAULT_STEP_HEIGHT: i32 = 16_i32;
 /// The [`crate::plan::model::ConnectionKind::Stairs`] step depth the wire default carries.

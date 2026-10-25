@@ -32,6 +32,7 @@ use crate::tools::maps::common;
 use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
 use crate::tools::themes::theme_texture;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::DEFAULT_LINTEL;
 use crate::wad::map::features::{
     WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines, door_rect, door_wall,
     outward_depth, window_record,
@@ -52,9 +53,6 @@ use super::{current_map, no_room, theme_wall, wall_lost};
 
 /// The `add_window` default sill height above the higher room floor.
 const DEFAULT_SILL: i32 = 32_i32;
-
-/// The `add_window` default lintel depth below the lower room ceiling.
-const DEFAULT_LINTEL: i32 = 24_i32;
 
 /// Arguments for [`Cyberdemon::add_window`].
 #[derive(Debug, Deserialize, JsonSchema)]

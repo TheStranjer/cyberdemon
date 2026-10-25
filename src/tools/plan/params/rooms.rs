@@ -11,11 +11,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::{
-    DEFAULT_CEILING, DEFAULT_DOOR_STYLE, DEFAULT_FLOOR, DEFAULT_LIGHT, DEFAULT_LINTEL,
-    DEFAULT_SILL, DEFAULT_STEP_DEPTH, DEFAULT_STEP_HEIGHT, DEFAULT_WIDTH, invalid_at,
+    DEFAULT_CEILING, DEFAULT_DOOR_STYLE, DEFAULT_FLOOR, DEFAULT_LIGHT, DEFAULT_SILL,
+    DEFAULT_STEP_DEPTH, DEFAULT_STEP_HEIGHT, DEFAULT_WIDTH, invalid_at,
 };
 use crate::error::CyberError;
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Room, Shape};
+use crate::wad::map::consts::DEFAULT_LINTEL;
 use crate::wad::map::features::LightEffect;
 
 /// One wire room: an id, exactly one of `rect`/`points`, and the sector

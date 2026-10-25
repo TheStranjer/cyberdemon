@@ -16,6 +16,7 @@ use core::slice::ChunksExact;
 use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::bytes::{Reader, Writer};
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::model::{Sector, Sidedef, Vertex};
 use crate::wad::name::{LumpName, NAME_LEN};
 
@@ -27,9 +28,6 @@ pub(super) const VERTEX_LEN: usize = 4;
 pub(super) const SECTOR_LEN: usize = 26;
 /// The stored sidedef number meaning "this side does not exist".
 pub(super) const NO_SIDEDEF: u16 = 0xFFFF;
-
-/// The model's `"-"` (or empty) name for one eight-byte texture field.
-const NONE_NAME: &str = "-";
 
 /// The eight stored bytes of "no texture": the one-character name `"-"`
 /// with `NUL` padding. Vanilla engines short-circuit a leading `-` in
@@ -112,7 +110,7 @@ fn decode_name(bytes: &[u8]) -> String {
         .map(|byte| char::from(byte).to_ascii_uppercase())
         .collect();
     if text.is_empty() {
-        NONE_NAME.to_owned()
+        NO_TEXTURE.to_owned()
     } else {
         text
     }
@@ -145,7 +143,7 @@ fn name_bytes(name: &str) -> Vec<u8> {
 /// [`CyberError::InvalidArgument`] when the name needs more than `NAME_LEN`
 /// bytes; nothing is appended in that case.
 fn put_name(writer: &mut Writer, name: &str) -> Result<(), CyberError> {
-    if name == NONE_NAME || name.is_empty() {
+    if name == NO_TEXTURE || name.is_empty() {
         writer.put_bytes(&NONE_FIELD);
         return Ok(());
     }

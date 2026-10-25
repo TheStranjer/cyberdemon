@@ -13,11 +13,10 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::normalized_picture;
 use crate::wad::map::geometry::linedef_length;
 use crate::wad::map::{Map, Sidedef};
 
-/// The texture name meaning "nothing here".
-const NO_TEXTURE: &str = "-";
 /// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
 const OFFSET_MIN: i32 = -0x8000_i32;
 /// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
@@ -60,7 +59,7 @@ fn slot_texture(map: &Map, line: usize) -> Option<String> {
     } else {
         &side.upper
     };
-    (name != NO_TEXTURE).then(|| name.to_owned())
+    normalized_picture(name)
 }
 
 /// Adjacency of the target lines: by start vertex and by end vertex.
@@ -533,5 +532,26 @@ mod tests {
         let change = run(&mut map);
         assert_eq!(map.sidedefs[0].x_offset, 7_i32, "no texture, no alignment");
         assert_eq!(change.aligned, 1, "only the surviving brick chain moved");
+    }
+
+    #[test]
+    fn an_unset_slot_starts_no_chain_and_draws_no_warning() {
+        let mut map = l_shape();
+        map.sidedefs[0].middle.clear();
+        map.sidedefs[1].middle.clear();
+        let change = run(&mut map);
+        assert_eq!(
+            map.sidedefs[0].x_offset, 7_i32,
+            "the unset face is left alone"
+        );
+        assert_eq!(
+            change.aligned, 0,
+            "the untouched OTHER chain already rests at 0"
+        );
+        assert!(
+            change.warnings.is_empty(),
+            "an unset face is skipped, not warned about: {:?}",
+            change.warnings
+        );
     }
 }

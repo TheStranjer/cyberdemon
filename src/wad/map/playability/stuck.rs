@@ -23,13 +23,10 @@ use serde::Serialize;
 use super::PLAYER_HEIGHT;
 use super::specials::spawns;
 use crate::defs::Definitions;
+use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
 use crate::wad::map::flags::{FlagFamily, Skill, blocks_players};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Map, Thing};
-
-/// The half-side of the square assumed for thing types the definitions do
-/// not know: `Doom`'s imp radius, the stock monster body.
-const UNKNOWN_THING_RADIUS: i64 = 20;
 
 /// Why one thing cannot stand where it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

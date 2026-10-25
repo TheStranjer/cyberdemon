@@ -36,6 +36,7 @@ use crate::geom::label::Label;
 use crate::geom::{Layer, Piece, Pt};
 use crate::plan::model::{Connection, ConnectionKind, Plan, Room};
 use crate::plan::walls::{WallKey, Walls, room_layers};
+use crate::wad::map::consts::MAX_STEP_HEIGHT;
 use frame::{clamp_i32, clamp_i64, delta};
 use pass::{Pass, preferred};
 
@@ -48,10 +49,6 @@ const ZERO_THICKNESS_DEPTH: i64 = 16_i64;
 
 /// Smallest usable window glass height, map units.
 const MIN_GLASS_HEIGHT: i64 = 16_i64;
-
-/// Largest accepted [`ConnectionKind::Stairs::step_height`], map units;
-/// taller requests clamp down to this.
-const MAX_STEP_HEIGHT: i32 = 24_i32;
 
 /// Upper bound on the steps of one stair run; keeps the emitted layer
 /// count sane for absurd floor differences.

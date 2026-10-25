@@ -36,10 +36,11 @@ use crate::wad::map::flags::{
 
 use super::doors::{DoorLineSetup, USE_REPEAT};
 
-/// The model's name for "no texture here" on a [`Sidedef`] texture face.
+/// The model's name for "no texture here" on a [`Sidedef`] texture face,
+/// shared from [`consts`](crate::wad::map::consts).
 ///
 /// [`Sidedef`]: crate::wad::map::Sidedef
-const NO_TEXTURE: &str = "-";
+pub(super) use crate::wad::map::consts::NO_TEXTURE;
 /// The `Hexen` trigger bits [`dress_edge`](build::dress_edge) replaces
 /// wholesale: the 3-bit activation field plus the `repeatspecial` bit,
 /// so a one-shot clears both and a repeating line gets exactly what

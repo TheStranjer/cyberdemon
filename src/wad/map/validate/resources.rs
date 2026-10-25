@@ -22,12 +22,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{Context, Issue, Severity};
+use crate::wad::map::consts::{NO_TEXTURE, is_sky_flat};
 use crate::wad::map::model::{Map, Sector, Sidedef};
-
-/// The model's explicit "no texture here" name.
-const NO_TEXTURE: &str = "-";
-/// The sky flat, always allowed even when no lump defines it.
-const SKY_FLAT: &str = "F_SKY1";
 
 /// One resolved side of a two-sided line: sidedef index, its row and
 /// the sector it opens into.
@@ -156,7 +152,7 @@ fn plane_gap(
         return Some(bare_plane_issue(index, role, flat));
     }
     let carried = flats?;
-    let sound = flat.eq_ignore_ascii_case(SKY_FLAT) || known(carried, flat);
+    let sound = is_sky_flat(flat) || known(carried, flat);
     (!sound).then(|| flat_issue(index, role, flat))
 }
 
@@ -191,8 +187,7 @@ pub(super) fn missing_flat(map: &Map, context: &Context<'_>) -> Vec<Issue> {
 /// between two sky-holding sectors draws the sky on both sides, so an
 /// upper texture there is nobody's missing face.
 fn both_sky(front: &Sector, back: &Sector) -> bool {
-    front.ceiling_flat.eq_ignore_ascii_case(SKY_FLAT)
-        && back.ceiling_flat.eq_ignore_ascii_case(SKY_FLAT)
+    is_sky_flat(&front.ceiling_flat) && is_sky_flat(&back.ceiling_flat)
 }
 
 /// One hall-of-mirrors row for a bare required face, `why` naming the

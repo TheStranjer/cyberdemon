@@ -59,6 +59,7 @@ use crate::tools::maps::params::validate_texture_name;
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Sector;
+use crate::wad::map::consts::NO_TEXTURE;
 
 /// The `add_sector` default floor height, in map units.
 const DEFAULT_FLOOR_HEIGHT: i32 = 0_i32;
@@ -70,8 +71,6 @@ const DEFAULT_FLOOR_FLAT: &str = "FLOOR4_8";
 const DEFAULT_CEILING_FLAT: &str = "CEIL3_5";
 /// The `add_sector` default light level.
 const DEFAULT_LIGHT: i32 = 160_i32;
-/// The texture name meaning "nothing here", never a valid flat.
-const NO_TEXTURE: &str = "-";
 /// The lowest light level the vanilla range allows.
 const LIGHT_MIN: i32 = 0_i32;
 /// The highest light level the vanilla range allows (`u8::MAX`).

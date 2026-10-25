@@ -87,6 +87,7 @@ use crate::error::CyberError;
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{DoorStyle, KeyColor, Plan};
 use crate::wad::map::Map;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::DoorStyle as WadDoorStyle;
 
 mod checks;
@@ -106,11 +107,6 @@ pub use checks::playable_checks;
 
 #[cfg(test)]
 mod tests;
-
-/// The model's name for "draw nothing here" on a texture face: what an
-/// unresolved theme role arrives as, leaving faces as the compiler
-/// dressed them.
-const NO_NAME: &str = "-";
 
 /// The theme-resolved texture names the feature steps dress with.
 ///
@@ -170,7 +166,7 @@ impl FeatureDress {
             "wall" => self.wall.as_str(),
             _ => "",
         };
-        (!name.is_empty() && name != NO_NAME).then_some(name)
+        (!name.is_empty() && name != NO_TEXTURE).then_some(name)
     }
 }
 

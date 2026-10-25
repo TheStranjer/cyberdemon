@@ -89,8 +89,9 @@ use crate::wad::classify::MapFormat;
 use commit::{commit, report};
 use job::{Job, Pending, new_job};
 
-/// The texture name meaning "nothing here", always legal on a face.
-const NO_TEXTURE: &str = "-";
+/// The texture name meaning "nothing here", always legal on a face,
+/// shared from [`consts`](crate::wad::map::consts).
+pub(super) use crate::wad::map::consts::NO_TEXTURE;
 /// The lowest light level the vanilla range allows.
 const LIGHT_MIN: i64 = 0_i64;
 /// The highest light level the vanilla range allows (`u8::MAX`).

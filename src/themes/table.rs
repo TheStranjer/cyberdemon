@@ -16,6 +16,9 @@ use alloc::collections::BTreeMap;
 use crate::error::CyberError;
 use crate::themes::{Role, ThemeRow, ThemeTable};
 use crate::wad::game::Game;
+// The marker column that means "no candidates" / "no fallback": the
+// shared none-name.
+use crate::wad::map::consts::NO_TEXTURE as NONE;
 
 /// The `DOOM` / `DOOM II` theme table, compiled into the binary from
 /// `data/themes/doom.tsv`.
@@ -35,9 +38,6 @@ const STRIFE_TSV: &str = include_str!("../../data/themes/strife.tsv");
 
 /// The header every theme file starts with.
 const HEADER: [&str; 4] = ["theme", "role", "candidates", "fallback_role"];
-
-/// The marker column that means "no candidates" / "no fallback".
-const NONE: &str = "-";
 
 /// One game's themes: name to rows, rows to their content.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

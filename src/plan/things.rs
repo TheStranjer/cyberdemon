@@ -35,8 +35,9 @@ use crate::wad::map::geometry::sector_bbox;
 use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points, fits, mid};
 use crate::wad::map::{Map, Thing};
 
-/// The thing type of the player 1 start.
-pub const PLAYER_ONE_START: u32 = 1_u32;
+/// The thing type of the player 1 start, shared from
+/// [`consts`](crate::wad::map::consts) in the plan's `u32` shape.
+pub use crate::wad::map::consts::PLAYER1_START_U32 as PLAYER_ONE_START;
 
 /// Where one planned thing goes.
 #[derive(Clone, Debug, PartialEq, Eq)]

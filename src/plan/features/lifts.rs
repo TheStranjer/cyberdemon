@@ -15,7 +15,7 @@ use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{Connection, ConnectionKind, Feature, Plan};
 use crate::wad::map::features::{LiftPlatform, LiftSpec, build_lift};
 
-use super::{FeatureDress, FeatureRow, FeatureRun, NO_NAME, invalid, room_sectors_of};
+use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sectors_of};
 
 /// The lift step: dress every `lift` row's room sector as a platform,
 /// in plan order.
@@ -44,7 +44,7 @@ pub(super) fn lifts(
             style,
             repeatable,
             side: lift_side(dress),
-            floor_flat: NO_NAME.to_owned(),
+            floor_flat: NO_TEXTURE.to_owned(),
         };
         let built = build_lift(&mut compiled.map, &spec)?;
         compiled.warnings.extend(built.notes.iter().cloned());
@@ -156,6 +156,6 @@ pub(super) fn lift_side(dress: &FeatureDress) -> String {
     dress
         .texture("step")
         .or_else(|| dress.texture("wall"))
-        .unwrap_or(NO_NAME)
+        .unwrap_or(NO_TEXTURE)
         .to_owned()
 }

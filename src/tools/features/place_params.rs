@@ -26,8 +26,9 @@ use super::specials::sector_selection;
 const COPIES_MAX: u32 = 256_u32;
 
 /// The blocking radius `place_things` assumes for a thing type the
-/// definitions do not list, map units.
-pub(super) const PLACE_UNKNOWN_RADIUS: i64 = 20_i64;
+/// definitions do not list, map units: the shared
+/// [`UNKNOWN_THING_RADIUS`](crate::wad::map::consts::UNKNOWN_THING_RADIUS).
+pub(super) use crate::wad::map::consts::UNKNOWN_THING_RADIUS as PLACE_UNKNOWN_RADIUS;
 
 /// The all-zero script argument list of a thing the call dressed.
 const PLACE_ZERO_ARGS: [i32; 5] = [0_i32; 5];

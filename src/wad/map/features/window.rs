@@ -20,13 +20,9 @@
 //! map untouched.
 
 use crate::error::CyberError;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::model::{Linedef, Map, Sector};
-
-/// The model's name for "no texture here" on a [`Sidedef`] texture face.
-///
-/// [`Sidedef`]: crate::wad::map::Sidedef
-const NO_TEXTURE: &str = "-";
 
 /// The smallest window opening the builder accepts, in map units: the
 /// clear glass band between the sill and the lintel.

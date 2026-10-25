@@ -7,7 +7,7 @@
 
 use alloc::collections::BTreeMap;
 
-use super::{NO_NAME, SKY_FLAT};
+use super::{NO_TEXTURE, SKY_FLAT};
 use crate::error::CyberError;
 use crate::plan::connectors::ConnectorGeometry;
 use crate::plan::model::{ConnectionKind, Plan, Room};
@@ -17,11 +17,11 @@ use crate::wad::map::Sector;
 /// or the convention default (`outdoor` rooms fall back to the sky), and
 /// no special or tag yet.
 pub(super) fn room_sector(room: &Room) -> Sector {
-    let ceiling_default = if room.outdoor { SKY_FLAT } else { NO_NAME };
+    let ceiling_default = if room.outdoor { SKY_FLAT } else { NO_TEXTURE };
     Sector {
         floor_height: room.floor,
         ceiling_height: room.ceiling,
-        floor_flat: flat_name(room.floor_flat.as_deref(), NO_NAME),
+        floor_flat: flat_name(room.floor_flat.as_deref(), NO_TEXTURE),
         ceiling_flat: flat_name(room.ceiling_flat.as_deref(), ceiling_default),
         light: room.light,
         special: 0_i32,
@@ -62,8 +62,8 @@ pub(super) fn connector_sector(
     Ok(Sector {
         floor_height,
         ceiling_height,
-        floor_flat: NO_NAME.to_owned(),
-        ceiling_flat: NO_NAME.to_owned(),
+        floor_flat: NO_TEXTURE.to_owned(),
+        ceiling_flat: NO_TEXTURE.to_owned(),
         light: from.light.min(to.light),
         special: 0_i32,
         tag: 0_i32,

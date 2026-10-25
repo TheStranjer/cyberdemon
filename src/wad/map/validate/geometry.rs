@@ -112,17 +112,16 @@ const fn ordered_pair(a: usize, b: usize) -> (usize, usize) {
 /// One resolved linedef: both endpoints as [`P`]s, or `None` when either
 /// vertex index dangles.
 fn resolved_line(map: &Map, index: usize, line: &Linedef) -> Option<Line> {
-    let start = map.vertices.get(line.v1)?;
-    let end = map.vertices.get(line.v2)?;
+    let ((ax, ay), (bx, by)) = map.line_endpoints(line)?;
     Some(Line {
         index,
         a: P {
-            x: i64::from(start.x),
-            y: i64::from(start.y),
+            x: i64::from(ax),
+            y: i64::from(ay),
         },
         b: P {
-            x: i64::from(end.x),
-            y: i64::from(end.y),
+            x: i64::from(bx),
+            y: i64::from(by),
         },
     })
 }
@@ -134,13 +133,6 @@ fn resolved_lines(map: &Map) -> Vec<Line> {
         .enumerate()
         .filter_map(|(index, line)| resolved_line(map, index, line))
         .collect()
-}
-
-/// The sector the sidedef `side` opens into, `None` when the side is
-/// absent or either of its references dangles.
-fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
 }
 
 /// Adds one directed boundary edge `from` → `to` to `sector`'s net table:
@@ -179,8 +171,7 @@ fn directed_edges(map: &Map) -> BTreeMap<usize, BTreeMap<usize, i32>> {
         let (Some(_), Some(_)) = (map.vertices.get(line.v1), map.vertices.get(line.v2)) else {
             continue;
         };
-        let front = side_sector(map, line.front);
-        let back = side_sector(map, line.back);
+        let (front, back) = map.line_sectors(line);
         push_edge(&mut ends, front, back, (line.v1, line.v2));
         push_edge(&mut ends, back, front, (line.v2, line.v1));
     }

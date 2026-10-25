@@ -31,9 +31,7 @@ use crate::tools::defs::collect::custom_sources;
 use crate::tools::graphics::session_game;
 use crate::tools::maps::common;
 use crate::wad::map::Map;
-use crate::wad::map::query::{
-    ElementKind, Filter, Query, QueryContext, Within, run_query, side_sector,
-};
+use crate::wad::map::query::{ElementKind, Filter, Query, QueryContext, Within, run_query};
 
 use super::{DEFAULT_LIMIT, MAX_LIMIT};
 
@@ -253,8 +251,8 @@ fn linedef_row(index: usize, map: &Map) -> Option<Row> {
         v2: row.v2,
         special: row.special,
         tag: row.tag,
-        front_sector: side_sector(map, row.front),
-        back_sector: side_sector(map, row.back),
+        front_sector: map.side_sector(row.front),
+        back_sector: map.side_sector(row.back),
     }))
 }
 

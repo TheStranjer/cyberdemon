@@ -82,15 +82,6 @@ fn palette_pixel(palette: &Palette, index: usize, fallback: Rgba) -> Rgba {
     }
 }
 
-/// The sector the sidedef `side` opens into, `None` for an absent or
-/// dangling side.
-#[must_use]
-#[inline]
-pub fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
-}
-
 /// The `Doom` automap colour of `line`.
 ///
 /// `None` for a hidden (`dontdraw`) line, the wall colour for one-sided
@@ -108,7 +99,7 @@ pub fn automap_color(map: &Map, line: &Linedef, colors: &AutomapColors) -> Optio
     } else {
         None
     };
-    let (Some(front), Some(back)) = (side_sector(map, line.front), side_sector(map, across)) else {
+    let (Some(front), Some(back)) = (map.side_sector(line.front), map.side_sector(across)) else {
         return Some(colors.wall);
     };
     let (Some(front_sector), Some(back_sector)) = (map.sectors.get(front), map.sectors.get(back))
@@ -349,7 +340,7 @@ mod tests {
     use super::{
         ARROW_BARB_PX, AutomapColors, PLAYER_ARROW_PX, PlayerMark, THING_DOT_PX, Window,
         automap_color, category_color, narrow, offset_pixel, paint_automap_lines,
-        paint_player_arrow, paint_thing_dots, palette_pixel, scale_down, side_sector, thing_visual,
+        paint_player_arrow, paint_thing_dots, palette_pixel, scale_down, thing_visual,
     };
     use crate::defs::definitions_for;
     use crate::fixed::Angle;
@@ -499,17 +490,17 @@ mod tests {
             "an unresolvable sidedef is a wall"
         );
         assert_eq!(
-            side_sector(&map, Some(0)),
+            map.side_sector(Some(0)),
             Some(0),
             "sidedef 0 opens sector 0"
         );
         assert_eq!(
-            side_sector(&map, Some(9)),
+            map.side_sector(Some(9)),
             None,
             "a dangling sidedef resolves to nothing"
         );
         assert_eq!(
-            side_sector(&map, None),
+            map.side_sector(None),
             None,
             "an absent side resolves to nothing"
         );

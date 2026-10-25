@@ -23,7 +23,6 @@ use super::{
 use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Linedef, Map, Thing};
-use crate::wad::map::playability::graph;
 impl<'map> Reader<'map> {
     /// A reader over `map` for flag family `family` at `skill`.
     pub(super) fn new(map: &'map Map, family: FlagFamily, skill: Skill) -> Self {
@@ -52,11 +51,9 @@ impl<'map> Reader<'map> {
     /// The sectors from which a player can work `line`: its front side for a
     /// use line, either side for a walk or shoot line.
     fn trigger_sectors(&self, line: &Linedef, trigger: Trigger) -> BTreeSet<usize> {
-        let mut sectors: BTreeSet<usize> = graph::side_sector(self.map, line.front)
-            .into_iter()
-            .collect();
+        let mut sectors: BTreeSet<usize> = self.map.side_sector(line.front).into_iter().collect();
         if trigger == Trigger::Walk {
-            sectors.extend(graph::side_sector(self.map, line.back));
+            sectors.extend(self.map.side_sector(line.back));
         }
         sectors
     }
@@ -265,9 +262,7 @@ impl<'map> Reader<'map> {
         let behind_the_line = plan.effect == RowEffect::ManualDoor
             || (plan.tag == 0_i32 && self.family == FlagFamily::Hexen);
         if behind_the_line {
-            return graph::side_sector(self.map, line.back)
-                .into_iter()
-                .collect();
+            return self.map.side_sector(line.back).into_iter().collect();
         }
         if plan.tag == 0_i32 {
             self.warnings.push(format!(

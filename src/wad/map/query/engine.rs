@@ -32,7 +32,7 @@ use crate::wad::map::model::{Linedef, Map, Thing};
 
 use super::check::{compare, prepare_filter};
 use super::fields::{FValue, FieldSpec};
-use super::{Bounds, ElementKind, Filter, Op, Query, QueryContext, resolve_bounds, side_sector};
+use super::{Bounds, ElementKind, Filter, Op, Query, QueryContext, resolve_bounds};
 
 /// One filter checked against the field table, ready to compare.
 pub(super) struct Prepared<'req> {
@@ -172,10 +172,15 @@ impl<'map, 'req> Engine<'map, 'req> {
             "special" => Some(FValue::Num(i64::from(line.special))),
             "tag" => Some(FValue::Num(i64::from(line.tag))),
             "front_sector" => self
+                .map
                 .side_sector(line.front)
                 .map(wide_usize)
                 .map(FValue::Num),
-            "back_sector" => self.side_sector(line.back).map(wide_usize).map(FValue::Num),
+            "back_sector" => self
+                .map
+                .side_sector(line.back)
+                .map(wide_usize)
+                .map(FValue::Num),
             "two_sided" => Some(FValue::Bool(line.front.is_some() && line.back.is_some())),
             "length" => linedef_length(self.map, index)
                 .map(wide_u64)
@@ -188,11 +193,6 @@ impl<'map, 'req> Engine<'map, 'req> {
             "back_lower" => self.face(line.back, "lower"),
             other => line_arg(line, other).map(FValue::Num),
         }
-    }
-
-    /// The sector a resolvable side opens into.
-    fn side_sector(&self, side: Option<usize>) -> Option<usize> {
-        side_sector(self.map, side)
     }
 
     /// One texture face of the side `side`, `None` when the side is absent
@@ -350,7 +350,8 @@ impl<'map, 'req> Engine<'map, 'req> {
 
     /// Whether the resolvable side `side` opens into one of `set`'s sectors.
     fn side_in_set(&self, side: Option<usize>, set: &BTreeSet<usize>) -> bool {
-        self.side_sector(side)
+        self.map
+            .side_sector(side)
             .is_some_and(|sector| set.contains(&sector))
     }
 }

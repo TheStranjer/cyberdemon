@@ -213,8 +213,8 @@ fn plan_room_line(map: &Map, line: usize, door_sector: usize) -> Result<RoomPlan
     let linedef = line_at(map, line, "room")?;
     let (front, back) = both_sides(line, linedef)?;
     let at_door = (
-        side_sector(map, line, front)? == door_sector,
-        side_sector(map, line, back)? == door_sector,
+        map.required_side_sector(line, front)? == door_sector,
+        map.required_side_sector(line, back)? == door_sector,
     );
     let (room_side, door_side) = match at_door {
         (false, true) => (front, back),
@@ -242,8 +242,8 @@ fn plan_jamb_line(map: &Map, line: usize, door_sector: usize) -> Result<JambPlan
     match (linedef.front, linedef.back) {
         (Some(front), Some(back)) => {
             let at_door = (
-                side_sector(map, line, front)? == door_sector,
-                side_sector(map, line, back)? == door_sector,
+                map.required_side_sector(line, front)? == door_sector,
+                map.required_side_sector(line, back)? == door_sector,
             );
             let (door_side, flip) = match at_door {
                 (true, false) => (front, false),
@@ -257,7 +257,7 @@ fn plan_jamb_line(map: &Map, line: usize, door_sector: usize) -> Result<JambPlan
             })
         }
         (Some(front), None) => {
-            if side_sector(map, line, front)? == door_sector {
+            if map.required_side_sector(line, front)? == door_sector {
                 Ok(JambPlan {
                     line,
                     door_side: front,
@@ -290,20 +290,6 @@ fn both_sides(line: usize, linedef: &Linedef) -> Result<(usize, usize), CyberErr
              facing the room and a back side facing the door sector"
         ))),
     }
-}
-
-/// The sector behind sidedef `side` of linedef `line`.
-fn side_sector(map: &Map, line: usize, side: usize) -> Result<usize, CyberError> {
-    map.sidedefs
-        .get(side)
-        .map(|sidedef| sidedef.sector)
-        .ok_or_else(|| {
-            CyberError::InvalidArgument(format!(
-                "linedef {line} references sidedef {side}, which the map does not hold \
-                 (it has {} sidedefs)",
-                map.sidedefs.len()
-            ))
-        })
 }
 
 /// `InvalidArgument` for a jamb line with no side over the door sector.

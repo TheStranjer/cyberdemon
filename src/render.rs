@@ -42,7 +42,7 @@ pub use settings::{Lighting, RenderSettings, Switch, TopdownStyle};
 pub use topdown::{
     AutomapColors, PLAYER_ARROW_PX, PlayerMark, THING_DOT_PX, UNKNOWN_THING_RADIUS, Window,
     automap_color, category_color, paint_automap_lines, paint_player_arrow, paint_thing_dots,
-    scale_down, side_sector, thing_visual,
+    scale_down, thing_visual,
 };
 pub use view::{
     Fraction, MAX_PITCH, MIN_PITCH, MaskedMiddle, Rendered, ViewCamera, ViewFrame, check_pitch,

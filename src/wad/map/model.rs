@@ -17,14 +17,19 @@
 //! padding stripped; `"-"` means no texture.
 
 use alloc::collections::BTreeMap;
+use alloc::format;
 
 use serde::Serialize;
 
+use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
 use crate::wad::name::{LumpName, NAME_LEN};
 
 use super::flags::FlagFamily;
+
+/// A linedef's two endpoints as `(x, y)` pairs of map-unit coordinates.
+pub type Endpoints = ((i32, i32), (i32, i32));
 
 /// A map vertex: one point of the map's geometry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -226,6 +231,72 @@ impl Map {
                 .map_or(FlagFamily::Hexen, FlagFamily::from_udmf_namespace),
         }
     }
+
+    /// The sector the sidedef slot `side` opens into: `None` when the
+    /// side is absent, its sidedef index dangles, or that sidedef's
+    /// sector index dangles. Every side read that must not hand out an
+    /// out-of-range index answers through this one check.
+    #[must_use]
+    #[inline]
+    pub fn side_sector(&self, side: Option<usize>) -> Option<usize> {
+        self.stored_side_sector(side)
+            .filter(|index| self.sectors.get(*index).is_some())
+    }
+
+    /// The sector index *stored* behind the sidedef slot `side`: `None`
+    /// only when the side is absent or its sidedef index dangles.
+    /// Unlike [`Map::side_sector`] this keeps an out-of-range sector
+    /// reference distinguishable as the index it is, which is what
+    /// [`crate::wad::map::ops::join_linedefs`] compares: two lines
+    /// fronted by two different broken references must still read as
+    /// disagreeing sides and be refused with a clear argument error,
+    /// before the removal engine below fails on them as broken state.
+    #[must_use]
+    #[inline]
+    pub fn stored_side_sector(&self, side: Option<usize>) -> Option<usize> {
+        side.and_then(|index| self.sidedefs.get(index))
+            .map(|sidedef| sidedef.sector)
+    }
+
+    /// The sectors behind both sides of `line`, each `None` exactly where
+    /// [`Map::side_sector`] answers `None` for that side.
+    #[must_use]
+    #[inline]
+    pub fn line_sectors(&self, line: &Linedef) -> (Option<usize>, Option<usize>) {
+        (self.side_sector(line.front), self.side_sector(line.back))
+    }
+
+    /// The two endpoint coordinates of `line` as an [`Endpoints`] pair,
+    /// `None` when either vertex index dangles.
+    #[must_use]
+    #[inline]
+    pub fn line_endpoints(&self, line: &Linedef) -> Option<Endpoints> {
+        let start = self.vertices.get(line.v1)?;
+        let end = self.vertices.get(line.v2)?;
+        Some(((start.x, start.y), (end.x, end.y)))
+    }
+
+    /// The sector index stored behind sidedef `side` of linedef `line`,
+    /// for callers that report a missing sidedef as their own error.
+    /// Unlike [`Map::side_sector`] this checks only that the *sidedef*
+    /// exists and answers with the stored index even when the sector it
+    /// names dangles: each caller re-reads the sector row itself after
+    /// this. The `line` index only names the owner in the refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] when the map holds no sidedef
+    /// `side`.
+    #[inline]
+    pub fn required_side_sector(&self, line: usize, side: usize) -> Result<usize, CyberError> {
+        self.stored_side_sector(Some(side)).ok_or_else(|| {
+            CyberError::InvalidArgument(format!(
+                "linedef {line} references sidedef {side}, which the map does not hold \
+                     (it has {} sidedefs)",
+                self.sidedefs.len()
+            ))
+        })
+    }
 }
 
 impl Default for Map {
@@ -241,6 +312,7 @@ impl Default for Map {
 mod tests {
     use super::{Map, Vertex};
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::common::fixtures::{solid_line, two_room_map};
     use crate::wad::map::flags::FlagFamily;
     use crate::wad::name::LumpName;
 
@@ -341,6 +413,126 @@ mod tests {
             single.bounds(),
             Some((7_i32, -7_i32, 7_i32, -7_i32)),
             "one vertex bounds itself"
+        );
+    }
+
+    #[test]
+    fn side_sector_resolves_both_ends_of_the_reference_chain() {
+        let map = two_room_map();
+        assert_eq!(map.side_sector(Some(0)), Some(0), "the hall side");
+        assert_eq!(map.side_sector(Some(3)), Some(1), "the back room side");
+        assert_eq!(map.side_sector(None), None, "no side, no sector");
+        assert_eq!(map.side_sector(Some(99)), None, "a dangling sidedef");
+        let mut broken = two_room_map();
+        broken.sidedefs.get_mut(0).expect("sidedef 0").sector = 99;
+        assert_eq!(broken.side_sector(Some(0)), None, "a dangling sector");
+    }
+
+    #[test]
+    fn line_sectors_answers_both_sides_with_the_checked_reads() {
+        let map = two_room_map();
+        let step = map.linedefs.get(2).expect("the step line");
+        assert_eq!(
+            map.line_sectors(step),
+            (Some(0_usize), Some(1_usize)),
+            "the hall in front, the back room behind"
+        );
+        let wall = map.linedefs.first().expect("the west wall");
+        assert_eq!(
+            map.line_sectors(wall),
+            (Some(0_usize), None),
+            "a one-sided line has no back sector"
+        );
+        let mut broken = two_room_map();
+        broken.sidedefs.get_mut(3).expect("the step's back").sector = 42;
+        let broken_step = broken.linedefs.get(2).expect("the step line");
+        assert_eq!(
+            broken.line_sectors(broken_step),
+            (Some(0_usize), None),
+            "the dangling far side reads as no sector"
+        );
+    }
+
+    #[test]
+    fn line_endpoints_pairs_the_vertices_or_finds_nothing() {
+        let map = two_room_map();
+        let step = map.linedefs.get(2).expect("the step line");
+        assert_eq!(
+            map.line_endpoints(step),
+            Some(((256_i32, 256_i32), (256_i32, 0_i32))),
+            "vertex 4 to vertex 1"
+        );
+        let mut broken = two_room_map();
+        broken.linedefs.push(solid_line(999, 0, 0));
+        let loose = broken.linedefs.last().expect("the pushed line");
+        assert_eq!(broken.line_endpoints(loose), None, "a dangling v1");
+        broken.linedefs.get_mut(0).expect("the west wall").v2 = 999;
+        let wall = broken.linedefs.first().expect("the west wall");
+        assert_eq!(broken.line_endpoints(wall), None, "a dangling v2");
+    }
+
+    #[test]
+    fn stored_side_sector_keeps_out_of_range_references_apart() {
+        let map = two_room_map();
+        assert_eq!(
+            map.stored_side_sector(Some(0)),
+            Some(0),
+            "a sound side reads the same as through the checked method"
+        );
+        assert_eq!(map.stored_side_sector(None), None, "an absent side");
+        assert_eq!(
+            map.stored_side_sector(Some(99)),
+            None,
+            "a dangling sidedef index"
+        );
+        let mut broken = two_room_map();
+        broken.sidedefs.get_mut(0).expect("sidedef 0").sector = 99;
+        assert_eq!(
+            broken.stored_side_sector(Some(0)),
+            Some(99),
+            "the stored index survives the missing sector"
+        );
+        assert_eq!(
+            broken.side_sector(Some(0)),
+            None,
+            "where the checked read refuses it"
+        );
+    }
+
+    #[test]
+    fn required_side_sector_reports_missing_sidedefs_only() {
+        let map = two_room_map();
+        assert!(
+            map.required_side_sector(2, 2).is_ok_and(|s| s == 0_usize),
+            "the step line's front row"
+        );
+        assert!(
+            map.required_side_sector(2, 3).is_ok_and(|s| s == 1_usize),
+            "and its back row"
+        );
+        let mut dangling = two_room_map();
+        dangling.sidedefs.get_mut(3).expect("sidedef 3").sector = 99;
+        assert!(
+            dangling
+                .required_side_sector(2, 3)
+                .is_ok_and(|s| s == 99_usize),
+            "the stored index answers unchecked, unlike side_sector"
+        );
+        assert_eq!(
+            dangling.side_sector(Some(3)),
+            None,
+            "and the checked read says no"
+        );
+        let error = map
+            .required_side_sector(2, 9)
+            .expect_err("sidedef 9 is past the block");
+        assert_eq!(error.code(), "invalid_argument", "the wire code");
+        assert!(
+            error.to_string().contains(
+                "linedef 2 references sidedef 9, which the map does not hold \
+                 (it has 8 sidedefs)"
+            ),
+            "the message names the line, the side and the count: {error}"
         );
     }
 }

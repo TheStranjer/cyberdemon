@@ -22,7 +22,7 @@ use crate::geom::label::{
 use crate::geom::segment::{delta, round_quotient};
 
 use super::geometry::{
-    box_area, grid_length, s_cross, s_delta, s_dist2, s_dot, segment_of, side_sector, widen_box,
+    box_area, grid_length, s_cross, s_delta, s_dist2, s_dot, segment_of, widen_box,
 };
 use super::{NEAR_HALF_SQ, OutsideRule, SAMPLE_HALF, SAMPLE_OFFSET, Shape, Source};
 
@@ -104,9 +104,8 @@ impl OverlayLabeler<'_> {
 fn shape_for(source: &Source, sector: usize) -> Option<Shape> {
     let mut edges: Vec<(Pt, Pt)> = Vec::new();
     let mut bbox: Option<(i64, i64, i64, i64)> = None;
-    for line in &source.linedefs {
-        let front = side_sector(source, line.front);
-        let back = side_sector(source, line.back);
+    for line in &source.map.linedefs {
+        let (front, back) = source.map.line_sectors(line);
         if front == back || (front != Some(sector) && back != Some(sector)) {
             continue;
         }
@@ -126,7 +125,7 @@ fn shape_for(source: &Source, sector: usize) -> Option<Shape> {
 
 /// The containment shapes of every original sector, ascending.
 pub(super) fn sector_shapes(source: &Source) -> Vec<Shape> {
-    (0..source.sectors.len())
+    (0..source.map.sectors.len())
         .filter_map(|sector| shape_for(source, sector))
         .collect()
 }

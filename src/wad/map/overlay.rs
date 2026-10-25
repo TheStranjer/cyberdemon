@@ -52,13 +52,13 @@ mod tests;
 
 use serde::Serialize;
 
-use super::model::{Linedef, Map, Sector, Sidedef, Vertex};
+use super::model::{Map, Sector};
 use crate::error::CyberError;
 use crate::geom::Pt;
 
 use prepared::Prepared;
 
-/// The model's name for "no texture here" on a [`Sidedef`] texture face,
+/// The model's name for "no texture here" on a [`Sidedef`](super::Sidedef) texture face,
 /// shared from [`consts`](super::consts), re-exported for this module's
 /// children.
 pub(super) use super::consts::NO_TEXTURE;
@@ -182,14 +182,30 @@ type WallClaim = (WallEnds, Distance, String);
 /// and copies consult while new rows are built.
 #[derive(Clone, Debug)]
 struct Source {
-    /// The original vertices.
-    vertices: Vec<Vertex>,
-    /// The original linedefs.
-    linedefs: Vec<Linedef>,
-    /// The original sidedefs.
-    sidedefs: Vec<Sidedef>,
-    /// The original sectors.
-    sectors: Vec<Sector>,
+    /// The original element blocks, as one [`Map`] view so the shared
+    /// [`Map`] reference reads answer from it; the things and the
+    /// generated node lumps are left out because no overlay read
+    /// consults them.
+    map: Map,
+}
+
+impl Source {
+    /// The pre-paint view of `map`: its four edited element blocks.
+    fn snapshot(map: &Map) -> Self {
+        Self {
+            map: Map {
+                name: map.name,
+                format: map.format,
+                udmf_namespace: map.udmf_namespace.clone(),
+                things: Vec::new(),
+                vertices: map.vertices.clone(),
+                linedefs: map.linedefs.clone(),
+                sidedefs: map.sidedefs.clone(),
+                sectors: map.sectors.clone(),
+                other: Vec::new(),
+            },
+        }
+    }
 }
 
 /// One original sector as a containment shape: its boundary segments and

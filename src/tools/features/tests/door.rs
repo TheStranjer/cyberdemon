@@ -11,8 +11,7 @@ use crate::tools::features::door::{
 };
 use crate::tools::features::out_of_range;
 use crate::tools::features::wall::{
-    centroid, choose_between, choose_linedef, half_axis, recess_depth, side_sector,
-    strip_face_lost, strip_wall,
+    centroid, choose_between, choose_linedef, half_axis, recess_depth, strip_face_lost, strip_wall,
 };
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
@@ -194,7 +193,7 @@ fn touching_doors_are_cut_apart_spanned_and_closed() {
             .get(line.front.expect("a front side"))
             .expect("front");
         assert_eq!(room_side.upper, "DOOR1", "the face wears the door");
-        fronts.push(side_sector(&map, line.front).expect("the front sector"));
+        fronts.push(map.side_sector(line.front).expect("the front sector"));
     }
     assert!(
         fronts.contains(&0_usize) && fronts.contains(&1_usize),

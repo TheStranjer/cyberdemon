@@ -13,7 +13,7 @@ use crate::geom::segment::{Delta, cross, delta, dot};
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::Point;
 
-use super::{endpoints, length_of, scale_shift, side_sector, wide};
+use super::{endpoints, length_of, scale_shift, wide};
 
 /// One prepared [`outward_depth`] ray.
 struct RecessRay {
@@ -79,7 +79,7 @@ pub fn outward_depth(
         source: linedef,
         normal,
         run_squared: dot(normal, normal),
-        near: side_sector(map, line.front),
+        near: map.side_sector(line.front),
         max_depth,
     };
     cast_outward(map, &ray).map(|hit| (hit.distance, hit.sector))
@@ -128,7 +128,7 @@ fn ray_hit(map: &Map, ray: &RecessRay, index: usize, line: &Linedef) -> Option<R
         return None;
     }
     let origin_side = cross(towards, run);
-    let sector = side_sector(map, away_side(origin_side, line))?;
+    let sector = map.side_sector(away_side(origin_side, line))?;
     let point = scale_shift(ray.origin, ray.normal, along, den);
     let distance = length_of(delta(wide(ray.origin), wide(point)));
     if distance == 0_i32 {

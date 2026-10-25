@@ -108,27 +108,6 @@ fn room_state(map: &Map, index: usize) -> Result<(i32, i32), CyberError> {
         .ok_or_else(|| range_error("sector", index, map.sectors.len()))
 }
 
-/// The sector the sidedef slot `side` opens into: `None` when the side
-/// is absent, its sidedef index dangles, or that sidedef's sector
-/// dangles.
-fn owned_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sector = side.and_then(|index| map.sidedefs.get(index))?.sector;
-    map.sectors.get(sector).map(|_| sector)
-}
-
-/// The sector behind sidedef `side` of linedef `line`, refused when the
-/// map does not hold that sidedef.
-fn side_sector(map: &Map, line: usize, side: usize) -> Result<usize, CyberError> {
-    let sidedef = map.sidedefs.get(side).ok_or_else(|| {
-        invalid(&format!(
-            "linedef {line} references sidedef {side}, which the map does not hold (it \
-             has {} sidedefs)",
-            map.sidedefs.len()
-        ))
-    })?;
-    Ok(sidedef.sector)
-}
-
 /// The window's `(floor, ceiling)` between rooms `a` and `b` under
 /// `trim`: `max(floorA, floorB) + sill` and `min(ceilA, ceilB) - lintel`.
 ///
@@ -206,8 +185,7 @@ enum Border {
 
 /// Classify `line` against the window sector `window`.
 fn window_border(map: &Map, line: &Linedef, window: usize) -> Border {
-    let front = owned_sector(map, line.front);
-    let back = owned_sector(map, line.back);
+    let (front, back) = map.line_sectors(line);
     match (front == Some(window), back == Some(window)) {
         (true, false) | (false, true) if front.is_some() && back.is_some() => Border::RoomLine,
         _ => Border::Elsewhere,
@@ -246,8 +224,8 @@ fn plan_room_line(map: &Map, line: usize, window: usize) -> Result<RoomPlan, Cyb
         )));
     };
     let at_window = (
-        side_sector(map, line, front)? == window,
-        side_sector(map, line, back)? == window,
+        map.required_side_sector(line, front)? == window,
+        map.required_side_sector(line, back)? == window,
     );
     match at_window {
         (false, true) => Ok(RoomPlan {

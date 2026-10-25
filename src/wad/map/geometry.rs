@@ -10,7 +10,7 @@
 //!
 //! [`Map`]: crate::wad::map::Map
 
-use super::model::{Linedef, Map};
+use super::model::{Endpoints, Linedef, Map};
 use crate::fixed::hypot;
 
 /// A linedef with both vertices resolved, coordinates widened to `i64`.
@@ -26,19 +26,9 @@ struct Segment {
     y2: i64,
 }
 
-/// Both endpoints of a linedef as `(x, y)` pairs.
-type Endpoints = ((i32, i32), (i32, i32));
-
-/// The two endpoint coordinates of `line`, when both vertices resolve.
-fn vertex_pair(map: &Map, line: &Linedef) -> Option<Endpoints> {
-    let start = map.vertices.get(line.v1)?;
-    let end = map.vertices.get(line.v2)?;
-    Some(((start.x, start.y), (end.x, end.y)))
-}
-
 /// The endpoints of `line` as a [`Segment`], when both vertices resolve.
 fn segment_of(map: &Map, line: &Linedef) -> Option<Segment> {
-    let ((x1, y1), (x2, y2)) = vertex_pair(map, line)?;
+    let ((x1, y1), (x2, y2)) = map.line_endpoints(line)?;
     Some(Segment {
         x1: i64::from(x1),
         y1: i64::from(y1),
@@ -47,19 +37,11 @@ fn segment_of(map: &Map, line: &Linedef) -> Option<Segment> {
     })
 }
 
-/// The sector the sidedef `side` opens into: `None` when the side is
-/// absent, its sidedef index dangles, or that sidedef's sector index
-/// dangles.
-fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
-}
-
 /// Whether `line`'s two sides point at the same sector; such a line bounds
 /// nothing and the containment tests ignore it.
 fn same_sector_sides(map: &Map, line: &Linedef) -> bool {
-    let front = side_sector(map, line.front);
-    front.is_some() && front == side_sector(map, line.back)
+    let (front, back) = map.line_sectors(line);
+    front.is_some() && front == back
 }
 
 /// The linedefs having a side in `sector`, as `(linedef index, is_front)`
@@ -72,10 +54,8 @@ fn same_sector_sides(map: &Map, line: &Linedef) -> bool {
 pub fn sector_boundary(map: &Map, sector: usize) -> Vec<(usize, bool)> {
     let mut boundary = Vec::new();
     for (index, line) in map.linedefs.iter().enumerate() {
-        match (
-            side_sector(map, line.front) == Some(sector),
-            side_sector(map, line.back) == Some(sector),
-        ) {
+        let (front, back) = map.line_sectors(line);
+        match (front == Some(sector), back == Some(sector)) {
             (true, _) => boundary.push((index, true)),
             (false, true) => boundary.push((index, false)),
             (false, false) => {}
@@ -95,7 +75,7 @@ pub fn sector_bbox(map: &Map, sector: usize) -> Option<(i32, i32, i32, i32)> {
         let Some(line) = map.linedefs.get(index) else {
             continue;
         };
-        if let Some(pair) = vertex_pair(map, line) {
+        if let Some(pair) = map.line_endpoints(line) {
             bbox = Some(widen(bbox, pair));
         }
     }
@@ -140,7 +120,7 @@ pub fn neighbors(map: &Map, sector: usize) -> Vec<usize> {
         .filter_map(|(index, is_front)| {
             let line = map.linedefs.get(index)?;
             let other = if is_front { line.back } else { line.front };
-            side_sector(map, other).filter(|across| *across != sector)
+            map.side_sector(other).filter(|across| *across != sector)
         })
         .collect();
     out.sort_unstable();

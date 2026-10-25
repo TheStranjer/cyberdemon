@@ -282,16 +282,6 @@ impl<'defs> QueryContext<'defs> {
     }
 }
 
-/// The sector index the side `side` opens into: `None` when the side is
-/// absent, its sidedef index dangles, or that sidedef's sector index
-/// dangles. The `find_elements` rows and later bulk edits share this read.
-#[must_use]
-#[inline]
-pub fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let row = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(row.sector).map(|_| row.sector)
-}
-
 /// Run `query` over `map`: the ascending indices of every element of the
 /// queried kind that lies within the bound and passes every filter.
 ///

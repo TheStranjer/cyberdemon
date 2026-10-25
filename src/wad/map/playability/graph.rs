@@ -82,18 +82,12 @@ pub(super) struct Opened {
     pub(super) low_lifts: BTreeSet<usize>,
 }
 
-/// The sector a line side opens into: `None` when the side is absent, its
-/// sidedef index dangles, or that sidedef's sector index dangles.
-pub(super) fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
-}
-
 /// The two sectors `line` joins, `None` when either side fails to resolve or
 /// both sides share one sector.
 pub(super) fn sides(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
-    let front = side_sector(map, line.front)?;
-    let back = side_sector(map, line.back)?;
+    let (Some(front), Some(back)) = map.line_sectors(line) else {
+        return None;
+    };
     (front != back).then_some((front, back))
 }
 
@@ -399,7 +393,7 @@ impl<'map> World<'map> {
 mod tests {
     use super::{
         Crossing, Height, Opened, Pass, World, closed, impassable, lowest_ceiling, lowest_floor,
-        neighbour_table, passage_table, side_sector, sides, standing,
+        neighbour_table, passage_table, sides, standing,
     };
     use crate::wad::map::common::fixtures::{name, room, side, spawn, two_room_map, vertex};
     use crate::wad::map::flags::{
@@ -435,18 +429,6 @@ mod tests {
         map.sidedefs = vec![side("-", "-", "-", 0), side("-", "-", "-", 0)];
         map.sectors = vec![room(0, 128, 160, 0)];
         map
-    }
-
-    #[test]
-    fn side_sector_needs_both_ends_of_the_reference_chain() {
-        let map = two_room_map();
-        assert_eq!(side_sector(&map, Some(0)), Some(0), "the hall side");
-        assert_eq!(side_sector(&map, Some(3)), Some(1), "the back room side");
-        assert_eq!(side_sector(&map, None), None, "no side, no sector");
-        assert_eq!(side_sector(&map, Some(99)), None, "a dangling sidedef");
-        let mut broken = map;
-        broken.sidedefs.get_mut(0).expect("sidedef 0").sector = 99;
-        assert_eq!(side_sector(&broken, Some(0)), None, "a dangling sector");
     }
 
     #[test]

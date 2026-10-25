@@ -14,8 +14,9 @@
 //! whose editable lump is missing or whose size is not a whole number of
 //! records; [`write_doom_map`] refuses values outside the stored type and
 //! names the offending element and field. Texture and flat fields hold
-//! `NUL`-padded names: the model's `"-"` writes as an all-`NUL` field and
-//! an all-`NUL` field reads back as `"-"`.
+//! `NUL`-padded names: the model's `"-"` writes as `"-"` plus padding and an
+//! all-`NUL` field reads back as `"-"`, so a name the model did not change
+//! keeps its stored bytes.
 //!
 //! [`Sidedef`]: crate::wad::map::Sidedef
 //! [`Sector`]: crate::wad::map::Sector
@@ -223,12 +224,14 @@ mod tests {
     use crate::wad::archive::Lump;
     use crate::wad::classify::MapFormat;
     use crate::wad::map::common::fixtures::{lump, marker, name, room, side, two_room_map};
-    use crate::wad::map::common::{NO_SIDEEDEF, read_sidedefs, write_sectors, write_sidedefs};
+    use crate::wad::map::common::{
+        NO_SIDEDEF, read_sectors, read_sidedefs, write_sectors, write_sidedefs,
+    };
     use crate::wad::map::doom::{
         read_doom_map, read_linedefs, read_things, write_doom_map, write_linedefs, write_things,
     };
     use crate::wad::map::model::{Linedef, Sector, Sidedef, Thing};
-    use crate::wad::name::LumpName;
+    use crate::wad::name::{LumpName, NAME_LEN};
 
     /// The `LimitExceeded` message one linedef row produces at write time.
     fn linedef_error(linedef: Linedef) -> String {
@@ -246,6 +249,20 @@ mod tests {
             Err(other) => panic!("expected LimitExceeded, got {other:?}"),
             Ok(bytes) => panic!("expected a rejection, wrote {} bytes", bytes.len()),
         }
+    }
+
+    /// The eight-byte name fields of one record that start at each of
+    /// `offsets`, in order.
+    fn name_fields(record: &[u8], offsets: &[usize]) -> Vec<[u8; NAME_LEN]> {
+        offsets
+            .iter()
+            .map(|&start| {
+                let end = start.checked_add(NAME_LEN).expect("a field fits");
+                let mut field = [0_u8; NAME_LEN];
+                field.copy_from_slice(record.get(start..end).expect("a whole name field"));
+                field
+            })
+            .collect()
     }
 
     #[test]
@@ -321,7 +338,7 @@ mod tests {
         buffer.extend_from_slice(&300_i16.to_le_bytes());
         buffer.extend_from_slice(&(-90_i16).to_le_bytes());
         buffer.extend_from_slice(&60000_u16.to_le_bytes());
-        buffer.extend_from_slice(&NO_SIDEEDEF.to_le_bytes());
+        buffer.extend_from_slice(&NO_SIDEDEF.to_le_bytes());
         let things = read_things(&buffer).expect("one complete record");
         assert_eq!(
             things,
@@ -341,7 +358,7 @@ mod tests {
     #[test]
     fn linedefs_decode_indices_high_u16_and_the_no_side_sentinel() {
         let mut buffer = Vec::new();
-        for value in [0xFFFE_u16, 3, 13, 0xFFFF, 257, NO_SIDEEDEF, 5] {
+        for value in [0xFFFE_u16, 3, 13, 0xFFFF, 257, NO_SIDEDEF, 5] {
             buffer.extend_from_slice(&value.to_le_bytes());
         }
         let linedefs = read_linedefs(&buffer).expect("one complete record");
@@ -585,33 +602,99 @@ mod tests {
             flat_message.contains("TOOLONGFLAT"),
             "the flat is named: {flat_message}"
         );
+        let wide = format!("CAF{}", "\u{e9}".repeat(8_usize));
+        let CyberError::InvalidArgument(high_message) = write_sectors(&[Sector {
+            ceiling_flat: wide,
+            ..Default::default()
+        }])
+        .expect_err("eleven Latin-1 characters are eleven bytes") else {
+            panic!("expected InvalidArgument for an over-wide high-byte name");
+        };
+        assert!(
+            high_message.contains("is 11 bytes"),
+            "the stored width, not the character count, is what overflows: \
+             {high_message}"
+        );
     }
 
     #[test]
-    fn the_dash_name_writes_as_the_empty_field_and_back() {
-        let buffer = write_sectors(&[Sector {
+    fn an_untextured_face_writes_as_dash_not_as_an_empty_field() {
+        let stored = *b"-\0\0\0\0\0\0\0";
+        let buffer = write_sidedefs(&[side("", "-", "-", 7)]).expect("empties are writable");
+        assert_eq!(
+            name_fields(&buffer, &[4_usize, 12, 20]),
+            vec![stored, stored, stored],
+            "the model's \"-\" and the empty string both store the one-character \
+             name a vanilla engine reads as no texture"
+        );
+        let flats = write_sectors(&[Sector {
             floor_flat: "-".to_owned(),
             ceiling_flat: String::new(),
             ..Default::default()
         }])
         .expect("dashes and empties are writable");
-        assert!(
-            buffer[4_usize..20].iter().all(|&byte| byte == 0_u8),
-            "both flat fields store all NUL"
+        assert_eq!(
+            name_fields(&flats, &[4_usize, 12]),
+            vec![stored, stored],
+            "the same rule holds for sector flats"
         );
-        let map = read_doom_map(
-            name("MAP01"),
-            &[
-                marker("THINGS"),
-                marker("LINEDEFS"),
-                marker("SIDEDEFS"),
-                marker("VERTEXES"),
-                lump("SECTORS", &buffer),
-            ],
-        )
-        .expect("the record reads back");
-        let sector = map.sectors.first().expect("one sector");
-        assert_eq!(sector.floor_flat, "-", "an empty field reads as dash");
+        let read = read_sectors(&flats).expect("the record reads back");
+        let sector = read.first().expect("one sector");
+        assert_eq!(sector.floor_flat, "-", "a dash field reads as dash");
         assert_eq!(sector.ceiling_flat, "-", "the empty name normalises too");
+    }
+
+    #[test]
+    fn an_all_nul_name_field_still_reads_as_dash() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&0_i16.to_le_bytes());
+        buffer.extend_from_slice(&128_i16.to_le_bytes());
+        buffer.extend_from_slice(&[0_u8; 8]);
+        buffer.extend_from_slice(&[0_u8; 8]);
+        buffer.extend_from_slice(&200_i16.to_le_bytes());
+        buffer.extend_from_slice(&0_u16.to_le_bytes());
+        buffer.extend_from_slice(&3_u16.to_le_bytes());
+        let sectors = read_sectors(&buffer).expect("one complete record");
+        let sector = sectors.first().expect("one sector");
+        assert_eq!(sector.floor_flat, "-", "an all-NUL flat reads as dash");
+        assert_eq!(
+            sector.ceiling_flat, "-",
+            "the other all-NUL flat reads as dash too"
+        );
+    }
+
+    #[test]
+    fn a_texture_name_with_a_high_byte_round_trips_byte_for_byte() {
+        let mut record = Vec::new();
+        record.extend_from_slice(&(-4_i16).to_le_bytes());
+        record.extend_from_slice(&8_i16.to_le_bytes());
+        record.extend_from_slice(b"FLOOR9\0\0");
+        record.extend_from_slice(&[b'-', 0, 0, 0, 0, 0, 0, 0]);
+        record.extend_from_slice(b"CA");
+        record.push(0xE9_u8);
+        record.extend_from_slice(b"LF\0\0\0");
+        record.extend_from_slice(&3_u16.to_le_bytes());
+        let sidedefs = read_sidedefs(&record).expect("one complete record");
+        assert_eq!(
+            sidedefs.first().map(|row| row.middle.as_str()),
+            Some("CA\u{e9}LF"),
+            "the byte above 0x7F reads as the Latin-1 character it stands for"
+        );
+        let written = write_sidedefs(&sidedefs).expect("the decoded name is writable");
+        assert_eq!(
+            written, record,
+            "a name the model did not change keeps its eight raw bytes"
+        );
+    }
+
+    #[test]
+    fn a_name_beyond_latin1_writes_its_whole_utf8_encoding() {
+        let buffer = write_sidedefs(&[side("-", "-", "A\u{20ac}B", 0)]).expect("five bytes fit");
+        assert_eq!(
+            name_fields(&buffer, &[20_usize]),
+            vec![[b'A', 0xE2, 0x82, 0xAC, b'B', 0, 0, 0]],
+            "a character above U+00FF contributes every UTF-8 byte of itself, so the \
+             field still comes out eight bytes wide"
+        );
     }
 }

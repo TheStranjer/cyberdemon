@@ -34,6 +34,11 @@ editing a layer-owned map copies the block in first
   validated: `-` means no texture, an empty name, a name over the
   format's cap (8 characters binary, 64 `UDMF`) or characters outside
   printable `ASCII` fail `invalid_argument`.
+- A binary map stores no texture as the one-character name `-` with `NUL`
+  padding — `2D 00 00 00 00 00 00 00` in `get_lump` hex — never as an
+  all-`NUL` field: vanilla engines read a leading `-` as no texture and
+  abort the load on an empty name. An all-`NUL` field a map arrives with
+  still reads as `"-"`, and `UDMF` stores the text `-`.
 - `x_offset`/`y_offset` are texture shifts in map units. The binary
   formats store them as `i16`: values outside `-32768..=32767` fail
   `invalid_argument`; `UDMF` maps store full integers.

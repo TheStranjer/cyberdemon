@@ -331,14 +331,34 @@ impl Writer {
     pub fn put_padded_str(&mut self, text: &str, len: usize) -> Result<(), CyberError> {
         let bytes = text.as_bytes();
         let count = bytes.len();
-        let Some(pad) = len.checked_sub(count) else {
+        if count > len {
             return Err(CyberError::InvalidArgument(format!(
                 "text {text:?} is {count} bytes, longer than the {len}-byte field; shorten it or widen the field"
+            )));
+        }
+        self.put_padded_bytes(bytes, len)
+    }
+
+    /// Appends raw `bytes`, padded with `NUL` to exactly `len` bytes: the
+    /// byte-exact form of [`Self::put_padded_str`] for fields the model
+    /// holds as bytes rather than `UTF-8` text, such as a `Doom` texture
+    /// name read from a binary record.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] when `bytes` is longer than `len`;
+    /// nothing is appended in that case.
+    #[inline]
+    pub fn put_padded_bytes(&mut self, bytes: &[u8], len: usize) -> Result<(), CyberError> {
+        let count = bytes.len();
+        let Some(pad) = len.checked_sub(count) else {
+            return Err(CyberError::InvalidArgument(format!(
+                "text is {count} bytes, longer than the {len}-byte field"
             )));
         };
         self.buf.extend_from_slice(bytes);
         for _ in 0_usize..pad {
-            self.buf.push(0);
+            self.buf.push(0_u8);
         }
         Ok(())
     }
@@ -674,6 +694,39 @@ mod tests {
         assert!(
             message.contains("TOOLONG"),
             "message names the text: {message}"
+        );
+        assert!(overflow.is_empty(), "a rejected write appends nothing");
+    }
+
+    #[test]
+    fn padded_bytes_keep_high_bytes_and_reject_overflow() {
+        let mut fitted = Writer::new();
+        fitted
+            .put_padded_bytes(b"-\0", 8)
+            .expect("two bytes fit in eight");
+        assert_eq!(
+            fitted.into_inner(),
+            *b"-\0\0\0\0\0\0\0",
+            "raw bytes are appended as they are and padded with NUL"
+        );
+        let mut high = Writer::new();
+        high.put_padded_bytes(&[b'W', 0xE9, b'L'], 8)
+            .expect("three bytes fit in eight");
+        assert_eq!(
+            high.into_inner(),
+            [b'W', 0xE9, b'L', 0, 0, 0, 0, 0],
+            "a byte above 0x7F is stored as that one byte"
+        );
+        let mut overflow = Writer::new();
+        let CyberError::InvalidArgument(message) = overflow
+            .put_padded_bytes(b"TOOLONG99", 8)
+            .expect_err("nine bytes do not fit in eight")
+        else {
+            panic!("expected InvalidArgument for an overflowing field");
+        };
+        assert!(
+            message.contains("9 bytes") && message.contains("8-byte"),
+            "the sizes are named: {message}"
         );
         assert!(overflow.is_empty(), "a rejected write appends nothing");
     }

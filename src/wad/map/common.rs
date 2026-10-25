@@ -26,10 +26,17 @@ pub(super) const VERTEX_LEN: usize = 4;
 /// Bytes in one `SECTORS` record.
 pub(super) const SECTOR_LEN: usize = 26;
 /// The stored sidedef number meaning "this side does not exist".
-pub(super) const NO_SIDEEDEF: u16 = 0xFFFF;
+pub(super) const NO_SIDEDEF: u16 = 0xFFFF;
 
 /// The model's `"-"` (or empty) name for one eight-byte texture field.
 const NONE_NAME: &str = "-";
+
+/// The eight stored bytes of "no texture": the one-character name `"-"`
+/// with `NUL` padding. Vanilla engines short-circuit a leading `-` in
+/// `R_CheckTextureNumForName`, while an all-`NUL` field reaches the linear
+/// name search, matches nothing and aborts the load, so an untextured face
+/// has to write as this.
+const NONE_FIELD: [u8; NAME_LEN] = *b"-\0\0\0\0\0\0\0";
 
 /// The payload of member `wanted`, or a `Format` error naming it; `format`
 /// names the map layout that needs the member.
@@ -94,7 +101,9 @@ pub(super) fn carried(other: &[Lump], wanted: LumpName) -> Lump {
 }
 
 /// Decodes one eight-byte texture/flat field: `NUL`-trimmed and uppercase,
-/// with an empty field reading as the model's `"-"`.
+/// with an empty field reading as the model's `"-"`. Every other byte is
+/// read as the `Latin-1` character it is, which [`put_name`] writes back as
+/// that same byte.
 fn decode_name(bytes: &[u8]) -> String {
     let text: String = bytes
         .iter()
@@ -109,20 +118,52 @@ fn decode_name(bytes: &[u8]) -> String {
     }
 }
 
-/// Appends one model texture/flat name as its eight-byte field; `"-"` and
-/// the empty string write as all-`NUL`.
+/// The stored bytes of one model texture/flat name: a character within
+/// `U+0000..=U+00FF` becomes the single raw byte [`decode_name`] read it
+/// from, so a name the model did not change round-trips byte-identically
+/// even when it carries a byte above `0x7F`; a wider character contributes
+/// its whole `UTF-8` encoding.
+fn name_bytes(name: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(name.len());
+    for ch in name.chars() {
+        let Ok(byte) = u8::try_from(u32::from(ch)) else {
+            let mut encoded = [0_u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+            continue;
+        };
+        bytes.push(byte);
+    }
+    bytes
+}
+
+/// Appends one model texture/flat name as its eight-byte field: the model's
+/// `"-"` and the empty string as [`NONE_FIELD`], any other name as its
+/// [`name_bytes`] with `NUL` padding.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when the name needs more than `NAME_LEN`
+/// bytes; nothing is appended in that case.
 fn put_name(writer: &mut Writer, name: &str) -> Result<(), CyberError> {
     if name == NONE_NAME || name.is_empty() {
-        writer.put_bytes(&[0_u8; NAME_LEN]);
+        writer.put_bytes(&NONE_FIELD);
         return Ok(());
     }
-    writer.put_padded_str(name, NAME_LEN)
+    let bytes = name_bytes(name);
+    let count = bytes.len();
+    if count > NAME_LEN {
+        return Err(CyberError::InvalidArgument(format!(
+            "texture name {name:?} is {count} bytes, longer than the \
+             {NAME_LEN}-byte field; use at most {NAME_LEN} characters"
+        )));
+    }
+    writer.put_padded_bytes(&bytes, NAME_LEN)
 }
 
 /// The stored side number for a model side reference: `None` becomes the
 /// `0xFFFF` sentinel.
 pub(super) fn read_side(raw: u16) -> Option<usize> {
-    (raw != NO_SIDEEDEF).then_some(usize::from(raw))
+    (raw != NO_SIDEDEF).then_some(usize::from(raw))
 }
 
 /// Reads the `VERTEXES` records.
@@ -286,7 +327,7 @@ impl Element {
         let Ok(small) = u16::try_from(value) else {
             return Err(self.overflow(field, value, "u16"));
         };
-        if small == NO_SIDEEDEF {
+        if small == NO_SIDEDEF {
             return Err(CyberError::LimitExceeded(format!(
                 "{} {} {field} 65535 collides with the reserved no-sidedef \
                  marker: keep {field} below 65535",
@@ -302,7 +343,7 @@ impl Element {
         field: &str,
         value: Option<usize>,
     ) -> Result<u16, CyberError> {
-        value.map_or(Ok(NO_SIDEEDEF), |index| self.index(field, index))
+        value.map_or(Ok(NO_SIDEDEF), |index| self.index(field, index))
     }
 
     /// Appends the five script arguments of one record as `u8` fields,

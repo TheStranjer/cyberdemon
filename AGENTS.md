@@ -1196,9 +1196,18 @@ src/
                   `Playability` (reachable sectors, exits, keys, locks,
                   unopened doors, narrow lines, warnings),
                   `playability/explain.rs` the per-unreachable-sector
-                  blocker reasons read off a finished walk, and
+                  blocker reasons read off a finished walk,
                   `playability/stuck.rs` the body-square tests for the
-                  things that cannot stand.
+                  things that cannot stand, and the walk's own tests in
+                  `playability/tests.rs` (the shared `hall` and plan
+                  builders) with `playability/tests/movement.rs` (the
+                  passable openings, steps, headroom, blocking bits and
+                  the doors and keys), `playability/tests/features.rs`
+                  (lifts, teleporters and exits),
+                  `playability/tests/plan_built.rs` (the four plan-built
+                  features) and `playability/tests/reports.rs` (the
+                  narrow-line, start, special and `feature_targets`
+                  report reads).
                   `map/query.rs` + `query/` is the pure filter engine behind
                   `find_elements`: a `Query` (element kind, ANDed field
                   `Filter`s over stored and derived values, an optional

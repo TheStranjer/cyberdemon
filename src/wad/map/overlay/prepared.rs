@@ -83,12 +83,7 @@ impl<'req> Prepared<'req> {
             Some(_) => Label::Region(sector_id(count)?),
             None => Label::Void,
         };
-        let source = Source {
-            vertices: map.vertices.clone(),
-            linedefs: map.linedefs.clone(),
-            sidedefs: map.sidedefs.clone(),
-            sectors: map.sectors.clone(),
-        };
+        let source = Source::snapshot(map);
         let shapes = sector_shapes(&source);
         let (external, unresolved) = external_segments(&source);
         let walls = external
@@ -200,7 +195,7 @@ impl<'req> Prepared<'req> {
     fn push_piece(&self, piece: &Piece, plan: &Plan, built: &mut Built) -> Result<(), CyberError> {
         let (start, finish, front_label, back_label) = orient_piece(piece);
         let old = first_external(piece);
-        let source = old.and_then(|index| self.source.linedefs.get(index));
+        let source = old.and_then(|index| self.source.map.linedefs.get(index));
         let (start_len, end_len) =
             source.map_or(Ok((0_i32, 0_i32)), |line| self.shifts_for(line, piece))?;
         let front = region_of(front_label).ok_or_else(void_front)?;
@@ -322,6 +317,7 @@ impl<'req> Prepared<'req> {
     /// `sector`, in linedef order (front side first).
     fn wall_candidates(&self, sector: usize) -> Vec<(WallEnds, String)> {
         self.source
+            .map
             .linedefs
             .iter()
             .filter_map(|line| Some((segment_of(&self.source, line)?, line)))
@@ -329,7 +325,7 @@ impl<'req> Prepared<'req> {
                 let name = [line.front, line.back]
                     .into_iter()
                     .flatten()
-                    .filter_map(|slot| self.source.sidedefs.get(slot))
+                    .filter_map(|slot| self.source.map.sidedefs.get(slot))
                     .find(|side| side.sector == sector && side.middle != NO_TEXTURE)?;
                 Some((ends, name.middle.clone()))
             })
@@ -347,7 +343,7 @@ impl<'req> Prepared<'req> {
 
     /// The sector `id` names: an original record, or the paint's new one.
     fn sector_record(&self, id: usize) -> Option<&Sector> {
-        if let Some(record) = self.source.sectors.get(id) {
+        if let Some(record) = self.source.map.sectors.get(id) {
             return Some(record);
         }
         match self.new_sector {
@@ -358,7 +354,7 @@ impl<'req> Prepared<'req> {
 
     /// The report of one finished rebuild.
     fn finish(&self, plan: &Plan, built: &Built) -> OverlayResult {
-        let linedef_map = (0..self.source.linedefs.len())
+        let linedef_map = (0..self.source.map.linedefs.len())
             .map(|old| built.first_of.get(&old).copied())
             .collect::<Vec<Option<usize>>>();
         let empty_sectors = self.empty_sectors(built);
@@ -384,13 +380,15 @@ impl<'req> Prepared<'req> {
         let used: BTreeSet<usize> = built.sidedefs.iter().map(|row| row.sector).collect();
         let before: BTreeSet<usize> = self
             .source
+            .map
             .sidedefs
             .iter()
             .map(|row| row.sector)
-            .filter(|sector| *sector < self.source.sectors.len())
+            .filter(|sector| *sector < self.source.map.sectors.len())
             .collect();
         let total = self
             .source
+            .map
             .sectors
             .len()
             .saturating_add(usize::from(self.new_sector.is_some()));

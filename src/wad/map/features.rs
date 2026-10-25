@@ -62,8 +62,8 @@ pub use lift::{
     LiftBuild, LiftPlatform, LiftSpec, LiftStyle, MIN_LIFT_DROP, build_lift, lift_specials,
 };
 pub use place::{
-    BoundaryStrip, DoorWall, VertexPair, door_rect, door_segment, door_wall, longest_boundary,
-    nearest_boundary, outward_depth, project_onto_line, void_strip,
+    BoundaryStrip, DoorWall, VertexPair, door_rect, door_segment, door_wall, endpoints,
+    longest_boundary, nearest_boundary, outward_depth, project_onto_line, void_strip,
 };
 pub use specials::{
     BOOM_SECRET_BIT, DOOM_SECRET_SPECIAL, GENERALIZED_SECTOR_MIN, HEXEN_SECRET_BIT, LightEffect,

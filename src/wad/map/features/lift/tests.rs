@@ -69,12 +69,6 @@ fn spec(platform: LiftPlatform) -> LiftSpec {
     }
 }
 
-/// The sector a sidedef slot opens into.
-fn side_sector(map: &Map, slot: Option<usize>) -> Option<usize> {
-    let index = slot?;
-    map.sidedefs.get(index).map(|sidedef| sidedef.sector)
-}
-
 #[test]
 fn lift_specials_matches_the_doom_table() {
     let expected = [
@@ -174,7 +168,7 @@ fn the_fixture_step_becomes_a_repeating_use_lift() {
     assert_eq!(line.args, [0_i32; 5], "Doom lines carry no args");
     assert_eq!(line.flags, 4_u32, "two-sided and reachable");
     assert_eq!(
-        side_sector(&map, line.front),
+        map.side_sector(line.front),
         Some(0_usize),
         "the front already faced the lower hall"
     );
@@ -223,11 +217,11 @@ fn a_reversed_edge_turns_to_face_the_lower_sector() {
     assert_eq!(line.v1, 4_usize, "the line turned around with its sides");
     assert_eq!(line.v2, 1_usize);
     assert_eq!(
-        side_sector(&map, line.front),
+        map.side_sector(line.front),
         Some(0_usize),
         "the front now faces the lower hall"
     );
-    assert_eq!(side_sector(&map, line.back), Some(1_usize));
+    assert_eq!(map.side_sector(line.back), Some(1_usize));
     assert_eq!(line.special, 62_i32);
     assert_eq!(map.sidedefs.get(2).expect("the low side").lower, "LIFTSIDE");
 }
@@ -386,12 +380,12 @@ fn a_drawn_platform_straddles_the_step() {
     for index in &build.lines {
         let line = map.linedefs.get(*index).expect("an activation line");
         assert_eq!(
-            side_sector(&map, line.front),
+            map.side_sector(line.front),
             Some(0_usize),
             "edge {index} faces the lower hall"
         );
         assert_eq!(
-            side_sector(&map, line.back),
+            map.side_sector(line.back),
             Some(2_usize),
             "and the platform behind"
         );

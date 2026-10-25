@@ -19,7 +19,7 @@ use crate::error::CyberError;
 use super::split::piece_length;
 use super::{
     JoinPlan, JoinResult, Linedef, Map, Order, Point, SideShift, check_offset, delta, endpoint,
-    linedef_row, side_sector, sidedef_of, wide,
+    linedef_row, sidedef_of, wide,
 };
 use crate::wad::map::remove::{CascadeOptions, Removal, apply_removal, expand_cascade};
 
@@ -89,6 +89,14 @@ pub(super) fn require_same_direction(
 /// Refuses sides that do not open onto the same sectors: the same front
 /// sector, and the same back sector or no back on both.
 ///
+/// The comparison runs on [`Map::stored_side_sector`]' unchecked read -
+/// this pass's deliberate difference from the checked [`Map::side_sector`]
+/// the rest of the crate uses: two lines fronted by two different
+/// out-of-range sector references are still two disagreeing sides here,
+/// refused with this clear argument error, where reading both as nothing
+/// would let them match and fail deeper down as the removal engine's
+/// `Internal` refusal of the broken references.
+///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming which side disagrees.
@@ -97,14 +105,18 @@ pub(super) fn require_matching_sectors(
     first: &Linedef,
     second: &Linedef,
 ) -> Result<(), CyberError> {
-    if side_sector(map, first.front) != side_sector(map, second.front) {
+    let first_front = map.stored_side_sector(first.front);
+    let second_front = map.stored_side_sector(second.front);
+    if first_front != second_front {
         return Err(CyberError::InvalidArgument(
             "the two linedefs' front sides open onto different sectors (or one has no \
              front side): only a line whose faces match can be joined"
                 .to_owned(),
         ));
     }
-    if side_sector(map, first.back) != side_sector(map, second.back) {
+    let first_back = map.stored_side_sector(first.back);
+    let second_back = map.stored_side_sector(second.back);
+    if first_back != second_back {
         return Err(CyberError::InvalidArgument(
             "the two linedefs' back sides differ (different sectors, or one line is \
              two-sided and the other is not): close the extra side with edit_linedef \

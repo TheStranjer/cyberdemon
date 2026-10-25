@@ -43,9 +43,7 @@ use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::{Linedef, Map, Sector};
 
-use super::wall::{
-    carve_strip, choose_wall, place_rect, side_sector, strip_face_lost, strip_wall, to_pts,
-};
+use super::wall::{carve_strip, choose_wall, place_rect, strip_face_lost, strip_wall, to_pts};
 use super::{NO_TEXTURE, current_map, invalid, sector_lost, theme_skin, wall_lost};
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
@@ -356,8 +354,7 @@ enum Border {
 
 /// Classify `line` against the door sector `door`.
 fn door_border(map: &Map, line: &Linedef, door: usize) -> Border {
-    let front = side_sector(map, line.front);
-    let back = side_sector(map, line.back);
+    let (front, back) = map.line_sectors(line);
     match (front == Some(door), back == Some(door)) {
         (true, false) | (false, true) if front.is_some() && back.is_some() => Border::Opening,
         (true, false) | (false, true) => Border::Jamb,

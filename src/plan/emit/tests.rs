@@ -10,7 +10,6 @@ mod geometry;
 
 use alloc::collections::BTreeSet;
 
-use super::lines::side_sector;
 use crate::defs::definitions_for;
 use crate::error::CyberError;
 use crate::geom::{Label, Piece};
@@ -122,8 +121,9 @@ pub(super) fn emit_error(plan: &Plan) -> CyberError {
 
 /// The sectors behind both sides of `line`, `None` when one-sided.
 fn side_sectors(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
-    let front = side_sector(map, line.front?)?;
-    let back = side_sector(map, line.back?)?;
+    let (Some(front), Some(back)) = map.line_sectors(line) else {
+        return None;
+    };
     Some((front, back))
 }
 
@@ -192,10 +192,7 @@ fn point_of(map: &Map, index: usize) -> (i64, i64) {
 
 /// Whether `line` is one-sided and its front faces sector `sector`.
 pub(super) fn faces_sector(map: &Map, line: &Linedef, sector: usize) -> bool {
-    line.back.is_none()
-        && line
-            .front
-            .is_some_and(|front| side_sector(map, front) == Some(sector))
+    line.back.is_none() && map.side_sector(line.front) == Some(sector)
 }
 
 /// Sidedness and flags agree with the piece faces: void-facing pieces
@@ -242,7 +239,10 @@ pub(super) fn assert_line_orientation(emitted: &Emitted, piece: &Piece, line: &L
         .copied()
         .expect("every surviving face owns a sector");
     let front = line.front.expect("every emitted line has a front");
-    let row = side_sector(&emitted.map, front).expect("the front row exists");
+    let row = emitted
+        .map
+        .side_sector(Some(front))
+        .expect("the front row exists");
     assert_eq!(row, expected, "the front side faces the piece's region");
     let (start, stop) = if flipped {
         (piece.b, piece.a)

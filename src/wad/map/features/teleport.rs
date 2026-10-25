@@ -297,20 +297,13 @@ fn chain_remaps(first: &[Option<usize>], second: &[Option<usize>]) -> Vec<Option
         .collect()
 }
 
-/// The sector the sidedef slot `side` opens into: `None` when the side
-/// is absent, its sidedef index dangles, or that sidedef's sector
-/// dangles.
-fn owned_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sector = side.and_then(|index| map.sidedefs.get(index))?.sector;
-    map.sectors.get(sector).map(|_| sector)
-}
-
 /// Whether `line` is a square border a player can cross from outside:
 /// two-sided with `sector` on exactly one side and a resolvable sector
 /// on the other, as the [`EdgePlan`] that turns its front outwards.
 fn border_edge(map: &Map, line: usize, def: &Linedef, sector: usize) -> Option<EdgePlan> {
-    let front = owned_sector(map, def.front)?;
-    let back = owned_sector(map, def.back)?;
+    let (Some(front), Some(back)) = map.line_sectors(def) else {
+        return None;
+    };
     match (front == sector, back == sector) {
         (true, false) => Some(EdgePlan { line, flip: true }),
         (false, true) => Some(EdgePlan { line, flip: false }),
@@ -556,12 +549,6 @@ mod tests {
         }
     }
 
-    /// The sector a sidedef slot opens into.
-    fn side_sector(map: &Map, slot: Option<usize>) -> Option<usize> {
-        let index = slot?;
-        map.sidedefs.get(index).map(|sidedef| sidedef.sector)
-    }
-
     /// The linedef at `index`, named by its border role.
     fn border_line(map: &Map, index: usize) -> &Linedef {
         map.linedefs.get(index).expect("a border line")
@@ -586,12 +573,12 @@ mod tests {
             );
             assert_eq!(line.tag, action.1, "the line tag of line {index}");
             assert_eq!(
-                side_sector(map, line.front),
+                map.side_sector(line.front),
                 Some(square.1),
                 "line {index} fronts the room outside the square"
             );
             assert_eq!(
-                side_sector(map, line.back),
+                map.side_sector(line.back),
                 Some(square.0),
                 "and the square lies behind it"
             );
@@ -928,12 +915,12 @@ mod tests {
             "the line turned around with its sides"
         );
         assert_eq!(
-            side_sector(&map, line.front),
+            map.side_sector(line.front),
             Some(1_usize),
             "the room side now faces out front"
         );
         assert_eq!(
-            side_sector(&map, line.back),
+            map.side_sector(line.back),
             Some(0_usize),
             "and the square sits behind"
         );

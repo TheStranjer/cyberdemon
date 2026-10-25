@@ -255,13 +255,6 @@ pub(super) fn sidedef_of<'model>(
     })
 }
 
-/// The sector behind an optional side reference, `None` for an absent side
-/// (and, defensively, for a reference into a missing sidedef).
-pub(super) fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    side.and_then(|index| map.sidedefs.get(index))
-        .map(|sidedef| sidedef.sector)
-}
-
 /// The vector from `from` to `to` as `i64` deltas; `i32` coordinates never
 /// wrap the wider difference.
 pub(super) fn delta(from: Point, to: Point) -> (i64, i64) {

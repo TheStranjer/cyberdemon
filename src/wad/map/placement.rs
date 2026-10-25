@@ -110,12 +110,10 @@ pub const fn keeps_distance(from: End, to: End, point: End, min: i128) -> bool {
 
 /// Both endpoints of `linedef` widened to `i128`, when they resolve.
 fn segment_endpoints(map: &Map, linedef: usize) -> Option<(End, End)> {
-    let line = map.linedefs.get(linedef)?;
-    let first = map.vertices.get(line.v1)?;
-    let second = map.vertices.get(line.v2)?;
+    let ((ax, ay), (bx, by)) = map.line_endpoints(map.linedefs.get(linedef)?)?;
     Some((
-        (i128::from(first.x), i128::from(first.y)),
-        (i128::from(second.x), i128::from(second.y)),
+        (i128::from(ax), i128::from(ay)),
+        (i128::from(bx), i128::from(by)),
     ))
 }
 

@@ -88,7 +88,7 @@ pub(super) fn plan_vertices(pieces: &[Piece], source: &Source) -> Result<Plan, C
     let wanted: BTreeSet<Pt> = pieces.iter().flat_map(|piece| [piece.a, piece.b]).collect();
     let mut index: BTreeMap<Pt, usize> = BTreeMap::new();
     let mut vertices: Vec<Vertex> = Vec::new();
-    for vertex in &source.vertices {
+    for vertex in &source.map.vertices {
         let point = (i64::from(vertex.x), i64::from(vertex.y));
         if wanted.contains(&point) && !index.contains_key(&point) {
             index.insert(point, vertices.len());
@@ -143,27 +143,20 @@ pub(super) fn plan_point(plan: &Plan, point: Pt) -> Result<usize, CyberError> {
 /// The [`Linedef`] segment of `line`'s two vertices, `None` when either
 /// reference dangles.
 pub(super) fn segment_of(source: &Source, line: &Linedef) -> Option<(Pt, Pt)> {
-    let start = source.vertices.get(line.v1)?;
-    let end = source.vertices.get(line.v2)?;
+    let ((ax, ay), (bx, by)) = source.map.line_endpoints(line)?;
     Some((
-        (i64::from(start.x), i64::from(start.y)),
-        (i64::from(end.x), i64::from(end.y)),
+        (i64::from(ax), i64::from(ay)),
+        (i64::from(bx), i64::from(by)),
     ))
-}
-
-/// The sector behind an optional side reference.
-pub(super) fn side_sector(source: &Source, side: Option<usize>) -> Option<usize> {
-    side.and_then(|index| source.sidedefs.get(index))
-        .map(|row| row.sector)
 }
 
 /// One external segment per linedef, in linedef order; unresolvable
 /// lines become zero-length segments the arrangement drops, keeping the
 /// indices aligned.
 pub(super) fn external_segments(source: &Source) -> (Vec<ExternalSegment>, Vec<usize>) {
-    let mut external = Vec::with_capacity(source.linedefs.len());
+    let mut external = Vec::with_capacity(source.map.linedefs.len());
     let mut unresolved = Vec::new();
-    for (index, line) in source.linedefs.iter().enumerate() {
+    for (index, line) in source.map.linedefs.iter().enumerate() {
         if let Some((a, b)) = segment_of(source, line) {
             external.push(ExternalSegment { a, b });
         } else {

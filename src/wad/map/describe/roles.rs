@@ -4,7 +4,8 @@
 //!
 //! The helpers here answer two questions the roles and neighbours fields
 //! ask. Where does a sector's boundary lie, and which sectors sit across
-//! it ([`boundary_edges`], [`neighbour_groups`], [`side_sector`])? And what
+//! it ([`boundary_edges`], [`neighbour_groups`], with [`Map::side_sector`]
+//! for the single-side read)? And what
 //! does a line, a floor difference or a stored special state about the way
 //! through it ([`carries_flag`], [`height_via`], [`is_stair_step`],
 //! [`walk_over_exit`], [`special_roles`])? The one read that needs the
@@ -63,21 +64,12 @@ pub(super) fn boundary_edges(map: &Map, sector: usize) -> Vec<Edge> {
         .into_iter()
         .filter_map(|(index, is_front)| {
             let line = map.linedefs.get(index)?;
-            let start = map.vertices.get(line.v1)?;
-            let end = map.vertices.get(line.v2)?;
-            let from = (i64::from(start.x), i64::from(start.y));
-            let to = (i64::from(end.x), i64::from(end.y));
+            let ((sx, sy), (ex, ey)) = map.line_endpoints(line)?;
+            let from = (i64::from(sx), i64::from(sy));
+            let to = (i64::from(ex), i64::from(ey));
             Some(if is_front { (from, to) } else { (to, from) })
         })
         .collect()
-}
-
-/// The sector the sidedef `side` opens into: `None` when the side is
-/// absent, its sidedef index dangles, or that sidedef's sector index
-/// dangles.
-pub(super) fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
 }
 
 /// The neighbour sectors across `sector`'s two-sided boundary, each with
@@ -91,7 +83,7 @@ pub(super) fn neighbour_groups(map: &Map, sector: usize) -> Vec<(usize, Vec<usiz
         let across = map
             .linedefs
             .get(index)
-            .and_then(|line| side_sector(map, if is_front { line.back } else { line.front }))
+            .and_then(|line| map.side_sector(if is_front { line.back } else { line.front }))
             .filter(|other| *other != sector);
         if let Some(other) = across {
             groups.entry(other).or_default().push(index);
@@ -148,11 +140,10 @@ pub(super) fn walk_over_exit(family: FlagFamily, line: &Linedef) -> bool {
 /// The world-space middle of `line`'s span, `None` when either vertex
 /// fails to resolve.
 pub(super) fn line_midpoint(map: &Map, line: &Linedef) -> Option<Point> {
-    let start = map.vertices.get(line.v1)?;
-    let end = map.vertices.get(line.v2)?;
+    let ((sx, sy), (ex, ey)) = map.line_endpoints(line)?;
     Some((
-        midpoint(i64::from(start.x), i64::from(end.x)),
-        midpoint(i64::from(start.y), i64::from(end.y)),
+        midpoint(i64::from(sx), i64::from(ex)),
+        midpoint(i64::from(sy), i64::from(ey)),
     ))
 }
 

@@ -136,7 +136,7 @@ impl LineCtx<'_> {
     ) -> Option<(Sidedef, i32)> {
         let line = self.source?;
         let owns = |slot: Option<usize>, shift: i32| {
-            slot.and_then(|index| source.sidedefs.get(index))
+            slot.and_then(|index| source.map.sidedefs.get(index))
                 .filter(|side| side.sector == sector)
                 .cloned()
                 .map(|side| (side, shift))

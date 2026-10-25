@@ -1,14 +1,14 @@
 //! The checks topic: filters `AND`ed together, every refusal the field
 //! table, the op and value checks and the flag and role names answer with,
 //! the family-specific tables, the eager check before any element is read,
-//! the `JSON` wire shape and the plain context and side reads.
+//! the `JSON` wire shape and the plain context reads.
 
 use serde_json::json;
 
 use super::{defs, doom_ctx, field_query, filter, hexen_ctx, hits, query, refuse_all};
 use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::{room, side, solid_line, two_room_map, vertex};
-use crate::wad::map::query::{ElementKind, Op, Query, Within, run_query, side_sector};
+use crate::wad::map::query::{ElementKind, Op, Query, Within, run_query};
 use crate::wad::map::{Linedef, MapFormat};
 
 #[test]
@@ -233,23 +233,6 @@ fn context_names_things_through_the_definitions() {
     assert_eq!(ctx.thing_category(3001), "Monsters", "the table category");
     assert_eq!(ctx.thing_name(99999), "Unknown (99999)", "undefined type");
     assert_eq!(ctx.thing_category(-1), "Unknown", "negative type");
-}
-
-#[test]
-fn side_sector_reads_resolvable_sides_only() {
-    let map = two_room_map();
-    let line = map.linedefs.get(2).expect("the step line");
-    assert_eq!(side_sector(&map, line.front), Some(0), "the hall side");
-    assert_eq!(side_sector(&map, line.back), Some(1), "the room side");
-    assert_eq!(side_sector(&map, None), None, "no side, no sector");
-    let mut broken = two_room_map();
-    broken.sidedefs.get_mut(3).expect("sidedef 3").sector = 42;
-    let dangling = broken.linedefs.get(2).expect("the step line");
-    assert_eq!(
-        side_sector(&broken, dangling.back),
-        None,
-        "a sidedef pointing past the sector block resolves to nothing"
-    );
 }
 
 #[test]

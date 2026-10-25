@@ -219,12 +219,8 @@ fn is_door_line(map: &Map, line: &Linedef, connector: &[usize], rooms: &[usize])
 /// The sectors behind both sides of `line`, `None` when it is one-sided
 /// or a side index dangles.
 fn line_sides(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
-    let front = side_sector(map, line.front?)?;
-    let back = side_sector(map, line.back?)?;
+    let (Some(front), Some(back)) = map.line_sectors(line) else {
+        return None;
+    };
     Some((front, back))
-}
-
-/// The sector index of one [`Sidedef`] row, `None` when it dangles.
-pub(super) fn side_sector(map: &Map, index: usize) -> Option<usize> {
-    map.sidedefs.get(index).map(|side| side.sector)
 }

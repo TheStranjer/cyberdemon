@@ -6,9 +6,7 @@
 
 use crate::defs::Definitions;
 use crate::fixed::mul_div_round;
-use crate::render::{
-    AutomapColors, Canvas, Edge, Pt, Rgba, TopdownStyle, automap_color, side_sector,
-};
+use crate::render::{AutomapColors, Canvas, Edge, Pt, Rgba, TopdownStyle, automap_color};
 use crate::wad::map::geometry;
 use crate::wad::map::{Linedef, Map};
 
@@ -96,33 +94,28 @@ pub(super) struct Scene<'render> {
 }
 
 impl Scene<'_> {
-    /// The sector the sidedef `side` opens into, `None` for an absent or
-    /// dangling side.
-    fn side_sector(&self, side: Option<usize>) -> Option<usize> {
-        side_sector(self.map, side)
-    }
-
     /// The floor height behind sidedef `side`, `None` when unresolvable.
     pub(super) fn side_floor(&self, side: Option<usize>) -> Option<i64> {
-        self.side_sector(side)
+        self.map
+            .side_sector(side)
             .and_then(|index| self.map.sectors.get(index))
             .map(|sector| i64::from(sector.floor_height))
     }
 
     /// The ceiling height behind sidedef `side`, `None` when unresolvable.
     pub(super) fn side_ceiling(&self, side: Option<usize>) -> Option<i64> {
-        self.side_sector(side)
+        self.map
+            .side_sector(side)
             .and_then(|index| self.map.sectors.get(index))
             .map(|sector| i64::from(sector.ceiling_height))
     }
 
     /// The pixel endpoints of `line`, `None` when a vertex dangles.
     pub(super) fn line_pixels(&self, line: &Linedef) -> Option<(Pt, Pt)> {
-        let start = self.map.vertices.get(line.v1)?;
-        let end = self.map.vertices.get(line.v2)?;
+        let ((ax, ay), (bx, by)) = self.map.line_endpoints(line)?;
         Some((
-            self.view.point(i64::from(start.x), i64::from(start.y)),
-            self.view.point(i64::from(end.x), i64::from(end.y)),
+            self.view.point(i64::from(ax), i64::from(ay)),
+            self.view.point(i64::from(bx), i64::from(by)),
         ))
     }
 
@@ -143,11 +136,10 @@ impl Scene<'_> {
     /// The world `x`/`y` corners of `line`'s two vertices, `None` when a
     /// vertex dangles.
     pub(super) fn iso_endpoints(&self, line: &Linedef) -> Option<IsoPair> {
-        let start = self.map.vertices.get(line.v1)?;
-        let end = self.map.vertices.get(line.v2)?;
+        let ((ax, ay), (bx, by)) = self.map.line_endpoints(line)?;
         Some(IsoPair {
-            start: (i64::from(start.x), i64::from(start.y)),
-            end: (i64::from(end.x), i64::from(end.y)),
+            start: (i64::from(ax), i64::from(ay)),
+            end: (i64::from(bx), i64::from(by)),
         })
     }
 

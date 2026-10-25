@@ -5,7 +5,7 @@
 use serde_json::from_str;
 
 use crate::tools::features::door::{DoorPointParam, Target, target_of};
-use crate::tools::features::wall::{choose_between, side_sector};
+use crate::tools::features::wall::choose_between;
 use crate::tools::features::window::{
     AddWindowParams, BuiltWindow, WindowSkins, WindowSpec, build_window,
 };
@@ -45,7 +45,7 @@ fn window_spec(target: Target) -> WindowSpec {
 /// The sidedef index of the room-facing side of a window view line:
 /// the side that does not belong to window sector `window`.
 fn room_side_of(map: &Map, line: &Linedef, window: usize) -> usize {
-    if side_sector(map, line.front) == Some(window) {
+    if map.side_sector(line.front) == Some(window) {
         line.back.expect("the room side")
     } else {
         line.front.expect("the room side")
@@ -55,7 +55,7 @@ fn room_side_of(map: &Map, line: &Linedef, window: usize) -> usize {
 /// The sidedef index of the strip-facing side of a window view line:
 /// the side that belongs to window sector `window`.
 fn strip_side_of(map: &Map, line: &Linedef, window: usize) -> usize {
-    if side_sector(map, line.front) == Some(window) {
+    if map.side_sector(line.front) == Some(window) {
         line.front.expect("the strip side")
     } else {
         line.back.expect("the strip side")

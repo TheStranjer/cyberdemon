@@ -31,11 +31,11 @@ use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily, PLAYER_USE_BITS};
-use crate::wad::map::model::{Linedef, Map, Vertex};
+use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::{self, Point};
 
 use super::doors::{DoorLineSetup, USE_REPEAT, next_free_tag};
-use super::place::{VertexPair, door_segment, project_onto_line};
+use super::place::{VertexPair, door_segment, endpoints, project_onto_line};
 
 /// What a switch is meant to do when the player uses it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,30 +205,6 @@ fn out_of_range(kind: &str, index: usize, count: usize) -> CyberError {
     ))
 }
 
-/// The two endpoint coordinates of linedef `index`, when both vertices
-/// resolve.
-fn line_ends(map: &Map, index: usize) -> Option<(Point, Point)> {
-    let line = map.linedefs.get(index)?;
-    let start = map.vertices.get(line.v1)?;
-    let finish = map.vertices.get(line.v2)?;
-    Some((point_of(start), point_of(finish)))
-}
-
-/// A [`Point`] at a [`Vertex`]'s coordinates.
-const fn point_of(vertex: &Vertex) -> Point {
-    Point {
-        x: vertex.x,
-        y: vertex.y,
-    }
-}
-
-/// The sector the sidedef `slot` opens into, when sidedef and sector
-/// both resolve.
-fn side_sector(map: &Map, slot: Option<usize>) -> Option<usize> {
-    let sector = slot.and_then(|index| map.sidedefs.get(index))?.sector;
-    map.sectors.get(sector).map(|_| sector)
-}
-
 /// Everything [`build_switch`] needs once the wire parameters resolved.
 #[derive(Debug)]
 pub struct SwitchSpec {
@@ -262,7 +238,7 @@ pub fn switch_span(map: &Map, index: usize) -> Result<(Point, Point), CyberError
     if index >= count {
         return Err(out_of_range("linedef", index, count));
     }
-    line_ends(map, index).ok_or_else(|| {
+    endpoints(map, index).ok_or_else(|| {
         invalid(&format!(
             "switch linedef {index} references a vertex the map does not hold: resolve \
              its endpoints first"
@@ -493,8 +469,7 @@ pub const fn walk_over_special(family: FlagFamily, secret: bool) -> i32 {
 /// Whether `line` is two-sided (both sides resolving to sectors) with
 /// `sector` opening on either of them.
 fn sector_boundary(map: &Map, line: &Linedef, sector: usize) -> bool {
-    let front = side_sector(map, line.front);
-    let back = side_sector(map, line.back);
+    let (front, back) = map.line_sectors(line);
     front.is_some() && back.is_some() && (front == Some(sector) || back == Some(sector))
 }
 

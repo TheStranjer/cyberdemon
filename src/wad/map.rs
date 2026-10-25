@@ -110,7 +110,7 @@ mod common;
 pub use crate::wad::classify::MapFormat;
 pub use blockmap::Blockmap;
 pub use flags::{FlagFamily, FlagKind, Skill};
-pub use model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
+pub use model::{Endpoints, Linedef, Map, Sector, Sidedef, Thing, Vertex};
 pub use nodes::{
     BoundingBox, Child, Node, NodeSet, NodesFormat, Seg, Subsector, lump_format,
     parse_extended_nodes, parse_vanilla_nodes,

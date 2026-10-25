@@ -12,6 +12,8 @@ use crate::wad::map::Sector;
 use crate::wad::map::common::fixtures::vertex;
 use crate::wad::map::ops::{OFFSET_MIN, find_vertex, join_linedefs, split_linedef};
 
+use crate::wad::map::ops::join::require_matching_sectors;
+
 use super::{code, join_fixture, line, point, side, split_fixture};
 
 #[test]
@@ -135,6 +137,30 @@ fn join_refuses_sides_that_open_onto_different_sectors() {
         back.to_string().contains("back sides"),
         "the message names the side: {back}"
     );
+}
+
+#[test]
+fn join_reads_dangling_sector_references_as_the_broken_indices_they_are() {
+    // The ops pass compares sides through `Map::stored_side_sector`,
+    // unchecked on purpose: two different out-of-range sector indices
+    // still disagree, and the same out-of-range index on both lines
+    // still matches. Reading both as nothing instead would let them
+    // agree and fail deeper down as the removal engine's `Internal`.
+    let mut map = join_fixture(MapFormat::Doom);
+    map.sidedefs.get_mut(0).expect("the head's front").sector = 98;
+    map.sidedefs.get_mut(1).expect("the tail's front").sector = 99;
+    let error = join_linedefs(&mut map, 0, 1, false)
+        .expect_err("two dangling fronts are different sectors");
+    assert_eq!(code(&error), "invalid_argument", "front sector code");
+    assert!(
+        error.to_string().contains("front sides"),
+        "the message names the side: {error}"
+    );
+    map.sidedefs.get_mut(1).expect("the tail's front").sector = 98;
+    let first = map.linedefs.first().expect("the head line");
+    let second = map.linedefs.get(1).expect("the tail line");
+    require_matching_sectors(&map, first, second)
+        .expect("the same dangling index on both fronts matches");
 }
 
 #[test]

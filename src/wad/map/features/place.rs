@@ -39,7 +39,7 @@ use crate::error::CyberError;
 use crate::fixed::hypot;
 use crate::geom::Pt;
 use crate::geom::segment::{Delta, cross, delta, dot, round_quotient};
-use crate::wad::map::model::{Linedef, Map, Vertex};
+use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::Point;
 
 /// A pair of endpoint coordinates, `(start, end)`.
@@ -95,8 +95,7 @@ pub fn longest_boundary(map: &Map, a: usize, b: usize) -> Option<Vec<usize>> {
 /// Whether `line` is two-sided between sectors `first` and `second`,
 /// either way around.
 fn joins_sectors(map: &Map, line: &Linedef, first: usize, second: usize) -> bool {
-    let (Some(front), Some(back)) = (side_sector(map, line.front), side_sector(map, line.back))
-    else {
+    let (Some(front), Some(back)) = map.line_sectors(line) else {
         return false;
     };
     (front == first && back == second) || (front == second && back == first)
@@ -136,19 +135,16 @@ pub fn nearest_boundary(map: &Map, a: usize, b: usize, at: Point) -> Option<usiz
 
 /// The two endpoint coordinates of linedef `index`, when both vertices
 /// resolve.
-fn endpoints(map: &Map, index: usize) -> Option<(Point, Point)> {
-    let line = map.linedefs.get(index)?;
-    let start = map.vertices.get(line.v1)?;
-    let finish = map.vertices.get(line.v2)?;
-    Some((point_of(start), point_of(finish)))
+#[must_use]
+#[inline]
+pub fn endpoints(map: &Map, index: usize) -> Option<VertexPair> {
+    let ((ax, ay), (bx, by)) = map.line_endpoints(map.linedefs.get(index)?)?;
+    Some((point_at(ax, ay), point_at(bx, by)))
 }
 
-/// A [`Point`] at a [`Vertex`]'s coordinates.
-const fn point_of(vertex: &Vertex) -> Point {
-    Point {
-        x: vertex.x,
-        y: vertex.y,
-    }
+/// A [`Point`] at map-unit coordinates.
+const fn point_at(x: i32, y: i32) -> Point {
+    Point { x, y }
 }
 
 /// A [`Point`] widened to the exact-arithmetic grid.
@@ -159,13 +155,6 @@ fn wide(point: Point) -> Pt {
 /// An exact [`Delta`] from [`Point`] axes.
 fn vector(point: Point) -> Delta {
     (i128::from(point.x), i128::from(point.y))
-}
-
-/// The sector the sidedef `side` opens into: `None` when the side is
-/// absent, its sidedef index dangles, or that sidedef's sector dangles.
-fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
 }
 
 /// The squared distance from `at` to segment `from`-`to` as an exact

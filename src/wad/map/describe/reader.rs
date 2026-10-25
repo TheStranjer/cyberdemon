@@ -32,7 +32,7 @@ use crate::wad::map::playability::{
 
 use super::roles::{
     boundary_edges, carries_flag, height_via, is_stair_step, line_midpoint, neighbour_groups,
-    side_sector, special_roles, walk_over_exit,
+    special_roles, walk_over_exit,
 };
 use super::shape::{label_point, shoelace_area};
 use super::tally::{
@@ -215,8 +215,8 @@ impl<'map> Describe<'map> {
     /// Whether `line` resolves to `sector` on either side, or is a
     /// walk-over end whose midpoint stands in `sector`.
     fn exit_side_or_sweep(&self, line: &Linedef, sector: usize) -> bool {
-        side_sector(self.map, line.front) == Some(sector)
-            || side_sector(self.map, line.back) == Some(sector)
+        self.map.side_sector(line.front) == Some(sector)
+            || self.map.side_sector(line.back) == Some(sector)
             || (walk_over_exit(self.family, line)
                 && line_midpoint(self.map, line)
                     .is_some_and(|(x, y)| point_in_sector(self.map, x, y) == Some(sector)))

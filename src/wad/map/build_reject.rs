@@ -173,16 +173,10 @@ fn components(map: &Map, sectors: usize) -> Vec<usize> {
 /// The two sectors `line` joins: present on both sides, resolving, and
 /// different.
 fn joined_pair(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
-    let front = side_sector(map, line.front)?;
-    let back = side_sector(map, line.back)?;
+    let (Some(front), Some(back)) = map.line_sectors(line) else {
+        return None;
+    };
     (front != back).then_some((front, back))
-}
-
-/// The sector the sidedef `side` opens into, when the side exists, its
-/// sidedef resolves and that sidedef's sector index is in range.
-fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
-    let sidedef = side.and_then(|index| map.sidedefs.get(index))?;
-    map.sectors.get(sidedef.sector).map(|_| sidedef.sector)
 }
 
 /// The root of `node`'s component. The trees stay shallow because

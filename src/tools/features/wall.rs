@@ -14,7 +14,7 @@ use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::geom::segment::{Delta, round_quotient};
 use crate::wad::map::features::{
-    DoorWall, door_rect, door_wall, longest_boundary, nearest_boundary, outward_depth,
+    DoorWall, door_rect, door_wall, endpoints, longest_boundary, nearest_boundary, outward_depth,
     project_onto_line, void_strip,
 };
 use crate::wad::map::geometry::{linedef_length, point_in_sector};
@@ -35,34 +35,9 @@ const CENTROID_DIVISOR: i128 = 4_i128;
 /// Divisor of the two-endpoint sum that gives a midpoint coordinate.
 const MIDPOINT_DIVISOR: i128 = 2_i128;
 
-/// The sector the sidedef `slot` opens into, when sidedef and sector
-/// both resolve.
-pub(super) fn side_sector(map: &Map, slot: Option<usize>) -> Option<usize> {
-    let sector = slot.and_then(|index| map.sidedefs.get(index))?.sector;
-    map.sectors.get(sector).map(|_| sector)
-}
-
-/// The two endpoint coordinates of linedef `index`, when both vertices
-/// resolve.
-fn line_ends(map: &Map, index: usize) -> Option<(Point, Point)> {
-    let line = map.linedefs.get(index)?;
-    let start = map.vertices.get(line.v1)?;
-    let finish = map.vertices.get(line.v2)?;
-    Some((
-        Point {
-            x: start.x,
-            y: start.y,
-        },
-        Point {
-            x: finish.x,
-            y: finish.y,
-        },
-    ))
-}
-
 /// The `v1` to `v2` vector of linedef `index` as an exact `i128` delta.
 fn wall_run(map: &Map, index: usize) -> Option<Delta> {
-    let (from, to) = line_ends(map, index)?;
+    let (from, to) = endpoints(map, index)?;
     Some((
         i128::from(to.x).saturating_sub(i128::from(from.x)),
         i128::from(to.y).saturating_sub(i128::from(from.y)),
@@ -108,7 +83,7 @@ pub(super) fn centroid(points: &[Point]) -> Point {
 /// The squared distance from `from` to the midpoint of linedef `index`,
 /// `None` when its vertices do not resolve.
 fn mid_distance_sq(map: &Map, index: usize, from: Point) -> Option<i128> {
-    let (a, b) = line_ends(map, index)?;
+    let (a, b) = endpoints(map, index)?;
     let dx = i128::from(half_axis(a.x, b.x)).saturating_sub(i128::from(from.x));
     let dy = i128::from(half_axis(a.y, b.y)).saturating_sub(i128::from(from.y));
     Some(dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)))
@@ -117,7 +92,8 @@ fn mid_distance_sq(map: &Map, index: usize, from: Point) -> Option<i128> {
 /// Whether the line's front faces `room` and nothing sits behind it: a
 /// one-sided wall of that room.
 fn room_face(map: &Map, line: &Linedef, room: usize) -> bool {
-    side_sector(map, line.front) == Some(room) && side_sector(map, line.back).is_none()
+    let (front, back) = map.line_sectors(line);
+    front == Some(room) && back.is_none()
 }
 
 /// The door wall for `between` sectors: their shared boundary's nearest
@@ -188,7 +164,7 @@ pub(super) fn choose_linedef(
     let Some(def) = map.linedefs.get(line) else {
         return Err(out_of_range("linedef", line, map.linedefs.len()));
     };
-    match (side_sector(map, def.front), side_sector(map, def.back)) {
+    match map.line_sectors(def) {
         (Some(a), Some(b)) if a != b => Ok(Chosen {
             room_a: a,
             room_b: b,

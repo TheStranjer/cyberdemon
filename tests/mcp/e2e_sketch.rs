@@ -43,7 +43,10 @@
 //! the ruled photo fixture, proving the hairline-cleaning chain turns a
 //! photograph's uneven light into one clean binarized sheet - walls kept
 //! pixel-for-pixel, ruling dropped, and the shadowed top of the room
-//! classing exactly like the lit bottom of it.
+//! classing exactly like the lit bottom of it. Over that, one wire proof:
+//! `process_image` over the sheet's `PNG` file reports both ops step by
+//! step and its published asset, fetched back over `HTTP`, is the same
+//! clean sheet through the `PNG` encode/decode round trip.
 
 #[cfg(test)]
 mod tests {
@@ -1871,5 +1874,127 @@ mod tests {
             assert_frame_rows_are_paper(image, band);
             assert_frame_columns_are_paper(image, band);
         }
+    }
+
+    // The wire proof: the same cleaning chain run through `process_image`,
+    // read off the tool's JSON report and off the published PNG fetched
+    // over HTTP, including the encode/decode round trip.
+
+    /// The `process_image` request over `source`: the photo cleaning chain
+    /// as wire parameters, the same `radius` and `offset` [`photo_chain`]
+    /// runs at library level. `quantize: false` keeps the proof free of a
+    /// session — the quantized preview is the one thing that wants a
+    /// `PLAYPAL` — and the chain's report and its full `RGBA`
+    /// `processed` picture are what this test reads.
+    fn photo_chain_request(source: &str) -> Value {
+        json!({
+            "source": source,
+            "ops": [
+                { "op": "adaptive_threshold", "radius": 6_u64, "offset": 10_u64 },
+                { "op": "thin_stroke_filter", "radius": 1_u64 },
+            ],
+            "quantize": false,
+        })
+    }
+
+    /// The first wire step: the local binarizer echoes its `radius` and
+    /// `offset`, picks no global level, inks the sheet, and its flattened
+    /// background's extremes prove the local-means window really ran over
+    /// the fixture's gradient. Returns the step's ink count.
+    fn assert_photo_chain_flatten_step(step: &Value) -> u64 {
+        assert_eq!(
+            step["op"],
+            json!("adaptive_threshold"),
+            "the first op echoes"
+        );
+        assert_eq!(step["radius"], json!(6_u64), "the asked radius echoes");
+        assert_eq!(step["offset"], json!(10_u64), "and the asked offset");
+        assert_eq!(
+            step["otsu"],
+            json!(false),
+            "the binarizer picks no global level"
+        );
+        let ink = step["ink_pixels"].as_u64().expect("an ink count");
+        assert!(ink > 0_u64, "the binarizer inks the sheet: {ink} pixels");
+        let darkest = step["background_min"].as_u64().expect("a floor");
+        let lightest = step["background_max"].as_u64().expect("a ceiling");
+        assert!(
+            lightest > darkest,
+            "the flattened background really is uneven: {darkest} to {lightest}",
+        );
+        ink
+    }
+
+    /// The second wire step: the opening echoes its `radius`, thresholds on
+    /// `Otsu`'s reported level, drops many times more ink than it keeps, and
+    /// splits the binarizer's ink exactly between what it dropped and what
+    /// it kept.
+    fn assert_photo_chain_opening_step(step: &Value, ink: u64) {
+        assert_eq!(step["op"], json!("thin_stroke_filter"), "the second op");
+        assert_eq!(step["radius"], json!(1_u64), "the asked radius echoes");
+        assert_eq!(
+            step["otsu"],
+            json!(true),
+            "the opening thresholds on Otsu's level"
+        );
+        assert!(step["level"].is_number(), "the used level reports: {step}");
+        let kept = step["kept_ink_pixels"].as_u64().expect("a kept count");
+        let removed = step["removed_ink_pixels"]
+            .as_u64()
+            .expect("a removed count");
+        assert!(
+            removed > kept.saturating_mul(5_u64),
+            "the ruling outweighs the walls five times over: \
+             {removed} dropped against {kept} kept",
+        );
+        assert_eq!(
+            removed.saturating_add(kept),
+            ink,
+            "the opening only splits the ink the binarizer painted",
+        );
+    }
+
+    /// The wire report's two steps, one per op, in order.
+    fn assert_photo_chain_steps(report: &Value) {
+        let steps = report["steps"].as_array().expect("a step list");
+        assert_eq!(steps.len(), 2_usize, "one entry per op");
+        let ink = assert_photo_chain_flatten_step(&steps[0]);
+        assert_photo_chain_opening_step(&steps[1], ink);
+    }
+
+    /// The uneven-light regression through the whole wire path: over the
+    /// ruled photo written to a file, `process_image` reports both cleaning
+    /// steps, publishes a full-size `PNG` that `HTTP` serves back intact,
+    /// and the fetched picture keeps every wall centrelined pixel in clean
+    /// black, returns every sampled ruling pixel as clean paper, classes
+    /// the shadowed band over the top wall exactly like the lit band over
+    /// the bottom one, and stays free of ink near the frame — including
+    /// through the `PNG` encode/decode round trip.
+    #[tokio::test]
+    async fn photo_chain_reports_both_ops_and_publishes_a_clean_png() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = connect().await;
+        let sheet = ruled_photo_sheet(SHEET_WIDTH, SHEET_HEIGHT);
+        let file = write_png(dir.path(), "PHOTO.png", &sheet);
+        let report = call(&client, "process_image", photo_chain_request(&file)).await;
+        assert_eq!(report["width"], json!(600_u64), "the sheet's width stands");
+        assert_eq!(report["height"], json!(400_u64), "and its height");
+        assert_photo_chain_steps(&report);
+        let url = report["processed"]["url"]
+            .as_str()
+            .expect("a processed url");
+        let clean = asset_png(url).await;
+        assert_eq!(
+            clean.width, SHEET_WIDTH,
+            "the published PNG decodes at the asked width"
+        );
+        assert_eq!(
+            clean.height, SHEET_HEIGHT,
+            "and at the asked height, unchanged"
+        );
+        assert_the_walls_stand(&clean);
+        assert_the_ruling_is_gone(&clean);
+        assert_the_light_is_even(&clean);
+        assert_the_frame_is_paper(&clean);
     }
 }

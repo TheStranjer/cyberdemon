@@ -48,6 +48,13 @@ starts from the same fields):
 `mp3`, `doom_sound`, `pc_speaker`, `flat`, `sprite`, `patch`, `text`,
 `empty`, `unknown`.
 
+Inside `flats`, `sprites` and `patches` the namespace hint wins over a
+guessed payload: only an unmistakable container signature (`png`, `jpeg`,
+`gif`, `wav`, `ogg`, `flac`, `midi`, `mus`, or an `mp3` starting with its
+`ID3` tag) overrides it. The three tests raw indexed pixels satisfy by
+accident — a bare `mp3` frame sync, a `doom_sound` header, a `pc_speaker`
+zero word — are consulted only outside those three regions.
+
 ### `namespace` values
 
 `sprites`, `flats`, `patches`, `colormaps`, `acs`, `voices`, `hires`,

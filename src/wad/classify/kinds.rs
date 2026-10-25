@@ -1,7 +1,9 @@
 //! The type hint for one lump: [`classify`]'s order of checks — markers
 //! first, then map membership, then well-known names, then the `colormaps`
 //! namespace, then payload magics — and [`fallback_kind`]'s last resorts of
-//! patch headers, printable `ASCII` and emptiness.
+//! patch headers, printable `ASCII` and emptiness. Inside the graphics
+//! namespaces only the unmistakable magics are consulted: the weak sound
+//! tests match raw indexed pixels too often to be trusted there.
 //!
 //! [`is_doom_patch`] is the standalone `PNAMES`/patch header check the
 //! graphics tools reuse, re-exported from the root. [`super::analyze`]
@@ -43,7 +45,7 @@ pub(super) fn classify(
     if namespace == Some(Namespace::Colormaps) {
         return LumpKind::Colormap;
     }
-    if let Some(kind) = kind_by_magic(lump.name, &lump.data) {
+    if let Some(kind) = kind_by_magic(lump.name, &lump.data, namespace) {
         return kind;
     }
     fallback_kind(lump, namespace)
@@ -70,11 +72,11 @@ const fn kind_by_name(name: LumpName, size: usize) -> Option<LumpKind> {
 }
 
 /// The kind implied by the payload's leading bytes, checked image-first
-/// then audio then `Doom` sound formats.
-fn kind_by_magic(name: LumpName, data: &[u8]) -> Option<LumpKind> {
+/// then audio then, outside a graphics namespace, the weak sound formats.
+fn kind_by_magic(name: LumpName, data: &[u8], namespace: Option<Namespace>) -> Option<LumpKind> {
     image_magic(data)
         .or_else(|| audio_magic(data))
-        .or_else(|| sound_magic(name, data))
+        .or_else(|| sound_magic(name, data, namespace))
 }
 
 /// The image container magics.
@@ -102,16 +104,23 @@ fn audio_magic(data: &[u8]) -> Option<LumpKind> {
         Some(LumpKind::Ogg)
     } else if data.starts_with(b"fLaC") {
         Some(LumpKind::Flac)
-    } else if is_mp3(data) {
+    } else if data.starts_with(b"ID3") {
         Some(LumpKind::Mp3)
     } else {
         None
     }
 }
 
-/// The `DMX` `DS` sound and `DP` PC speaker formats.
-fn sound_magic(name: LumpName, data: &[u8]) -> Option<LumpKind> {
-    if is_doom_sound(data) {
+/// The bare `MPEG` frame sync and the `DMX` `DS` sound and `DP` PC speaker
+/// formats: three tests a run of indexed pixels satisfies by accident, so
+/// they are skipped wherever [`kind_by_namespace`] already names the payload.
+fn sound_magic(name: LumpName, data: &[u8], namespace: Option<Namespace>) -> Option<LumpKind> {
+    if kind_by_namespace(namespace).is_some() {
+        return None;
+    }
+    if is_mp3_frame(data) {
+        Some(LumpKind::Mp3)
+    } else if is_doom_sound(data) {
         Some(LumpKind::DoomSound)
     } else if is_pc_speaker(name, data) {
         Some(LumpKind::PcSpeaker)
@@ -125,11 +134,8 @@ fn is_wav(data: &[u8]) -> bool {
     data.starts_with(b"RIFF") && data.get(8_usize..12).is_some_and(|tag| tag == b"WAVE")
 }
 
-/// Whether `data` starts with an `ID3` tag or an `MPEG` frame sync word.
-fn is_mp3(data: &[u8]) -> bool {
-    if data.starts_with(b"ID3") {
-        return true;
-    }
+/// Whether `data` starts with an `MPEG` frame sync word.
+fn is_mp3_frame(data: &[u8]) -> bool {
     match (data.first(), data.get(1_usize)) {
         (Some(&first), Some(&second)) => first == 0xFF_u8 && second >= 0xE0_u8,
         _ => false,

@@ -116,10 +116,19 @@ fn a_second_gl_build_replaces_the_block_and_undo_removes_it() {
 
 #[test]
 fn a_long_map_name_marks_the_gl_run_gl_level() {
-    let names = gl_lump_names(name("CUSTOMMA")).expect("eight-char names parse");
-    assert_eq!(names[0].to_string(), "GL_LEVEL", "the fallback marker");
-    let short = gl_lump_names(name("E1M1")).expect("episode names fit");
+    let names = gl_lump_names(name("CUSTOMMA"));
+    assert_eq!(
+        names[0].to_string(),
+        "GL_LEVEL",
+        "the shared fallback marker"
+    );
+    let short = gl_lump_names(name("E1M1"));
     assert_eq!(short[0].to_string(), "GL_E1M1", "embedded when it fits");
+    assert_eq!(
+        names[1..],
+        short[1..],
+        "the five record lumps do not care about the map name",
+    );
 }
 
 #[test]

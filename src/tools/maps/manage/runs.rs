@@ -80,6 +80,8 @@ pub(in crate::tools::maps) struct CopyReport {
     to: LumpName,
     /// Lumps appended (header and members, the kept GL run included).
     lumps: usize,
+    /// Non-fatal notices: what the copy dropped, with the fix.
+    warnings: Vec<String>,
 }
 
 /// Runs one `copy_map`: resolve the source block in its scope and append
@@ -98,7 +100,8 @@ pub(in crate::tools::maps) fn copy_run(
     let block = dir
         .find_block(plan.from)
         .ok_or_else(|| common::missing_map(plan.from, plan.scope))?;
-    let copies = copied_block(&dir, block, plan.to);
+    let mut warnings = Vec::new();
+    let copies = copied_block(&dir, block, plan.to, &mut warnings);
     let count = copies.len();
     let label = format!("copy_map {} -> {}", plan.from, plan.to);
     let to = plan.to;
@@ -119,6 +122,7 @@ pub(in crate::tools::maps) fn copy_run(
         from: plan.from,
         to: plan.to,
         lumps: count,
+        warnings,
     })
 }
 
@@ -129,6 +133,8 @@ pub(in crate::tools::maps) struct RenameReport {
     pub(super) from: LumpName,
     /// The name it has now.
     pub(super) to: LumpName,
+    /// Non-fatal notices: what the rename dropped, with the fix.
+    pub(super) warnings: Vec<String>,
 }
 
 /// Runs one `rename_map`: rename the working block in place, then move the
@@ -150,11 +156,12 @@ pub(in crate::tools::maps) fn rename_run(
         )));
     }
     let label = format!("rename_map {from} -> {to}");
-    session.edit(&label, |wad| apply_rename(wad, from, to))?;
+    let mut warnings = Vec::new();
+    session.edit(&label, |wad| apply_rename(wad, from, to, &mut warnings))?;
     if session.active_map() == Some(from) {
         session.set_active_map(Some(to));
     }
-    Ok(RenameReport { from, to })
+    Ok(RenameReport { from, to, warnings })
 }
 
 /// Structured result of [`crate::server::Cyberdemon::remove_map`].

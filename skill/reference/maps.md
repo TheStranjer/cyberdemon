@@ -22,7 +22,8 @@ The members present decide the format:
   the block may carry `BEHAVIOR` and `ZNODES` members.
 
 Optionally a **GL node block** sits right after the map: a header named
-`GL_<mapname>` (or `GL_LEVEL`) with `GL_VERT`, `GL_SEGS`, `GL_SSECT`,
+`GL_<mapname>` (or `GL_LEVEL` when the map name is longer than 5 characters
+and no longer fits) with `GL_VERT`, `GL_SEGS`, `GL_SSECT`,
 `GL_NODES` and `GL_PVS`. A block "has nodes" when its `NODES` lump carries
 bytes or a `ZNODES` lump is present; tools that rebuild nodes overwrite
 them. The merged view applies last-archive-wins to whole map blocks: a
@@ -274,11 +275,15 @@ outside the history: `create_map` adopts it when none was set,
 - Arguments: `from`, `to` (both required), `scope` (source archive:
   `"merged"` default, `"working"`, `"layer:N"`) and `replace` (default
   `false`).
-- Returns: `{"from", "to", "lumps"}` — `lumps` counts what was appended
-  (header, members, kept `GL` run). The `GL` marker is renamed
-  `GL_<from>` → `GL_<to>`; a `GL_LEVEL` marker stays as-is (it attaches
-  to the copied block above it); a `GL` run whose new marker would not
-  fit eight bytes (`to` longer than 5 characters) is dropped.
+- Returns: `{"from", "to", "lumps", "warnings"}` — `lumps` counts what was
+  appended (header, members and the `GL` run, which always comes along).
+  The marker is re-named with the block: `GL_<to>` when the new name fits
+  (at most 5 characters), `GL_LEVEL` when it does not — the run is
+  appended right after the copied block, which is what a `GL_LEVEL`
+  marker attaches to. A pre-existing `GL_LEVEL` marker follows the same
+  rule. `warnings` names anything the copy still dropped (its node data
+  unreadable in the source) and how to rebuild it; an empty list means
+  nothing was lost.
 - Errors: `not_found` (`from` missing from the scope), `already_exists`
   (`to` in the working archive without `replace`), `invalid_argument`
   (unparsable names or scope).
@@ -288,10 +293,15 @@ outside the history: `create_map` adopts it when none was set,
 - Purpose: rename a working-archive block in place, header and `GL`
   marker together.
 - Arguments: `from`, `to` (both required).
-- Returns: `{"from", "to"}`. A `GL_<from>` marker follows the new name
-  (or its run is dropped when the new marker would not fit eight bytes);
-  a `GL_LEVEL` marker needs no rename and stays. When the active map
-  pointed at `from` it now points at `to`.
+- Returns: `{"from", "to", "warnings"}`. The `GL` run follows the rename
+  and keeps its bytes: the marker is re-named to `GL_<to>` when that
+  fits (at most 5 characters), or to `GL_LEVEL` when it does not — the
+  fallback attaches to the block right above the run, and a rename never
+  moves either, so it stays attached to the renamed block. Only a named
+  `GL_<from>` run that does **not** sit right after its block cannot
+  carry a too-long name this way; that run is dropped and `warnings`
+  says so and names `build_nodes` variant `gl` as the fix. When the
+  active map pointed at `from` it now points at `to`.
 - Errors: `not_found` (`from` is not a working block — the layers are
   read-only, the message says to use `copy_map`), `already_exists` (`to`
   is already a working block), `invalid_argument` (`from` equals `to`, or

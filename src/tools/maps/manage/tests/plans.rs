@@ -1,16 +1,16 @@
 //! Tests for the management machinery's pure half in [`super::super`]:
-//! the format, namespace, name and plan validators, the `GL` marker plan,
+//! the format, namespace, name and plan validators, the `GL` run copies,
 //! the empty-block encoder, the copied block and the doomed positions.
 
 use super::super::{
-    GlPlan, copied_block, doomed_positions, empty_block, gl_marker, gl_plan, is_loadable_name,
-    name_warning, plan_copy, plan_create,
+    copied_block, doomed_positions, empty_block, gl_copies, is_loadable_name, name_warning,
+    plan_copy, plan_create,
 };
 use super::{
     base_session, carrying, code, copy_args, copy_plan, create_args, layer_map, marker, name,
 };
 use crate::session::Scope;
-use crate::tools::maps::common::directory;
+use crate::tools::maps::common::{Directory, directory};
 use crate::tools::maps::{parse_format, resolve_namespace};
 use crate::wad::classify::{MapFormat, analyze};
 
@@ -80,19 +80,42 @@ fn odd_names_warn_with_the_engine_rule() {
 }
 
 #[test]
-fn gl_markers_fit_short_names_only() {
+fn gl_copies_rename_the_head_and_warn_when_the_marker_is_gone() {
+    let session = base_session(layer_map());
+    let dir = directory(&session, Scope::Merged).expect("the view reads");
+    let mut warnings = Vec::new();
+    let copies = gl_copies(&dir, (4, 6), name("MAP09"), &mut warnings);
+    let names: Vec<String> = copies.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
-        gl_marker(name("MAP07")).expect("five fit"),
-        name("GL_MAP07")
+        names,
+        vec!["GL_MAP09", "GL_VERT"],
+        "the head follows the name"
     );
-    assert_eq!(gl_marker(name("E1M1")).expect("four fit"), name("GL_E1M1"));
-    assert_eq!(gl_marker(name("LONGNAME")), None, "GL_ plus eight is over");
+    assert!(warnings.is_empty(), "nothing was dropped: {warnings:?}");
+    let long = gl_copies(&dir, (4, 6), name("LONGMAP"), &mut warnings);
+    let long_names: Vec<String> = long.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
-        gl_plan(name("GL_MAP01"), name("MAP09")),
-        GlPlan::Rename(name("GL_MAP09"))
+        long_names,
+        vec!["GL_LEVEL", "GL_VERT"],
+        "the shared fallback"
     );
-    assert_eq!(gl_plan(name("GL_LEVEL"), name("MAP09")), GlPlan::Keep);
-    assert_eq!(gl_plan(name("GL_MAP01"), name("LONGNAME")), GlPlan::Drop);
+    assert!(
+        warnings.is_empty(),
+        "a fallback is not a drop: {warnings:?}"
+    );
+    let stale = Directory {
+        entries: Vec::new(),
+        lumps: Vec::new(),
+        analysis: analyze(&[]),
+    };
+    let dropped = gl_copies(&stale, (2, 5), name("LONGMAP"), &mut warnings);
+    assert!(dropped.is_empty(), "there was nothing to copy");
+    assert_eq!(warnings.len(), 1, "the drop is reported: {warnings:?}");
+    assert!(
+        warnings[0].contains("2..5") && warnings[0].contains("build_nodes"),
+        "the warning names the run and the fix: {}",
+        warnings[0],
+    );
 }
 
 #[test]
@@ -144,7 +167,8 @@ fn a_copied_block_renames_header_and_gl_marker() {
         .find_block(name("MAP01"))
         .expect("the layer map")
         .clone();
-    let copies = copied_block(&dir, &block, name("MAP09"));
+    let mut warnings = Vec::new();
+    let copies = copied_block(&dir, &block, name("MAP09"), &mut warnings);
     let names: Vec<String> = copies.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
         names,
@@ -153,17 +177,18 @@ fn a_copied_block_renames_header_and_gl_marker() {
     );
     let things = copies.get(1).expect("THINGS").data.as_ref().to_vec();
     assert_eq!(String::from_utf8(things).expect("text payload"), "things");
-    let dropped = copied_block(&dir, &block, name("LONGNAME"));
-    let dropped_names: Vec<String> = dropped.iter().map(|lump| lump.name.to_string()).collect();
+    let long = copied_block(&dir, &block, name("LONGNAME"), &mut warnings);
+    let long_names: Vec<String> = long.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
-        dropped_names,
-        vec!["LONGNAME", "THINGS", "LINEDEFS"],
-        "the GL run goes when the marker would not fit",
+        long_names,
+        vec!["LONGNAME", "THINGS", "LINEDEFS", "GL_LEVEL", "GL_VERT"],
+        "the run comes along under the shared fallback marker",
     );
+    assert!(warnings.is_empty(), "nothing was dropped: {warnings:?}");
 }
 
 #[test]
-fn a_copied_gl_level_marker_stays_gl_level() {
+fn a_copied_gl_level_marker_follows_the_target_name() {
     let session = base_session(vec![
         marker("E1M1"),
         carrying("THINGS", "t"),
@@ -172,13 +197,22 @@ fn a_copied_gl_level_marker_stays_gl_level() {
     ]);
     let dir = directory(&session, Scope::Merged).expect("the view reads");
     let block = dir.find_block(name("E1M1")).expect("the block").clone();
-    let copies = copied_block(&dir, &block, name("E2M1"));
+    let mut warnings = Vec::new();
+    let copies = copied_block(&dir, &block, name("E2M1"), &mut warnings);
     let names: Vec<String> = copies.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
         names,
-        vec!["E2M1", "THINGS", "GL_LEVEL", "GL_VERT"],
-        "GL_LEVEL keeps its name and attaches to the copy above it",
+        vec!["E2M1", "THINGS", "GL_E2M1", "GL_VERT"],
+        "a fitting name is embedded, so the copy attaches by name",
     );
+    let long = copied_block(&dir, &block, name("E2M12345"), &mut warnings);
+    let long_names: Vec<String> = long.iter().map(|lump| lump.name.to_string()).collect();
+    assert_eq!(
+        long_names,
+        vec!["E2M12345", "THINGS", "GL_LEVEL", "GL_VERT"],
+        "GL_LEVEL stays GL_LEVEL and attaches to the copy above it",
+    );
+    assert!(warnings.is_empty(), "nothing was dropped: {warnings:?}");
 }
 
 #[test]

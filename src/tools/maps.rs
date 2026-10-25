@@ -641,7 +641,7 @@ impl Cyberdemon {
 
     /// Copies a scope's map block into the working archive under a new name.
     #[tool(
-        description = "Copies a whole map block (and its GL node run) from any scope into the working archive under a new header name as one undoable edit; the destination name must be free unless replace: true. Use it to clone a level or to bring a read-only map in for editing; undo removes the copy again."
+        description = "Copies a whole map block (and its GL node run) from any scope into the working archive under a new header name as one undoable edit; the destination name must be free unless replace: true. The copy carries the block's GL run along, re-naming its marker to GL_<name> or the GL_LEVEL fallback; the result's warnings name anything it could not carry. Use it to clone a level or to bring a read-only map in for editing; undo removes the copy again."
     )]
     fn copy_map(
         &self,
@@ -659,7 +659,7 @@ impl Cyberdemon {
 
     /// Renames a working-archive map block in place.
     #[tool(
-        description = "Renames a map block of the working archive as one undoable edit: the header lump and its attached GL_<map> run follow the new name, and the result reports the block's header index. The new name must be 1 to 8 printable ASCII characters and free. A block only a read-only layer holds cannot be renamed; copy_map brings one in first."
+        description = "Renames a map block of the working archive as one undoable edit: the header lump and its GL node run follow the new name - the marker becomes GL_<name>, or the GL_LEVEL fallback when the name leaves no room behind the prefix - and the result's warnings name any node data it could not carry. The new name must be 1 to 8 printable ASCII characters and free. A block only a read-only layer holds cannot be renamed; copy_map brings one in first."
     )]
     fn rename_map(
         &self,

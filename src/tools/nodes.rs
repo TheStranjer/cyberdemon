@@ -41,8 +41,8 @@
 //! writes the two side lumps, [`build_nodes`] the tree in its three
 //! layouts, [`build_gl`] the `GL_*` block a `gl` build splices around the
 //! map and [`build_all`] the combined whole-set run. This root keeps what
-//! the group shares - the asset-extension and lump-magic constants, the
-//! three parameters every reader resolves, the map-open and lump lookups
+//! the group shares - the asset-extension constant, the three parameters
+//! every reader resolves, the map-open and lump lookups
 //! behind them, the held-back publish plumbing and the router - and the
 //! group's unit tests live in `nodes/tests.rs`.
 
@@ -86,8 +86,6 @@ pub(in crate::tools) use crate::tools::nodes::build_all::{AllPlan, apply_all};
 
 /// File extension of the published `JSON` assets.
 const JSON_EXTENSION: &str = "json";
-/// Bytes in a `GL` lump magic.
-const MAGIC_LEN: usize = 4;
 
 /// How much of a result to publish.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

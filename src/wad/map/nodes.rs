@@ -9,8 +9,9 @@
 //! fraction-precise vertices, then subsector seg counts, then wider segs
 //! and nodes whose child words reach `bit 31` for the subsector flag.
 //! [`parse_vanilla_nodes`] and [`parse_extended_nodes`] both produce a
-//! [`NodeSet`]; [`lump_format`] names whatever magic a node lump starts
-//! with, including the `GL` variants this module reports but never parses.
+//! [`NodeSet`]; [`lump_format`] is the one sniffer of what magic a node lump
+//! starts with, answering a [`NodeMagic`] that covers the `GL` variants this
+//! module reports but never parses.
 //! The writers that rebuild these lumps join here later. Nothing in this
 //! module knows about sessions or MCP.
 //!
@@ -18,7 +19,8 @@
 //! vanilla record walker lives in the private `vanilla` module, the
 //! extended lump walker in the private `extended` one, and this root holds
 //! what both share — the record sizes and child-word masks, the element
-//! types, [`NodeSet`] and its cross-reference checks.
+//! types, [`NodeSet`] and its cross-reference checks, and [`NodeMagic`]: the
+//! one answer every reader and reporter of a node lump's leading magic uses.
 
 mod extended;
 mod vanilla;
@@ -54,18 +56,6 @@ const EXT_SEG_LEN: usize = 11;
 const EXT_NODE_LEN: usize = 32;
 /// Cap on what a `ZNOD` payload may inflate to, guarding against bombs.
 const MAX_ZNOD_BYTES: usize = 64 * 1024 * 1024;
-
-/// Known node-lump magics with their lowercase report names.
-const NODE_MAGICS: [(&[u8; MAGIC_LEN], &str); 8] = [
-    (b"XNOD", "xnod"),
-    (b"ZNOD", "znod"),
-    (b"XGLN", "xgln"),
-    (b"ZGLN", "zgln"),
-    (b"XGL2", "xgl2"),
-    (b"ZGL2", "zgl2"),
-    (b"XGL3", "xgl3"),
-    (b"ZGL3", "zgl3"),
-];
 
 /// One segment between two vertices: a piece of a linedef side that bounds
 /// one subsector.
@@ -165,6 +155,131 @@ impl NodesFormat {
             Self::Xnod => "xnod",
             Self::Znod => "znod",
         }
+    }
+}
+
+/// The magic a node lump's bytes start with, as [`lump_format`] answers it.
+///
+/// That magic is the only thing telling the three vanilla record lumps
+/// apart from one extended lump, and the parseable `ZDoom` runs apart from
+/// the `GL` family the tools report but never read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeMagic {
+    /// No magic: the lump holds plain records.
+    Vanilla,
+    /// `XNOD`: a raw `ZDoom` extended run.
+    Xnod,
+    /// `ZNOD`: a `zlib`-compressed `ZDoom` extended run.
+    Znod,
+    /// `XGLN`: raw extended `GL` nodes, reported but never parsed.
+    Xgln,
+    /// `ZGLN`: compressed extended `GL` nodes, reported but never parsed.
+    Zgln,
+    /// `XGL2`: raw `GL` nodes of the second extended format, never parsed.
+    Xgl2,
+    /// `ZGL2`: its compressed form, never parsed.
+    Zgl2,
+    /// `XGL3`: raw `GL` nodes of the third extended format, never parsed.
+    Xgl3,
+    /// `ZGL3`: its compressed form, never parsed.
+    Zgl3,
+}
+
+impl NodeMagic {
+    /// Every magic a node lump can start with, in the order [`lump_format`]
+    /// tries them; [`Self::Vanilla`] names the absence of a magic and so is
+    /// not one of them.
+    pub const ALL: [Self; 8] = [
+        Self::Xnod,
+        Self::Znod,
+        Self::Xgln,
+        Self::Zgln,
+        Self::Xgl2,
+        Self::Zgl2,
+        Self::Xgl3,
+        Self::Zgl3,
+    ];
+
+    /// The four letters a lump with this magic starts with, `None` for
+    /// [`Self::Vanilla`].
+    #[must_use]
+    #[inline]
+    pub const fn bytes(self) -> Option<&'static [u8; MAGIC_LEN]> {
+        match self {
+            Self::Vanilla => None,
+            Self::Xnod => Some(b"XNOD"),
+            Self::Znod => Some(b"ZNOD"),
+            Self::Xgln => Some(b"XGLN"),
+            Self::Zgln => Some(b"ZGLN"),
+            Self::Xgl2 => Some(b"XGL2"),
+            Self::Zgl2 => Some(b"ZGL2"),
+            Self::Xgl3 => Some(b"XGL3"),
+            Self::Zgl3 => Some(b"ZGL3"),
+        }
+    }
+
+    /// The lowercase report name of this magic: its stored letters turned to
+    /// lowercase, `"vanilla"` for a lump that starts with no magic at all.
+    /// The `get_nodes` report prints exactly these names.
+    #[must_use]
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Vanilla => "vanilla",
+            Self::Xnod => "xnod",
+            Self::Znod => "znod",
+            Self::Xgln => "xgln",
+            Self::Zgln => "zgln",
+            Self::Xgl2 => "xgl2",
+            Self::Zgl2 => "zgl2",
+            Self::Xgl3 => "xgl3",
+            Self::Zgl3 => "zgl3",
+        }
+    }
+
+    /// The magic's letters as they are stored, uppercase, `None` for
+    /// [`Self::Vanilla`]. `get_map_summary` prints these as the `NODES`
+    /// lump's format.
+    #[must_use]
+    #[inline]
+    pub const fn stored_name(self) -> Option<&'static str> {
+        match self {
+            Self::Vanilla => None,
+            Self::Xnod => Some("XNOD"),
+            Self::Znod => Some("ZNOD"),
+            Self::Xgln => Some("XGLN"),
+            Self::Zgln => Some("ZGLN"),
+            Self::Xgl2 => Some("XGL2"),
+            Self::Zgl2 => Some("ZGL2"),
+            Self::Xgl3 => Some("XGL3"),
+            Self::Zgl3 => Some("ZGL3"),
+        }
+    }
+
+    /// Whether `head`, a lump's first four bytes, carries this magic's
+    /// letters. [`Self::Vanilla`] never matches: it names no letters.
+    #[must_use]
+    fn matches_head(self, head: &[u8]) -> bool {
+        self.bytes()
+            .is_some_and(|letters| head == letters.as_slice())
+    }
+
+    /// Whether [`parse_extended_nodes`] reads a lump of this magic.
+    #[must_use]
+    #[inline]
+    pub const fn is_extended(self) -> bool {
+        matches!(self, Self::Xnod | Self::Znod)
+    }
+
+    /// Whether this magic names a `GL`-family run: reportable, never
+    /// parsed.
+    #[must_use]
+    #[inline]
+    pub const fn is_gl(self) -> bool {
+        matches!(
+            self,
+            Self::Xgln | Self::Zgln | Self::Xgl2 | Self::Zgl2 | Self::Xgl3 | Self::Zgl3
+        )
     }
 }
 
@@ -313,16 +428,34 @@ fn to_index(value: u32, what: &str) -> Result<usize, CyberError> {
     })
 }
 
-/// The lowercase report name of the magic `data` starts with (`xnod`,
-/// `znod`, `xgln`, `zgl2`, ...), or `None` for vanilla record data.
+/// The magic a node lump starts with: [`NodeMagic::Vanilla`] when the data
+/// is plain records or too short to carry a magic, the named variant when it
+/// starts with one of [`NodeMagic::ALL`]'s letters.
 #[must_use]
 #[inline]
-pub fn lump_format(data: &[u8]) -> Option<&'static str> {
+pub fn lump_format(data: &[u8]) -> NodeMagic {
+    let Some(head) = data.get(..MAGIC_LEN) else {
+        return NodeMagic::Vanilla;
+    };
+    NodeMagic::ALL
+        .into_iter()
+        .find(|magic| magic.matches_head(head))
+        .unwrap_or(NodeMagic::Vanilla)
+}
+
+/// The four alphanumeric letters a lump starts with, exactly as stored.
+///
+/// `None` when the lump is shorter than four bytes or its head is no
+/// letters at all. The `GL_VERT` report of a `glBSP` run reads its magic
+/// this way: `gNd2`, `gNd5` and friends name no [`NodeMagic`], so the head
+/// travels to the report unparsed.
+#[must_use]
+#[inline]
+pub fn lump_head(data: &[u8]) -> Option<String> {
     let head = data.get(..MAGIC_LEN)?;
-    NODE_MAGICS
-        .iter()
-        .find(|entry| head == entry.0.as_slice())
-        .map(|entry| entry.1)
+    head.iter()
+        .all(u8::is_ascii_alphanumeric)
+        .then(|| String::from_utf8_lossy(head).into_owned())
 }
 
 /// Added fraction-precise vertices, raw `16.16` pairs.

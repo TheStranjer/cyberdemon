@@ -4,9 +4,11 @@
 //! all three in memory, so their absence is normal there.
 //!
 //! The checks look at the block's [`Map::other`] lumps, never parsing
-//! records: [`crate::wad::map::nodes`] owns that, and the tools that
-//! read the parsed tree report malformed data themselves. An empty lump
-//! reads as absent - that is what an invalidated build leaves behind.
+//! records: [`crate::wad::map::nodes`] owns that, and this module only asks
+//! its [`crate::wad::map::nodes::lump_format`] which magic a node lump
+//! starts with. The tools that read the parsed tree report malformed data
+//! themselves. An empty lump reads as absent - that is what an invalidated
+//! build leaves behind.
 
 use alloc::format;
 use alloc::vec;
@@ -16,6 +18,7 @@ use super::{Issue, Severity};
 use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::model::Map;
+use crate::wad::map::nodes::{self, NodeMagic};
 use crate::wad::map::reject::Reject;
 use crate::wad::name::LumpName;
 
@@ -34,13 +37,15 @@ fn is_binary(map: &Map) -> bool {
     map.format != MapFormat::Udmf
 }
 
-/// Whether any of the three record lumps carries bytes: a vanilla run
-/// needs all three, an extended one lives entirely inside `NODES`, so
-/// any data at all counts as built.
+/// Whether the block carries a node run: a lump of any known magic lives in
+/// `NODES` alone, and a vanilla run is the three record lumps, so an
+/// extended build and a hand-stuffed record lump both count as built.
 fn has_tree(map: &Map) -> bool {
-    lumps::CLASSIC_NODE_RUN_LUMPS
-        .into_iter()
-        .any(|wanted| lump_data(map, wanted).is_some_and(|data| !data.is_empty()))
+    let magic = lump_data(map, lumps::NODES).map_or(NodeMagic::Vanilla, nodes::lump_format);
+    magic != NodeMagic::Vanilla
+        || lumps::CLASSIC_NODE_RUN_LUMPS
+            .into_iter()
+            .any(|wanted| lump_data(map, wanted).is_some_and(|data| !data.is_empty()))
 }
 
 /// Binary maps whose `SEGS`, `SSECTORS` and `NODES` lumps are all empty
@@ -169,6 +174,25 @@ mod tests {
             nodes_missing(&udmf).is_empty(),
             "UDMF ports build the tree themselves"
         );
+    }
+
+    #[test]
+    fn every_node_magic_in_nodes_lump_reads_as_a_built_tree() {
+        for stored in [
+            "XNOD", "ZNOD", "XGLN", "ZGLN", "XGL2", "ZGL2", "XGL3", "ZGL3",
+        ] {
+            let mut data = stored.as_bytes().to_vec();
+            data.extend_from_slice(b" and the run behind it");
+            let built = map_with(
+                MapFormat::Doom,
+                2,
+                vec![marker("SEGS"), marker("SSECTORS"), lump("NODES", &data)],
+            );
+            assert!(
+                nodes_missing(&built).is_empty(),
+                "a {stored} NODES lump is a node run whatever the record lumps hold",
+            );
+        }
     }
 
     #[test]

@@ -848,8 +848,8 @@ src/
                   feature rows and a room's dressing) and
                   `plan/params/tests/units_things.rs` (the `units`
                   mapping, the snap grid and the thing rows),
-                  `tools/nodes.rs` (the `JSON`-extension and lump-magic
-                  constants, the shared scope, detail and request, the
+                  `tools/nodes.rs` (the `JSON`-extension constant,
+                  the shared scope, detail and request, the
                   map-open and lump lookups, the held-back publish plumbing
                   and the router) with `nodes/get_nodes.rs` (the
                   `get_nodes` parameter, the node run's three shapes, the
@@ -1006,7 +1006,8 @@ src/
                   that module's tests in `udmf_map/tests.rs`,
                   `map/nodes.rs` typed SEGS/SSECTORS/NODES parsing in the
                   vanilla and ZDoom `XNOD`/`ZNOD` layouts (`NodeSet`,
-                  `Seg`, `Subsector`, `Node`, `Child`, magic detection, the
+                  `Seg`, `Subsector`, `Node`, `Child`, `NodeMagic` with the
+                  `lump_format` and `lump_head` magic sniffers, the
                   record sizes and child-word masks both layouts share, and
                   its two `pub use` entry points) on `nodes/vanilla.rs` (the
                   vanilla record walker, whose `read_box` the node records of

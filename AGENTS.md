@@ -794,7 +794,37 @@ src/
                   `nodes/tests/build_tables.rs` (the two side-lump builds),
                   `nodes/tests/build_nodes.rs` (the classic and extended
                   tree builds), `nodes/tests/build_gl.rs` and
-                  `nodes/tests/build_all.rs` (the whole-set build);
+                  `nodes/tests/build_all.rs` (the whole-set build) and
+                  `tools/render.rs` (the three settings tools with their
+                  option names, apply and reports, the constants the
+                  submodules share, `midpoint` and the router) with
+                  `render/params.rs` (the `Projection`, the
+                  `render_topdown` wire structs and the resolved `Request`
+                  with its parts), `render/frame.rs` (the `Plane` and
+                  `View` mapping, `fit`, the plane builders and the
+                  rounding helpers), `render/resolve.rs` (the projection,
+                  bounds, highlight and overlay parsing behind
+                  `resolve_request` and the `load_underlay` fetch),
+                  `render/paint.rs` (the colour helpers, the `Scene` and
+                  its element reads, the top-down and isometric painting
+                  order with the underlay and grid passes),
+                  `render/marks.rs` (the line, fill, mark, label,
+                  annotation and isometric strokes),
+                  `render/topdown.rs` (`paint_map`, the reports,
+                  `load_scene` and the `playability` group's
+                  `playability_overview`), `render/minimap.rs` (the
+                  `render_minimap` window resolution, painting and
+                  report) and `render/view.rs` (the `render_view` settings
+                  overrides, the `SpriteWiring` dressing pass and the
+                  report); that group's tests are `render/tests.rs` (the
+                  fixture map, request, pixel and colour builders) plus
+                  `render/tests/settings.rs` (the settings tools),
+                  `render/tests/topdown.rs` (the fit, the resolution and
+                  the painted fixture), `render/tests/overlays.rs` (the
+                  overlay parameters), `render/tests/painting.rs` (the
+                  painted overlays), `render/tests/minimap.rs` (the
+                  minimap arguments) and `render/tests/view.rs` (the
+                  sprite pass);
   wad.rs          WAD format core module root: lump names, byte access, the
                   in-memory archive, the map module tree and the texture
                   definition codecs.

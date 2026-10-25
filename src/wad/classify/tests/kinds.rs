@@ -1,8 +1,10 @@
 //! The kind topic: the fixed names and the exact-size `ENDOOM`, the
 //! `colormaps` namespace, the image and audio magics, the `DMX` and `DP`
-//! sound rules, the namespace-implied graphic kinds, [`is_doom_patch`]'s
-//! accepted and rejected headers, the text, binary and empty fallbacks, the
-//! wire names of a whole analysis and the empty directory.
+//! sound rules and the graphics namespaces beating those weak tests while a
+//! strong signature still overrides them, the namespace-implied graphic
+//! kinds, [`is_doom_patch`]'s accepted and rejected headers, the text,
+//! binary and empty fallbacks, the wire names of a whole analysis and the
+//! empty directory.
 
 use serde_json::json;
 
@@ -149,6 +151,119 @@ fn namespaces_imply_the_graphic_kinds() {
             "a loose lump inside {start}"
         );
         assert_eq!(namespace_at(&analysis, 1), Some(ns), "namespace of {start}");
+    }
+}
+
+/// A 4096-byte flat whose first two bytes read as an `MPEG` frame sync:
+/// palette index 255 followed by 229.
+fn frame_sync_flat() -> Vec<u8> {
+    let mut data = vec![0xAA_u8; 4096];
+    data[0] = 0xFF;
+    data[1] = 0xE5;
+    data
+}
+
+/// A dark flat payload that reads as a `DMX` sound: format word `3` and a
+/// sample count that fits the lump.
+fn dmx_shaped_flat() -> Vec<u8> {
+    vec![3_u8, 0, 0, 0, 4, 0, 0, 0, 200, 210, 220, 230]
+}
+
+/// A graphics payload that reads as `DP` PC speaker data: a zero first word.
+fn speaker_shaped_flat() -> Vec<u8> {
+    vec![0_u8, 0, 0x91, 0x8A]
+}
+
+/// One `F_START`/`F_END` region holding a single lump.
+fn flats_lump(name: &str, data: &[u8]) -> Vec<Lump> {
+    vec![marker("F_START"), lump(name, data), marker("F_END")]
+}
+
+#[test]
+fn the_flats_namespace_beats_the_frame_sync() {
+    let data = frame_sync_flat();
+    let inside = analyze(&flats_lump("FLAT01", &data));
+    assert_eq!(kind_at(&inside, 1), LumpKind::Flat, "the namespace wins");
+    assert_eq!(
+        namespace_at(&inside, 1),
+        Some(Namespace::Flats),
+        "the namespace is still reported"
+    );
+    let outside = analyze(&[lump("MP3ISH", &data)]);
+    assert_eq!(
+        kind_at(&outside, 0),
+        LumpKind::Mp3,
+        "the same bytes outside a namespace"
+    );
+}
+
+#[test]
+fn the_flats_namespace_beats_the_weak_sound_tests() {
+    let dmx = dmx_shaped_flat();
+    assert_eq!(
+        kind_at(&analyze(&flats_lump("FLAT02", &dmx)), 1),
+        LumpKind::Flat,
+        "a dark flat is not a `DMX` sound"
+    );
+    assert_eq!(
+        kind_at(&analyze(&[lump("DSISH", &dmx)]), 0),
+        LumpKind::DoomSound,
+        "the same bytes outside a namespace"
+    );
+    let speaker = speaker_shaped_flat();
+    assert_eq!(
+        kind_at(&analyze(&flats_lump("DPFLAT", &speaker)), 1),
+        LumpKind::Flat,
+        "a `DP` name in the flats namespace is not PC speaker data"
+    );
+    assert_eq!(
+        kind_at(&analyze(&[lump("DPFLAT", &speaker)]), 0),
+        LumpKind::PcSpeaker,
+        "the same lump outside a namespace"
+    );
+}
+
+#[test]
+fn every_graphics_namespace_refuses_the_weak_magics() {
+    let data = frame_sync_flat();
+    let cases = [
+        ("F_START", "F_END", LumpKind::Flat),
+        ("S_START", "S_END", LumpKind::Sprite),
+        ("P_START", "P_END", LumpKind::Patch),
+    ];
+    for case in cases {
+        let lumps = vec![marker(case.0), lump("MEMBER", &data), marker(case.1)];
+        assert_eq!(
+            kind_at(&analyze(&lumps), 1),
+            case.2,
+            "a frame-sync payload inside {}",
+            case.0
+        );
+    }
+}
+
+#[test]
+fn a_strong_magic_still_wins_inside_the_flats_namespace() {
+    let cases: Vec<MagicCase> = vec![
+        ("PNGF", b"\x89PNG\r\n\x1a\n\x00\x01".to_vec(), LumpKind::Png),
+        ("JPEF", vec![0xFF_u8, 0xD8, 0xFF, 0x00], LumpKind::Jpeg),
+        ("GIFF", b"GIF87a".to_vec(), LumpKind::Gif),
+        ("WAVF", b"RIFF$\0\0\0WAVEfmt".to_vec(), LumpKind::Wav),
+        ("MIDF", b"MThd\x00\x06".to_vec(), LumpKind::Midi),
+        ("MUSF", b"MUS\x1Arest".to_vec(), LumpKind::Mus),
+        ("OGGF", b"OggS\x00".to_vec(), LumpKind::Ogg),
+        ("FLCF", b"fLaC\x00".to_vec(), LumpKind::Flac),
+        ("ID3F", b"ID3\x04\x00".to_vec(), LumpKind::Mp3),
+    ];
+    for case in &cases {
+        let inside = analyze(&flats_lump(case.0, &case.1));
+        assert_eq!(kind_at(&inside, 1), case.2, "container of {}", case.0);
+        assert_eq!(
+            namespace_at(&inside, 1),
+            Some(Namespace::Flats),
+            "{} is still reported in the flats namespace",
+            case.0
+        );
     }
 }
 

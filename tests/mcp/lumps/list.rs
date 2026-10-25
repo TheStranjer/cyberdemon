@@ -3,7 +3,8 @@
 //! `layer:N` scope reading one archive with its own layout, the `working`
 //! scope reading the editable archive, the out-of-range layer and the bogus
 //! scope, namespace, kind and limit refusals, the namespace, kind and map
-//! filters and the offset/limit/total paging.
+//! filters, a graphics region keeping a weakly-guessed payload its own kind,
+//! and the offset/limit/total paging.
 
 use serde_json::{Value, json};
 
@@ -198,6 +199,40 @@ async fn list_lumps_filters_by_namespace_kind_and_map() {
             .iter()
             .all(|row| row["map"] == json!("MAP01")),
         "every row names the filtered map",
+    );
+}
+
+#[tokio::test]
+async fn list_lumps_keeps_a_frame_sync_flat_in_the_flats_region() {
+    let client = connect().await;
+    let hex = format!("FFE5{}", "AA".repeat(4_094));
+    call(
+        &client,
+        "add_lump",
+        json!({ "name": "FEE5FLAT", "hex": hex, "namespace": "flats" }),
+    )
+    .await;
+    call(
+        &client,
+        "add_lump",
+        json!({ "name": "FEE5FREE", "hex": hex }),
+    )
+    .await;
+    let listing = call(&client, "list_lumps", json!({ "scope": "working" })).await;
+    assert_eq!(
+        row_named(&listing, "FEE5FLAT")["kind"],
+        json!("flat"),
+        "the region beats the frame-sync guess"
+    );
+    assert_eq!(
+        row_named(&listing, "FEE5FLAT")["namespace"],
+        json!("flats"),
+        "and the region is still reported"
+    );
+    assert_eq!(
+        row_named(&listing, "FEE5FREE")["kind"],
+        json!("mp3"),
+        "the same bytes outside a region still read as a frame sync"
     );
 }
 

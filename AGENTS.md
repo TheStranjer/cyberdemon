@@ -408,7 +408,12 @@ src/
                   `tools/palette.rs`, `tools/nodes.rs`, `tools/audio.rs`,
                   `tools/music.rs`, `tools/render.rs`, `tools/scripts.rs`,
                   `tools/defs.rs`, `tools/query.rs`, `tools/inspect.rs`,
-                  `tools/validate.rs` and `tools/playability.rs`; the ones
+                  `tools/validate.rs` and `tools/playability.rs`, plus the
+                  router-less `tools/audio_common.rs` (the `D_` and `DS`
+                  `MediaFamily` rules both media groups import through:
+                  the prefix-aware derived lump name, the one undoable
+                  replace-or-append store of a global lump, and the shared
+                  `publish_playable` preview step); the ones
                   with shared machinery split it into submodules described
                   below, e.g. `tools/lumps.rs` with `lumps/rows.rs` (shared
                   directory rows), `lumps/select.rs` (the lump selector),

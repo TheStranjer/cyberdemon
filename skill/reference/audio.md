@@ -17,8 +17,10 @@ sounds a session holds.
     URL or this server's asset URL of the sound file.
   - `name` (string, optional): 1 to 8 printable ASCII characters, uppercased.
     Defaults to `DS` plus the file stem uppercased and trimmed: `pistol.wav`
-    becomes `DSPISTOL`, `very long sound name.wav` becomes `DSVERYLO`. When
-    nothing usable can be derived the call fails asking for this name.
+    becomes `DSPISTOL`, `very long sound name.wav` becomes `DSVERYLO`. A stem
+    that already starts with `DS` is kept whole, so the prefix never doubles:
+    `DSPISTOL.wav` becomes `DSPISTOL`, not `DSDSPIST`. When nothing usable
+    can be derived the call fails asking for this name.
   - `format` (string, optional): `"doom"` (the default) stores a vanilla
     `DMX` `DS*` lump (unsigned 8-bit mono, the engine's 16 pad bytes at each
     end); `"passthrough"` validates that the bytes decode, then stores the

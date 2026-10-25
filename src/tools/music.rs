@@ -5,11 +5,12 @@
 //! music file through [`AppState::fetch_source`], identify its container
 //! with [`crate::music::sniff_music`] and either store a vanilla `MUS`
 //! `D_*` lump (converting `MIDI` with [`midi_to_mus`], validating `MUS`
-//! with [`mus_to_midi`]) or keep the original bytes unchanged.
-//! [`Cyberdemon::preview_music`] goes the other way: it reads one music
-//! lump of the session and publishes it as a playable asset, converting
-//! `MUS` to `MIDI`. The conversion itself lives in the crate-visible
-//! [`music_to_playable`] so `get_asset_url` can reuse it.
+//! with [`mus_to_midi`]) or keep the original bytes unchanged. Naming and
+//! placement run through the shared [`crate::tools::audio_common::MUSIC`]
+//! family rule. [`Cyberdemon::preview_music`] goes the other way: it reads
+//! one music lump of the session and publishes it as a playable asset,
+//! converting `MUS` to `MIDI`. The conversion itself lives in the
+//! crate-visible [`music_to_playable`] so `get_asset_url` can reuse it.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -17,25 +18,15 @@ use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::assets::fetch::derive_lump_name;
 use crate::assets::server::AssetRef;
-use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
 use crate::music::{MusicKind, midi_to_mus, mus_to_midi, sniff_music};
 use crate::server::Cyberdemon;
-use crate::session::Session;
 use crate::state::AppState;
+use crate::tools::audio_common::{MUSIC, MediaLump, publish_playable};
 use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::reply;
-use crate::wad::archive::{Lump, Wad};
-use crate::wad::name::{LumpName, MAX_NAME_LEN};
-
-/// Prefix vanilla `Doom`'s music player puts in front of every song name;
-/// the engine looks songs up as `D_<name>` with no `MAPINFO` entry.
-const MUSIC_PREFIX: &str = "D_";
-/// Characters left for the derived stem once the prefix took its share of
-/// the eight-byte lump-name field.
-const MUSIC_HEAD: usize = 6;
+use crate::wad::name::LumpName;
 
 /// Arguments for [`Cyberdemon::import_music`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -46,7 +37,9 @@ struct ImportMusicParams {
     source: String,
     /// Lump name (1 to 8 printable ASCII characters, uppercased). Defaults
     /// to `D_` plus the file stem uppercased and trimmed to 8 characters:
-    /// `runnin.mid` becomes `D_RUNNIN`.
+    /// `runnin.mid` becomes `D_RUNNIN`. A stem that already starts with
+    /// `D_` is kept whole: `D_RUNNIN.mid` becomes `D_RUNNIN`, not
+    /// `D_D_RUNN`.
     #[serde(default)]
     name: Option<String>,
     /// `"mus"` stores a vanilla `MUS` lump (`MIDI` is converted, `MUS`
@@ -222,78 +215,13 @@ fn store_payload(
     }
 }
 
-/// The name to store under: the explicit one, else `D_` plus the derived,
-/// trimmed file stem.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] asking for `name` when nothing usable
-/// can be derived.
-fn chosen_name(plan: &Plan, filename: &str) -> Result<LumpName, CyberError> {
-    if let Some(name) = plan.name {
-        return Ok(name);
-    }
-    let stem = derive_lump_name(filename).ok_or_else(|| {
-        CyberError::InvalidArgument(format!(
-            "cannot derive a music name from {filename:?}: pass name (1 to {MAX_NAME_LEN} \
-             printable ASCII characters)"
-        ))
-    })?;
-    let head: String = stem.to_string().chars().take(MUSIC_HEAD).collect();
-    LumpName::parse(&format!("{MUSIC_PREFIX}{head}"))
-}
-
-/// The synchronous half: one undoable insert (or in-place replace) of the
-/// music lump in the global area of the working archive.
-///
-/// # Errors
-///
-/// [`CyberError::AlreadyExists`] for a working lump of the same name when
-/// `replace` is `false`.
-fn commit(
-    session: &mut Session,
-    name: LumpName,
-    data: Vec<u8>,
-    replace: bool,
-) -> Result<(), CyberError> {
-    let label = format!("import_music {name}");
-    session.edit(&label, |wad| place_music(wad, name, data, replace))
-}
-
-/// Put the song at the end of `wad`, replacing the last same-name lump
-/// when one exists and `replace` allows it. Music has no namespace.
-///
-/// # Errors
-///
-/// [`CyberError::AlreadyExists`] as by [`commit`].
-fn place_music(
-    wad: &mut Wad,
-    name: LumpName,
-    data: Vec<u8>,
-    replace: bool,
-) -> Result<(), CyberError> {
-    if wad.find_last(name).is_none() {
-        wad.lumps.push(Lump::new(name, data));
-        return Ok(());
-    }
-    if !replace {
-        return Err(CyberError::AlreadyExists(format!(
-            "lump {name} already exists in the working archive: pass replace true to overwrite \
-             it or choose another name"
-        )));
-    }
-    if let Some(slot) = wad.lumps.iter_mut().rev().find(|lump| lump.name == name) {
-        *slot = Lump::new(name, data);
-    }
-    Ok(())
-}
-
 /// Run `import_music` end to end: fetch, sniff, convert and commit.
 ///
 /// # Errors
 ///
-/// [`plan`], [`AppState::fetch_source`], [`store_payload`], [`chosen_name`]
-/// and [`commit`] errors pass through.
+/// [`plan`], [`AppState::fetch_source`], [`store_payload`],
+/// [`MUSIC`](crate::tools::audio_common::MUSIC)'s name and store errors
+/// pass through.
 async fn import(
     state: &AppState,
     args: &ImportMusicParams,
@@ -303,10 +231,14 @@ async fn import(
     let kind = sniff_music(&fetched.bytes);
     let format = chosen_format(&plan, kind);
     let stored = store_payload(format, kind, fetched.bytes)?;
-    let name = chosen_name(&plan, &fetched.filename)?;
-    let bytes = stored.data.len();
+    let name = MUSIC.choose_name(plan.name, &fetched.filename)?;
     let warnings = stored.warnings;
-    state.with_session(|session| commit(session, name, stored.data, plan.replace))?;
+    let bytes = stored.data.len();
+    let lump = MediaLump {
+        name,
+        data: stored.data,
+    };
+    state.with_session(|session| MUSIC.store(session, lump, plan.replace))?;
     Ok(ImportMusicReport {
         name,
         input_format: kind,
@@ -343,8 +275,9 @@ struct PreviewMusicReport {
 /// extension (without the dot) and the sniffed input kind.
 type Playable = (Vec<u8>, &'static str, MusicKind);
 
-/// Make one music lump's bytes playable: the file bytes, the extension to
-/// publish them under (without the dot) and the sniffed input kind.
+/// Make one lump named `name`'s bytes playable: the file bytes, the
+/// extension to publish them under (without the dot) and the sniffed input
+/// kind. The bytes are sniffed exactly once, here.
 ///
 /// `MUS` scores are converted to type-0 `SMF` with [`mus_to_midi`]; every
 /// other recognised container is kept byte for byte. This is the tools-
@@ -352,9 +285,13 @@ type Playable = (Vec<u8>, &'static str, MusicKind);
 ///
 /// # Errors
 ///
-/// [`mus_to_midi`]'s [`CyberError::Format`] for a corrupt `MUS` lump;
-/// [`CyberError::Unsupported`] for bytes no recognised music container owns.
-pub(in crate::tools) fn music_to_playable(bytes: &[u8]) -> Result<Playable, CyberError> {
+/// [`mus_to_midi`]' [`CyberError::Format`] for a corrupt `MUS` lump;
+/// [`CyberError::Unsupported`] naming the lump when its bytes are not
+/// recognised music.
+pub(in crate::tools) fn music_to_playable(
+    name: LumpName,
+    bytes: &[u8],
+) -> Result<Playable, CyberError> {
     let kind = sniff_music(bytes);
     match kind {
         MusicKind::Mus => Ok((mus_to_midi(bytes)?, "mid", kind)),
@@ -367,11 +304,9 @@ pub(in crate::tools) fn music_to_playable(bytes: &[u8]) -> Result<Playable, Cybe
         MusicKind::It => Ok((bytes.to_vec(), "it", kind)),
         MusicKind::S3m => Ok((bytes.to_vec(), "s3m", kind)),
         MusicKind::Mod => Ok((bytes.to_vec(), "mod", kind)),
-        MusicKind::Unknown => Err(CyberError::Unsupported(
-            "these bytes are not recognised music: expected MUS, MIDI, OGG, MP3, FLAC, WAV \
-             or a tracker module (XM, IT, S3M, MOD)"
-                .to_owned(),
-        )),
+        MusicKind::Unknown => Err(CyberError::Unsupported(format!(
+            "lump {name} is not recognised music; use get_lump format=url for raw bytes"
+        ))),
     }
 }
 
@@ -380,23 +315,14 @@ pub(in crate::tools) fn music_to_playable(bytes: &[u8]) -> Result<Playable, Cybe
 ///
 /// # Errors
 ///
-/// [`resolve`] errors for the selector; [`CyberError::Unsupported`] naming
-/// the lump when its bytes are not recognised music; [`music_to_playable`]
-/// errors for the bytes; [`AppState::publish`] errors for the asset store.
+/// [`resolve`] errors for the selector; [`music_to_playable`] errors for
+/// the bytes; [`publish_playable`] errors for the asset store.
 fn preview(state: &AppState, args: &PreviewMusicParams) -> Result<PreviewMusicReport, CyberError> {
     let row = state.with_session(|session| resolve(session, &args.selector))?;
-    let name = row.name;
-    if sniff_music(&row.lump.data) == MusicKind::Unknown {
-        return Err(CyberError::Unsupported(format!(
-            "lump {name} is not recognised music; use get_lump format=url for raw bytes"
-        )));
-    }
-    let (data, extension, kind) = music_to_playable(&row.lump.data)?;
-    let filename = format!("{name}.{extension}");
-    let mime = mime_for_extension(extension);
-    let asset = state.publish(&filename, mime, data)?;
+    let (data, extension, kind) = music_to_playable(row.name, &row.lump.data)?;
+    let asset = publish_playable(state, row.name, extension, data)?;
     Ok(PreviewMusicReport {
-        name,
+        name: row.name,
         input_format: kind,
         output_format: extension,
         asset,
@@ -411,7 +337,7 @@ fn preview(state: &AppState, args: &PreviewMusicParams) -> Result<PreviewMusicRe
 impl Cyberdemon {
     /// Imports a music file as a lump in the working archive.
     #[tool(
-        description = "Imports a music file as a lump in the working archive as one undoable edit: the container is sniffed from the bytes (MUS, MIDI, OGG, MP3, FLAC, XM, IT, S3M, MOD); format mus converts MIDI to a vanilla D_-lump and warns about events MUS cannot carry, while port formats keep their names. preview_music publishes it back as a playable file."
+        description = "Imports a music file as a lump in the working archive as one undoable edit: the container is sniffed from the bytes (MUS, MIDI, OGG, MP3, FLAC, XM, IT, S3M, MOD); format mus converts MIDI to a vanilla D_-lump and warns about events MUS cannot carry, while port formats keep their names. name defaults to the file stem under the D_ prefix, kept whole when it already starts with D_. preview_music publishes it back as a playable file."
     )]
     async fn import_music(
         &self,
@@ -437,7 +363,7 @@ mod tests {
     use super::{
         ImportMusicParams, MusicKind, Plan, StorageFormat, music_to_playable, sniff_music,
     };
-    use super::{chosen_format, chosen_name, parse_format, plan, store_payload};
+    use super::{chosen_format, parse_format, plan, store_payload};
 
     /// The arguments of a `source`-only call, everything else defaulted.
     fn args(source: &str) -> ImportMusicParams {
@@ -579,49 +505,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn names_default_to_the_prefix_plus_a_trimmed_stem() {
-        let blank = Plan {
-            name: None,
-            format: None,
-            replace: false,
-        };
-        assert_eq!(
-            chosen_name(&blank, "runnin.mid")
-                .expect("derivable")
-                .to_string(),
-            "D_RUNNIN",
-            "the ticket's example"
-        );
-        assert_eq!(
-            chosen_name(&blank, "E1M2 theme.mid")
-                .expect("derivable")
-                .to_string(),
-            "D_E1M2TH",
-            "space dropped, stem trimmed to six"
-        );
-        let explicit = Plan {
-            name: super::LumpName::parse("MYTUNE").ok(),
-            format: None,
-            replace: false,
-        };
-        assert_eq!(
-            chosen_name(&explicit, "runnin.mid")
-                .expect("explicit")
-                .to_string(),
-            "MYTUNE",
-            "an explicit name wins over derivation"
-        );
-        let error = chosen_name(&blank, ".mid").expect_err("nothing usable");
-        assert_eq!(error.code(), "invalid_argument", "unnameable source code");
-        assert!(
-            error.to_string().contains("pass name"),
-            "the message asks for the name: {error}"
-        );
-    }
-
     /// Bytes of the fixed `MUS` header in the fixture.
     const HEADER_LEN: u16 = 16_u16;
+
+    /// The lump name every converter test reports failures under.
+    fn song_name() -> super::LumpName {
+        super::LumpName::parse("D_TEST").expect("a valid test name")
+    }
 
     /// A minimal valid `MUS` lump: the 16-byte header plus a score holding
     /// one middle-C note and the end marker.
@@ -641,7 +531,7 @@ mod tests {
     #[test]
     fn playable_mus_becomes_a_midi_file_and_midi_passes_through() {
         let (midi, extension, kind) =
-            music_to_playable(&mus_fixture()).expect("the MUS fixture converts");
+            music_to_playable(song_name(), &mus_fixture()).expect("the MUS fixture converts");
         assert_eq!(extension, "mid", "the playable container is SMF");
         assert_eq!(kind, MusicKind::Mus, "the input kind is reported");
         assert!(midi.starts_with(b"MThd"), "the conversion writes SMF");
@@ -651,7 +541,7 @@ mod tests {
         );
         let raw = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01".to_vec();
         let (through, smf_ext, smf_kind) =
-            music_to_playable(&raw).expect("MIDI is already playable");
+            music_to_playable(song_name(), &raw).expect("MIDI is already playable");
         assert_eq!(through, raw, "the bytes are unchanged");
         assert_eq!(smf_ext, "mid", "the same container");
         assert_eq!(smf_kind, MusicKind::Midi, "reported as the input kind");
@@ -670,7 +560,7 @@ mod tests {
             (b"IMPM\0\0\0\0body".to_vec(), ("it", MusicKind::It)),
         ] {
             let (data, extension, kind) =
-                music_to_playable(&bytes).expect("a recognised container plays");
+                music_to_playable(song_name(), &bytes).expect("a recognised container plays");
             assert_eq!(data, bytes, "byte for byte for {want:?}");
             assert_eq!(extension, want.0, "extension for {want:?}");
             assert_eq!(kind, want.1, "kind for {want:?}");
@@ -683,7 +573,8 @@ mod tests {
             (s3m, ("s3m", MusicKind::S3m)),
             (mod_bytes, ("mod", MusicKind::Mod)),
         ] {
-            let (data, extension, kind) = music_to_playable(&bytes).expect("a module plays");
+            let (data, extension, kind) =
+                music_to_playable(song_name(), &bytes).expect("a module plays");
             assert_eq!(data, bytes, "byte for byte for {want:?}");
             assert_eq!(extension, want.0, "extension for {want:?}");
             assert_eq!(kind, want.1, "kind for {want:?}");
@@ -691,14 +582,24 @@ mod tests {
     }
 
     #[test]
-    fn unrecognised_and_corrupt_music_refuse_to_convert() {
-        let error = music_to_playable(b"total nonsense").expect_err("no magic here");
+    fn unrecognised_music_refuses_naming_the_lump() {
+        let error = music_to_playable(song_name(), b"total nonsense").expect_err("no magic here");
         assert_eq!(error.code(), "unsupported", "unrecognised code");
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("not recognised music"),
-            "the message names the fix: {error}"
+            message.contains("D_TEST") && message.contains("not recognised music"),
+            "the message names the lump and the way out: {message}"
         );
-        let corrupt_error = music_to_playable(b"MUS\x1A").expect_err("a truncated MUS");
+        assert!(
+            message.contains("get_lump format=url"),
+            "and the raw fallback: {message}"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_mus_score_keeps_the_validator_s_message() {
+        let corrupt_error =
+            music_to_playable(song_name(), b"MUS\x1A").expect_err("a truncated MUS");
         assert_eq!(
             corrupt_error.code(),
             "format_error",

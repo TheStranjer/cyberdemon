@@ -4,11 +4,13 @@
 //! The group's first tool is [`Cyberdemon::import_sound`]: fetch a
 //! `WAV`/`OGG`/`MP3`/`FLAC` file through [`AppState::fetch_source`], decode
 //! it with [`crate::audio::decode_any`] and either convert it to a vanilla
-//! `DMX` `DS*` lump or store the original bytes unchanged.
-//! [`Cyberdemon::preview_sound`] goes the other way: it reads one sound
-//! lump of the session and publishes it as a playable asset, converting
-//! `DMX` and `PC` speaker lumps to `WAV`. The conversion itself lives in
-//! the crate-visible [`sound_to_playable`] so `get_asset_url` can reuse it.
+//! `DMX` `DS*` lump or store the original bytes unchanged. Naming and
+//! placement run through the shared [`crate::tools::audio_common::SOUND`]
+//! family rule. [`Cyberdemon::preview_sound`] goes the other way: it reads
+//! one sound lump of the session and publishes it as a playable asset,
+//! converting `DMX` and `PC` speaker lumps to `WAV`. The conversion itself
+//! lives in the crate-visible [`sound_to_playable`] so `get_asset_url` can
+//! reuse it.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -16,29 +18,20 @@ use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::assets::fetch::derive_lump_name;
 use crate::assets::server::AssetRef;
-use crate::assets::store::mime_for_extension;
 use crate::audio::{
     Pcm, decode_any, decode_dmx, decode_wav, encode_dmx, encode_wav, sniff_format,
     synthesize_pc_speaker,
 };
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::Session;
 use crate::state::AppState;
+use crate::tools::audio_common::{MediaLump, SOUND, publish_playable};
 use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::{parse_limit, reply};
-use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::LumpKind;
-use crate::wad::name::{LumpName, MAX_NAME_LEN};
+use crate::wad::name::LumpName;
 
-/// Prefix `Doom`'s sound table puts in front of every built-in sound name;
-/// vanilla engines look sounds up as `DS<name>` with no `SNDINFO`.
-const SOUND_PREFIX: &str = "DS";
-/// Characters left for the derived stem once the prefix took its share of
-/// the eight-byte lump-name field.
-const SOUND_HEAD: usize = 6;
 /// Default `DMX` sample rate, the vanilla engine's own.
 const DEFAULT_RATE: u32 = 11025;
 /// Lowest `sample_rate` the tool accepts.
@@ -60,7 +53,9 @@ struct ImportSoundParams {
     source: String,
     /// Lump name (1 to 8 printable ASCII characters, uppercased). Defaults
     /// to `DS` plus the file stem uppercased and trimmed to 8 characters:
-    /// `pistol.wav` becomes `DSPISTOL`.
+    /// `pistol.wav` becomes `DSPISTOL`. A stem that already starts with
+    /// `DS` is kept whole: `DSPISTOL.wav` becomes `DSPISTOL`, not
+    /// `DSDSPIST`.
     #[serde(default)]
     name: Option<String>,
     /// `"doom"` (the default) converts to a vanilla `DMX` sound lump;
@@ -260,78 +255,13 @@ fn build_dmx(pcm: &Pcm, plan: &Plan) -> Result<Stored, CyberError> {
     })
 }
 
-/// The name to store under: the explicit one, else `DS` plus the derived,
-/// trimmed file stem.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] asking for `name` when nothing usable
-/// can be derived.
-fn chosen_name(plan: &Plan, filename: &str) -> Result<LumpName, CyberError> {
-    if let Some(name) = plan.name {
-        return Ok(name);
-    }
-    let stem = derive_lump_name(filename).ok_or_else(|| {
-        CyberError::InvalidArgument(format!(
-            "cannot derive a sound name from {filename:?}: pass name (1 to {MAX_NAME_LEN} \
-             printable ASCII characters)"
-        ))
-    })?;
-    let head: String = stem.to_string().chars().take(SOUND_HEAD).collect();
-    LumpName::parse(&format!("{SOUND_PREFIX}{head}"))
-}
-
-/// The synchronous half: one undoable insert (or in-place replace) of the
-/// sound lump in the global area of the working archive.
-///
-/// # Errors
-///
-/// [`CyberError::AlreadyExists`] for a working lump of the same name when
-/// `replace` is `false`.
-fn store(
-    session: &mut Session,
-    name: LumpName,
-    data: Vec<u8>,
-    replace: bool,
-) -> Result<(), CyberError> {
-    let label = format!("import_sound {name}");
-    session.edit(&label, |wad| place_sound(wad, name, data, replace))
-}
-
-/// Put the sound at the end of `wad`, replacing the last same-name lump
-/// when one exists and `replace` allows it. Sounds have no namespace.
-///
-/// # Errors
-///
-/// [`CyberError::AlreadyExists`] as by [`store`].
-fn place_sound(
-    wad: &mut Wad,
-    name: LumpName,
-    data: Vec<u8>,
-    replace: bool,
-) -> Result<(), CyberError> {
-    if wad.find_last(name).is_none() {
-        wad.lumps.push(Lump::new(name, data));
-        return Ok(());
-    }
-    if !replace {
-        return Err(CyberError::AlreadyExists(format!(
-            "lump {name} already exists in the working archive: pass replace true to overwrite \
-             it or choose another name"
-        )));
-    }
-    if let Some(slot) = wad.lumps.iter_mut().rev().find(|lump| lump.name == name) {
-        *slot = Lump::new(name, data);
-    }
-    Ok(())
-}
-
 /// Run `import_sound` end to end: fetch, decode, convert and commit.
 ///
 /// # Errors
 ///
 /// [`plan`], [`AppState::fetch_source`], [`decode_any`], [`check_duration`],
-/// [`build_dmx`], [`chosen_name`] and [`store`] errors pass through.
+/// [`build_dmx`], [`SOUND`](crate::tools::audio_common::SOUND)'s name and
+/// store errors pass through.
 async fn import(
     state: &AppState,
     args: &ImportSoundParams,
@@ -357,14 +287,15 @@ async fn import(
             data: fetched.bytes,
         },
     };
-    let name = chosen_name(&plan, &fetched.filename)?;
+    let name = SOUND.choose_name(plan.name, &fetched.filename)?;
     let Stored {
         data,
         sample_rate,
         duration_ms,
     } = stored;
     let bytes = data.len();
-    state.with_session(|session| store(session, name, data, plan.replace))?;
+    let lump = MediaLump { name, data };
+    state.with_session(|session| SOUND.store(session, lump, plan.replace))?;
     Ok(ImportSoundReport {
         name,
         format: plan.format,
@@ -475,14 +406,16 @@ fn playable_wav(pcm: &Pcm, bits: u16) -> Result<Playable, CyberError> {
     Ok((encode_wav(pcm, bits)?, "wav", Some(info)))
 }
 
-/// Convert one sound lump's bytes into a playable file: the file bytes,
-/// its extension (without the dot) and, where the format names them, the
-/// sample rate and length.
+/// Convert the bytes of one lump named `name` into a playable file: the
+/// file bytes, its extension (without the dot) and, where the format names
+/// them, the sample rate and length.
 ///
 /// `doom_sound` lumps are decoded and re-encoded as `WAV` at `bits`;
 /// `pc_speaker` lumps are synthesized (mono 11025 Hz square wave, pitch
 /// approximate, see [`synthesize_pc_speaker`]) and encoded as `WAV` at
-/// `bits`; the four container kinds pass through unchanged.
+/// `bits`; the four container kinds pass through unchanged. Every other
+/// classification refuses naming the lump, which is the one `unsupported`
+/// branch `preview_sound` and `get_asset_url` share.
 ///
 /// # Errors
 ///
@@ -490,6 +423,7 @@ fn playable_wav(pcm: &Pcm, bits: u16) -> Result<Playable, CyberError> {
 /// for malformed sound data; [`CyberError::Unsupported`] for a kind that
 /// is not a sound.
 pub(in crate::tools) fn sound_to_playable(
+    name: LumpName,
     bytes: &[u8],
     kind: LumpKind,
     bits: u16,
@@ -506,7 +440,7 @@ pub(in crate::tools) fn sound_to_playable(
         LumpKind::Ogg => Ok((bytes.to_vec(), "ogg", None)),
         LumpKind::Mp3 => Ok((bytes.to_vec(), "mp3", None)),
         LumpKind::Flac => Ok((bytes.to_vec(), "flac", None)),
-        other @ (LumpKind::Marker
+        LumpKind::Marker
         | LumpKind::MapMarker
         | LumpKind::MapData
         | LumpKind::Palette
@@ -529,36 +463,26 @@ pub(in crate::tools) fn sound_to_playable(
         | LumpKind::Patch
         | LumpKind::Text
         | LumpKind::Empty
-        | LumpKind::Unknown) => Err(CyberError::Unsupported(format!(
-            "a {} lump is not a recognised sound; use get_lump format=url \
-             for raw bytes",
-            other.as_str()
+        | LumpKind::Unknown => Err(CyberError::Unsupported(format!(
+            "lump {name} is not a recognised sound; use get_lump format=url for raw bytes"
         ))),
     }
 }
 
-/// Run `preview_sound` end to end: resolve the lump, convert it and
-/// publish the playable file.
+/// Run `preview_sound` end to end: resolve the lump, convert it and publish
+/// the playable file.
 ///
 /// # Errors
 ///
 /// [`parse_bits`] and [`resolve`] errors for the arguments;
-/// [`CyberError::Unsupported`] naming the lump when its kind is not a
-/// sound; [`sound_to_playable`] errors for the bytes;
-/// [`AppState::publish`] errors for the asset store.
+/// [`sound_to_playable`] errors for the lump and its bytes, naming the lump
+/// when its kind is not a sound; [`publish_playable`] errors for the asset
+/// store.
 fn preview(state: &AppState, args: &PreviewSoundParams) -> Result<PreviewSoundReport, CyberError> {
     let bits = parse_bits(args.bits)?;
     let row = state.with_session(|session| resolve(session, &args.selector))?;
-    if !is_sound_kind(row.kind) {
-        let name = row.name;
-        return Err(CyberError::Unsupported(format!(
-            "lump {name} is not a recognised sound; use get_lump format=url for raw bytes"
-        )));
-    }
-    let (data, extension, info) = sound_to_playable(&row.lump.data, row.kind, bits)?;
-    let filename = format!("{}.{extension}", row.name);
-    let mime = mime_for_extension(extension);
-    let asset = state.publish(&filename, mime, data)?;
+    let (data, extension, info) = sound_to_playable(row.name, &row.lump.data, row.kind, bits)?;
+    let asset = publish_playable(state, row.name, extension, data)?;
     Ok(PreviewSoundReport {
         name: row.name,
         kind: row.kind,
@@ -577,7 +501,7 @@ fn preview(state: &AppState, args: &PreviewSoundParams) -> Result<PreviewSoundRe
 impl Cyberdemon {
     /// Imports a sound file as a lump in the working archive.
     #[tool(
-        description = "Imports a WAV, OGG, MP3 or FLAC file as a lump in the working archive as one undoable edit: by default the audio is downmixed, resampled and stored as a vanilla Doom DS-prefixed 8-bit sound, or kept in its container when format says so and a port reads it directly. name defaults to the file's stem with the DS prefix; preview_sound plays it back."
+        description = "Imports a WAV, OGG, MP3 or FLAC file as a lump in the working archive as one undoable edit: by default the audio is downmixed, resampled and stored as a vanilla Doom DS-prefixed 8-bit sound, or kept in its container when format says so and a port reads it directly. name defaults to the file's stem under the DS prefix, kept whole when it already starts with DS; preview_sound plays it back."
     )]
     async fn import_sound(
         &self,
@@ -606,6 +530,7 @@ mod tests {
     };
     use crate::audio::{Pcm, decode_wav, encode_dmx, encode_wav};
     use crate::wad::classify::LumpKind;
+    use crate::wad::name::LumpName;
 
     /// One frame of the small square wave the fixtures use.
     fn square_at(frame: usize) -> i16 {
@@ -623,6 +548,11 @@ mod tests {
             channels: 1,
             samples: (0..frames).map(square_at).collect(),
         }
+    }
+
+    /// The lump name every converter test reports failures under.
+    fn lump_name(text: &str) -> LumpName {
+        LumpName::parse(text).expect("a valid test name")
     }
 
     #[test]
@@ -757,7 +687,8 @@ mod tests {
     fn dmx_lump_bytes_become_a_wav_with_their_facts() {
         let bytes = encode_dmx(&tone(22050, 100), true).expect("mono encodes");
         let (wav, extension, maybe_facts) =
-            sound_to_playable(&bytes, LumpKind::DoomSound, 16).expect("a DMX sound converts");
+            sound_to_playable(lump_name("DSTEST"), &bytes, LumpKind::DoomSound, 16)
+                .expect("a DMX sound converts");
         assert_eq!(extension, "wav", "a WAV is produced");
         assert_eq!(wav[..4], *b"RIFF", "RIFF magic");
         let decoded = decode_wav(&wav).expect("the WAV we just encoded");
@@ -771,8 +702,11 @@ mod tests {
     #[test]
     fn bits_8_writes_the_narrower_wav_data() {
         let bytes = encode_dmx(&tone(11025, 100), true).expect("mono encodes");
-        let (wide, _, _) = sound_to_playable(&bytes, LumpKind::DoomSound, 16).expect("16-bit");
-        let (narrow, _, _) = sound_to_playable(&bytes, LumpKind::DoomSound, 8).expect("8-bit");
+        let name = lump_name("DSTEST");
+        let (wide, _, _) =
+            sound_to_playable(name, &bytes, LumpKind::DoomSound, 16).expect("16-bit");
+        let (narrow, _, _) =
+            sound_to_playable(name, &bytes, LumpKind::DoomSound, 8).expect("8-bit");
         assert_eq!(
             wide.len(),
             44_usize.checked_add(200).expect("test sizes fit"),
@@ -789,7 +723,8 @@ mod tests {
     fn pc_speaker_lumps_synthesize_and_broken_ones_refuse() {
         let lump = [0_u8, 0, 3, 0, 0, 20, 40];
         let (wav, extension, maybe_facts) =
-            sound_to_playable(&lump, LumpKind::PcSpeaker, 16).expect("a tone list synthesizes");
+            sound_to_playable(lump_name("DPTEST"), &lump, LumpKind::PcSpeaker, 16)
+                .expect("a tone list synthesizes");
         assert_eq!(extension, "wav", "the synthesis is a WAV");
         let decoded = decode_wav(&wav).expect("the WAV we just encoded");
         assert_eq!(decoded.sample_rate, 11025, "the engine's rate");
@@ -800,7 +735,7 @@ mod tests {
             "236 frames at 11025 Hz floor to 21 ms"
         );
         let broken = [1_u8, 0, 1, 0, 0];
-        let error = sound_to_playable(&broken, LumpKind::PcSpeaker, 16)
+        let error = sound_to_playable(lump_name("DPTEST"), &broken, LumpKind::PcSpeaker, 16)
             .expect_err("format 1 is not a tone list");
         assert_eq!(error.code(), "format_error", "bad DP format code");
     }
@@ -809,7 +744,8 @@ mod tests {
     fn containers_pass_through_and_only_wav_reports_facts() {
         let wav = encode_wav(&tone(8000, 30), 16).expect("the fixture encodes");
         let (kept, extension, facts) =
-            sound_to_playable(&wav, LumpKind::Wav, 16).expect("a WAV passes through");
+            sound_to_playable(lump_name("WAVTEST"), &wav, LumpKind::Wav, 16)
+                .expect("a WAV passes through");
         assert_eq!(extension, "wav", "kept as a WAV");
         assert_eq!(kept, wav, "byte for byte unchanged");
         let header = facts.expect("the WAV header decodes");
@@ -821,7 +757,8 @@ mod tests {
             (LumpKind::Flac, "flac"),
         ] {
             let payload = b"\x00\x01\x02\x03";
-            let (data, got, info) = sound_to_playable(payload, kind, 16).expect("bytes pass");
+            let (data, got, info) =
+                sound_to_playable(lump_name("TEST"), payload, kind, 16).expect("bytes pass");
             assert_eq!(got, wanted, "extension for {kind:?}");
             assert_eq!(data, payload, "unchanged for {kind:?}");
             assert!(info.is_none(), "no facts for {kind:?}");
@@ -832,20 +769,26 @@ mod tests {
     fn a_broken_wav_still_passes_through_without_facts() {
         let not_a_real_wav = b"RIFF\x00\x00\x00\x00WAVEjunk";
         let (bytes, extension, info) =
-            sound_to_playable(not_a_real_wav, LumpKind::Wav, 16).expect("the bytes pass");
+            sound_to_playable(lump_name("WAVTEST"), not_a_real_wav, LumpKind::Wav, 16)
+                .expect("the bytes pass");
         assert_eq!(extension, "wav", "the kind picks the extension");
         assert_eq!(bytes, not_a_real_wav, "unchanged");
         assert!(info.is_none(), "an undecodable header reports nothing");
     }
 
     #[test]
-    fn non_sound_kinds_are_unsupported_with_a_way_out() {
-        let error =
-            sound_to_playable(b"xx", LumpKind::Palette, 16).expect_err("a palette is not a sound");
+    fn non_sound_kinds_are_unsupported_naming_the_lump() {
+        let error = sound_to_playable(lump_name("PLAYPAL"), b"xx", LumpKind::Palette, 16)
+            .expect_err("a palette is not a sound");
         assert_eq!(error.code(), "unsupported", "palette code");
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("get_lump format=url"),
-            "the message names the way out: {error}"
+            message.contains("PLAYPAL") && message.contains("not a recognised sound"),
+            "the message names the lump: {message}"
+        );
+        assert!(
+            message.contains("get_lump format=url"),
+            "the message names the way out: {message}"
         );
     }
 }

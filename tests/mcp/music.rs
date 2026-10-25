@@ -210,6 +210,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_midi_file_already_named_for_the_engine_keeps_its_lump_name() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let named = write_midi(dir.path(), "D_RUNNIN", &ONE_NOTE);
+        let report = call(&client, "import_music", source_arg(&named)).await;
+        assert_eq!(
+            report["name"],
+            json!("D_RUNNIN"),
+            "the D_ prefix is not doubled"
+        );
+        let long = write_midi(dir.path(), "D_INTERLONGER", &ONE_NOTE);
+        let second = call(&client, "import_music", source_arg(&long)).await;
+        assert_eq!(
+            second["name"],
+            json!("D_INTERL"),
+            "the stem is trimmed to the eight-byte field, not re-prefixed to six"
+        );
+        let short = write_mus(dir.path(), "d_run");
+        let third = call(&client, "import_music", source_arg(&short)).await;
+        assert_eq!(
+            third["name"],
+            json!("D_RUN"),
+            "a short lowercase prefixed stem stays short"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["D_RUNNIN", "D_INTERL", "D_RUN"],
+            "three distinct lumps"
+        );
+    }
+
+    #[tokio::test]
     async fn a_conversion_reports_what_mus_cannot_carry() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;

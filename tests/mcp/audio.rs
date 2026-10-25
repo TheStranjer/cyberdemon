@@ -208,6 +208,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_wav_already_named_for_the_engine_keeps_its_lump_name() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let named = write_stereo_wav(dir.path(), "DSPISTOL", ONE_SECOND);
+        let report = call(&client, "import_sound", source_arg(&named)).await;
+        assert_eq!(
+            report["name"],
+            json!("DSPISTOL"),
+            "the DS prefix is not doubled"
+        );
+        let lower = write_stereo_wav(dir.path(), "dsdoorsw", 441);
+        let second = call(&client, "import_sound", source_arg(&lower)).await;
+        assert_eq!(
+            second["name"],
+            json!("DSDOORSW"),
+            "a short lowercase DS stem keeps its name too"
+        );
+        assert_eq!(
+            working_names(&client).await,
+            vec!["DSPISTOL", "DSDOORSW"],
+            "two distinct lumps, in directory order"
+        );
+    }
+
+    #[tokio::test]
     async fn keep_rate_stores_the_source_rate_instead_of_resampling() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = connect().await;

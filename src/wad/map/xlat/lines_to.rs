@@ -15,27 +15,14 @@
 //! [`linedefs_from_hexen`](super::linedefs_from_hexen) is the reverse.
 
 use crate::error::CyberError;
-use crate::wad::map::flags::{ACTIVATION_SHIFT, MONSTER_ACTIVATE};
+use crate::wad::map::flags::{
+    ACTIVATION_SHIFT, MONSTER_ACTIVATE, PASS_USE, REPEAT_SPECIAL, SHARED_LINEDEF_BITS,
+};
 use crate::wad::map::model::{Linedef, Map};
 
 use super::lines_from::expected_field;
 use super::table::{XlatFlags, XlatRow, rows_for_doom};
 use super::{LinesReport, Untranslated, show_indices};
-
-/// The `Doom`-family linedef bit 512: `passuse`, which the `Hexen` family
-/// spends on `repeatspecial`.
-const DOOM_PASSUSE: u32 = 0x200;
-
-/// The `Hexen`-family linedef bit 512: `repeatspecial`.
-pub(super) const HEXEN_REPEAT: u32 = 0x200;
-
-/// The linedef flag bits the two families share: `blocking` through
-/// `mapped`.
-pub(super) const DOOM_FLAG_BITS: u32 = 0x1FF;
-
-/// The `Hexen`-family bits 0x4000|0x8000: `blockplayers` and
-/// `blockeverything`, which no `Doom`-family bit holds.
-pub(super) const HEXEN_BLOCK_BITS: u32 = 0xC000;
 
 /// The binary `Hexen` line special that stores a line id:
 /// `Line_SetIdentification`.
@@ -182,10 +169,10 @@ fn forward_line(
 /// family owns bit 512 for `repeatspecial` and the `UDMF` writers carry
 /// the verbatim key wherever a `passuse` flag cannot sit.
 fn share_passuse(line: &mut Linedef) {
-    if line.flags & DOOM_PASSUSE != 0_u32 {
+    if line.flags & PASS_USE != 0_u32 {
         line.extra.insert(PASSUSE_KEY.to_owned(), "true".to_owned());
     }
-    line.flags &= DOOM_FLAG_BITS;
+    line.flags &= SHARED_LINEDEF_BITS;
 }
 
 /// Report one forward step's loss: the special the stage could not carry
@@ -274,7 +261,7 @@ const fn hexen_trigger_bits(row: &XlatRow) -> u32 {
         None => 0_u32,
     };
     if row.activation.contains(XlatFlags::REP) {
-        bits |= HEXEN_REPEAT;
+        bits |= REPEAT_SPECIAL;
     }
     if row.activation.contains(XlatFlags::MONST) {
         bits |= MONSTER_ACTIVATE;

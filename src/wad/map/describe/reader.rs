@@ -22,7 +22,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::defs::Definitions;
-use crate::wad::map::flags::Skill;
+use crate::wad::map::flags::{BLOCKING, Skill};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::playability::{
@@ -39,9 +39,9 @@ use super::tally::{
     special_info, start_stuck, thing_counts, top_rows, wall_tally, wall_textures,
 };
 use super::{
-    BLOCKING, Describe, MapOverview, NAME_DOOR, NAME_EXIT_ROOM, NAME_IMPASSABLE, NAME_LIFT,
-    NAME_SECRET, NAME_SKY, NAME_STAIR_STEP, NAME_TELEPORT_DESTINATION, NAME_WINDOW, Neighbour,
-    PlayableSummary, SectorFacts,
+    Describe, MapOverview, NAME_DOOR, NAME_EXIT_ROOM, NAME_IMPASSABLE, NAME_LIFT, NAME_SECRET,
+    NAME_SKY, NAME_STAIR_STEP, NAME_TELEPORT_DESTINATION, NAME_WINDOW, Neighbour, PlayableSummary,
+    SectorFacts,
 };
 
 /// The ceiling flat that means open sky, the name the renderer switches on.

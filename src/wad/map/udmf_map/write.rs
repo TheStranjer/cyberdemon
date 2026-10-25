@@ -15,7 +15,10 @@
 use alloc::collections::BTreeMap;
 
 use crate::error::CyberError;
-use crate::wad::map::flags::{FlagFamily, FlagKind, to_names};
+use crate::wad::map::flags::{
+    FlagFamily, FlagKind, THING_AMBUSH, THING_DOOM_FRIEND, THING_DOOM_NOT_COOP, THING_DOOM_NOT_DM,
+    THING_DOOM_NOT_SINGLE, THING_EASY, THING_HARD, THING_MEDIUM, to_names,
+};
 use crate::wad::map::model::{Linedef, Sector, Sidedef, Thing, Vertex};
 use crate::wad::udmf::{UdmfBlock, UdmfValue};
 
@@ -249,16 +252,16 @@ fn store_index(value: usize, key: &str, at: &str) -> Result<i32, CyberError> {
 /// presence bits, and `single`, `dm` and `coop` are written true exactly
 /// when their inverse bit is clear.
 fn doom_thing_booleans(out: &mut Out, bits: u32) {
-    let easy = bits & 1_u32 != 0_u32;
-    let hard = bits & 4_u32 != 0_u32;
+    let easy = bits & THING_EASY != 0_u32;
+    let hard = bits & THING_HARD != 0_u32;
     out.boolean("skill1", easy);
     out.boolean("skill2", easy);
-    out.boolean("skill3", bits & 2_u32 != 0_u32);
+    out.boolean("skill3", bits & THING_MEDIUM != 0_u32);
     out.boolean("skill4", hard);
     out.boolean("skill5", hard);
-    out.boolean("ambush", bits & 8_u32 != 0_u32);
-    out.boolean("single", bits & 16_u32 == 0_u32);
-    out.boolean("dm", bits & 32_u32 == 0_u32);
-    out.boolean("coop", bits & 64_u32 == 0_u32);
-    out.boolean("friend", bits & 128_u32 != 0_u32);
+    out.boolean("ambush", bits & THING_AMBUSH != 0_u32);
+    out.boolean("single", bits & THING_DOOM_NOT_SINGLE == 0_u32);
+    out.boolean("dm", bits & THING_DOOM_NOT_DM == 0_u32);
+    out.boolean("coop", bits & THING_DOOM_NOT_COOP == 0_u32);
+    out.boolean("friend", bits & THING_DOOM_FRIEND != 0_u32);
 }

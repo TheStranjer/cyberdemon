@@ -23,12 +23,10 @@ use serde::Serialize;
 use super::PLAYER_HEIGHT;
 use super::specials::spawns;
 use crate::defs::Definitions;
-use crate::wad::map::flags::Skill;
+use crate::wad::map::flags::{FlagFamily, Skill, blocks_players};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Map, Thing};
 
-/// The `blocking` linedef bit, the same value in both flag families.
-const BLOCKING: u32 = 1_u32;
 /// The half-side of the square assumed for thing types the definitions do
 /// not know: `Doom`'s imp radius, the stock monster body.
 const UNKNOWN_THING_RADIUS: i64 = 20;
@@ -93,7 +91,7 @@ pub fn stuck_things(map: &Map, defs: &Definitions, skill: Skill) -> Vec<Stuck> {
             continue;
         };
         let square = Square::of(row, radius);
-        if let Some(line) = wall_through(map, &square) {
+        if let Some(line) = wall_through(map, family, &square) {
             report.push(Stuck {
                 thing: index,
                 reason: StuckReason::InWall { line },
@@ -144,10 +142,11 @@ fn sector_depth(map: &Map, sector: usize) -> Option<i32> {
 }
 
 /// The first linedef running strictly through `square`, checking every
-/// one-sided or blocking line of `map` in linedef order.
-fn wall_through(map: &Map, square: &Square) -> Option<usize> {
+/// one-sided line and every line whose bits stop a player in the map's
+/// own flag family, in linedef order.
+fn wall_through(map: &Map, family: FlagFamily, square: &Square) -> Option<usize> {
     map.linedefs.iter().enumerate().find_map(|(index, line)| {
-        let solid = line.back.is_none() || line.flags & BLOCKING == BLOCKING;
+        let solid = line.back.is_none() || blocks_players(line.flags, family);
         if !solid {
             return None;
         }
@@ -332,13 +331,11 @@ mod tests {
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
     use crate::wad::map::common::fixtures::{name, room, side, solid_line, spawn, vertex};
-    use crate::wad::map::flags::Skill;
+    use crate::wad::map::flags::{
+        HEXEN_BLOCK_EVERYTHING, HEXEN_BLOCK_PLAYERS, Skill, THING_EASY, THING_HEXEN_SINGLE,
+        THING_MEDIUM, THING_SKILL_BITS, TWO_SIDED,
+    };
     use crate::wad::map::{Map, Thing};
-
-    /// The `Doom` `easy` skill bit.
-    const EASY: u32 = 1_u32;
-    /// The `Doom` `medium` skill bit.
-    const MEDIUM: u32 = 2_u32;
 
     /// The built-in `DOOM II` definitions the tests read bodies from.
     fn defs() -> Definitions {
@@ -348,7 +345,12 @@ mod tests {
     /// A walled 256-unit room standing at `heights`, with a player 1 start
     /// in the middle. Line 3 is the west wall, `x = 0`.
     fn room_map(heights: (i32, i32)) -> Map {
-        let mut map = Map::new_empty(name("MAP01"), MapFormat::Doom);
+        room_map_in(heights, MapFormat::Doom)
+    }
+
+    /// [`room_map`] storing its block in the map format `format`.
+    fn room_map_in(heights: (i32, i32), format: MapFormat) -> Map {
+        let mut map = Map::new_empty(name("MAP01"), format);
         map.vertices = vec![
             vertex(0, 0),
             vertex(256, 0),
@@ -408,6 +410,67 @@ mod tests {
                 reason: StuckReason::InWall { line: 3 },
             }],
             "the west wall runs through the imp's square"
+        );
+    }
+
+    /// Turn `map`'s west wall (line 3) into a two-sided line wearing
+    /// `extra`: no longer one-sided, so only its bits can stop a body.
+    fn open_west_wall(map: &mut Map, extra: u32) {
+        let wall = map.linedefs.get_mut(3).expect("the west wall");
+        wall.flags = TWO_SIDED | extra;
+        wall.back = Some(0);
+    }
+
+    #[test]
+    fn a_hexen_blockplayers_line_holds_a_thing_in_wall() {
+        let mut map = room_map_in((0_i32, 128_i32), MapFormat::Hexen);
+        map.things.clear();
+        open_west_wall(&mut map, HEXEN_BLOCK_PLAYERS);
+        let imp = stand(
+            &mut map,
+            3001,
+            (4_i32, 128_i32),
+            THING_SKILL_BITS | THING_HEXEN_SINGLE,
+        );
+        assert_eq!(
+            stuck_things(&map, &defs(), Skill::Medium),
+            vec![Stuck {
+                thing: imp,
+                reason: StuckReason::InWall { line: 3 },
+            }],
+            "the walk and the placement already read blockplayers as a wall; so does this"
+        );
+    }
+
+    #[test]
+    fn a_hexen_blockeverything_line_holds_a_thing_in_wall() {
+        let mut map = room_map_in((0_i32, 128_i32), MapFormat::Hexen);
+        map.things.clear();
+        open_west_wall(&mut map, HEXEN_BLOCK_EVERYTHING);
+        stand(
+            &mut map,
+            3001,
+            (4_i32, 128_i32),
+            THING_SKILL_BITS | THING_HEXEN_SINGLE,
+        );
+        let report = stuck_things(&map, &defs(), Skill::Medium);
+        assert!(
+            report
+                .iter()
+                .any(|stuck| stuck.reason == StuckReason::InWall { line: 3 }),
+            "blockeverything stops every body: {report:?}"
+        );
+    }
+
+    #[test]
+    fn the_same_hexen_bits_are_nothing_to_a_doom_wall_test() {
+        let mut map = room_map((0_i32, 128_i32));
+        map.things.clear();
+        open_west_wall(&mut map, HEXEN_BLOCK_PLAYERS | HEXEN_BLOCK_EVERYTHING);
+        stand(&mut map, 3001, (4_i32, 128_i32), THING_SKILL_BITS);
+        assert!(
+            stuck_things(&map, &defs(), Skill::Medium).is_empty(),
+            "the Doom tables do not name those bits, so the open line passes"
         );
     }
 
@@ -528,7 +591,7 @@ mod tests {
     #[test]
     fn a_thing_that_does_not_spawn_at_the_skill_is_left_alone() {
         let mut map = room_map((0_i32, 128_i32));
-        let imp = stand(&mut map, 3001, (4_i32, 128_i32), EASY);
+        let imp = stand(&mut map, 3001, (4_i32, 128_i32), THING_EASY);
         assert!(
             stuck_things(&map, &defs(), Skill::Medium).is_empty(),
             "an easy-only imp is not on the map at medium skill"
@@ -547,7 +610,7 @@ mod tests {
     fn a_medium_skill_bit_spawns_on_medium_only() {
         let mut map = room_map((0_i32, 128_i32));
         map.things.clear();
-        stand(&mut map, 3001, (4_i32, 128_i32), MEDIUM);
+        stand(&mut map, 3001, (4_i32, 128_i32), THING_MEDIUM);
         assert!(
             stuck_things(&map, &defs(), Skill::Easy).is_empty(),
             "the medium bit keeps him off easy"

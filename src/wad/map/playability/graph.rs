@@ -19,17 +19,9 @@ use alloc::vec::Vec;
 use super::reach::Run;
 use super::specials::Inventory;
 use super::{CLOSED_DOOR_TOLERANCE, DOOR_HEADROOM, MAX_STEP_UP, PLAYER_HEIGHT};
-use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::flags::{FlagFamily, blocks_players};
 use crate::wad::map::geometry::linedef_length;
 use crate::wad::map::model::{Linedef, Map};
-
-/// The `blocking` linedef bit, the same value in both flag families: nothing
-/// gets through, player or monster.
-const BLOCKING: u32 = 1_u32;
-/// The `Hexen` `blockplayers` bit: the player cannot cross, monsters can.
-const BLOCK_PLAYERS: u32 = 0x4000;
-/// The `Hexen` `blockeverything` bit.
-const BLOCK_EVERYTHING: u32 = 0x8000;
 
 /// A sector's floor and ceiling heights.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,15 +97,10 @@ pub(super) fn sides(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
     (front != back).then_some((front, back))
 }
 
-/// Whether nothing can cross `line`: the shared `blocking` bit, plus the two
-/// `Hexen` bits that keep players out. The `blockmonsters` bit is deliberately
-/// not among them: a player walks past a wall that only holds monsters.
+/// Whether nothing a player is can cross `line`: [`blocks_players`]'
+/// answer, phrased in the walk's own vocabulary.
 pub(super) const fn impassable(flags: u32, family: FlagFamily) -> bool {
-    if flags & BLOCKING == BLOCKING {
-        return true;
-    }
-    matches!(family, FlagFamily::Hexen)
-        && (flags & BLOCK_PLAYERS == BLOCK_PLAYERS || flags & BLOCK_EVERYTHING == BLOCK_EVERYTHING)
+    blocks_players(flags, family)
 }
 
 /// Whether a player standing in a sector of height `from` can step into one of
@@ -411,12 +398,13 @@ impl<'map> World<'map> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BLOCK_EVERYTHING, BLOCK_PLAYERS, BLOCKING, Crossing, Height, Opened, Pass, World, closed,
-        impassable, lowest_ceiling, lowest_floor, neighbour_table, passage_table, side_sector,
-        sides, standing,
+        Crossing, Height, Opened, Pass, World, closed, impassable, lowest_ceiling, lowest_floor,
+        neighbour_table, passage_table, side_sector, sides, standing,
     };
     use crate::wad::map::common::fixtures::{name, room, side, spawn, two_room_map, vertex};
-    use crate::wad::map::flags::{FlagFamily, Skill};
+    use crate::wad::map::flags::{
+        BLOCKING, FlagFamily, HEXEN_BLOCK_EVERYTHING, HEXEN_BLOCK_PLAYERS, Skill,
+    };
     use crate::wad::map::playability::MIN_LINE_WIDTH;
     use crate::wad::map::playability::reach::Run;
     use crate::wad::map::playability::specials::read_inventory;
@@ -484,15 +472,15 @@ mod tests {
         );
         assert!(!impassable(0_u32, FlagFamily::Hexen), "an open line");
         assert!(
-            impassable(BLOCK_PLAYERS, FlagFamily::Hexen),
+            impassable(HEXEN_BLOCK_PLAYERS, FlagFamily::Hexen),
             "blockplayers keeps the player out"
         );
         assert!(
-            impassable(BLOCK_EVERYTHING, FlagFamily::Hexen),
+            impassable(HEXEN_BLOCK_EVERYTHING, FlagFamily::Hexen),
             "and blockeverything more so"
         );
         assert!(
-            !impassable(BLOCK_PLAYERS, FlagFamily::Doom),
+            !impassable(HEXEN_BLOCK_PLAYERS, FlagFamily::Doom),
             "which the Doom family does not define"
         );
     }

@@ -11,8 +11,9 @@
 
 use alloc::collections::BTreeSet;
 
-use super::{BLOCKING_FLAG, NO_TEXTURE, Removal, TWO_SIDED_FLAG};
+use super::{NO_TEXTURE, Removal};
 use crate::error::CyberError;
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::model::{Linedef, Map, Sidedef};
 
 /// The old-to-new indices a surviving linedef's fields renumber through.
@@ -126,7 +127,7 @@ fn normalise_side(
         kept.flipped.push(new_index);
     }
     if had_back && moved.back.is_none() {
-        moved.flags = (moved.flags & !TWO_SIDED_FLAG) | BLOCKING_FLAG;
+        moved.flags = (moved.flags & !TWO_SIDED) | BLOCKING;
         kept.one_sided.push(new_index);
         reveal_front_texture(new_sides, moved.front);
     }

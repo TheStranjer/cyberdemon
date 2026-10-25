@@ -43,7 +43,11 @@ use crate::wad::classify::MapFormat;
 use crate::wad::name::LumpName;
 use crate::wad::udmf::{UdmfDoc, UdmfValue, parse_udmf, write_udmf};
 
-use super::flags::FlagFamily;
+use super::flags::{
+    FlagFamily, IMPACT, MISSILE_CROSS, MONSTER_CROSS, PLAYER_CROSS, PLAYER_PUSH, PLAYER_USE,
+    THING_AMBUSH, THING_DOOM_FRIEND, THING_DOOM_NOT_COOP, THING_DOOM_NOT_DM, THING_DOOM_NOT_SINGLE,
+    THING_EASY, THING_HARD, THING_MEDIUM,
+};
 use super::model::Map;
 
 use read::{Fields, read_linedef, read_sector, read_sidedef, read_thing, read_vertex};
@@ -65,14 +69,14 @@ const NO_TEXTURE: &str = "-";
 /// implies the [`MONSTER_ACTIVATE`] bit. In table order: the first true
 /// name picks the field.
 const ACTIVATIONS: [(&str, u32, bool); 8] = [
-    ("playercross", 0_u32, false),
-    ("playeruse", 1_u32, false),
-    ("monstercross", 2_u32, false),
-    ("impact", 3_u32, false),
-    ("playerpush", 4_u32, false),
-    ("missilecross", 5_u32, false),
-    ("monsteruse", 1_u32, true),
-    ("monsterpush", 4_u32, true),
+    ("playercross", PLAYER_CROSS, false),
+    ("playeruse", PLAYER_USE, false),
+    ("monstercross", MONSTER_CROSS, false),
+    ("impact", IMPACT, false),
+    ("playerpush", PLAYER_PUSH, false),
+    ("missilecross", MISSILE_CROSS, false),
+    ("monsteruse", PLAYER_USE, true),
+    ("monsterpush", PLAYER_PUSH, true),
 ];
 
 /// Pairs of player and monster trigger booleans that, both true, also
@@ -86,17 +90,20 @@ const MONSTER_PAIRS: [(&str, &str); 3] = [
 /// `UDMF` thing booleans of the `Doom` family: the flag bit and the
 /// names that, any of them true, set it.
 const DOOM_THING_BITS: [(u32, &[&str]); 5] = [
-    (1_u32, &["skill1", "skill2"]),
-    (2_u32, &["skill3"]),
-    (4_u32, &["skill4", "skill5"]),
-    (8_u32, &["ambush"]),
-    (128_u32, &["friend"]),
+    (THING_EASY, &["skill1", "skill2"]),
+    (THING_MEDIUM, &["skill3"]),
+    (THING_HARD, &["skill4", "skill5"]),
+    (THING_AMBUSH, &["ambush"]),
+    (THING_DOOM_FRIEND, &["friend"]),
 ];
 
 /// `Doom` family thing presence bits: the flag bit and the boolean name
 /// that, not true, sets it.
-const DOOM_THING_INVERSES: [(u32, &str); 3] =
-    [(16_u32, "single"), (32_u32, "dm"), (64_u32, "coop")];
+const DOOM_THING_INVERSES: [(u32, &str); 3] = [
+    (THING_DOOM_NOT_SINGLE, "single"),
+    (THING_DOOM_NOT_DM, "dm"),
+    (THING_DOOM_NOT_COOP, "coop"),
+];
 
 /// Reads the `UDMF` map named `name` out of a block's `members` (the
 /// block's lumps after its header, `TEXTMAP` through `ENDMAP`).

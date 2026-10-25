@@ -30,28 +30,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
 use crate::geom::Pt;
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
+use crate::wad::map::flags::{
+    ACTIVATION_MASK, FlagFamily, PLAYER_CROSS_BITS, PLAYER_USE_BITS, REPEAT_SPECIAL,
+};
 
-use super::doors::{DoorLineSetup, USE, USE_REPEAT};
+use super::doors::{DoorLineSetup, USE_REPEAT};
 
-/// The `blocking` linedef flag bit, cleared on the activation lines so
-/// the player can reach (and walk across) the lowered platform.
-const BLOCKING_BIT: u32 = 1_u32;
 /// The model's name for "no texture here" on a [`Sidedef`] texture face.
 ///
 /// [`Sidedef`]: crate::wad::map::Sidedef
 const NO_TEXTURE: &str = "-";
-/// The `Hexen` `repeatspecial` bit, added on top of either the
-/// `playeruse` or `playercross` activation for a repeating lift line.
-const REPEAT_SPECIAL_BIT: u32 = 0x200;
 /// The `Hexen` trigger bits [`dress_edge`](build::dress_edge) replaces
 /// wholesale: the 3-bit activation field plus the `repeatspecial` bit,
 /// so a one-shot clears both and a repeating line gets exactly what
 /// [`lift_specials`] names.
-const TRIGGER_MASK: u32 = ACTIVATION_MASK | REPEAT_SPECIAL_BIT;
-/// The `Hexen` `playercross` activation: the activation field's zero
-/// value, crossed rather than used.
-const CROSS: u32 = 0_u32;
+const TRIGGER_MASK: u32 = ACTIVATION_MASK | REPEAT_SPECIAL;
 /// The `Hexen` lift line special: `Plat_DownWaitUpStayLip`.
 const HEXEN_PLAT_SPECIAL: i32 = 206;
 /// The `Hexen` lift's speed argument, in map units per game tic.
@@ -143,9 +136,9 @@ const fn doom_lift(style: LiftStyle, repeatable: bool, tag: i32) -> DoorLineSetu
 const fn hexen_lift(style: LiftStyle, repeatable: bool, tag: i32) -> DoorLineSetup {
     let activation = match (style, repeatable) {
         (LiftStyle::UseWall, true) => USE_REPEAT,
-        (LiftStyle::UseWall, false) => USE,
-        (LiftStyle::WalkTrigger, true) => CROSS | REPEAT_SPECIAL_BIT,
-        (LiftStyle::WalkTrigger, false) => CROSS,
+        (LiftStyle::UseWall, false) => PLAYER_USE_BITS,
+        (LiftStyle::WalkTrigger, true) => PLAYER_CROSS_BITS | REPEAT_SPECIAL,
+        (LiftStyle::WalkTrigger, false) => PLAYER_CROSS_BITS,
     };
     DoorLineSetup {
         special: HEXEN_PLAT_SPECIAL,

@@ -30,15 +30,14 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::KeyColor;
-use crate::wad::map::flags::{ACTIVATION_MASK, ACTIVATION_SHIFT, FlagFamily, Skill};
+use crate::wad::map::flags::{
+    ACTIVATION_MASK, ACTIVATION_SHIFT, FlagFamily, PLAYER_USE, Skill, THING_DOOM_NOT_SINGLE,
+    THING_HEXEN_SINGLE,
+};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Linedef, Map};
 use tables::{KEY_THINGS, RowEffect, Trigger};
 
-/// The `Doom` family's `notsingle` thing bit: a multiplayer-only spawn.
-const NOT_SINGLE: u32 = 16_u32;
-/// The `Hexen` family's `single` thing bit: the single-player game mode.
-const SINGLE_PLAYER: u32 = 0x0100;
 /// The thing type of the player 1 start.
 const PLAYER_START: i32 = 1_i32;
 /// The `Doom` family's teleport destination thing.
@@ -48,9 +47,6 @@ const HEXEN_DESTINATIONS: &[i32] = &[14_i32, 9_043_i32, 9_044_i32];
 /// The `Hexen` teleport argument that narrows the destination search to the
 /// sectors carrying this tag, when it is non-zero.
 const SECTOR_TAG_ARG: usize = 1_usize;
-/// The `Hexen` `playeruse` activation field value: the one activation this
-/// model reads as "press use on the front side".
-const PLAYER_USE_FIELD: u32 = 1_u32;
 
 /// What an openable feature does to the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,8 +196,8 @@ pub(super) fn spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
         return false;
     }
     match family {
-        FlagFamily::Doom => flags & NOT_SINGLE != NOT_SINGLE,
-        FlagFamily::Hexen => flags & SINGLE_PLAYER == SINGLE_PLAYER,
+        FlagFamily::Doom => flags & THING_DOOM_NOT_SINGLE != THING_DOOM_NOT_SINGLE,
+        FlagFamily::Hexen => flags & THING_HEXEN_SINGLE == THING_HEXEN_SINGLE,
     }
 }
 
@@ -216,7 +212,7 @@ fn hexen_trigger(flags: u32) -> Trigger {
     let field = (flags & ACTIVATION_MASK)
         .checked_shr(ACTIVATION_SHIFT)
         .unwrap_or(0_u32);
-    if field == PLAYER_USE_FIELD {
+    if field == PLAYER_USE {
         return Trigger::Use;
     }
     Trigger::Walk

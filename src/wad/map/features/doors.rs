@@ -28,31 +28,17 @@ mod apply;
 
 pub use apply::{apply_door, face_room_line};
 
-use crate::wad::map::flags::{FlagFamily, MONSTER_ACTIVATE};
+use crate::wad::map::flags::{FlagFamily, MONSTER_ACTIVATE, PLAYER_USE_BITS, REPEAT_SPECIAL};
 use crate::wad::map::model::Map;
 
-/// The `blocking` linedef flag bit: the flags of the one-sided jamb wall.
-const BLOCKING_BIT: u32 = 1_u32;
-/// The `twosided` linedef flag bit, the same value in both flag families.
-const TWO_SIDED_BIT: u32 = 4_u32;
-/// The `dontpegtop` (upper-unpegged) linedef bit, value 8 in both tables.
-const DONTPEG_TOP_BIT: u32 = 8_u32;
-/// The `dontpegbottom` (lower-unpegged) linedef bit, value 16 in both.
-const DONTPEG_BOTTOM_BIT: u32 = 16_u32;
 /// The model's name for "no texture here" on a [`Sidedef`] texture face.
 ///
 /// [`Sidedef`]: crate::wad::map::Sidedef
 const NO_TEXTURE: &str = "-";
-/// The `Hexen` `repeatspecial` linedef bit (see the `flags` tables).
-const REPEAT_SPECIAL_BIT: u32 = 0x200;
-/// The `Hexen` `playeruse` activation: field value 1 at bit 10.
-const PLAYER_USE_BITS: u32 = 0x400;
-/// The activation bits of a `Hexen` use line: `playeruse` alone.
-pub(super) const USE: u32 = PLAYER_USE_BITS;
 /// `playeruse` plus `repeatspecial`: the line keeps working after use.
-pub(super) const USE_REPEAT: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL_BIT;
+pub(super) const USE_REPEAT: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL;
 /// `playeruse`, `repeatspecial` and `monsteractivate`: monsters, too.
-const USE_REPEAT_MONSTER: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL_BIT | MONSTER_ACTIVATE;
+const USE_REPEAT_MONSTER: u32 = PLAYER_USE_BITS | REPEAT_SPECIAL | MONSTER_ACTIVATE;
 
 /// The way a door is meant to be opened, as the room-facing lines see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,7 +225,11 @@ const fn hexen_door(style: DoorStyle) -> DoorLineSetup {
             [0_i32, 64_i32, 150_i32, 0_i32, 0_i32],
             USE_REPEAT_MONSTER,
         ),
-        DoorStyle::StayOpen => (11_i32, [0_i32, 16_i32, 0_i32, 0_i32, 0_i32], USE),
+        DoorStyle::StayOpen => (
+            11_i32,
+            [0_i32, 16_i32, 0_i32, 0_i32, 0_i32],
+            PLAYER_USE_BITS,
+        ),
         DoorStyle::LockedRed => (13_i32, [0_i32, 16_i32, 150_i32, 129_i32, 0_i32], USE_REPEAT),
         DoorStyle::LockedBlue => (13_i32, [0_i32, 16_i32, 150_i32, 130_i32, 0_i32], USE_REPEAT),
         DoorStyle::LockedYellow => (13_i32, [0_i32, 16_i32, 150_i32, 131_i32, 0_i32], USE_REPEAT),

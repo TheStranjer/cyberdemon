@@ -20,13 +20,9 @@
 //! map untouched.
 
 use crate::error::CyberError;
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::model::{Linedef, Map, Sector};
 
-/// The `blocking` linedef flag bit: set on the window's room-facing
-/// lines so no actor crosses them.
-const BLOCKING_BIT: u32 = 1_u32;
-/// The `twosided` linedef flag bit, the same value in both flag families.
-const TWO_SIDED_BIT: u32 = 4_u32;
 /// The model's name for "no texture here" on a [`Sidedef`] texture face.
 ///
 /// [`Sidedef`]: crate::wad::map::Sidedef
@@ -298,7 +294,7 @@ fn plan_window(map: &Map, sides: &WindowSides) -> Result<Vec<RoomPlan>, CyberErr
 /// skipped rather than a new refusal).
 fn dress_room_line(map: &mut Map, room: RoomPlan, textures: &WindowTextures) {
     if let Some(linedef) = map.linedefs.get_mut(room.line) {
-        linedef.flags = linedef.flags | TWO_SIDED_BIT | BLOCKING_BIT;
+        linedef.flags = linedef.flags | TWO_SIDED | BLOCKING;
     }
     if let Some(side) = map.sidedefs.get_mut(room.room_side) {
         textures.wall.clone_into(&mut side.upper);

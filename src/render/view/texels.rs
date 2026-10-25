@@ -20,6 +20,7 @@ use super::{DIRECTION_SCALE, ONE_16, TEXTURE_NONE};
 use crate::fixed::{atan2, hypot};
 use crate::render::light::WallDir;
 use crate::render::scene::Scene;
+use crate::wad::map::flags::{DONT_PEG_BOTTOM, DONT_PEG_TOP};
 use crate::wad::map::{Linedef, Map};
 
 /// The ray-segment intersection: `cam + t * d` against `edge`, giving
@@ -129,7 +130,7 @@ pub(super) fn tex_top(plan: &FacePlan<'_>) -> i64 {
 ///
 /// Differs from a drawn middle's [`super::walk::Slot::Middle`] pegging:
 /// pegged, the texture hangs from the lower of the two sectors' ceilings;
-/// with the linedef's lower-unpegged bit (16) its bottom stands on the
+/// with the linedef's [`DONT_PEG_BOTTOM`] bit its bottom stands on the
 /// higher of the two floors, `tex_height` below the top.
 pub(super) fn masked_tex_top(
     near: &Plane<'_>,
@@ -245,8 +246,8 @@ pub(super) fn edge(line: usize, map: &Map, row: &Linedef) -> Option<Edge> {
         dir: wall_dir(ex, ey),
         front,
         back,
-        upper_unpegged: row.flags & 8_u32 != 0_u32,
-        lower_unpegged: row.flags & 16_u32 != 0_u32,
+        upper_unpegged: row.flags & DONT_PEG_TOP != 0_u32,
+        lower_unpegged: row.flags & DONT_PEG_BOTTOM != 0_u32,
     })
 }
 

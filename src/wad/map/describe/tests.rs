@@ -22,13 +22,11 @@ use crate::plan::features::FeatureRow;
 use crate::wad::classify::MapFormat;
 use crate::wad::game::Game;
 use crate::wad::map::common::fixtures::{name, room, side, solid_line, spawn, vertex};
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing};
 
-use super::{BLOCKING, Describe, Neighbour, SectorFacts};
-
-/// The shared `twosided` bit.
-pub(super) const TWO_SIDED: u32 = 4_u32;
+use super::{Describe, Neighbour, SectorFacts};
 
 /// The embedded `DOOM` definitions (the sector table's home).
 pub(super) fn doom_defs() -> Definitions {

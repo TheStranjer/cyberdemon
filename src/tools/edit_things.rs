@@ -43,6 +43,10 @@ use crate::tools::maps::params::{FlagsInput, IndexSelector, check_index, edit_re
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::flags;
+use crate::wad::map::flags::{
+    THING_HEXEN_CLASS1, THING_HEXEN_CLASS2, THING_HEXEN_CLASS3, THING_HEXEN_COOP, THING_HEXEN_DM,
+    THING_HEXEN_SINGLE, THING_SKILL_BITS,
+};
 use crate::wad::map::remove::{Removal, apply_removal};
 use crate::wad::map::{FlagFamily, FlagKind, Map, Thing};
 
@@ -50,10 +54,16 @@ use crate::wad::map::{FlagFamily, FlagKind, Map, Thing};
 const DEGREES: i32 = 360_i32;
 /// `Doom` family default thing flags: every skill in every mode
 /// (`easy | medium | hard`).
-const DOOM_DEFAULT_FLAGS: u32 = 7_u32;
+const DOOM_DEFAULT_FLAGS: u32 = THING_SKILL_BITS;
 /// `Hexen` family default thing flags: every skill, class and game mode
 /// (`easy | medium | hard | class1 | class2 | class3 | single | coop | dm`).
-const HEXEN_DEFAULT_FLAGS: u32 = 2_023_u32;
+const HEXEN_DEFAULT_FLAGS: u32 = THING_SKILL_BITS
+    | THING_HEXEN_CLASS1
+    | THING_HEXEN_CLASS2
+    | THING_HEXEN_CLASS3
+    | THING_HEXEN_SINGLE
+    | THING_HEXEN_COOP
+    | THING_HEXEN_DM;
 /// The all-zero script argument list of a `Doom`-format thing.
 const ZERO_ARGS: [i32; 5] = [0_i32; 5];
 /// The lowest value any unsigned binary record column holds.

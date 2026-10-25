@@ -17,10 +17,11 @@ use alloc::collections::BTreeMap;
 use crate::error::CyberError;
 use crate::geom::label::Label;
 use crate::geom::{Piece, Pt};
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Vertex};
 
 use super::geometry::plan_point;
-use super::{BLOCKING_BIT, NO_TEXTURE, OverlayResult, Source, TWO_SIDED_BIT};
+use super::{NO_TEXTURE, OverlayResult, Source};
 
 /// The rebuilt rows plus the report, waiting to be written into the map.
 pub(super) struct Rebuilt {
@@ -162,9 +163,9 @@ pub(super) fn transition_face(differ: bool, texture: &str) -> String {
 pub(super) fn shell_of(ctx: &LineCtx<'_>, plan: &Plan) -> Result<Linedef, CyberError> {
     let base = ctx.source.map_or(0_u32, |line| line.flags);
     let flags = if ctx.back.is_some() {
-        (base | TWO_SIDED_BIT) & !BLOCKING_BIT
+        (base | TWO_SIDED) & !BLOCKING
     } else {
-        (base | BLOCKING_BIT) & !TWO_SIDED_BIT
+        (base | BLOCKING) & !TWO_SIDED
     };
     Ok(Linedef {
         v1: plan_point(plan, ctx.start)?,

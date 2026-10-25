@@ -45,7 +45,8 @@
 //! `features` with its `features/door`, `features/window`,
 //! `features/switch`, `features/exit`, `features/secret`, `features/light`,
 //! `features/stairs`, `features/lift`, `features/teleporter` and
-//! `features/place` topic tests, the
+//! `features/place` topic tests, the linedef/thing flag-name
+//! glossary guard in `flag_names`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
@@ -151,6 +152,9 @@ mod features;
 #[cfg(test)]
 #[path = "mcp/fixtures.rs"]
 pub mod fixtures;
+#[cfg(test)]
+#[path = "mcp/flag_names.rs"]
+mod flag_names;
 #[cfg(test)]
 #[path = "mcp/graphics.rs"]
 mod graphics;

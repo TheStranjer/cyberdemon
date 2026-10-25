@@ -10,46 +10,20 @@
 //! by [`HexenDrops`](super::HexenDrops) into the one grouped warning the
 //! reverse stage reports.
 
+use crate::wad::map::flags::{
+    THING_DOOM_FRIEND, THING_DOOM_NOT_COOP, THING_DOOM_NOT_DM, THING_DOOM_NOT_SINGLE,
+    THING_HEXEN_CLASSES, THING_HEXEN_COOP, THING_HEXEN_DM, THING_HEXEN_FRIEND, THING_HEXEN_SINGLE,
+    THING_SHARED_BITS,
+};
 use crate::wad::map::model::{Map, Thing};
 
 use super::{FieldReport, HexenDrops, count_if};
-
-/// The low nibble the `Doom` and `Hexen` thing flags share: `easy`,
-/// `medium`, `hard` and `ambush` keep their bit in both families.
-const THING_SKILL_BITS: u32 = 0x0F;
-/// The `Doom` thing bit 16: `notsingle`.
-const THING_DOOM_NOT_SINGLE: u32 = 16_u32;
-/// The `Doom` thing bit 32: `notdm`.
-const THING_DOOM_NOT_DM: u32 = 32_u32;
-/// The `Doom` thing bit 64: `notcoop`.
-const THING_DOOM_NOT_COOP: u32 = 64_u32;
-/// The `Doom` thing bit 128: `friend`.
-const THING_DOOM_FRIEND: u32 = 128_u32;
-/// The `Hexen` thing bit 16: `dormant`.
-pub(super) const THING_HEXEN_DORMANT: u32 = 16_u32;
-/// The `Hexen` thing bits 32|64|128: `class1`, `class2` and `class3`
-/// combined.
-const THING_HEXEN_CLASSES: u32 = 0xE0;
-/// The `Hexen` thing bit 256: `single`.
-const THING_HEXEN_SINGLE: u32 = 256_u32;
-/// The `Hexen` thing bit 512: `coop`.
-const THING_HEXEN_COOP: u32 = 512_u32;
-/// The `Hexen` thing bit 1024: `dm`.
-const THING_HEXEN_DM: u32 = 1024_u32;
-/// The `Hexen` thing bit 2048: `translucent`.
-pub(super) const THING_HEXEN_TRANSLUCENT: u32 = 2048_u32;
-/// The `Hexen` thing bit 4096: `invisible`.
-pub(super) const THING_HEXEN_INVISIBLE: u32 = 4096_u32;
-/// The `Hexen` thing bit 8192: `friend`.
-const THING_HEXEN_FRIEND: u32 = 8192_u32;
-/// The `Hexen` thing bit 0x4000: `standing`.
-pub(super) const THING_HEXEN_STANDING: u32 = 0x4000;
 
 /// The `Hexen` thing flags the `Doom` family bits of `flags` become: the
 /// shared skill bits, all three class bits, a presence bit for every game
 /// mode the thing was not excluded from, and `friend` at its `Hexen` bit.
 const fn hexen_thing_flags(flags: u32) -> u32 {
-    let mut out = (flags & THING_SKILL_BITS) | THING_HEXEN_CLASSES;
+    let mut out = (flags & THING_SHARED_BITS) | THING_HEXEN_CLASSES;
     if flags & THING_DOOM_NOT_SINGLE == 0 {
         out |= THING_HEXEN_SINGLE;
     }
@@ -70,7 +44,7 @@ const fn hexen_thing_flags(flags: u32) -> u32 {
 /// may not appear in, and `friend` back at its `Doom` bit. The bits `Doom`
 /// has no room for drop; the caller reports them.
 const fn doom_thing_flags(flags: u32) -> u32 {
-    let mut out = flags & THING_SKILL_BITS;
+    let mut out = flags & THING_SHARED_BITS;
     let all_classes = flags & THING_HEXEN_CLASSES == THING_HEXEN_CLASSES;
     if flags & THING_HEXEN_SINGLE == 0 || !all_classes {
         out |= THING_DOOM_NOT_SINGLE;

@@ -15,10 +15,11 @@ use crate::defs::definitions_for;
 use crate::error::CyberError;
 use crate::geom::{Label, Piece};
 use crate::plan::connectors::{ConnectorGeometry, plan_connectors};
-use crate::plan::emit::{Emitted, FLAG_BLOCKING, FLAG_TWOSIDED, MapIdentity, emit};
+use crate::plan::emit::{Emitted, MapIdentity, emit};
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Plan, Room, Shape};
 use crate::plan::walls::build_walls;
 use crate::wad::game::Game;
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::validate::{Context, Issue, ResourceIndex, run};
 use crate::wad::map::{Linedef, Map, MapFormat};
 use crate::wad::name::LumpName;
@@ -130,7 +131,7 @@ fn side_sectors(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
 /// is flagged two-sided.
 pub(super) fn door_pair(map: &Map, index: usize) -> (usize, usize) {
     let line = map.linedefs.get(index).expect("recorded index");
-    assert_eq!(line.flags, FLAG_TWOSIDED, "door lines are two-sided");
+    assert_eq!(line.flags, TWO_SIDED, "door lines are two-sided");
     let (front, back) = side_sectors(map, line).expect("door lines have two sides");
     (front.min(back), front.max(back))
 }
@@ -220,9 +221,9 @@ fn assert_piece_facing(piece: &Piece, line: &Linedef) {
         "void-facing pieces are the one-sided lines: {piece:?}"
     );
     let expected = if line.back.is_some() {
-        FLAG_TWOSIDED
+        TWO_SIDED
     } else {
-        FLAG_BLOCKING
+        BLOCKING
     };
     assert_eq!(line.flags, expected, "flags match sidedness");
     let front = line.front.expect("every emitted line has a front");

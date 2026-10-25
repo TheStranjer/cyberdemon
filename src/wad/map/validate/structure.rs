@@ -11,10 +11,8 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use super::{Issue, Severity, listed};
+use crate::wad::map::flags::TWO_SIDED;
 use crate::wad::map::model::{Linedef, Map, Vertex};
-
-/// The vanilla two-sided linedef flag, shared by both flag families.
-const TWOSIDED: u32 = 4_u32;
 
 /// Both endpoint vertices when the map holds the indices `line` names.
 fn resolved_ends<'map>(map: &'map Map, line: &Linedef) -> Option<(&'map Vertex, &'map Vertex)> {
@@ -123,14 +121,14 @@ pub(super) fn two_sided_flag_mismatch(map: &Map) -> Vec<Issue> {
         .iter()
         .enumerate()
         .filter_map(|(index, line)| {
-            let flagged = line.flags & TWOSIDED != 0;
+            let flagged = line.flags & TWO_SIDED != 0;
             if line.back.is_some() && !flagged {
                 return Some(
                     Issue::new(
                         Severity::Warning,
                         format!(
                             "linedef {index} has a back side but the two-sided flag \
-                             ({TWOSIDED}) is not set",
+                             ({TWO_SIDED}) is not set",
                         ),
                     )
                     .linedef(&[index]),
@@ -141,7 +139,7 @@ pub(super) fn two_sided_flag_mismatch(map: &Map) -> Vec<Issue> {
                     Issue::new(
                         Severity::Warning,
                         format!(
-                            "linedef {index} sets the two-sided flag ({TWOSIDED}) but has no \
+                            "linedef {index} sets the two-sided flag ({TWO_SIDED}) but has no \
                              back side",
                         ),
                     )
@@ -242,9 +240,10 @@ mod tests {
     use alloc::string::String;
 
     use super::{
-        TWOSIDED, duplicate_line, shared_sidedef, two_sided_flag_mismatch, unused_sector,
-        unused_sidedef, unused_vertex, zero_length_line,
+        duplicate_line, shared_sidedef, two_sided_flag_mismatch, unused_sector, unused_sidedef,
+        unused_vertex, zero_length_line,
     };
+    use crate::wad::map::flags::TWO_SIDED;
     use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Vertex};
 
     /// A vertex at `x`/`y`.
@@ -277,7 +276,7 @@ mod tests {
         Linedef {
             v1,
             v2,
-            flags: TWOSIDED,
+            flags: TWO_SIDED,
             special: 0,
             tag: 0,
             args: [0; 5],
@@ -424,7 +423,7 @@ mod tests {
                 .linedefs
                 .first_mut()
                 .expect("the minimal map has a line");
-            bad.flags = TWOSIDED;
+            bad.flags = TWO_SIDED;
         }
         let issues = two_sided_flag_mismatch(&map);
         let issue = issues

@@ -28,9 +28,8 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::{FlagFamily, Linedef, Map};
 
 use super::side_edit::{SideEdit, apply_side_edit, side_target};
-use super::{
-    BLOCKING_BITS, EditBits, LinedefDetail, TWO_SIDED_BITS, check_line, detail_of, flags_given,
-};
+use super::{EditBits, LinedefDetail, check_line, detail_of, flags_given};
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 
 /// The value of an [`Cyberdemon::edit_linedef`] side reference: an existing
 /// sidedef index, or an explicit `null` dropping the reference.
@@ -265,9 +264,9 @@ fn zero_line(index: usize, vertex: usize) -> CyberError {
 #[must_use]
 const fn adjusted_for_back(flags: u32, target: SideRef) -> u32 {
     if matches!(target, SideRef::Clear) {
-        (flags & !TWO_SIDED_BITS) | BLOCKING_BITS
+        (flags & !TWO_SIDED) | BLOCKING
     } else {
-        (flags | TWO_SIDED_BITS) & !BLOCKING_BITS
+        (flags | TWO_SIDED) & !BLOCKING
     }
 }
 

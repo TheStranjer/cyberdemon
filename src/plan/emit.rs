@@ -31,12 +31,6 @@ use crate::wad::name::LumpName;
 use lines::{connector_info, push_linedefs, room_sector_map};
 use sectors::{connector_sector, room_sector};
 
-/// The `Doom` linedef `blocking` bit: engines stop motion at the line.
-const FLAG_BLOCKING: u32 = 1_u32;
-
-/// The `Doom` linedef `twosided` bit: the line has a sector behind it.
-const FLAG_TWOSIDED: u32 = 4_u32;
-
 /// The model's name for "draw nothing here" on a texture or flat face.
 const NO_NAME: &str = "-";
 

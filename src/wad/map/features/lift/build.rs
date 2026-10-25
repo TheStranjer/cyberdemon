@@ -10,16 +10,16 @@
 use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::geom::segment::round_quotient;
-use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::flags::{BLOCKING, FlagFamily};
 use crate::wad::map::geometry::{neighbors, point_in_sector};
 use crate::wad::map::model::{Linedef, Map, Sector};
 use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, apply_overlay};
 
 use super::super::doors::{DoorLineSetup, next_free_tag};
 use super::{
-    BLOCKING_BIT, Edge, EdgeProbe, LiftBuild, LiftPlatform, LiftSpec, MIN_LIFT_DROP,
-    MIN_PLATFORM_CORNERS, NO_TEXTURE, Side, TRIGGER_MASK, centre_lost, invalid, isolated,
-    lift_specials, no_edges, no_way_down, paint_lost, range_error, shrink_note,
+    Edge, EdgeProbe, LiftBuild, LiftPlatform, LiftSpec, MIN_LIFT_DROP, MIN_PLATFORM_CORNERS,
+    NO_TEXTURE, Side, TRIGGER_MASK, centre_lost, invalid, isolated, lift_specials, no_edges,
+    no_way_down, paint_lost, range_error, shrink_note,
 };
 
 /// The mean of one axis of the polygon's corners, rounded to the
@@ -179,7 +179,7 @@ fn dress_edge(map: &mut Map, edge: &Edge, setup: &DoorLineSetup, side: &str) {
         line.special = setup.special;
         line.tag = setup.tag;
         line.args = setup.args;
-        line.flags &= !BLOCKING_BIT;
+        line.flags &= !BLOCKING;
         if hexen {
             line.flags = (line.flags & !TRIGGER_MASK) | setup.flags_activation;
         }

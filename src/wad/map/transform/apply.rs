@@ -13,14 +13,11 @@
 use alloc::collections::BTreeMap;
 
 use crate::error::CyberError;
-use crate::fixed::mul_div_round;
+use crate::fixed::midpoint;
 use crate::wad::classify::MapFormat;
 
 use super::super::model::Map;
-use super::{
-    COORD_MAX, COORD_MIN, DEGREES, HALF_DEN, HALF_NUM, Move, Operations, Point, Selection,
-    ThingMove,
-};
+use super::{COORD_MAX, COORD_MIN, DEGREES, Move, Operations, Point, Selection, ThingMove};
 
 /// The planned vertex destinations keyed by index, for the checks that
 /// compare positions after the move.
@@ -63,16 +60,9 @@ fn widen(span: Option<(i64, i64, i64, i64)>, at: Point) -> (i64, i64, i64, i64) 
 /// The midpoint of a `(min_x, min_y, max_x, max_y)` span.
 fn centre((min_x, min_y, max_x, max_y): (i64, i64, i64, i64)) -> Point {
     Point {
-        x: mid(min_x, max_x),
-        y: mid(min_y, max_y),
+        x: midpoint(min_x, max_x),
+        y: midpoint(min_y, max_y),
     }
-}
-
-/// Midpoint of `low` and `high`, rounded to nearest (halves away from
-/// zero).
-fn mid(low: i64, high: i64) -> i64 {
-    let sum = low.checked_add(high).unwrap_or(low);
-    mul_div_round(sum, HALF_NUM, HALF_DEN).unwrap_or(low)
 }
 
 /// The planned moves of every selected vertex.

@@ -3,6 +3,7 @@
 //! rounded integer divisions the samplers and the blur count with.
 
 use crate::error::CyberError;
+use crate::fixed::div_round;
 use crate::gfx::ops::MAX_OP_DIMENSION;
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
@@ -49,11 +50,12 @@ pub(crate) fn pixel_at(pixels: &[u8], index: usize) -> Option<[u8; 4]> {
     Some(to_pixel(chunk))
 }
 
-/// `numerator / denominator` rounded to nearest; `0` for a zero denominator.
+/// `numerator / denominator` rounded to nearest; `0` for a zero
+/// denominator, saturating results into `u64`.
 pub(crate) fn rounded_div(numerator: u64, denominator: u64) -> u64 {
-    let half = denominator.checked_div(2_u64).unwrap_or_default();
-    let scaled = numerator.checked_add(half).unwrap_or(numerator);
-    scaled.checked_div(denominator).unwrap_or_default()
+    div_round(i128::from(numerator), i128::from(denominator))
+        .and_then(|quotient| u64::try_from(quotient).ok())
+        .unwrap_or_default()
 }
 
 /// `numerator / denominator` rounded up; saturates for a zero denominator.

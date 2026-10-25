@@ -15,7 +15,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::error::CyberError;
-use crate::fixed::{hypot, isqrt};
+use crate::fixed::{self, hypot, isqrt};
 use crate::geom::label::{Label, ScaledPt, contains_point};
 use crate::geom::segment::{ExternalSegment, SourceId, cross, delta, dot};
 use crate::geom::{Piece, Pt};
@@ -23,7 +23,7 @@ use crate::wad::map::model::{Linedef, Map, Sector, Vertex};
 
 use super::labeler::{label_at, side_samples};
 use super::rebuilt::Plan;
-use super::{Distance, MIDPOINT_DIVISOR, Outside, OverlayRequest, Shape, Source, WallClaim};
+use super::{Distance, Outside, OverlayRequest, Shape, Source, WallClaim};
 
 /// The integer length of `start` to `finish`, at least one.
 pub(super) fn grid_length(start: Pt, finish: Pt) -> i128 {
@@ -208,16 +208,10 @@ pub(super) fn sector_id(index: usize) -> Result<u32, CyberError> {
     })
 }
 
-/// The `(x, y)` midpoint of two grid points, truncated toward zero.
+/// The `(x, y)` midpoint of two grid points, each coordinate rounded
+/// through [`crate::fixed::midpoint`] (halves away from zero).
 pub(super) fn midpoint(from: Pt, to: Pt) -> Pt {
-    (half_sum(from.0, to.0), half_sum(from.1, to.1))
-}
-
-/// `(from + to) / 2` truncated toward zero, overflow-free.
-fn half_sum(from: i64, to: i64) -> i64 {
-    let sum = i128::from(from).saturating_add(i128::from(to));
-    let half = sum.checked_div(MIDPOINT_DIVISOR).unwrap_or(sum);
-    i64::try_from(half).unwrap_or(from)
+    (fixed::midpoint(from.0, to.0), fixed::midpoint(from.1, to.1))
 }
 
 /// The floored `hypot` length of a grid segment, refused when no offset

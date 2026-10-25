@@ -11,7 +11,7 @@
 
 use core::ops::RangeInclusive;
 
-use crate::fixed::isqrt;
+use crate::fixed::{isqrt, narrow_i64};
 use crate::gfx::image::RgbaImage;
 use crate::gfx::{
     BYTES_PER_PIXEL, MAX_DIMENSION, clamp_dimension, pixel_count, pixel_index, to_pixel,
@@ -590,11 +590,6 @@ fn ordered(a: i64, b: i64) -> (i64, i64) {
     (a.min(b), a.max(b))
 }
 
-/// The `i64` nearest an `i128` value (saturating at the bounds).
-fn narrow(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
-}
-
 /// `base + delta * num / den` in exact `i128`, rounded down, saturating
 /// back to `i64`; a zero `den` (a degenerate segment) answers `base`.
 fn scale_down(base: i64, delta: i64, num: i128, den: i128) -> i64 {
@@ -613,7 +608,7 @@ fn scale_down(base: i64, delta: i64, num: i128, den: i128) -> i64 {
         .saturating_mul(d)
         .saturating_add(n)
         .div_euclid(d);
-    narrow(drawn)
+    narrow_i64(drawn)
 }
 
 /// The column where the `start`-`end` line crosses row `y`, floor-rounded.

@@ -6,11 +6,12 @@ use super::{
     assert_band, compile, error_of, find_piece, first, notch_plan, opening, raise_b, stairs,
     two_rooms,
 };
+use crate::fixed::{narrow_i32, narrow_i64};
 use crate::geom::Piece;
 use crate::geom::arrange;
 use crate::geom::label::{Label, LayerLabeler};
 use crate::plan::connectors::final_layers;
-use crate::plan::connectors::frame::{Frame, clamp_i32, clamp_i64, rounded_unit};
+use crate::plan::connectors::frame::{Frame, rounded_unit};
 use crate::plan::connectors::pass::{distance_squared, midpoint};
 use crate::plan::connectors::{LabelAllocator, connection_label, measure, plan_connectors};
 use crate::plan::model::{ConnectionKind, DoorStyle};
@@ -310,10 +311,14 @@ fn the_pass_is_deterministic_and_labels_follow_the_rooms() {
 
 #[test]
 fn helpers_round_measure_and_clamp() {
-    assert_eq!(clamp_i64(i128::from(i64::MAX)), i64::MAX, "in range");
-    assert_eq!(clamp_i32(i64::from(i32::MAX)), i32::MAX, "in range");
+    assert_eq!(narrow_i64(i128::from(i64::MAX)), i64::MAX, "in range");
     assert_eq!(
-        clamp_i32(-i64::from(i32::MAX)),
+        narrow_i32(i128::from(i64::from(i32::MAX))),
+        i32::MAX,
+        "in range"
+    );
+    assert_eq!(
+        narrow_i32(i128::from(-i64::from(i32::MAX))),
         i32::MIN.saturating_add(1),
         "negative"
     );

@@ -9,6 +9,8 @@
 
 use alloc::vec::Vec;
 
+use crate::fixed::{midpoint, narrow_i64};
+
 use super::{Edge, Point};
 
 /// Half of the shoelace sum: the doubled area divides by it.
@@ -60,11 +62,6 @@ fn edge_rows(edges: &[Edge]) -> Option<(i64, i64)> {
     Some((min, rows.max()?))
 }
 
-/// The midpoint of two world coordinates, rounded down.
-pub(super) const fn midpoint(low: i64, high: i64) -> i64 {
-    low.saturating_add(high).div_euclid(2)
-}
-
 /// The widest `(lo, hi)` interval between consecutive pairs of the sorted
 /// `crossings`, `None` when fewer than two of them exist.
 fn longest_interval(crossings: &[i64]) -> Option<(i64, i64)> {
@@ -112,10 +109,5 @@ fn scale_down(base: i64, delta: i64, num: i128, den: i128) -> i64 {
         .saturating_mul(d)
         .saturating_add(i128::from(delta).saturating_mul(n))
         .div_euclid(d);
-    narrow(drawn)
-}
-
-/// The `i64` nearest an `i128` value, saturating at the bounds.
-fn narrow(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(if value < 0_i128 { i64::MIN } else { i64::MAX })
+    narrow_i64(drawn)
 }

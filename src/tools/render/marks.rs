@@ -3,7 +3,7 @@
 //! annotations, and the isometric line and thing markers, all drawn onto
 //! the [`Scene`] [`super::paint`] prepares.
 
-use crate::fixed::{Angle, rotate_point};
+use crate::fixed::{Angle, midpoint, rotate_point};
 use crate::render::canvas::intersect_x;
 use crate::render::{Edge, Pt, Rgba, Stroke, TextStyle, draw_text, thing_visual};
 use crate::wad::map::geometry;
@@ -12,7 +12,8 @@ use crate::wad::map::{Linedef, Thing, Vertex};
 use super::frame::offset_pt;
 use super::paint::{IsoPair, Scene, light_grey};
 use super::params::Request;
-use super::{HIGHLIGHT_RED, HIGHLIGHT_WIDTH, LINE_ONE_SIDED, LINE_TWO_SIDED, midpoint};
+
+use super::{HIGHLIGHT_RED, HIGHLIGHT_WIDTH, LINE_ONE_SIDED, LINE_TWO_SIDED};
 
 /// Half edge of a vertex mark, in pixels (a `3x3` square).
 const VERTEX_HALF: i64 = 1;

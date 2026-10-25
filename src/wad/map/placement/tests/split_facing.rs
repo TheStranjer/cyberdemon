@@ -5,13 +5,14 @@
 
 use alloc::vec::Vec;
 
+use crate::fixed::midpoint;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::Thing;
 use crate::wad::map::placement::distribute::{distribute, sector_area};
 use crate::wad::map::placement::facing::{bearing, next_u32};
 use crate::wad::map::placement::{
-    Area, Facing, Placed, mid, occupants, player_start, snap_angle, split_proportional,
+    Area, Facing, Placed, occupants, player_start, snap_angle, split_proportional,
 };
 
 use super::{angles, doom_definitions, map_name, spec, square_rooms};
@@ -183,8 +184,8 @@ fn blockers_widen_with_the_occupant_radius() {
 
 #[test]
 fn the_midpoint_and_area_shape_helpers_stay_exact() {
-    assert_eq!(mid(0_i64, 100_i64), 50_i64);
-    assert_eq!(mid(-300_i64, 300_i64), 0_i64);
+    assert_eq!(midpoint(0_i64, 100_i64), 50_i64);
+    assert_eq!(midpoint(-300_i64, 300_i64), 0_i64);
     let circle = Area::Circle {
         centre: (0_i64, 0_i64),
         radius: 64_i64,

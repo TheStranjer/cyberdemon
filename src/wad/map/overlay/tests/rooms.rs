@@ -25,8 +25,8 @@ fn ring_normalization_and_midpoints_follow_the_engine() {
     assert_eq!(midpoint((0, 0), (10, 4)), (5, 2), "exact halves");
     assert_eq!(
         midpoint((-3, 0), (0, 3)),
-        (-1, 1),
-        "odd sums truncate to zero"
+        (-2, 2),
+        "odd sums round away from zero"
     );
 }
 

@@ -18,7 +18,7 @@ use alloc::collections::BTreeMap;
 
 use crate::bsp::{BBox, BspTree, BuildSeg, BuiltNode, Child, Point};
 use crate::error::CyberError;
-use crate::fixed::{FRACBITS, atan2, round_shift};
+use crate::fixed::{FRACUNIT, atan2, div_round_sat};
 use crate::wad::bytes::Writer;
 use crate::wad::map::{Map, Vertex};
 
@@ -222,7 +222,7 @@ fn child_index(index: usize, what: &str) -> Result<u16, CyberError> {
 /// The whole-unit form of a `16.16` value, refusing what passes the map
 /// model's `i32`.
 fn round_unit(value: i64) -> Result<i32, CyberError> {
-    let rounded = round_shift(i128::from(value), FRACBITS);
+    let rounded = div_round_sat(i128::from(value), i128::from(FRACUNIT));
     i32::try_from(rounded).map_err(|_error| too_big("coordinate", rounded))
 }
 

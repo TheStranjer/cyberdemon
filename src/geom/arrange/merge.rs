@@ -11,13 +11,13 @@
 
 use alloc::collections::BTreeMap;
 
-use super::split::{divided, gcd};
+use super::split::divided;
 use super::{LineKey, SAMPLE_HALF, SAMPLE_OFFSET};
-use crate::fixed::isqrt;
+use crate::fixed::{div_round, gcd, isqrt};
 use crate::geom::Piece;
 use crate::geom::Pt;
 use crate::geom::label::{Label, Labeler, ScaledPt};
-use crate::geom::segment::{SegmentOrigin, cross, delta, dot, round_quotient};
+use crate::geom::segment::{SegmentOrigin, cross, delta, dot};
 
 /// The integer length of `start`→`end`, at least one.
 fn segment_length(start: Pt, end: Pt) -> i128 {
@@ -33,12 +33,12 @@ fn side_offset(start: Pt, end: Pt) -> ScaledPt {
     let direction = delta(start, end);
     let length = segment_length(start, end);
     (
-        round_quotient(
+        div_round(
             direction.1.saturating_neg().saturating_mul(SAMPLE_OFFSET),
             length,
         )
         .unwrap_or(0),
-        round_quotient(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0),
+        div_round(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0),
     )
 }
 

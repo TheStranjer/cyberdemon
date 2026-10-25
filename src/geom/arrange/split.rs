@@ -13,6 +13,7 @@ use alloc::collections::BTreeMap;
 
 use super::{MAX_SEGMENTS, normalize_polygon, ring_edges, validate_polygon};
 use crate::error::CyberError;
+use crate::fixed::gcd;
 use crate::geom::segment::{
     ExternalSegment, PointMerge, Seg, SegmentOrigin, SourceId, between, cross, delta, dot,
     on_segment_tol,
@@ -105,21 +106,6 @@ fn split_chain(seg: &Seg, raw: &[Pt], merged: &PointMerge, points: &[Pt]) -> Vec
     chain.extend(cuts);
     chain.push(end);
     chain
-}
-
-/// `gcd` of two non-negative `i128` values, at least one.
-#[must_use]
-#[inline]
-pub(super) const fn gcd(mut left: i128, mut right: i128) -> i128 {
-    while right != 0 {
-        let next = match left.checked_rem(right) {
-            Some(rem) => rem,
-            None => 0,
-        };
-        left = right;
-        right = next;
-    }
-    if left < 1 { 1 } else { left }
 }
 
 /// Exact division by a `gcd` result (never zero, never overflowing for

@@ -14,6 +14,7 @@
 //! rebuild.
 
 use crate::error::CyberError;
+use crate::fixed::{midpoint, narrow_i32};
 use crate::geom::Pt;
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{Feature, Plan};
@@ -28,9 +29,6 @@ use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sect
 /// corners: every corner of the 64-unit square shrunk by this much must
 /// resolve into the room that owns the square.
 const TELEPORT_CLEARANCE: i32 = 8_i32;
-
-/// Divisor of the two-bound axis sum that gives the box centre.
-const AXIS_DIVISOR: i64 = 2_i64;
 
 /// The teleporter step: stand every `teleporter` row's pad and
 /// destination squares, in plan order.
@@ -245,12 +243,10 @@ fn merged_bbox(map: &Map, sectors: &[usize]) -> Option<(i32, i32, i32, i32)> {
         })
 }
 
-/// The centre axis of two box edges, halved in `i64` so the sum never
-/// wraps.
+/// The centre axis of two box edges, through [`crate::fixed::midpoint`]
+/// and saturated back into the plan grid.
 fn mid_axis(low: i32, high: i32) -> i32 {
-    let sum = i64::from(low).saturating_add(i64::from(high));
-    let half = sum.div_euclid(AXIS_DIVISOR);
-    i32::try_from(half).unwrap_or(if half < 0_i64 { i32::MIN } else { i32::MAX })
+    narrow_i32(i128::from(midpoint(i64::from(low), i64::from(high))))
 }
 
 /// The map-unit [`Point`] of a transformed plan coordinate, refused

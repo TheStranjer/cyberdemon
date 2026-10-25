@@ -8,8 +8,8 @@
 //! live beside them in [`super`].
 
 use crate::error::CyberError;
+use crate::fixed::{div_round, narrow_i64};
 use crate::geom::Pt;
-use crate::geom::segment::round_quotient;
 use crate::wad::map::flags::{BLOCKING, FlagFamily};
 use crate::wad::map::geometry::{neighbors, point_in_sector};
 use crate::wad::map::model::{Linedef, Map, Sector};
@@ -25,12 +25,7 @@ use super::{
 /// The mean of one axis of the polygon's corners, rounded to the
 /// nearest whole unit and saturated into the grid.
 fn mean_axis(sum: i128, count: i128) -> i64 {
-    let exact = round_quotient(sum, count).unwrap_or(sum);
-    match i64::try_from(exact) {
-        Ok(axis) => axis,
-        Err(_error) if exact < 0_i128 => i64::MIN,
-        Err(_error) => i64::MAX,
-    }
+    narrow_i64(div_round(sum, count).unwrap_or(sum))
 }
 
 /// The corner-average centre of a platform polygon.

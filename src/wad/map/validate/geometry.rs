@@ -17,6 +17,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{Issue, Severity};
+use crate::fixed::gcd;
 use crate::wad::map::model::{Linedef, Map};
 
 /// Linedef count past which [`crossing_lines`] declines to sweep and
@@ -349,24 +350,14 @@ pub(super) fn check_skipped(map: &Map) -> Vec<Issue> {
     )]
 }
 
-/// The greatest common divisor of two `u64` values, `1` for the `0, 0`
-/// pair so the caller's division can never see zero.
-const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
-    while right != 0 {
-        let next = match left.checked_rem(right) {
-            Some(rem) => rem,
-            None => 0,
-        };
-        left = right;
-        right = next;
-    }
-    if left < 1 { 1 } else { left }
-}
-
 /// The reduced direction in canonical sign: first component positive,
 /// or for a vertical line, the second one.
 fn reduced_direction(dx: i64, dy: i64) -> Option<(i64, i64)> {
-    let g = i64::try_from(gcd_u64(dx.unsigned_abs(), dy.unsigned_abs())).ok()?;
+    let g = i64::try_from(gcd(
+        i128::from(dx.unsigned_abs()),
+        i128::from(dy.unsigned_abs()),
+    ))
+    .ok()?;
     let raw_x = dx.checked_div(g)?;
     let raw_y = dy.checked_div(g)?;
     let flip = raw_x < 0 || (raw_x == 0 && raw_y < 0);

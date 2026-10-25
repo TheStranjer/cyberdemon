@@ -224,11 +224,6 @@ fn options_report(
     })
 }
 
-/// The midpoint of two world coordinates, rounded down.
-pub(super) const fn midpoint(low: i64, high: i64) -> i64 {
-    low.saturating_add(high).div_euclid(2)
-}
-
 /// Stroke width of highlighted linedefs.
 pub(super) const HIGHLIGHT_WIDTH: u32 = 3;
 /// Media type of the published overview.

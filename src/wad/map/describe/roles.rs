@@ -16,12 +16,12 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::defs::boom::{SectorFamily, SectorFlag, decode_sector_special};
+use crate::fixed::midpoint;
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily, PLAYER_USE_BITS};
 use crate::wad::map::geometry::sector_boundary;
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::playability::MAX_STEP_UP;
 
-use super::shape::midpoint;
 use super::{
     Edge, NAME_DAMAGING, NAME_LIGHT_EFFECT, NAME_OPENING, NAME_SECRET, NAME_STEP_DOWN,
     NAME_STEP_UP, Neighbour, Point,

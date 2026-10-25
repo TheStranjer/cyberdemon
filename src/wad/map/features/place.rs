@@ -36,9 +36,9 @@ pub use depth::outward_depth;
 pub use strip::void_strip;
 
 use crate::error::CyberError;
-use crate::fixed::hypot;
+use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};
 use crate::geom::Pt;
-use crate::geom::segment::{Delta, cross, delta, dot, round_quotient};
+use crate::geom::segment::{Delta, cross, delta, dot};
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::Point;
 
@@ -186,27 +186,8 @@ pub fn distance_fraction(at: Point, from: Point, to: Point) -> (i128, i128) {
 /// The floored integer length of an `i128` delta vector, saturated into
 /// `i32` (only `i32`-coordinate deltas are ever measured).
 fn length_of(run: Delta) -> i32 {
-    let length = hypot(saturate_i64(run.0), saturate_i64(run.1));
+    let length = hypot(narrow_i64(run.0), narrow_i64(run.1));
     i32::try_from(length).unwrap_or(i32::MAX)
-}
-
-/// An `i128` saturated into `i64` (deltas of `i32` coordinates never
-/// leave `i64`; the saturation is defensive).
-fn saturate_i64(value: i128) -> i64 {
-    match i64::try_from(value) {
-        Ok(narrow) => narrow,
-        Err(_) if value < 0_i128 => i64::MIN,
-        Err(_) => i64::MAX,
-    }
-}
-
-/// An `i128` saturated into `i32`.
-fn narrow_axis(value: i128) -> i32 {
-    match i32::try_from(value) {
-        Ok(narrow) => narrow,
-        Err(_) if value < 0_i128 => i32::MIN,
-        Err(_) => i32::MAX,
-    }
 }
 
 /// `from + vector * num / den` per coordinate, each rounded to the
@@ -224,20 +205,19 @@ fn shift_axis(from: i32, axis: i128, num: i128, den: i128) -> i32 {
     let scaled = i128::from(from)
         .saturating_mul(den)
         .saturating_add(axis.saturating_mul(num));
-    narrow_axis(round_quotient(scaled, den).unwrap_or(scaled))
+    narrow_i32(div_round(scaled, den).unwrap_or(scaled))
 }
 
 /// One coordinate of the midpoint of `first` and `second`, halves
-/// rounded away from zero.
+/// rounded away from zero and saturated back into `i32`.
 fn half_axis(first: i32, second: i32) -> i32 {
-    let sum = i128::from(first).saturating_add(i128::from(second));
-    narrow_axis(round_quotient(sum, 2_i128).unwrap_or(sum))
+    narrow_i32(i128::from(midpoint(i64::from(first), i64::from(second))))
 }
 
 /// The componentwise mean of two offset vectors, halves rounded away
 /// from zero: a chain corner's bevelled strip offset.
 fn half_vector(low: Delta, high: Delta) -> Delta {
-    let mean = |sum: i128| round_quotient(sum, 2_i128).unwrap_or(sum);
+    let mean = |sum: i128| div_round(sum, 2_i128).unwrap_or(sum);
     (
         mean(low.0.saturating_add(high.0)),
         mean(low.1.saturating_add(high.1)),
@@ -247,8 +227,8 @@ fn half_vector(low: Delta, high: Delta) -> Delta {
 /// A [`Point`] from exact axes, saturated into `i32`.
 fn from_axes(x: i128, y: i128) -> Point {
     Point {
-        x: narrow_axis(x),
-        y: narrow_axis(y),
+        x: narrow_i32(x),
+        y: narrow_i32(y),
     }
 }
 

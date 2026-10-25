@@ -12,7 +12,7 @@
 //! builds its whole picture from these pieces.
 
 use crate::defs::Definitions;
-use crate::fixed::{Angle, rotate_point};
+use crate::fixed::{Angle, narrow_i64, rotate_point};
 use crate::gfx::palette::Palette;
 use crate::render::{Canvas, Pt, Rgba};
 use crate::wad::map::flags::{DONT_DRAW, SECRET};
@@ -115,18 +115,13 @@ pub fn automap_color(map: &Map, line: &Linedef, colors: &AutomapColors) -> Optio
     Some(colors.other)
 }
 
-/// The `i64` nearest an `i128` value (saturating at the bounds).
-fn narrow(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
-}
-
 /// `value * num / den` rounded down, exact in `i128` and saturating back
 /// to `i64`; a non-positive `den` behaves like `1`.
 #[must_use]
 #[inline]
 pub fn scale_down(value: i64, num: i64, den: i64) -> i64 {
     let product = i128::from(value).saturating_mul(i128::from(num));
-    narrow(product.div_euclid(i128::from(den).max(1)))
+    narrow_i64(product.div_euclid(i128::from(den).max(1)))
 }
 
 /// The square world window a minimap frames.
@@ -339,11 +334,11 @@ pub fn paint_thing_dots(map: &Map, defs: &Definitions, window: &Window, canvas: 
 mod tests {
     use super::{
         ARROW_BARB_PX, AutomapColors, PLAYER_ARROW_PX, PlayerMark, THING_DOT_PX, Window,
-        automap_color, category_color, narrow, offset_pixel, paint_automap_lines,
-        paint_player_arrow, paint_thing_dots, palette_pixel, scale_down, thing_visual,
+        automap_color, category_color, offset_pixel, paint_automap_lines, paint_player_arrow,
+        paint_thing_dots, palette_pixel, scale_down, thing_visual,
     };
     use crate::defs::definitions_for;
-    use crate::fixed::Angle;
+    use crate::fixed::{Angle, narrow_i64};
     use crate::gfx::palette::Palette;
     use crate::render::{Canvas, Rgba};
     use crate::wad::game::Game;
@@ -541,9 +536,9 @@ mod tests {
         assert_eq!(scale_down(-32, 88, 320), -9, "-8.8 floors to -9");
         assert_eq!(scale_down(31, 88, 320), 8, "8.52 floors to 8");
         assert_eq!(scale_down(7, 1, 0), 7, "a zero denominator behaves like 1");
-        assert_eq!(narrow(i128::from(i64::MAX)), i64::MAX, "in range stays");
+        assert_eq!(narrow_i64(i128::from(i64::MAX)), i64::MAX, "in range stays");
         assert_eq!(
-            narrow(i128::from(i64::MAX) + 1),
+            narrow_i64(i128::from(i64::MAX) + 1),
             i64::MAX,
             "above the range saturates"
         );

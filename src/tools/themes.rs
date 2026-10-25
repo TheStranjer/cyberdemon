@@ -651,7 +651,7 @@ impl Cyberdemon {
 
     /// Fills missing textures or repaints a map with the theme.
     #[tool(
-        description = "Dresses a map (or the listed sectors) with the session's texture theme, as one undoable edit: mode fill_missing (default) gives untextured middles, visible upper gaps and lower steps the theme's wall, door or step texture; mode repaint redresses every face, keeping door and switch specials. Returns per-role change counts. Use it after building or swapping a theme; align_textures then removes the seams."
+        description = "Dresses a map (or the listed sectors) with the session's texture theme, as one undoable edit: mode fill_missing (default) gives untextured middles, visible upper gaps and lower steps the theme's wall, door or step texture; mode retexture redresses every face, keeping door and switch specials. Returns per-role change counts. Use it after building or swapping a theme; align_textures then removes the seams."
     )]
     fn auto_texture(
         &self,

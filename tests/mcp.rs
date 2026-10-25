@@ -37,7 +37,10 @@
 //! `edit_vertices`-group tests in `edit_vertices`, the
 //! graphics-group shared helpers in `graphics` with its `graphics/list`,
 //! `graphics/flat_patch` and `graphics/sprites` topic tests,
-//! the imports-group tests in `imports`, the
+//! the imports-group shared helpers in `imports` with its
+//! `imports/patch`, `imports/patch_sources`, `imports/flat`, `imports/raw`,
+//! `imports/sprite`, `imports/process`, `imports/create_texture`,
+//! `imports/create_flat` and `imports/create_sprite` topic tests, the
 //! inspect-group tests in `inspect`, the features-group tests in
 //! `features`, the
 //! music-group tests in `music`, the

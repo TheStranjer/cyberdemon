@@ -924,11 +924,26 @@ src/
                   replacement passes (`replace_textures`, `replace_flats`,
                   `replace_thing_types`, the `Face` and `Surface` knobs)
                   the CD-108 bulk `replace_*` tools fold over maps, and
-                  `map/bulk/edits.rs` the pure field-edit engine
-                  (`FieldEdits`, `EditScope`, `apply`, `Applied`) behind
-                  the CD-108 `bulk_edit` tool: per-kind `set`/`add`
+                  `map/bulk/edits.rs` + `edits/` the pure field-edit
+                  engine (`FieldEdits`, `EditScope`, `apply`, `Applied`)
+                  behind the CD-108 `bulk_edit` tool: per-kind `set`/`add`
                   tables over all five element kinds, the family-gated
-                  linedef fields and the named flag edits,
+                  linedef fields and the named flag edits — the request
+                  and answer shapes, the range vocabulary and the `apply`
+                  and `run` entry points in the root, the field tables
+                  with the `KindPlan` of accessors each drives in
+                  `edits/tables.rs`, the `Job` of one run with its request
+                  checks and per-row `Pending` plans in `edits/job.rs`,
+                  the check, plan, write and report steps in
+                  `edits/commit.rs`, and the value bounds beside the typed
+                  readers and writers of the five blocks in
+                  `edits/access.rs`, with that module's tests in
+                  `edits/tests.rs` (the stock, the request builders and
+                  the sample maps) plus `edits/tests/geometry_kinds.rs`
+                  (the sector, sidedef and vertex blocks),
+                  `edits/tests/lines_things.rs` (the linedef and thing
+                  blocks with their flags) and `edits/tests/report.rs`
+                  (the answer and the entry gate),
                   `map/placement.rs` + `placement/` the pure
                   thing-placement core: the clearance primitives (`fits`,
                   `keeps_distance`, `boundary_clear`, `axis_points`,

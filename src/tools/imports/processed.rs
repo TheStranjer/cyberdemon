@@ -45,7 +45,7 @@ const PNG_MIME: &str = "image/png";
 const FALLBACK_STEM: &str = "IMAGE";
 
 /// The full documentation of [`crate::server::Cyberdemon::process_image`].
-pub(in crate::tools) const PROCESS_TOOL_DESCRIPTION: &str = "Previews the image pipeline without touching a WAD: decodes source, runs your ordered ops (crop, fit, rotate, flip, perspective_correct, auto_levels, adjust, color_key, trim, remove_background, make_tileable, threshold, adaptive_threshold, thin_stroke_filter, grayscale, blur) and publishes the processed PNG plus a PLAYPAL-quantized preview with colors_used and max_color_error measured. Pass the returned URL as source to any import tool; see skill/reference/imports.md.";
+pub(in crate::tools) const PROCESS_TOOL_DESCRIPTION: &str = "Previews the image pipeline without touching a WAD: decodes source, runs your ordered ops (crop, fit, rotate, flip, perspective_correct, auto_levels, adjust, color_key, trim, remove_background, make_tileable, threshold, adaptive_threshold, grayscale, blur, thin_stroke_filter) and publishes the processed PNG plus a PLAYPAL-quantized preview with colors_used and max_color_error measured. Pass the returned URL as source to any import tool; see skill/reference/imports.md.";
 
 /// The shared processing parameters, flattened into the arguments of every
 /// tool that runs [`process`] before it stores or publishes a picture.

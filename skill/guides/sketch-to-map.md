@@ -1,6 +1,6 @@
 # Sketch to map
 
-Tools: open_iwad, new_wad, get_asset_server_info, trace_sketch, build_map_from_plan, validate_map, check_playability, render_topdown, render_view, describe_map, undo, add_stairs, edit_sector, add_thing, add_door, edit_decorate, save_wad
+Tools: open_iwad, new_wad, get_asset_server_info, process_image, trace_sketch, build_map_from_plan, validate_map, check_playability, render_topdown, render_view, describe_map, undo, add_stairs, edit_sector, add_thing, add_door, edit_decorate, save_wad
 
 Turn a hand-drawn floor plan into a playable map. The server measures the
 drawing and builds exactly what the plan says; every reading of the drawing
@@ -33,8 +33,10 @@ you only see.
   you the path.
 - If they can only hand you bytes, call `get_asset_server_info` for the
   upload URL and `PUT` the file there; the receipt's URL is a valid `source`.
-- A photograph at an angle will not trace well: ask for a flat scan. The
-  tools do not correct perspective.
+- A photograph taken at an angle will not trace well: ask for a flat scan, or
+  square the sheet with the `process_image` op `perspective_correct` (the
+  four corners in source pixels, a target `width` and `height`) before
+  tracing.
 
 Start the editing session while you are at it: `open_iwad` the game archive
 (themes, definitions and checks read it) — a `new_wad` gives the work a
@@ -126,6 +128,16 @@ is only dust raise `noise_floor_px` (default the measured `stroke_px`) past
 it; `verbose: true` returns every row and can outgrow your client's result
 limit. The `debug` image labels only the reported rows, so the picture and
 the lists never disagree.
+
+**A phone photo of ruled paper is prepped, not traced as-is.** Run
+`process_image` over it with
+`ops: [{"op":"adaptive_threshold","radius":6,"offset":10},{"op":"thin_stroke_filter","radius":1}]`,
+then feed the returned `processed.url` straight back to `trace_sketch` as its
+`source` on the same connection. `adaptive_threshold` is the local-means
+binarizer: it finds the ink under uneven light and ignores smooth gradients
+across the sheet. The radius-1 `thin_stroke_filter` is a 3x3 opening: it
+drops the 1 px ruling and any residual hairlines, painting opaque black on
+opaque white. Then trace the result and tune as above.
 
 ## 6. Write the plan
 

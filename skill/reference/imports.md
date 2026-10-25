@@ -367,14 +367,6 @@ canonical operation reference.
   (the local-mean extremes: the measurable proof the gradient was
   flattened) and `ink_pixels`.
   `{ "op": "adaptive_threshold", "radius": 80, "offset": 15 }`.
-- `thin_stroke_filter` — drop hairline ruling. Binarize the picture the same
-  way as `threshold` (`level` omitted means Otsu; `invert` swaps the two
-  classes), then keep only the ink wide enough to contain the square
-  `(2r + 1) x (2r + 1)` element: strokes thinner than that element
-  (1 px rules, stray specks) are erased while walls `2r + 1` pixels or thicker
-  survive intact, and `erode`'s border convention keeps frame-touching ink.
-  `radius` is `1..=16`. Reports `level`, `otsu`, `removed_ink_pixels` and
-  `kept_ink_pixels`. `{ "op": "thin_stroke_filter", "radius": 1 }`.
 - `grayscale` — replace the colour channels of every opaque pixel (alpha
   `128` or above) with its luminance; every alpha stays untouched. Reports
   `distinct_colors_before` and `distinct_colors_after` counted over unique
@@ -384,6 +376,14 @@ canonical operation reference.
   `(2r + 1) x (2r + 1)` window around it, clipped at the borders; colours
   are weighted by alpha, so transparent pixels never darken an edge.
   `radius` is `1..=256`. `{ "op": "blur", "radius": 2 }`.
+- `thin_stroke_filter` — drop hairline ruling. Binarize the picture the same
+  way as `threshold` (`level` omitted means Otsu; `invert` swaps the two
+  classes), then keep only the ink wide enough to contain the square
+  `(2r + 1) x (2r + 1)` element: strokes thinner than that element
+  (1 px rules, stray specks) are erased while walls `2r + 1` pixels or thicker
+  survive intact, and `erode`'s border convention keeps frame-touching ink.
+  `radius` is `1..=16`. Reports `level`, `otsu`, `removed_ink_pixels` and
+  `kept_ink_pixels`. `{ "op": "thin_stroke_filter", "radius": 1 }`.
 
 ## `process_image`
 

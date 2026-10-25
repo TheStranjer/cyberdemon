@@ -34,7 +34,10 @@ in first (`copied_to_working: true`) — see `reference/maps.md` and
 - Flats (`floor_flat`, `ceiling_flat`) are uppercased and validated like
   texture names (non-empty, printable `ASCII`, 8 characters on binary
   maps, 64 on `UDMF`), but `"-"` — which names *no texture* — is refused
-  for a flat.
+  for a flat. A map that arrives with a blank flat field reads it back as
+  `"-"`; every plane needs a flat, so `validate_map` reports such a sector
+  as `missing_flat` (see `reference/validate.md`) and `edit_sector` fixes
+  it.
 - The resulting sector needs its ceiling at or above its floor; equal
   heights are allowed (the closed shell of a raised door), a ceiling
   below the floor fails `invalid_argument`.

@@ -3,15 +3,17 @@
 //! session does not define, and the classic hall-of-mirrors gaps -
 //! faces the neighbouring sectors' heights demand but nobody dressed.
 //!
-//! An empty name is "unset" and never judged (the binary readers store a
-//! blank face as `"-"`, hand-built `UDMF` rows may leave it empty); the
-//! checks only speak about named-but-undefined resources and about
-//! faces that are explicitly `"-"` where the geometry needs one.
-//! The texture side runs only when the merged view defines composite
-//! textures at all - without any `TEXTURE1`/`TEXTURE2`/`TX_` source
-//! there is no standard to check against, and [`texture_check_skipped`]
-//! says so instead. The flat side likewise stays quiet when the session
-//! carries no flats.
+//! An empty name is "unset" (the binary readers store a blank field as
+//! `"-"`, hand-built `UDMF` rows may leave it empty). On a sidedef face
+//! unset is legal, so the texture side speaks only about named-but-undefined
+//! faces and about faces explicitly `"-"` where the geometry demands one.
+//! On a sector plane it is not: every floor and ceiling wears a flat, so
+//! [`missing_flat`] reports an undressed plane whatever the session carries.
+//! The name lookups run only when the merged view defines that resource at
+//! all - without any `TEXTURE1`/`TEXTURE2`/`TX_` source there is no standard
+//! to check texture names against, and [`texture_check_skipped`] says so
+//! instead; the flat side likewise judges no names when the session carries
+//! no flats.
 
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -117,37 +119,71 @@ fn flat_issue(index: usize, role: &str, flat: &str) -> Issue {
     .sector(&[index])
 }
 
-/// Whether one flat name needs its lookup: it must be set, not the `-`
-/// marker, and not the sky, which every port draws itself.
-fn wants_flat(flat: &str) -> bool {
-    checkable(flat) && !flat.eq_ignore_ascii_case(SKY_FLAT)
+/// One row for sector `index`'s plane that wears no flat at all.
+fn bare_plane_issue(index: usize, role: &str, flat: &str) -> Issue {
+    Issue::new(
+        Severity::Error,
+        format!(
+            "sector {index} has no {role} flat: \"{flat}\" is the unset-field placeholder, never \
+             a flat name, so the engine draws that plane missing or broken - edit_sector the \
+             sector's {role}_flat to a real flat (load the archive that carries the flats first \
+             when the merged view holds none)",
+        ),
+    )
+    .sector(&[index])
 }
 
-/// The undefined flats named by one sector.
-fn sector_flat_gaps(index: usize, space: &Sector, flats: &BTreeSet<String>) -> Vec<Issue> {
-    let mut gaps: Vec<Issue> = Vec::new();
-    for (role, flat) in [
+/// Whether a flat name leaves its plane undressed: the `"-"` marker (what
+/// the binary readers store for a blank field) or the empty name a
+/// hand-built row carries. Unlike a sidedef face, a sector plane always
+/// needs a flat, so neither is ever valid.
+fn bare_plane(flat: &str) -> bool {
+    !checkable(flat)
+}
+
+/// The row one plane of sector `index` earns, or `None` when it is sound.
+/// An undressed plane always reports; a named flat reports only when
+/// `flats` does not carry it, `None` standing for a session that carries no
+/// flats and so judges no names at all. `F_SKY1` never reports: every port
+/// draws the sky itself.
+fn plane_gap(
+    index: usize,
+    role: &str,
+    flat: &str,
+    flats: Option<&BTreeSet<String>>,
+) -> Option<Issue> {
+    if bare_plane(flat) {
+        return Some(bare_plane_issue(index, role, flat));
+    }
+    let carried = flats?;
+    let sound = flat.eq_ignore_ascii_case(SKY_FLAT) || known(carried, flat);
+    (!sound).then(|| flat_issue(index, role, flat))
+}
+
+/// The rows both planes of sector `index` earn, in floor then ceiling
+/// order.
+fn sector_flat_gaps(index: usize, space: &Sector, flats: Option<&BTreeSet<String>>) -> Vec<Issue> {
+    [
         ("floor", space.floor_flat.as_str()),
         ("ceiling", space.ceiling_flat.as_str()),
-    ] {
-        if wants_flat(flat) && !known(flats, flat) {
-            gaps.push(flat_issue(index, role, flat));
-        }
-    }
-    gaps
+    ]
+    .into_iter()
+    .filter_map(|(role, flat)| plane_gap(index, role, flat, flats))
+    .collect()
 }
 
-/// Sector flats naming a flat the merged view does not carry. `F_SKY1`
-/// is always allowed - the engine substitutes the sky - and a session
-/// without any flats defines no standard, so the check stays quiet.
+/// Sector planes left with no flat, and sector flats naming a flat the
+/// merged view does not carry. `F_SKY1` is always allowed on either plane -
+/// the engine substitutes the sky. A carried flat is the standard a name is
+/// measured against, so the name half stays quiet when the session carries
+/// none; an undressed plane needs no standard and reports whatever the
+/// session holds.
 pub(super) fn missing_flat(map: &Map, context: &Context<'_>) -> Vec<Issue> {
-    if context.resources.flats.is_empty() {
-        return Vec::new();
-    }
+    let flats = (!context.resources.flats.is_empty()).then_some(&context.resources.flats);
     map.sectors
         .iter()
         .enumerate()
-        .flat_map(|(index, space)| sector_flat_gaps(index, space, &context.resources.flats))
+        .flat_map(|(index, space)| sector_flat_gaps(index, space, flats))
         .collect()
 }
 
@@ -269,7 +305,9 @@ mod tests {
     use alloc::collections::BTreeSet;
     use alloc::string::{String, ToString};
 
-    use super::{missing_flat, missing_required_texture, missing_texture, texture_check_skipped};
+    use super::{
+        Issue, missing_flat, missing_required_texture, missing_texture, texture_check_skipped,
+    };
     use crate::defs::definitions_for;
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
@@ -317,6 +355,30 @@ mod tests {
             flats: set(&["FLOOR1"]),
             has_texture_defs: true,
         }
+    }
+
+    /// The one sector of [`ring_map`] re-flattened onto `floor` and `ceiling`.
+    fn reflatted(mut map: Map, floor: &str, ceiling: &str) -> Map {
+        let space = map.sectors.get_mut(0).expect("the only sector");
+        space.floor_flat = floor.to_owned();
+        space.ceiling_flat = ceiling.to_owned();
+        map
+    }
+
+    /// The single issue of a one-row finding, panicking when the check said
+    /// more or less than that.
+    #[track_caller]
+    fn only_issue(issues: Vec<Issue>) -> Issue {
+        assert_eq!(issues.len(), 1, "exactly one issue expected");
+        issues.into_iter().next().expect("the one issue")
+    }
+
+    /// The plane a bare-plane row names: its message says "sector N has no
+    /// {role} flat".
+    #[track_caller]
+    fn plane_role(issue: &Issue) -> &str {
+        let after = issue.message.split(" has no ").nth(1).expect("the role");
+        after.split(' ').next().expect("the role word")
     }
 
     /// A `Doom` map: a closed square ring whose four walls all front
@@ -430,30 +492,17 @@ mod tests {
     }
 
     #[test]
-    fn missing_flat_requires_a_known_flat_but_always_allows_the_sky() {
+    fn missing_flat_requires_a_known_flat_and_reports_an_unknown_one() {
         let given = fixture(full_index());
         let context = context_of(&given);
         assert!(
             missing_flat(&ring_map(), &context).is_empty(),
             "FLOOR1 is carried"
         );
-        let mut sky = ring_map();
-        sky.sectors
-            .get_mut(0)
-            .expect("the only sector")
-            .ceiling_flat = "F_SKY1".to_owned();
-        assert!(
-            missing_flat(&sky, &context).is_empty(),
-            "the sky is always allowed"
-        );
-        let mut missing = ring_map();
-        missing
-            .sectors
-            .get_mut(0)
-            .expect("the only sector")
-            .floor_flat = "LAVA1".to_owned();
-        let found = missing_flat(&missing, &context);
-        let issue = found.first().expect("LAVA1 is not carried");
+        let issue = only_issue(missing_flat(
+            &reflatted(ring_map(), "LAVA1", "FLOOR1"),
+            &context,
+        ));
         assert_eq!(
             issue.severity,
             Severity::Error,
@@ -461,32 +510,89 @@ mod tests {
         );
         assert_eq!(issue.sectors, vec![0_usize], "the sector named");
         assert!(
-            issue.message.contains("floor flat \"LAVA1\""),
-            "the message quotes the role and name: {}",
+            issue.message.contains("floor flat \"LAVA1\"") && issue.message.contains("edit_sector"),
+            "the message quotes the role and name and names the fix: {}",
             issue.message
-        );
-        let mut blanks = ring_map();
-        let space = blanks.sectors.get_mut(0).expect("the only sector");
-        space.floor_flat = String::new();
-        space.ceiling_flat = "-".to_owned();
-        assert!(
-            missing_flat(&blanks, &context).is_empty(),
-            "an unset or dashed flat asks for no lookup"
         );
     }
 
     #[test]
-    fn missing_flat_is_quiet_when_the_session_carries_no_flats_at_all() {
-        let mut map = ring_map();
-        map.sectors.get_mut(0).expect("the only sector").floor_flat = "EVERY".to_owned();
+    fn the_sky_flat_is_always_allowed() {
+        let given = fixture(full_index());
+        let context = context_of(&given);
+        assert!(
+            missing_flat(&reflatted(ring_map(), "FLOOR1", "F_SKY1"), &context).is_empty(),
+            "the engine draws the sky itself"
+        );
+        assert!(
+            missing_flat(&reflatted(ring_map(), "F_SKY1", "f_sky1"), &context).is_empty(),
+            "on either plane, and a hand-built row's lower case too"
+        );
+    }
+
+    #[test]
+    fn a_dash_flat_reports_the_undressed_plane() {
+        let given = fixture(full_index());
+        let context = context_of(&given);
+        let floor = only_issue(missing_flat(
+            &reflatted(ring_map(), "-", "FLOOR1"),
+            &context,
+        ));
+        assert_eq!(floor.severity, Severity::Error, "a bare plane is broken");
+        assert_eq!(floor.sectors, vec![0_usize], "the sector named");
+        assert_eq!(plane_role(&floor), "floor", "its floor plane");
+        assert!(
+            floor.message.contains("floor_flat") && floor.message.contains("edit_sector"),
+            "the message names the field and the fixing tool: {}",
+            floor.message
+        );
+        let ceiling = only_issue(missing_flat(
+            &reflatted(ring_map(), "FLOOR1", "-"),
+            &context,
+        ));
+        assert_eq!(plane_role(&ceiling), "ceiling", "the other plane by itself");
+        assert!(ceiling.message.contains("ceiling_flat"), "and its field");
+        let both = missing_flat(&reflatted(ring_map(), "-", "-"), &context);
+        assert_eq!(both.len(), 2, "both planes report: {both:?}");
+    }
+
+    #[test]
+    fn an_empty_flat_reports_the_undressed_plane_too() {
+        let given = fixture(full_index());
+        let context = context_of(&given);
+        let issues = missing_flat(&reflatted(ring_map(), "", ""), &context);
+        assert_eq!(issues.len(), 2, "both unset planes report: {issues:?}");
+        assert_eq!(
+            issues.iter().map(plane_role).collect::<Vec<&str>>(),
+            vec!["floor", "ceiling"],
+            "each plane named, in order"
+        );
+        for issue in &issues {
+            assert_eq!(issue.severity, Severity::Error, "broken either way");
+            assert_eq!(issue.sectors, vec![0_usize], "the sector named");
+        }
+    }
+
+    #[test]
+    fn missing_flat_judges_names_only_when_the_session_carries_flats() {
         let given = fixture(ResourceIndex {
             textures: BTreeSet::new(),
             flats: BTreeSet::new(),
             has_texture_defs: true,
         });
+        let context = context_of(&given);
         assert!(
-            missing_flat(&map, &context_of(&given)).is_empty(),
-            "no flats defined: no standard to check against"
+            missing_flat(&reflatted(ring_map(), "EVERY", "F_SKY1"), &context).is_empty(),
+            "no flats carried: no standard to check a name against"
+        );
+        let issue = only_issue(missing_flat(
+            &reflatted(ring_map(), "-", "F_SKY1"),
+            &context,
+        ));
+        assert_eq!(
+            plane_role(&issue),
+            "floor",
+            "an undressed plane needs no standard to be broken"
         );
     }
 

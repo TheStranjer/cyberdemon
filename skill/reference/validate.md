@@ -59,7 +59,7 @@ with `render_topdown` to look at the spot.
 | `ceiling_below_floor` | error | A sector's ceiling height is below its floor height. |
 | `thing_outside_map` | warning | No sector contains the thing's point: it spawns into the void. |
 | `missing_texture` | error | A sidedef face names a texture the merged view does not define (`TEXTURE1`/`TEXTURE2` entries plus the textures region). Empty and `"-"` faces are skipped. Runs only when the merged view defines textures (see `texture_check_skipped`). |
-| `missing_flat` | error | A sector floor or ceiling flat is no flat lump of the merged flats namespace. `F_SKY1` is always allowed; a session carrying no flats at all is not judged. |
+| `missing_flat` | error | A sector plane is not dressed. Its floor or ceiling flat is `"-"` (what a blank binary field reads back as) or empty — always an error, because every plane needs a flat; fix it with `edit_sector` `floor_flat`/`ceiling_flat` — or it names a flat the merged flats region does not carry, judged only when the session carries flats at all. `F_SKY1` is always allowed, on either plane: the engine draws the sky itself. |
 | `missing_required_texture` | warning | Hall of mirrors: a one-sided line with `"-"` middle, or a two-sided line whose neighbour's lower ceiling / higher floor demands an upper / lower face that is `"-"` (checked on both sides; `F_SKY1` on both sectors' ceiling flats exempts the upper faces). |
 | `texture_check_skipped` | info | The merged view has no `TEXTURE1`/`TEXTURE2` lump and no textures region, so wall-texture names were not checked. |
 | `nodes_missing` | warning | A binary (Doom/Hexen-format) map whose `SEGS`, `SSECTORS` and `NODES` lumps are all empty or absent. Run `build_all_nodes`; `ZDoom`-family ports build the tree themselves, every other port does not. |
@@ -87,9 +87,12 @@ rows deserve a look. Run the check list again after every round of fixes
 - **Textures and flats** check against the **merged view** whatever scope
   the map came from: defined textures are the winning `TEXTURE1`/
   `TEXTURE2` records plus the `TX_` lumps of a textures region, and flats
-  are the lumps of a flats region. An empty geometry edit's invalidated
-  node lumps show up as `nodes_missing` / `blockmap_missing` until
-  `build_all_nodes` runs.
+  are the lumps of a flats region. A sector plane wearing `"-"` or nothing
+  needs no view to judge: no WAD carries such a flat, so `missing_flat`
+  reports it whatever the session holds (a name is judged only against a
+  view that carries textures or flats). An empty geometry edit's
+  invalidated node lumps show up as `nodes_missing` / `blockmap_missing`
+  until `build_all_nodes` runs.
 
 ## Not checked yet
 

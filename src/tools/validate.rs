@@ -498,6 +498,20 @@ mod tests {
         assert_eq!(error.code(), "invalid_argument", "bad scope code");
     }
 
+    /// A map of one sector whose two planes wear `FLOOR1`. The resource
+    /// index these fixtures hand the checks carries no flats, so the names
+    /// are not judged and the rows below stay about counting, paging and
+    /// filtering rather than about flats.
+    fn one_sector() -> Map {
+        let mut map = Map::default();
+        map.sectors.push(Sector {
+            floor_flat: "FLOOR1".to_owned(),
+            ceiling_flat: "FLOOR1".to_owned(),
+            ..Default::default()
+        });
+        map
+    }
+
     #[test]
     fn counts_total_every_severity_of_the_found_issues() {
         let doom = definitions_for(Game::Doom2).expect("the embedded Doom II table is valid");
@@ -508,8 +522,7 @@ mod tests {
             hexen_specials: &hexen,
             resources: &resources,
         };
-        let mut map = Map::default();
-        map.sectors.push(Sector::default());
+        let map = one_sector();
         let outcome = validate::run(&map, &context, None);
         let counts = Counts::of(&outcome.issues);
         assert_eq!(counts.error, 1, "only the missing player 1 start");
@@ -663,8 +676,7 @@ mod tests {
             hexen_specials: &hexen,
             resources: &resources,
         };
-        let mut map = Map::default();
-        map.sectors.push(Sector::default());
+        let map = one_sector();
         let name = LumpName::parse("MAP01").expect("test names are valid");
         let outcome = validate::run(&map, &context, None);
         let errors_only = viewed(name, outcome, Severity::Error, DEFAULT_LIMIT);
@@ -690,8 +702,7 @@ mod tests {
             hexen_specials: &hexen,
             resources: &resources,
         };
-        let mut map = Map::default();
-        map.sectors.push(Sector::default());
+        let map = one_sector();
         let name = LumpName::parse("MAP01").expect("test names are valid");
         let outcome = validate::run(&map, &context, None);
         let paged = viewed(name, outcome, Severity::Info, 2);

@@ -176,8 +176,10 @@ impl Issue {
 /// layer and consulted by the resource checks.
 ///
 /// `Default` is a session that defines nothing: the texture side reports
-/// its `texture_check_skipped` info row instead of judging names, and
-/// the flat side stays quiet when [`ResourceIndex::flats`] is empty.
+/// its `texture_check_skipped` info row instead of judging names, and the
+/// flat side judges no names either when [`ResourceIndex::flats`] is empty.
+/// A plane dressed in `"-"` or nothing is no name question: `missing_flat`
+/// reports it whatever this holds.
 #[derive(Debug, Default)]
 pub struct ResourceIndex {
     /// Defined composite texture names, uppercase: the `TEXTURE1` and
@@ -464,10 +466,15 @@ mod tests {
         }
     }
 
-    /// An untagged sector.
+    /// An untagged sector dressed in `FLOOR1` flats: the flat check judges
+    /// names only against a session that carries flats, and these fixtures
+    /// carry none, so a dressed plane stays quiet and the rows below stay
+    /// about the code being tested.
     fn plain_sector(tag: i32) -> Sector {
         Sector {
             tag,
+            floor_flat: "FLOOR1".to_owned(),
+            ceiling_flat: "FLOOR1".to_owned(),
             ..Default::default()
         }
     }

@@ -2,7 +2,9 @@
 //! `validate_map`'s report over the fixtures, its breakage detection
 //! through the editing tools, the severity filter, the code selection, the
 //! paging limit, the definition awareness of loaded archives, the geometry
-//! and resource checks and the node-lump warnings around `build_all_nodes`.
+//! and resource checks (the flat check speaks for a plane dressed in no
+//! flat at all and for a name no lump carries, and never for `F_SKY1`),
+//! the node-lump warnings around `build_all_nodes`.
 
 #[cfg(test)]
 mod tests {
@@ -501,6 +503,151 @@ mod tests {
             .map(|byte| format!("{byte:02X}"))
             .collect::<Vec<String>>()
             .join(" ")
+    }
+
+    /// The fixture map's `SECTORS` bytes with sector 0's floor flat set to
+    /// `"-"` and sector 1's ceiling flat left empty: `put_name` writes both
+    /// as the all-`NUL` field a hand-built or imported block carries and the
+    /// reader gives both back as the `"-"` placeholder. Hex-encoded for
+    /// `replace_lump`, because `edit_sector` refuses a `"-"` flat.
+    fn undressed_sectors_hex() -> String {
+        let mut map = two_room_map();
+        map.sectors[0].floor_flat = "-".to_owned();
+        map.sectors[1].ceiling_flat = String::new();
+        let lumps = write_doom_map(&map).expect("the fixture map serializes");
+        let lump = lumps
+            .iter()
+            .find(|candidate| candidate.name.as_bytes() == b"SECTORS")
+            .expect("the encoded block carries SECTORS");
+        lump.data
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<String>>()
+            .join(" ")
+    }
+
+    /// Requires a bare-plane row to name the field to set and the tool that
+    /// sets it: "sector N has no {plane} flat" plus `edit_sector` and
+    /// `{plane}_flat`.
+    fn names_its_field_and_the_editor(row: &Value) {
+        let text = row["message"].as_str().expect("text");
+        let plane = text
+            .split(" has no ")
+            .nth(1)
+            .expect("the plane")
+            .split(' ')
+            .next()
+            .expect("the plane word");
+        assert!(
+            text.contains(&format!("{plane}_flat")) && text.contains("edit_sector"),
+            "the message names the field to set and the tool that sets it: {row}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sector_whose_plane_names_no_flat_reports_that_plane() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        call(
+            &client,
+            "copy_map",
+            json!({ "from": "MAP01", "to": "MAP02" }),
+        )
+        .await;
+        let hexed = undressed_sectors_hex();
+        call(
+            &client,
+            "replace_lump",
+            json!({ "name": "SECTORS", "hex": hexed }),
+        )
+        .await;
+        let report = call(
+            &client,
+            "validate_map",
+            json!({ "map": "MAP02", "codes": ["missing_flat"] }),
+        )
+        .await;
+        assert_eq!(
+            report["checks_run"],
+            json!(["missing_flat"]),
+            "one check ran"
+        );
+        assert_eq!(
+            report["counts"]["error"],
+            json!(2_u64),
+            "sector 0's bare floor and sector 1's bare ceiling: {report}"
+        );
+        let rows = report["issues"].as_array().expect("an issue list");
+        let floor = rows.first().expect("the floor row");
+        assert_eq!(
+            floor["severity"],
+            json!("error"),
+            "an undressed plane is broken"
+        );
+        assert_eq!(floor["sectors"], json!([0_u64]), "sector 0's floor");
+        assert!(
+            floor["message"]
+                .as_str()
+                .expect("text")
+                .contains("has no floor flat"),
+            "the plane is named: {floor}"
+        );
+        let ceiling = rows.get(1).expect("the ceiling row");
+        assert_eq!(ceiling["sectors"], json!([1_u64]), "sector 1's ceiling");
+        names_its_field_and_the_editor(floor);
+        names_its_field_and_the_editor(ceiling);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_flat_reports_and_the_sky_never_does() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        call(
+            &client,
+            "edit_sector",
+            json!({ "map": "MAP01", "index": 0_i32, "floor_flat": "NOSUCHFL" }),
+        )
+        .await;
+        let report = call(
+            &client,
+            "validate_map",
+            json!({ "map": "MAP01", "codes": ["missing_flat"] }),
+        )
+        .await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(1_u64),
+            "the one name no lump carries: {report}"
+        );
+        let unknown = issue(&report, "missing_flat");
+        assert!(
+            unknown["message"]
+                .as_str()
+                .expect("text")
+                .contains("floor flat \"NOSUCHFL\""),
+            "the message quotes the name: {unknown}"
+        );
+        let sky = call(
+            &client,
+            "edit_sector",
+            json!({ "map": "MAP01", "index": 0_i32, "floor_flat": "F_SKY1" }),
+        )
+        .await;
+        assert_eq!(
+            sky["sectors"][0]["floor_flat"],
+            json!("F_SKY1"),
+            "the sky flat is a legal name for a plane"
+        );
+        let cleaned = call(
+            &client,
+            "validate_map",
+            json!({ "map": "MAP01", "codes": ["missing_flat"] }),
+        )
+        .await;
+        assert!(
+            issue_codes(&cleaned).is_empty(),
+            "the sky stays valid even where no F_SKY1 lump is carried: {cleaned}"
+        );
     }
 
     #[tokio::test]

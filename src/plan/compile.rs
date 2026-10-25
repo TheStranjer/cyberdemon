@@ -210,7 +210,7 @@ mod tests {
     use crate::plan::walls::room_layers;
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
-    use crate::wad::map::validate::{Context, ResourceIndex, run};
+    use crate::wad::map::validate::{Context, Issue, ResourceIndex, Severity, run};
     use crate::wad::map::{Linedef, Map, Sector, Sidedef};
     use crate::wad::name::LumpName;
 
@@ -318,10 +318,21 @@ mod tests {
             .expect("the scenario compiles")
     }
 
-    /// Run the geometry checks plus the resource checks over a compiled
-    /// map: a dressed plan must report nothing.
+    /// The codes [`assert_valid`] runs: geometry plus the resource lookups.
+    const VALIDATED_CODES: [&str; 7] = [
+        "crossing_lines",
+        "overlapping_lines",
+        "two_sided_flag_mismatch",
+        "zero_length_line",
+        "duplicate_line",
+        "missing_texture",
+        "missing_flat",
+    ];
+
+    /// The issues of the `codes` checks over `map`, on the built-in tables
+    /// and a resource index carrying nothing.
     #[track_caller]
-    fn assert_valid(map: &Map) {
+    fn issues_for(map: &Map, codes: &[&'static str]) -> Vec<Issue> {
         let definitions = definitions_for(Game::Doom).expect("the embedded tables parse");
         let resources = ResourceIndex::default();
         let context = Context {
@@ -329,18 +340,15 @@ mod tests {
             hexen_specials: &definitions,
             resources: &resources,
         };
-        let enabled: BTreeSet<&'static str> = [
-            "crossing_lines",
-            "overlapping_lines",
-            "two_sided_flag_mismatch",
-            "zero_length_line",
-            "duplicate_line",
-            "missing_texture",
-            "missing_flat",
-        ]
-        .into_iter()
-        .collect();
-        let issues = run(map, &context, Some(&enabled)).issues;
+        let enabled: BTreeSet<&'static str> = codes.iter().copied().collect();
+        run(map, &context, Some(&enabled)).issues
+    }
+
+    /// Run the geometry checks plus the resource checks over a compiled
+    /// map: a dressed plan must report nothing.
+    #[track_caller]
+    fn assert_valid(map: &Map) {
+        let issues = issues_for(map, &VALIDATED_CODES);
         assert!(issues.is_empty(), "the compiled map validates: {issues:?}");
     }
 
@@ -1182,6 +1190,29 @@ mod tests {
                 ("-", "-")
             );
         }
-        assert_valid(&out.map);
+        let geometry: [&'static str; 5] = [
+            "crossing_lines",
+            "overlapping_lines",
+            "two_sided_flag_mismatch",
+            "zero_length_line",
+            "duplicate_line",
+        ];
+        let sound = issues_for(&out.map, &geometry);
+        assert!(
+            sound.is_empty(),
+            "an undressed map is still built sound: {sound:?}"
+        );
+        let bare = issues_for(&out.map, &["missing_flat"]);
+        let planes = out.map.sectors.len().saturating_mul(2);
+        assert_eq!(
+            bare.len(),
+            planes,
+            "a theme that answers nothing leaves every plane undressed"
+        );
+        assert!(
+            bare.iter()
+                .all(|issue| issue.code == "missing_flat" && issue.severity == Severity::Error),
+            "an undressed plane is an error, whatever the session carries: {bare:?}"
+        );
     }
 }

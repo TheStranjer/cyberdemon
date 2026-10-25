@@ -14,7 +14,7 @@
 
 use crate::bsp::side::{FixedLine, SegPlace, classify_seg, side_value};
 use crate::bsp::{BuildSeg, Point};
-use crate::fixed::hypot;
+use crate::fixed::{div_round, hypot};
 
 /// Where a seg ends up relative to a partition line.
 pub(crate) enum Placement {
@@ -120,23 +120,12 @@ const fn between(num: i128, den: i128) -> bool {
 }
 
 /// `value * num / den` rounded to the nearest (halves away from zero)
-/// through an `i128` intermediate, `None` on overflow of `i128` or of
-/// the `i64` result. Shared with the polygon clipper, which cuts at the
-/// same rounded points the seg splitter does.
+/// through [`div_round`]'s exact `i128`, `None` on overflow of `i128` or
+/// of the `i64` result. Shared with the polygon clipper, which cuts at
+/// the same rounded points the seg splitter does.
 pub(crate) fn scale_round(value: i128, num: i128, den: i128) -> Option<i64> {
     let product = value.checked_mul(num)?;
-    let quotient = product.checked_div(den)?;
-    let remainder = product.checked_rem(den)?;
-    let twice = remainder.checked_abs()?.checked_mul(2_i128)?;
-    if twice < den.checked_abs()? {
-        return i64::try_from(quotient).ok();
-    }
-    let rounded = if (remainder >= 0_i128) == (den >= 0_i128) {
-        quotient.checked_add(1)?
-    } else {
-        quotient.checked_sub(1)?
-    };
-    i64::try_from(rounded).ok()
+    div_round(product, den).and_then(|rounded| i64::try_from(rounded).ok())
 }
 
 #[cfg(test)]

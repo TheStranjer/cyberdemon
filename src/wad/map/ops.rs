@@ -25,7 +25,7 @@ mod split;
 use serde::Serialize;
 
 use crate::error::CyberError;
-use crate::fixed::mul_div_round;
+use crate::fixed::{self, narrow_i32};
 use crate::wad::classify::MapFormat;
 
 use super::model::{Linedef, Map, Sidedef, Vertex};
@@ -41,8 +41,6 @@ const COORD_MAX: i32 = 0x7FFF_i32;
 const OFFSET_MIN: i32 = -0x8000_i32;
 /// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
 const OFFSET_MAX: i32 = 0x7FFF_i32;
-/// Divisor of the two-endpoint sum that gives a midpoint.
-const MIDPOINT_DIVISOR: i64 = 2_i64;
 
 /// A point in map units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,20 +274,19 @@ pub(super) fn length_squared(from: Point, to: Point) -> i128 {
     wide(dx, dx).saturating_add(wide(dy, dy))
 }
 
-/// `(a + b) / 2` rounded to nearest, halves away from zero: one coordinate
-/// of a midpoint. The midpoint of two `i32`s always fits `i32`, so the
-/// fallback is defensive.
-fn half_sum(a: i32, b: i32) -> i32 {
-    let sum = i64::from(a).saturating_add(i64::from(b));
-    let half = mul_div_round(sum, 1_i64, MIDPOINT_DIVISOR).unwrap_or(sum);
-    i32::try_from(half).unwrap_or(i32::MAX)
-}
-
-/// The midpoint of `from` and `to`, each coordinate rounded to nearest.
+/// The midpoint of `from` and `to`, each coordinate rounded to nearest
+/// (halves away from zero). The midpoint of two `i32`s always fits
+/// `i32`, so the saturation is defensive.
 pub(super) fn midpoint(from: Point, to: Point) -> Point {
     Point {
-        x: half_sum(from.x, to.x),
-        y: half_sum(from.y, to.y),
+        x: narrow_i32(i128::from(fixed::midpoint(
+            i64::from(from.x),
+            i64::from(to.x),
+        ))),
+        y: narrow_i32(i128::from(fixed::midpoint(
+            i64::from(from.y),
+            i64::from(to.y),
+        ))),
     }
 }
 

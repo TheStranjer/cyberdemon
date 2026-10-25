@@ -12,7 +12,7 @@
 //! case the tool reports instead of refusing.
 
 use crate::error::CyberError;
-use crate::fixed::mul_div_round;
+use crate::fixed::{gcd, mul_div_round};
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::resample::resample;
 use crate::gfx::ops::{Filter, pixel_at, rounded_div};
@@ -400,26 +400,13 @@ pub(super) fn scale_for(width: u32, height: u32, max_size: u32) -> (u32, u32) {
     if long <= max_size {
         return (1_u32, 1_u32);
     }
-    let divisor = gcd(long, max_size).max(1_u32);
+    let exact = gcd(i128::from(long), i128::from(max_size));
+    let divisor = u32::try_from(exact).unwrap_or(1_u32);
     let num = max_size.checked_div(divisor).unwrap_or(1_u32);
     let den = long
         .checked_div(divisor)
         .unwrap_or_else(|| max_size.max(1_u32));
     (num, den)
-}
-
-/// The greatest common divisor of two edge lengths (`0` inputs yield `0`).
-fn gcd(one: u32, two: u32) -> u32 {
-    let mut big = one.max(two);
-    let mut small = one.min(two);
-    while small != 0 {
-        let Some(rest) = big.checked_rem(small) else {
-            break;
-        };
-        big = small;
-        small = rest;
-    }
-    big
 }
 
 /// The area-filter downscale, the untouched image when the scale is `1/1`.

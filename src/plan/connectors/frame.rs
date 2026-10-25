@@ -13,7 +13,7 @@
 
 use super::{Boundary, MAX_STEP_HEIGHT, MAX_STEPS, Target, ZERO_THICKNESS_DEPTH};
 use crate::error::CyberError;
-use crate::fixed::mul_div_round;
+use crate::fixed::{mul_div_round_sat, narrow_i32, narrow_i64};
 use crate::geom::Layer;
 use crate::geom::Pt;
 use crate::geom::label::Label;
@@ -89,11 +89,11 @@ fn step_floors(lower: i64, higher: i64, height: i64, steps: usize) -> Vec<i32> {
     (0..steps)
         .map(|step| {
             let rise = i64::try_from(step.saturating_add(1)).unwrap_or(i64::MAX);
-            clamp_i32(
+            narrow_i32(i128::from(
                 lower
                     .saturating_add(height.saturating_mul(rise))
                     .min(higher),
-            )
+            ))
         })
         .collect()
 }
@@ -213,11 +213,11 @@ fn along_at(point: Pt, from: Pt, dx: i128, dy: i128) -> i128 {
 }
 
 /// `value * numerator / denominator` per component, rounded through
-/// [`mul_div_round`].
+/// [`mul_div_round_sat`].
 fn scale_offset(value: i64, numerator: Pt, denominator: i64) -> Pt {
     (
-        rounded(value, numerator.0, denominator),
-        rounded(value, numerator.1, denominator),
+        mul_div_round_sat(value, numerator.0, denominator),
+        mul_div_round_sat(value, numerator.1, denominator),
     )
 }
 
@@ -242,7 +242,7 @@ const fn negated(offset: Pt) -> Pt {
 pub(super) fn stair_edge(back: i64, side: i64, step: usize, step_depth: i64) -> i64 {
     let count = i64::try_from(step).unwrap_or(i64::MAX);
     let gone = i128::from(count).saturating_mul(i128::from(step_depth).saturating_mul(2_i128));
-    clamp_i64(
+    narrow_i64(
         i128::from(back)
             .saturating_sub(gone)
             .saturating_mul(i128::from(side)),
@@ -265,56 +265,13 @@ pub(super) fn rounded_unit(x: i64, y: i64, length: i64) -> Pt {
     if length == 0 {
         return (0_i64, 0_i64);
     }
-    (rounded(1_i64, x, length), rounded(1_i64, y, length))
-}
-
-/// `value * numerator / denominator` through [`mul_div_round`],
-/// saturating to the `i64` extreme in the product's direction.
-pub(super) fn rounded(value: i64, numerator: i64, denominator: i64) -> i64 {
-    let fallback = if (value >= 0) == (numerator >= 0) {
-        i64::MAX
-    } else {
-        i64::MIN
-    };
-    mul_div_round(value, numerator, denominator).unwrap_or(fallback)
-}
-
-/// The `i64` nearest `value`, saturating at the extremes.
-pub(super) fn clamp_i64(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
-}
-
-/// The `i32` nearest `value`, saturating at the extremes.
-pub(super) fn clamp_i32(value: i64) -> i32 {
-    i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
+    (
+        mul_div_round_sat(1_i64, x, length),
+        mul_div_round_sat(1_i64, y, length),
+    )
 }
 
 /// `to - from` in `i128`.
 pub(super) fn delta(from: i64, to: i64) -> i128 {
     i128::from(to).saturating_sub(i128::from(from))
-}
-
-/// `product / denominator` rounded half away from zero, saturating to
-/// the `i64` range.
-pub(super) fn round_div(product: i128, denominator: i128) -> i64 {
-    let Some(quotient) = product.checked_div(denominator) else {
-        return if (product >= 0) == (denominator >= 0) {
-            i64::MAX
-        } else {
-            i64::MIN
-        };
-    };
-    let remainder = product.checked_rem(denominator).unwrap_or(0_i128);
-    let doubled = remainder.checked_abs().and_then(|a| a.checked_mul(2));
-    let magnitude = denominator.checked_abs().unwrap_or(i128::MAX);
-    let step = if doubled.is_some_and(|twice| twice >= magnitude) {
-        if (remainder >= 0) == (denominator >= 0) {
-            1_i128
-        } else {
-            -1_i128
-        }
-    } else {
-        0_i128
-    };
-    clamp_i64(quotient.saturating_add(step))
 }

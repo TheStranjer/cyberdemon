@@ -1,11 +1,18 @@
-//! Float-free math: `Doom`'s 16.16 fixed point, `BAM` angles, integer trig.
+//! Float-free math: `Doom`'s 16.16 fixed point, `BAM` angles, integer trig
+//! and the crate's shared integer helpers.
 //!
 //! The crate denies `float_arithmetic`, and geometry (rotation, the BSP
 //! node builder, the software renderer) needs fractions and trigonometry,
 //! so everything here is integer-only, computed the way vanilla `Doom`
 //! did: [`Fixed`] is a signed 16.16 value, [`angle`] adds 32-bit binary
 //! angles with `CORDIC` trig, and this root adds exact square roots and
-//! rounded multiply-divide. Use this module instead of `f32`/`f64`.
+//! the one home for the idioms the whole crate repeats: [`div_round`]
+//! (and [`mul_div_round`], [`div_round_sat`], [`mul_div_round_sat`])
+//! divides with the crate's rule, rounding to nearest with halves away
+//! from zero; [`narrow_i64`] and [`narrow_i32`] saturate a wider value
+//! into a narrower one; [`gcd`] is the never-zero greatest common
+//! divisor; and [`midpoint`] is the [`div_round`]-rounded mean of two
+//! coordinates. Use this module instead of `f32`/`f64`.
 
 pub mod angle;
 pub mod trig;
@@ -67,7 +74,7 @@ impl Fixed {
     #[must_use]
     #[inline]
     pub fn to_int_round(self) -> i32 {
-        i32::try_from(round_shift(i128::from(self.0), FRACBITS)).unwrap_or(i32::MAX)
+        div_round(i128::from(self.0), i128::from(FRACUNIT)).map_or(i32::MAX, narrow_i32)
     }
 
     /// Sum, `None` on overflow of the 16.16 range.
@@ -156,36 +163,111 @@ pub fn isqrt(n: u64) -> u64 {
 #[inline]
 pub fn mul_div_round(value: i64, num: i64, den: i64) -> Option<i64> {
     let product = i128::from(value).checked_mul(i128::from(num))?;
-    let divisor = i128::from(den);
-    let quotient = product.checked_div(divisor)?;
-    let remainder = product.checked_rem(divisor)?;
-    let rounded = if remainder.checked_abs()?.checked_mul(2)? < divisor.checked_abs()? {
-        quotient
-    } else if (remainder >= 0) == (divisor >= 0) {
-        quotient.checked_add(1)?
-    } else {
-        quotient.checked_sub(1)?
-    };
+    let rounded = div_round(product, i128::from(den))?;
     i64::try_from(rounded).ok()
 }
 
-/// `value / 2^shift` rounded to nearest, halves away from zero,
-/// saturating the result to `i64`.
-pub(crate) fn round_shift(value: i128, shift: u32) -> i64 {
-    let half = (1_i128.checked_shl(shift).unwrap_or(2))
-        .checked_shr(1)
-        .unwrap_or(1);
-    let magnitude = value.checked_abs().unwrap_or(i128::MAX);
-    let rounded = magnitude
-        .checked_add(half)
-        .and_then(|biased| biased.checked_shr(shift))
-        .unwrap_or(i128::MAX);
-    let signed = if value >= 0 {
-        rounded
+/// `numerator / denominator` rounded to nearest, halves away from zero:
+/// the crate's one rounded integer division. `None` when the denominator
+/// is zero or the rounded quotient leaves `i128`.
+#[must_use]
+#[inline]
+pub fn div_round(numerator: i128, denominator: i128) -> Option<i128> {
+    let quotient = numerator.checked_div(denominator)?;
+    let remainder = numerator.checked_rem(denominator)?;
+    let rounds_up = remainder
+        .checked_abs()
+        .and_then(|magnitude| magnitude.checked_mul(2_i128))
+        .is_some_and(|twice| twice >= denominator.saturating_abs());
+    if !rounds_up {
+        return Some(quotient);
+    }
+    if (numerator >= 0_i128) == (denominator >= 0_i128) {
+        quotient.checked_add(1_i128)
     } else {
-        rounded.checked_neg().unwrap_or(i128::MIN)
-    };
-    i64::try_from(signed).unwrap_or(if signed >= 0 { i64::MAX } else { i64::MIN })
+        quotient.checked_sub(1_i128)
+    }
+}
+
+/// [`div_round`] saturating the quotient into `i64`: a refused division
+/// (zero denominator included) answers the `i64` extreme in the
+/// quotient's direction.
+#[must_use]
+#[inline]
+pub fn div_round_sat(numerator: i128, denominator: i128) -> i64 {
+    match div_round(numerator, denominator) {
+        Some(exact) => narrow_i64(exact),
+        None if (numerator >= 0_i128) == (denominator >= 0_i128) => i64::MAX,
+        None => i64::MIN,
+    }
+}
+
+/// `value * numerator / denominator` rounded like [`mul_div_round`],
+/// saturating to the `i64` extreme in the product's direction instead of
+/// refusing.
+#[must_use]
+#[inline]
+pub fn mul_div_round_sat(value: i64, numerator: i64, denominator: i64) -> i64 {
+    match mul_div_round(value, numerator, denominator) {
+        Some(exact) => exact,
+        None if (value >= 0_i64) == (numerator >= 0_i64) => i64::MAX,
+        None => i64::MIN,
+    }
+}
+
+/// The `i64` nearest `value`, saturating at the range extremes.
+#[must_use]
+#[inline]
+pub fn narrow_i64(value: i128) -> i64 {
+    match i64::try_from(value) {
+        Ok(narrowed) => narrowed,
+        Err(_error) if value < 0_i128 => i64::MIN,
+        Err(_error) => i64::MAX,
+    }
+}
+
+/// The `i32` nearest `value`, saturating at the range extremes.
+#[must_use]
+#[inline]
+pub fn narrow_i32(value: i128) -> i32 {
+    match i32::try_from(value) {
+        Ok(narrowed) => narrowed,
+        Err(_error) if value < 0_i128 => i32::MIN,
+        Err(_error) => i32::MAX,
+    }
+}
+
+/// The greatest common divisor of the magnitudes of `left` and `right`,
+/// never zero: the `0, 0` pair answers `1` so a caller can always divide
+/// by the result. `i128::MIN`'s magnitude saturates (defensive).
+#[must_use]
+#[inline]
+pub const fn gcd(mut left: i128, mut right: i128) -> i128 {
+    if left < 0 {
+        left = left.saturating_neg();
+    }
+    if right < 0 {
+        right = right.saturating_neg();
+    }
+    while right != 0 {
+        let next = match left.checked_rem(right) {
+            Some(rem) => rem,
+            None => 0,
+        };
+        left = right;
+        right = next;
+    }
+    if left < 1 { 1 } else { left }
+}
+
+/// The midpoint of two coordinates: their mean rounded by
+/// [`div_round`]'s rule, halves away from zero. The mean of two `i64`s
+/// always fits `i64`, so the saturation is defensive.
+#[must_use]
+#[inline]
+pub fn midpoint(low: i64, high: i64) -> i64 {
+    let sum = i128::from(low).saturating_add(i128::from(high));
+    narrow_i64(div_round(sum, 2_i128).unwrap_or(sum))
 }
 
 /// `floor(sqrt(n))` for `u128` inputs; the result always fits `u64`
@@ -215,7 +297,10 @@ fn isqrt_u128(n: u128) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fixed, MAGNITUDE_LIMIT, isqrt, mul_div_round};
+    use super::{
+        Fixed, MAGNITUDE_LIMIT, div_round, div_round_sat, gcd, isqrt, midpoint, mul_div_round,
+        mul_div_round_sat, narrow_i32, narrow_i64,
+    };
 
     /// `n` squared as `u64`, for perfect-square tests.
     fn square(n: u64) -> u64 {
@@ -471,5 +556,164 @@ mod tests {
         assert_eq!(mul_div_round(1, 1, 0), None, "zero denominator");
         assert_eq!(mul_div_round(i64::MAX, 2, 1), None, "result leaves i64");
         assert_eq!(mul_div_round(i64::MAX, 1, 1), Some(i64::MAX), "identity");
+    }
+
+    #[test]
+    fn div_round_is_nearest_halves_away_from_zero() {
+        assert_eq!(div_round(7, 2), Some(4), "3.5 up");
+        assert_eq!(div_round(-7, 2), Some(-4), "-3.5 down");
+        assert_eq!(div_round(7, -2), Some(-4), "negative divisor");
+        assert_eq!(div_round(-7, -2), Some(4), "both negative");
+        assert_eq!(div_round(5, 2), Some(3), "2.5 up");
+        assert_eq!(div_round(-5, 2), Some(-3), "-2.5 down");
+        assert_eq!(div_round(1, 3), Some(0), "0.33 to zero");
+        assert_eq!(div_round(-1, 3), Some(0), "-0.33 to zero");
+        assert_eq!(div_round(2, 3), Some(1), "0.67 to one");
+        assert_eq!(div_round(0, 5), Some(0), "zero numerator");
+        assert_eq!(div_round(4, 2), Some(2), "exact division");
+        assert_eq!(div_round(1, 0), None, "zero denominator");
+        assert_eq!(div_round(0, 0), None, "zero over zero");
+        assert_eq!(div_round(i128::MAX, 1), Some(i128::MAX), "top of the range");
+        assert_eq!(
+            div_round(i128::MIN, 2),
+            Some(i128::MIN.checked_div(2).unwrap()),
+            "bottom of the range is exact"
+        );
+        assert_eq!(div_round(i128::MIN, -1), None, "MIN over -1 does not fit");
+    }
+
+    #[test]
+    fn div_round_sat_saturates_rather_than_refusing() {
+        assert_eq!(div_round_sat(7, 2), 4, "plain rounding");
+        assert_eq!(div_round_sat(-7, 2), -4, "and negative");
+        assert_eq!(div_round_sat(1, 0), i64::MAX, "zero divisor, positive");
+        assert_eq!(div_round_sat(-1, 0), i64::MIN, "zero divisor, negative");
+        assert_eq!(
+            div_round_sat(i128::from(i64::MAX) + 1, 1),
+            i64::MAX,
+            "past the top saturates"
+        );
+        assert_eq!(
+            div_round_sat(i128::from(i64::MIN) - 1, 1),
+            i64::MIN,
+            "past the bottom saturates"
+        );
+    }
+
+    #[test]
+    fn mul_div_round_sat_saturates_in_the_products_direction() {
+        assert_eq!(mul_div_round_sat(2, 3, 4), 2, "1.5 away from zero");
+        assert_eq!(mul_div_round_sat(-2, 3, 4), -2, "-1.5 away from zero");
+        assert_eq!(mul_div_round_sat(8, 128, 128), 8, "exact stays exact");
+        assert_eq!(
+            mul_div_round_sat(i64::MAX, i64::MAX, 1),
+            i64::MAX,
+            "a leaving result saturates high"
+        );
+        assert_eq!(
+            mul_div_round_sat(i64::MIN, i64::MAX, 1),
+            i64::MIN,
+            "and low for negative products"
+        );
+        assert_eq!(
+            mul_div_round_sat(8, 2, 0),
+            i64::MAX,
+            "zero divisor goes high"
+        );
+        assert_eq!(
+            mul_div_round_sat(-8, 2, 0),
+            i64::MIN,
+            "by the product's sign"
+        );
+    }
+
+    #[test]
+    fn narrow_saturates_towards_the_nearest_extreme() {
+        assert_eq!(narrow_i64(0), 0, "zero");
+        assert_eq!(narrow_i64(i128::from(i64::MAX)), i64::MAX, "top stays");
+        assert_eq!(narrow_i64(i128::from(i64::MIN)), i64::MIN, "bottom stays");
+        assert_eq!(
+            narrow_i64(i128::from(i64::MAX).checked_add(1).unwrap()),
+            i64::MAX,
+            "above the top saturates high"
+        );
+        assert_eq!(
+            narrow_i64(i128::from(i64::MIN).checked_sub(1).unwrap()),
+            i64::MIN,
+            "below the bottom saturates low, not high"
+        );
+        assert_eq!(narrow_i32(i128::from(i32::MAX)), i32::MAX, "top stays");
+        assert_eq!(narrow_i32(i128::from(i32::MIN)), i32::MIN, "bottom stays");
+        assert_eq!(
+            narrow_i32(i128::from(i32::MAX).checked_add(1).unwrap()),
+            i32::MAX,
+            "above the top saturates high"
+        );
+        assert_eq!(
+            narrow_i32(i128::from(i32::MIN).checked_sub(1).unwrap()),
+            i32::MIN,
+            "a large negative saturates low, not high"
+        );
+    }
+
+    #[test]
+    fn gcd_uses_magnitudes_and_never_answers_zero() {
+        assert_eq!(gcd(0, 0), 1, "the defensive pair");
+        assert_eq!(gcd(0, 5), 5, "one zero");
+        assert_eq!(gcd(5, 0), 5, "the other");
+        assert_eq!(gcd(12, 18), 6, "plain");
+        assert_eq!(gcd(18, 12), 6, "either order");
+        assert_eq!(gcd(-12, 18), 6, "negative magnitude");
+        assert_eq!(gcd(12, -18), 6, "the other side");
+        assert_eq!(gcd(7, 5), 1, "coprime");
+        assert_eq!(gcd(i128::from(u64::MAX), 2), 1, "beyond i64");
+        assert_eq!(
+            gcd(i128::from(u64::MAX).checked_mul(2).unwrap(), 6),
+            6,
+            "beyond u64"
+        );
+        assert_eq!(gcd(i128::MIN, 0), i128::MAX, "MIN's magnitude saturates");
+    }
+
+    #[test]
+    fn midpoint_is_the_mean_rounded_away_from_zero() {
+        assert_eq!(midpoint(0, 4), 2, "exact half");
+        assert_eq!(midpoint(-4, 0), -2, "exact negative half");
+        assert_eq!(midpoint(0, 3), 2, "1.5 goes up");
+        assert_eq!(midpoint(0, -3), -2, "-1.5 goes down");
+        assert_eq!(midpoint(-3, 0), -2, "from the negative side too");
+        assert_eq!(midpoint(1, 2), 2, "sum 3");
+        assert_eq!(midpoint(-300, 300), 0, "symmetric span");
+        assert_eq!(midpoint(i64::MAX, i64::MAX), i64::MAX, "top edge");
+        assert_eq!(midpoint(i64::MIN, i64::MIN), i64::MIN, "bottom edge");
+        assert_eq!(
+            midpoint(i64::MIN, 0),
+            i64::MIN.checked_div(2).unwrap(),
+            "half the bottom edge"
+        );
+    }
+
+    #[test]
+    fn to_int_round_uses_the_shared_rule() {
+        assert_eq!(
+            Fixed::from_ratio(3_i64, 2_i64).map(Fixed::to_int_round),
+            Some(2_i32),
+            "1.5"
+        );
+        assert_eq!(
+            Fixed::from_ratio(-3_i64, 2_i64).map(Fixed::to_int_round),
+            Some(-2_i32),
+            "-1.5 saturates nowhere and rounds away"
+        );
+        assert_eq!(
+            Fixed::from_ratio(1_i64, 2_i64).map(Fixed::to_int_round),
+            Some(1_i32),
+            "0.5"
+        );
+        assert_eq!(
+            Fixed::from_ratio(-1_i64, 2_i64).map(Fixed::to_int_round),
+            Some(-1_i32),
+            "-0.5"
+        );
     }
 }

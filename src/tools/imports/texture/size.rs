@@ -11,6 +11,7 @@
 //! that produced them.
 
 use crate::error::CyberError;
+use crate::fixed::div_round;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::rounded_div;
 
@@ -158,12 +159,11 @@ pub(super) fn keep_or_fallback(picture: &RgbaImage) -> WallSize {
     }
 }
 
-/// `value` to the nearest multiple of [`SIZE_ROUND_STEP`].
+/// `value` to the nearest multiple of [`SIZE_ROUND_STEP`], rounding the
+/// step count through [`div_round`] (halves away from zero).
 pub(super) fn round_to_step(value: u32) -> u32 {
-    let half = SIZE_ROUND_STEP.checked_div(2).unwrap_or(0_u32);
-    value
-        .saturating_add(half)
-        .checked_div(SIZE_ROUND_STEP)
+    div_round(i128::from(value), i128::from(SIZE_ROUND_STEP))
+        .and_then(|steps| u32::try_from(steps).ok())
         .and_then(|steps| steps.checked_mul(SIZE_ROUND_STEP))
         .unwrap_or(value)
 }

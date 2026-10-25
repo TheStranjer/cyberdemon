@@ -34,7 +34,7 @@ use alloc::collections::BTreeSet;
 use serde::Serialize;
 
 use crate::error::CyberError;
-use crate::fixed::{Angle, mul_div_round, rotate_point};
+use crate::fixed::{Angle, div_round, mul_div_round, narrow_i64, rotate_point};
 
 use super::model::Map;
 use apply::{
@@ -52,10 +52,6 @@ pub(super) const COORD_MAX: i32 = 0x7FFF_i32;
 pub(super) const DEGREES: i64 = 360;
 /// Millidegrees in one degree.
 const MILLIDEGREES: i64 = 1_000;
-/// Numerator of the halving that turns a two-endpoint sum into a midpoint.
-pub(super) const HALF_NUM: i64 = 1;
-/// Denominator of that halving.
-pub(super) const HALF_DEN: i64 = 2;
 
 /// A point in map units, widened to `i64` so no transform intermediate
 /// can overflow.
@@ -138,7 +134,8 @@ impl Rotation {
     pub fn from_millidegrees(millidegrees: i64) -> Self {
         Self {
             angle: Angle::from_millidegrees(millidegrees),
-            degrees: mul_div_round(millidegrees, HALF_NUM, MILLIDEGREES).unwrap_or(millidegrees),
+            degrees: div_round(i128::from(millidegrees), i128::from(MILLIDEGREES))
+                .map_or(millidegrees, narrow_i64),
         }
     }
 }

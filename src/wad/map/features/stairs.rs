@@ -25,9 +25,9 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use crate::error::CyberError;
-use crate::fixed::hypot;
+use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};
 use crate::geom::Pt;
-use crate::geom::segment::{Delta, round_quotient};
+use crate::geom::segment::Delta;
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Map, Sector};
 use crate::wad::map::ops::Point;
@@ -44,8 +44,6 @@ pub const MIN_HEADROOM: i32 = 72_i32;
 /// How far the path may miss `steps * step_depth` when a fixed
 /// `step_depth` is asked for, in map units.
 pub const DEPTH_TOLERANCE: i64 = 8_i64;
-/// Divisor of the two-endpoint sum that gives a midpoint coordinate.
-const MIDPOINT_DIVISOR: i128 = 2_i128;
 
 /// Everything one staircase needs, as the tool layer resolved it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,24 +156,6 @@ fn invalid(message: &str) -> CyberError {
     CyberError::InvalidArgument(message.to_owned())
 }
 
-/// An exact `i128` axis saturated into `i32`.
-fn narrow_axis(value: i128) -> i32 {
-    match i32::try_from(value) {
-        Ok(narrow) => narrow,
-        Err(_) if value < 0_i128 => i32::MIN,
-        Err(_) => i32::MAX,
-    }
-}
-
-/// An exact `i128` axis saturated into `i64`.
-fn wide_axis(value: i128) -> i64 {
-    match i64::try_from(value) {
-        Ok(wide) => wide,
-        Err(_) if value < 0_i128 => i64::MIN,
-        Err(_) => i64::MAX,
-    }
-}
-
 /// A `usize` widened to exact arithmetic, saturated (defensive).
 fn tall(value: usize) -> i128 {
     i128::try_from(value).unwrap_or(i128::MAX)
@@ -216,7 +196,7 @@ fn check_shape(spec: &StairSpec) -> Result<(), CyberError> {
 fn path_run(spec: &StairSpec) -> Result<PathRun, CyberError> {
     let dx = i128::from(spec.to.x).saturating_sub(i128::from(spec.from.x));
     let dy = i128::from(spec.to.y).saturating_sub(i128::from(spec.from.y));
-    let length = i64::try_from(hypot(wide_axis(dx), wide_axis(dy))).unwrap_or(i64::MAX);
+    let length = i64::try_from(hypot(narrow_i64(dx), narrow_i64(dy))).unwrap_or(i64::MAX);
     if length == 0_i64 {
         return Err(invalid(
             "the stair path is zero-length: `from` and `to` name the same point; \
@@ -288,13 +268,13 @@ fn check_depth(run: &PathRun, count: usize, depth: i32) -> Result<(), CyberError
         return Ok(());
     }
     let length = i128::from(run.length);
-    let fit = round_quotient(length, tall(count)).unwrap_or(length);
+    let fit = div_round(length, tall(count)).unwrap_or(length);
     Err(invalid(&format!(
         "step_depth {depth} with {count} steps wants a path {wanted} map units long \
          (tolerance {DEPTH_TOLERANCE}): this path is {} units; pass step_depth {} to \
          divide it evenly, or drop step_depth to let the steps fill the path",
         run.length,
-        narrow_axis(fit),
+        narrow_i32(fit),
     )))
 }
 
@@ -328,8 +308,8 @@ fn prepare(map: &Map, spec: &StairSpec) -> Result<Prep, CyberError> {
 /// One path axis at fraction `index / count`, rounded to the nearest
 /// whole map unit (halves away from zero).
 fn axis_of(base: i32, axis: i128, index: i128, count: i128) -> i32 {
-    let shift = round_quotient(axis.saturating_mul(index), count).unwrap_or(0_i128);
-    narrow_axis(i128::from(base).saturating_add(shift))
+    let shift = div_round(axis.saturating_mul(index), count).unwrap_or(0_i128);
+    narrow_i32(i128::from(base).saturating_add(shift))
 }
 
 /// The point `index / count` of the way along the path.
@@ -348,8 +328,8 @@ fn step_floor(climb: Climb, index: usize) -> i32 {
     let count = tall(climb.count);
     let at = i128::try_from(index).unwrap_or(count);
     let rise = i128::from(climb.floor_to).saturating_sub(i128::from(climb.floor_from));
-    let shift = round_quotient(rise.saturating_mul(at), count).unwrap_or(0_i128);
-    narrow_axis(i128::from(climb.floor_from).saturating_add(shift))
+    let shift = div_round(rise.saturating_mul(at), count).unwrap_or(0_i128);
+    narrow_i32(i128::from(climb.floor_from).saturating_add(shift))
 }
 
 /// The path's left perpendicular, `width` wide in total (half each
@@ -358,16 +338,16 @@ fn side_offset(run: &PathRun, width: i32) -> Delta {
     let den = i128::from(run.length).saturating_mul(2_i128).max(2_i128);
     let across = i128::from(width);
     (
-        round_quotient(run.dy.saturating_neg().saturating_mul(across), den).unwrap_or(0_i128),
-        round_quotient(run.dx.saturating_mul(across), den).unwrap_or(0_i128),
+        div_round(run.dy.saturating_neg().saturating_mul(across), den).unwrap_or(0_i128),
+        div_round(run.dx.saturating_mul(across), den).unwrap_or(0_i128),
     )
 }
 
 /// One rectangle corner: `point` moved `sign` half-widths across the path.
 fn corner(point: Point, off: &Delta, sign: i128) -> Pt {
     (
-        i64::from(point.x).saturating_add(wide_axis(off.0.saturating_mul(sign))),
-        i64::from(point.y).saturating_add(wide_axis(off.1.saturating_mul(sign))),
+        i64::from(point.x).saturating_add(narrow_i64(off.0.saturating_mul(sign))),
+        i64::from(point.y).saturating_add(narrow_i64(off.1.saturating_mul(sign))),
     )
 }
 
@@ -384,13 +364,9 @@ fn rectangle(near: Point, far: Point, off: &Delta) -> Vec<Pt> {
 
 /// The midpoint of two path points, halves rounded away from zero.
 fn middle(from: Point, to: Point) -> Point {
-    let half = |first: i32, second: i32| {
-        let sum = i128::from(first).saturating_add(i128::from(second));
-        narrow_axis(round_quotient(sum, MIDPOINT_DIVISOR).unwrap_or(sum))
-    };
     Point {
-        x: half(from.x, to.x),
-        y: half(from.y, to.y),
+        x: narrow_i32(i128::from(midpoint(i64::from(from.x), i64::from(to.x)))),
+        y: narrow_i32(i128::from(midpoint(i64::from(from.y), i64::from(to.y)))),
     }
 }
 

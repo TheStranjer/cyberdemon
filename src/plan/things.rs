@@ -25,6 +25,7 @@ use alloc::collections::BTreeMap;
 
 use crate::defs::Definitions;
 use crate::error::CyberError;
+use crate::fixed::midpoint;
 use crate::geom::Pt;
 use crate::plan::units::Units;
 /// A difficulty skill a planned thing can be limited to: the flag tables'
@@ -32,7 +33,7 @@ use crate::plan::units::Units;
 pub use crate::wad::map::flags::Skill;
 use crate::wad::map::flags::{FlagFamily, FlagKind, names as flag_names};
 use crate::wad::map::geometry::sector_bbox;
-use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points, fits, mid};
+use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points, fits};
 use crate::wad::map::{Map, Thing};
 
 /// The thing type of the player 1 start, shared from
@@ -274,8 +275,8 @@ fn room_centre(
     })?;
     let (min_x, min_y, max_x, max_y) = bbox;
     Ok((
-        mid(i64::from(min_x), i64::from(max_x)),
-        mid(i64::from(min_y), i64::from(max_y)),
+        midpoint(i64::from(min_x), i64::from(max_x)),
+        midpoint(i64::from(min_y), i64::from(max_y)),
     ))
 }
 

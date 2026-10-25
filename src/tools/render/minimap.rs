@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::defs::{Definitions, session_definitions};
 use crate::error::CyberError;
+use crate::fixed::midpoint;
 use crate::gfx::codec::encode_png;
 use crate::gfx::palette::Palette;
 use crate::render::{
@@ -23,7 +24,7 @@ use crate::tools::maps::common;
 use crate::tools::palette::load_palette;
 use crate::wad::map::Map;
 
-use super::{PNG_MIME, midpoint};
+use super::PNG_MIME;
 
 /// Default minimap output edge, in pixels.
 const DEFAULT_MINIMAP_SIZE: u32 = 256;

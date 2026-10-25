@@ -1,30 +1,18 @@
 //! The split topic: where a cut lands, what it does to the sides and every
 //! refusal it reports.
 //!
-//! [`half_sum`] and [`midpoint`] are the arithmetic,
-//! [`split_linedef`] the whole pass: the midpoint and off-centre cuts, the
-//! vertex reuse, the shifted copies, the one-sided line and the `udmf`
-//! extra bag, against the off-line, endpoint, zero-length, `i16`-range and
-//! over-long-piece refusals.
+//! [`midpoint`] (rounded through [`crate::fixed::midpoint`]) is the
+//! arithmetic, [`split_linedef`] the whole pass: the midpoint and
+//! off-centre cuts, the vertex reuse, the shifted copies, the one-sided
+//! line and the `udmf` extra bag, against the off-line, endpoint,
+//! zero-length, `i16`-range and over-long-piece refusals.
 
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::vertex;
-use crate::wad::map::ops::{half_sum, midpoint, split_linedef};
+use crate::wad::map::ops::{midpoint, split_linedef};
 
 use super::{code, point, split_fixture};
-
-#[test]
-fn half_sum_rounds_halves_away_from_zero() {
-    assert_eq!(half_sum(0, 256), 128_i32, "an even sum halves exactly");
-    assert_eq!(half_sum(0, 255), 128_i32, "255/2 rounds up to nearest");
-    assert_eq!(
-        half_sum(0, -255),
-        -128_i32,
-        "and a negative half rounds away from zero"
-    );
-    assert_eq!(half_sum(-3, -2), -3_i32, "(-5)/2 is -2.5, away from zero");
-}
 
 #[test]
 fn midpoint_is_the_rounded_average_of_both_axes() {

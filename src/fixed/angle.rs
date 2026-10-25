@@ -6,8 +6,8 @@
 //! `CORDIC`; so do the inverse (`atan2`) and the whole-number helpers
 //! [`hypot`] and [`rotate_point`].
 
-use super::{Fixed, isqrt_u128, round_shift};
-use crate::fixed::{FRACBITS, trig};
+use super::{Fixed, div_round_sat, isqrt_u128};
+use crate::fixed::{FRACUNIT, trig};
 
 /// `BAM` per full turn as `u64` (`2^32`).
 const TURN: u64 = 0x1_0000_0000;
@@ -173,7 +173,7 @@ fn component(first: i64, second: i64, cos: i32, sin: i32) -> i64 {
     let b = i128::from(second)
         .checked_mul(i128::from(sin))
         .unwrap_or(0_i128);
-    round_shift(a.wrapping_sub(b), FRACBITS)
+    div_round_sat(a.wrapping_sub(b), i128::from(FRACUNIT))
 }
 
 #[cfg(test)]

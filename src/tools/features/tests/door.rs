@@ -11,7 +11,8 @@ use crate::tools::features::door::{
 };
 use crate::tools::features::out_of_range;
 use crate::tools::features::wall::{
-    centroid, choose_between, choose_linedef, half_axis, recess_depth, strip_face_lost, strip_wall,
+    centroid, choose_between, choose_linedef, half_axis, outward_normal, recess_depth,
+    strip_face_lost, strip_wall,
 };
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
@@ -19,7 +20,7 @@ use crate::wad::map::features::DoorStyle;
 use crate::wad::map::features::door_wall;
 use crate::wad::map::ops::Point;
 
-use super::{code, one_room, open_line, refuse, room_and_hall, solid_line, two_rooms};
+use super::{code, one_room, open_line, refuse, room_and_hall, solid_line, two_rooms, vertex};
 
 /// A request parsed from `json`.
 fn args(json: &str) -> AddDoorParams {
@@ -366,6 +367,24 @@ fn centroids_and_halves_stay_whole() {
     assert_eq!(half_axis(-1, 0), -1_i32, "halves round away from zero");
     assert_eq!(half_axis(0, 1), 1_i32, "up too");
     assert_eq!(half_axis(i32::MAX, i32::MAX), i32::MAX, "saturated");
+}
+
+/// The `CD-284` regression: an `i128` axis below `i32::MIN` used to
+/// saturate up to `i32::MAX`, flipping the sign of a huge `UDMF`
+/// coordinate.
+#[test]
+fn the_outward_normal_saturates_large_negatives_low() {
+    let mut map = Map::default();
+    map.vertices.push(vertex(i32::MIN, 0));
+    map.vertices.push(vertex(i32::MAX, 1));
+    map.linedefs.push(solid_line(0_usize, 1_usize, 0_usize));
+    let normal = outward_normal(&map, 0_usize).expect("the line resolves");
+    assert_eq!(normal.x, 1_i32, "dy is one");
+    assert_eq!(
+        normal.y,
+        i32::MIN,
+        "the huge negative dx saturates to the bottom, not the top"
+    );
 }
 
 #[test]

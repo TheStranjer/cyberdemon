@@ -31,13 +31,13 @@ mod pass;
 use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
-use crate::fixed::isqrt;
+use crate::fixed::{isqrt, narrow_i32, narrow_i64};
 use crate::geom::label::Label;
 use crate::geom::{Layer, Piece, Pt};
 use crate::plan::model::{Connection, ConnectionKind, Plan, Room};
 use crate::plan::walls::{WallKey, Walls, room_layers};
 use crate::wad::map::consts::MAX_STEP_HEIGHT;
-use frame::{clamp_i32, clamp_i64, delta};
+use frame::delta;
 use pass::{Pass, preferred};
 
 /// Band depth used for an opening when [`Plan::wall_thickness`] is not
@@ -250,8 +250,8 @@ struct Boundary<'walls> {
 
 /// Measure one shared piece.
 fn measure(piece: &Piece) -> Boundary<'_> {
-    let dx = clamp_i64(delta(piece.a.0, piece.b.0));
-    let dy = clamp_i64(delta(piece.a.1, piece.b.1));
+    let dx = narrow_i64(delta(piece.a.0, piece.b.0));
+    let dy = narrow_i64(delta(piece.a.1, piece.b.1));
     let length_squared = i128::from(dx)
         .saturating_mul(i128::from(dx))
         .saturating_add(i128::from(dy).saturating_mul(i128::from(dy)));
@@ -342,7 +342,10 @@ fn connection_label(connection: &Connection) -> String {
 fn span_height(target: &Target<'_>) -> (i32, i32) {
     let floor = i64::from(target.from_room.floor).max(i64::from(target.to_room.floor));
     let ceiling = i64::from(target.from_room.ceiling).min(i64::from(target.to_room.ceiling));
-    (clamp_i32(floor), clamp_i32(ceiling))
+    (
+        narrow_i32(i128::from(floor)),
+        narrow_i32(i128::from(ceiling)),
+    )
 }
 
 /// The glass span of a window: `max(floor) + sill` to
@@ -353,7 +356,10 @@ fn window_span(target: &Target<'_>, sill: i32, lintel: i32) -> Result<(i32, i32)
     let floor = i64::from(base_floor).saturating_add(i64::from(sill));
     let ceiling = i64::from(base_ceiling).saturating_sub(i64::from(lintel));
     if ceiling.saturating_sub(floor) >= MIN_GLASS_HEIGHT {
-        return Ok((clamp_i32(floor), clamp_i32(ceiling)));
+        return Ok((
+            narrow_i32(i128::from(floor)),
+            narrow_i32(i128::from(ceiling)),
+        ));
     }
     Err(CyberError::InvalidArgument(format!(
         "connection '{}' has window floor {floor} and ceiling {ceiling}; that leaves under {MIN_GLASS_HEIGHT} units of glass; lower the sill or the lintel",

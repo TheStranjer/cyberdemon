@@ -11,8 +11,9 @@
 //! through.
 
 use crate::error::CyberError;
+use crate::fixed::{div_round, midpoint, narrow_i32};
 use crate::geom::Pt;
-use crate::geom::segment::{Delta, round_quotient};
+use crate::geom::segment::Delta;
 use crate::wad::map::features::{
     DoorWall, door_rect, door_wall, endpoints, longest_boundary, nearest_boundary, outward_depth,
     project_onto_line, void_strip,
@@ -32,9 +33,6 @@ pub(super) const STRIP_THICKNESS: i32 = 16_i32;
 /// Divisor turning a four-corner sum into the polygon centroid.
 const CENTROID_DIVISOR: i128 = 4_i128;
 
-/// Divisor of the two-endpoint sum that gives a midpoint coordinate.
-const MIDPOINT_DIVISOR: i128 = 2_i128;
-
 /// The `v1` to `v2` vector of linedef `index` as an exact `i128` delta.
 fn wall_run(map: &Map, index: usize) -> Option<Delta> {
     let (from, to) = endpoints(map, index)?;
@@ -49,21 +47,15 @@ fn wall_run(map: &Map, index: usize) -> Option<Delta> {
 pub(super) fn outward_normal(map: &Map, index: usize) -> Option<Point> {
     let run = wall_run(map, index)?;
     Some(Point {
-        x: narrow(run.1),
-        y: narrow(run.0.saturating_neg()),
+        x: narrow_i32(run.1),
+        y: narrow_i32(run.0.saturating_neg()),
     })
-}
-
-/// An exact `i128` axis saturated into `i32`.
-fn narrow(value: i128) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 /// The mean of two coordinates, halves rounded away from zero and
 /// saturated back into `i32`.
 pub(super) fn half_axis(first: i32, second: i32) -> i32 {
-    let sum = i128::from(first).saturating_add(i128::from(second));
-    narrow(round_quotient(sum, MIDPOINT_DIVISOR).unwrap_or(sum))
+    narrow_i32(i128::from(midpoint(i64::from(first), i64::from(second))))
 }
 
 /// The centroid of a polygon: the mean of its corner coordinates.
@@ -75,8 +67,8 @@ pub(super) fn centroid(points: &[Point]) -> Point {
         sum_y = sum_y.saturating_add(i128::from(corner.y));
     }
     Point {
-        x: narrow(round_quotient(sum_x, CENTROID_DIVISOR).unwrap_or(sum_x)),
-        y: narrow(round_quotient(sum_y, CENTROID_DIVISOR).unwrap_or(sum_y)),
+        x: narrow_i32(div_round(sum_x, CENTROID_DIVISOR).unwrap_or(sum_x)),
+        y: narrow_i32(div_round(sum_y, CENTROID_DIVISOR).unwrap_or(sum_y)),
     }
 }
 

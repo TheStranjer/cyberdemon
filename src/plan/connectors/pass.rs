@@ -12,14 +12,14 @@
 //! [`final_layers`](super::final_layers) drops the wall there.
 
 use super::frame::{
-    Body, Frame, StairPlan, clamp_i64, delta, gap_depth, plan_stairs, round_div, rounded,
-    rounded_unit, stair_edge,
+    Body, Frame, StairPlan, delta, gap_depth, plan_stairs, rounded_unit, stair_edge,
 };
 use super::{
     Boundary, ConnectorGeometry, LabelAllocator, Target, best_boundary, resolve_target,
     span_height, window_span,
 };
 use crate::error::CyberError;
+use crate::fixed;
 use crate::geom::Layer;
 use crate::geom::Pt;
 use crate::geom::label::Label;
@@ -99,28 +99,19 @@ pub(super) fn distance_squared(boundary: &Boundary<'_>, point: Pt) -> i128 {
 }
 
 /// The point the band is centred on: the nearest point of the piece to
-/// `at`, or the piece's
-/// [`mul_div_round`](crate::fixed::mul_div_round)-rounded midpoint.
+/// `at`, or the piece's [`fixed::midpoint`]-rounded midpoint.
 fn placement_point(boundary: &Boundary<'_>, at: Option<Pt>) -> Pt {
     at.map_or_else(|| midpoint(boundary), |point| projected(boundary, point))
 }
 
 /// The piece's midpoint, each coordinate rounded through
-/// [`mul_div_round`](crate::fixed::mul_div_round).
+/// [`fixed::midpoint`].
 pub(super) fn midpoint(boundary: &Boundary<'_>) -> Pt {
     let piece = boundary.piece;
     (
-        rounded_half(piece.a.0, piece.b.0),
-        rounded_half(piece.a.1, piece.b.1),
+        fixed::midpoint(piece.a.0, piece.b.0),
+        fixed::midpoint(piece.a.1, piece.b.1),
     )
-}
-
-/// `(first + second) / 2` through
-/// [`mul_div_round`](crate::fixed::mul_div_round), the sum saturating at the
-/// `i64` extremes.
-fn rounded_half(first: i64, second: i64) -> i64 {
-    let sum = clamp_i64(i128::from(first).saturating_add(i128::from(second)));
-    rounded(sum, 1_i64, 2_i64)
 }
 
 /// The clamped projection of `point` onto the piece, rounded to integers
@@ -142,14 +133,14 @@ fn projected(boundary: &Boundary<'_>, point: Pt) -> Pt {
         return piece.b;
     }
     (
-        piece
-            .a
-            .0
-            .saturating_add(round_div(along.saturating_mul(dx), boundary.length_squared)),
-        piece
-            .a
-            .1
-            .saturating_add(round_div(along.saturating_mul(dy), boundary.length_squared)),
+        piece.a.0.saturating_add(fixed::div_round_sat(
+            along.saturating_mul(dx),
+            boundary.length_squared,
+        )),
+        piece.a.1.saturating_add(fixed::div_round_sat(
+            along.saturating_mul(dy),
+            boundary.length_squared,
+        )),
     )
 }
 

@@ -13,7 +13,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::error::CyberError;
-use crate::fixed::{isqrt, mul_div_round};
+use crate::fixed::{isqrt, mul_div_round_sat, narrow_i64};
 use crate::geom::label::{Label, LayerLabeler};
 use crate::geom::{Layer, Piece, Pt, arrange};
 use crate::plan::model::Plan;
@@ -94,7 +94,7 @@ pub struct WallEnds {
 ///
 /// The segment `a`→`b` is offset by `± thickness / 2` along the integer
 /// unit normal `(-dy / len, dx / len)`, every component rounded through
-/// [`mul_div_round`] (exact for axis-aligned pieces). At each end named
+/// [`mul_div_round_sat`] (exact for axis-aligned pieces). At each end named
 /// by `ends` the segment is additionally extended by `thickness / 2`
 /// past the piece, so the rectangles of abutting walls overlap at their
 /// shared corner and the final stack never leaves an unwalled gap piece
@@ -112,8 +112,8 @@ pub struct WallEnds {
 #[must_use]
 #[inline]
 pub fn wall_void_layer(piece: &Piece, thickness: i64, ends: WallEnds) -> Layer {
-    let dx = clamp_i64(i128::from(piece.b.0).saturating_sub(i128::from(piece.a.0)));
-    let dy = clamp_i64(i128::from(piece.b.1).saturating_sub(i128::from(piece.a.1)));
+    let dx = narrow_i64(i128::from(piece.b.0).saturating_sub(i128::from(piece.a.0)));
+    let dy = narrow_i64(i128::from(piece.b.1).saturating_sub(i128::from(piece.a.1)));
     let length_squared = i128::from(dx)
         .saturating_mul(i128::from(dx))
         .saturating_add(i128::from(dy).saturating_mul(i128::from(dy)));
@@ -128,12 +128,12 @@ pub fn wall_void_layer(piece: &Piece, thickness: i64, ends: WallEnds) -> Layer {
     }
     let half = thickness.saturating_div(2_i64);
     let extension = (
-        rounded_offset(half, dx, length),
-        rounded_offset(half, dy, length),
+        mul_div_round_sat(half, dx, length),
+        mul_div_round_sat(half, dy, length),
     );
     let normal = (
-        rounded_offset(half, dy.saturating_neg(), length),
-        rounded_offset(half, dx, length),
+        mul_div_round_sat(half, dy.saturating_neg(), length),
+        mul_div_round_sat(half, dx, length),
     );
     let back = reaching(extension, ends.at_a);
     let forward = reaching(extension, ends.at_b);
@@ -160,25 +160,6 @@ pub fn wall_void_layer(piece: &Piece, thickness: i64, ends: WallEnds) -> Layer {
 #[inline]
 const fn reaching(extension: Pt, abutted: bool) -> Pt {
     if abutted { extension } else { (0_i64, 0_i64) }
-}
-
-/// `half * numerator / length`, rounded through [`mul_div_round`],
-/// saturating to the `i64` extreme in the product's direction when the
-/// exact value does not fit.
-#[inline]
-fn rounded_offset(half: i64, numerator: i64, length: i64) -> i64 {
-    let fallback = if (half >= 0) == (numerator >= 0) {
-        i64::MAX
-    } else {
-        i64::MIN
-    };
-    mul_div_round(half, numerator, length).unwrap_or(fallback)
-}
-
-/// The `i64` nearest `value`, saturating at the extremes.
-#[inline]
-fn clamp_i64(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
 }
 
 /// `point` moved by `(dx, dy)`, saturating per component.
@@ -330,9 +311,9 @@ fn count_at(counts: &mut BTreeMap<Pt, usize>, point: Pt) {
 #[cfg(test)]
 mod tests {
     use super::{
-        WallEnds, WallKey, Walls, build_walls, clamp_i64, room_layers, rounded_offset,
-        shared_boundaries, wall_void_layer,
+        WallEnds, WallKey, Walls, build_walls, room_layers, shared_boundaries, wall_void_layer,
     };
+    use crate::fixed::{mul_div_round_sat, narrow_i64};
     use crate::geom::label::{Labeler as _, contains_point};
     use crate::geom::{Label, Layer, LayerLabeler, Piece, Pt, SAMPLE_SCALE, arrange};
     use crate::plan::model::{Plan, Room, Shape};
@@ -804,28 +785,28 @@ mod tests {
 
     #[test]
     fn rounding_helpers_saturate_instead_of_failing() {
-        assert_eq!(clamp_i64(i128::from(i64::MAX)), i64::MAX, "in range");
+        assert_eq!(narrow_i64(i128::from(i64::MAX)), i64::MAX, "in range");
         assert_eq!(
-            clamp_i64(i128::from(i64::MAX).saturating_mul(2)),
+            narrow_i64(i128::from(i64::MAX).saturating_mul(2)),
             i64::MAX,
             "above the top saturates"
         );
         assert_eq!(
-            clamp_i64(i128::from(i64::MIN).saturating_sub(1)),
+            narrow_i64(i128::from(i64::MIN).saturating_sub(1)),
             i64::MIN,
             "below the bottom saturates"
         );
         assert_eq!(
-            rounded_offset(i64::MAX, i64::MAX, 1),
+            mul_div_round_sat(i64::MAX, i64::MAX, 1),
             i64::MAX,
             "a leaving result saturates high"
         );
         assert_eq!(
-            rounded_offset(i64::MIN, i64::MAX, 1),
+            mul_div_round_sat(i64::MIN, i64::MAX, 1),
             i64::MIN,
             "and low for negative halves"
         );
-        assert_eq!(rounded_offset(8, 128, 128), 8, "exact stays exact");
+        assert_eq!(mul_div_round_sat(8, 128, 128), 8, "exact stays exact");
     }
 
     #[test]

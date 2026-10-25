@@ -15,11 +15,12 @@
 //! [`side_samples`] the two points the arrangement asks a piece's sides
 //! about and [`side_normal`] the offset they sit at.
 
+use crate::fixed::div_round;
 use crate::geom::Pt;
 use crate::geom::label::{
     Label, Labeler, ScaledPt, contains_point, crosses_ray, scale_point, spans,
 };
-use crate::geom::segment::{delta, round_quotient};
+use crate::geom::segment::delta;
 
 use super::geometry::{
     box_area, grid_length, s_cross, s_delta, s_dist2, s_dot, segment_of, widen_box,
@@ -211,11 +212,11 @@ pub(super) fn side_normal(start: Pt, finish: Pt) -> ScaledPt {
     let direction = delta(start, finish);
     let length = grid_length(start, finish);
     (
-        round_quotient(
+        div_round(
             direction.1.saturating_neg().saturating_mul(SAMPLE_OFFSET),
             length,
         )
         .unwrap_or(0_i128),
-        round_quotient(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0_i128),
+        div_round(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0_i128),
     )
 }

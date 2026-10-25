@@ -33,6 +33,7 @@ pub use facing::{Facing, snap_angle};
 use alloc::vec::Vec;
 
 use crate::defs::Definitions;
+use crate::fixed::midpoint;
 use crate::geom::Pt;
 use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{FlagFamily, blocks_players};
@@ -48,18 +49,9 @@ pub const CLEARANCE: i64 = 8_i64;
 /// The largest number of grid points one area axis contributes, so a
 /// huge bounding box cannot spin the fill forever.
 pub(super) const MAX_AXIS_POINTS: usize = 4_096_usize;
-/// Divisor of the two-endpoint sum that gives a midpoint coordinate.
-const MIDPOINT_DIVISOR: i64 = 2_i64;
 
 /// A map point widened to the exact `i128` space of the distance tests.
 pub(super) type End = (i128, i128);
-
-/// The whole midpoint of an axis, `i64`-safe for any `i32` pair.
-#[must_use]
-#[inline]
-pub const fn mid(low: i64, high: i64) -> i64 {
-    low.saturating_add(high).saturating_div(MIDPOINT_DIVISOR)
-}
 
 /// The blocking radius of thing type `kind`: its definition's radius, or
 /// `unknown_radius` when the definitions do not list the type.
@@ -223,9 +215,7 @@ impl Area {
     pub fn centre(&self, map: &Map) -> Option<Pt> {
         match *self {
             Self::Circle { centre, .. } => Some(centre),
-            Self::Sector(_) | Self::Rect { .. } => self
-                .bbox(map)
-                .map(|(min_x, min_y, max_x, max_y)| (mid(min_x, max_x), mid(min_y, max_y))),
+            Self::Sector(_) | Self::Rect { .. } => self.bbox(map).map(box_centre),
         }
     }
 
@@ -262,6 +252,14 @@ impl Area {
             Self::Circle { .. } => "the circle".to_owned(),
         }
     }
+}
+
+/// The midpoint of a `(min_x, min_y, max_x, max_y)` bounding box, each
+/// axis rounded through [`midpoint`].
+#[must_use]
+#[inline]
+fn box_centre((min_x, min_y, max_x, max_y): (i64, i64, i64, i64)) -> Pt {
+    (midpoint(min_x, max_x), midpoint(min_y, max_y))
 }
 
 /// Whether `at` sits within `radius` of `centre`, exact in `i128`.

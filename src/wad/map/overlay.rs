@@ -70,8 +70,6 @@ const SAMPLE_OFFSET: i128 = 0x2_0000;
 /// Half a sample-scaled unit squared, `2^19 * 2^19`: the radius at which
 /// a side sample counts as lying on a wall.
 const NEAR_HALF_SQ: i128 = 0x40_0000_0000;
-/// Divisor of the two-endpoint sum that gives a midpoint coordinate.
-const MIDPOINT_DIVISOR: i128 = 2_i128;
 
 /// The sector record [`Paint::Sector`] appends.
 pub type SectorSpec = Sector;

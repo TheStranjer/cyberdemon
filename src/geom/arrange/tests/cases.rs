@@ -3,8 +3,9 @@
 //! refusals of degenerate or over-sized input.
 
 use super::{CountingLabeler, assert_clean, find_piece, piece_claims, rect, room};
+use crate::fixed::gcd;
 use crate::geom::Pt;
-use crate::geom::arrange::split::{gcd, normalize_fraction};
+use crate::geom::arrange::split::normalize_fraction;
 use crate::geom::arrange::{arrange, normalize_polygon, polygon_area2, ring_edges, self_crossing};
 use crate::geom::label::Label;
 use crate::geom::segment::{ExternalSegment, SourceId};

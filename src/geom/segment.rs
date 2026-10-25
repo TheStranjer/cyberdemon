@@ -8,6 +8,7 @@
 
 use alloc::collections::BTreeMap;
 
+use crate::fixed::div_round;
 use crate::geom::Pt;
 
 /// At or above this many segments, `find_cuts` sweeps instead of
@@ -176,32 +177,6 @@ pub(crate) fn on_segment_tol(from: Pt, to: Pt, point: Pt) -> bool {
     close && between(point, from, to)
 }
 
-/// `n / d` rounded to nearest, halves away from zero, as `i128`; `None`
-/// for `d == 0` or a result that does not fit.
-pub(crate) fn round_quotient(n: i128, d: i128) -> Option<i128> {
-    let quotient = n.checked_div(d)?;
-    let remainder = n.checked_rem(d)?;
-    let rounds_up = remainder
-        .checked_abs()
-        .and_then(|magnitude| magnitude.checked_mul(2))
-        .is_some_and(|twice| twice >= d.saturating_abs());
-    if !rounds_up {
-        return Some(quotient);
-    }
-    if (n >= 0) == (d >= 0) {
-        quotient.checked_add(1)
-    } else {
-        quotient.checked_sub(1)
-    }
-}
-
-/// `n / d` rounded to nearest, halves away from zero, as an `i64` grid
-/// coordinate; `None` when the result leaves the grid.
-#[inline]
-pub(crate) fn round_div(n: i128, d: i128) -> Option<i64> {
-    i64::try_from(round_quotient(n, d)?).ok()
-}
-
 /// The point where the two segment lines cross, rounded to the nearest
 /// integer point; `None` when the point does not fit the `i64` grid.
 fn crossing_point(first: &Seg, second: &Seg) -> Option<Pt> {
@@ -217,8 +192,8 @@ fn crossing_point(first: &Seg, second: &Seg) -> Option<Pt> {
         .saturating_mul(determinant)
         .saturating_add(run.1.saturating_mul(numerator));
     Some((
-        round_div(scaled_x, determinant)?,
-        round_div(scaled_y, determinant)?,
+        div_round(scaled_x, determinant).and_then(|axis| i64::try_from(axis).ok())?,
+        div_round(scaled_y, determinant).and_then(|axis| i64::try_from(axis).ok())?,
     ))
 }
 
@@ -440,8 +415,7 @@ impl PointMerge {
 #[cfg(test)]
 mod tests {
     use super::{
-        PointMerge, Seg, between, cross, delta, dot, on_segment_tol, opposite, orient, round_div,
-        round_quotient, sweep_cuts,
+        PointMerge, Seg, between, cross, delta, dot, on_segment_tol, opposite, orient, sweep_cuts,
     };
     use crate::geom::Pt;
     use crate::geom::segment::SourceId;
@@ -505,17 +479,6 @@ mod tests {
             !on_segment_tol((0, 0), (0, 0), (0, 0)),
             "degenerate segment"
         );
-    }
-
-    #[test]
-    fn round_quotient_rounds_halves_away_from_zero() {
-        assert_eq!(round_quotient(7, 2), Some(4), "3.5 up");
-        assert_eq!(round_quotient(-7, 2), Some(-4), "-3.5 down");
-        assert_eq!(round_quotient(7, -2), Some(-4), "negative divisor");
-        assert_eq!(round_quotient(1, 3), Some(0), "0.33 to zero");
-        assert_eq!(round_quotient(1, 0), None, "zero divisor");
-        assert_eq!(round_div(5, 2), Some(3), "i64 conversion");
-        assert_eq!(round_div(i128::from(i64::MAX) + 1, 1), None, "leaves i64");
     }
 
     #[test]

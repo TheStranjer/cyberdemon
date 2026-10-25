@@ -4,13 +4,15 @@
 //! commits that place the staged bytes as one undoable edit.
 //!
 //! [`located_patch`] reads the merged view the way `list_patches` does and
-//! answers how a replacement must land; [`add_patch_run`] refuses a working
-//! `patches`-region twin before anything is fetched, stages the bytes on the
-//! shared pipeline of [`crate::tools::imports::image_pipeline`] and commits
-//! patch and grown `PNAMES` list together; [`replace_patch_run`] commits the
-//! same staged bytes over a patch the session already has and never writes
-//! `PNAMES`. The staging, the report shapes and the parameters stay in the
-//! group root, [`super`].
+//! answers how a replacement must land; [`add_patch_run`] stages the bytes
+//! on the shared pipeline of [`crate::tools::imports::image_pipeline`]
+//! outside any lock, then runs [`land_add_patch`] - one session lock in
+//! which the working `patches`-region twin is refused, the `PNAMES` entry
+//! is planned from the list as it stands and patch and (when it grew) list
+//! commit together as one edit; [`replace_patch_run`] re-locates the target
+//! inside its single lock too, then commits the staged bytes over it and
+//! never writes `PNAMES`. The staging, the report shapes and the
+//! parameters stay in the group root, [`super`].
 
 use crate::error::CyberError;
 use crate::session::{Scope, Session};
@@ -41,16 +43,16 @@ pub(super) fn holds_patch(session: &Session, name: LumpName) -> Result<bool, Cyb
     Ok(holds)
 }
 
-/// The duplicate refusal, before any work: `put_lump`' own hint says
-/// `replace=true`, which this tool has no parameter for, so the message
-/// points at `replace_patch` instead.
+/// The duplicate refusal: `put_lump`' own hint says `replace=true`, which
+/// this tool has no parameter for, so the message points at
+/// `replace_patch` instead.
 ///
 /// # Errors
 ///
 /// [`CyberError::AlreadyExists`] for a working `patches`-region twin, and
 /// [`Session::lumps_in`]' read errors.
-fn refuse_working_twin(state: &AppState, name: LumpName) -> Result<(), CyberError> {
-    if state.with_session(|session| holds_patch(session, name))? {
+pub(super) fn refuse_working_twin(session: &Session, name: LumpName) -> Result<(), CyberError> {
+    if holds_patch(session, name)? {
         return Err(CyberError::AlreadyExists(format!(
             "lump {name} already exists in the patches region of the working archive: use \
              replace_patch to overwrite it in place, or add the picture under another name"
@@ -90,11 +92,12 @@ pub(super) fn holds_global_patch(session: &Session, name: LumpName) -> bool {
     })
 }
 
-/// What the merged view stands on for a `replace_patch` target, decided
-/// before any work: the name must stand as a patch the way `list_patches`
-/// reads one - inside a `patches` region, or as a `PNAMES`-named global -
-/// and the answer carries how the write must land (overwrite in place, or
-/// override a lower layer) with the name's unchanged `PNAMES` index.
+/// What the merged view stands on for a `replace_patch` target, read
+/// before the fetch and again inside the land: the name must stand as a
+/// patch the way `list_patches` reads one - inside a `patches` region, or
+/// as a `PNAMES`-named global - and the answer carries how the write must
+/// land (overwrite in place, or override a lower layer) with the name's
+/// unchanged `PNAMES` index.
 ///
 /// # Errors
 ///
@@ -157,16 +160,17 @@ fn commit_patch(
     })
 }
 
-/// `add_patch`' work: validate, refuse a working twin before any fetch,
-/// stage the bytes, plan the `PNAMES` entry, then commit patch and list as
-/// one undoable edit.
+/// `add_patch`' work: validate and refuse a working twin before any fetch,
+/// stage the bytes outside every lock, then run [`land_add_patch`] as one
+/// session step.
 ///
 /// # Errors
 ///
 /// [`parse_import`]' argument errors, [`refuse_working_twin`]'
-/// [`CyberError::AlreadyExists`], whatever [`resolve_staged`] reports for
-/// the source and picture, and [`pnames_plan`]' and [`commit_patch`]'
-/// errors; a refusal leaves the working archive untouched.
+/// [`CyberError::AlreadyExists`] from either the pre-fetch check or the
+/// land, whatever [`resolve_staged`] reports for the source and picture,
+/// and [`pnames_plan`]' and [`commit_patch`]' errors; a refusal leaves the
+/// working archive untouched.
 pub(super) async fn add_patch_run(
     state: &AppState,
     args: &AddPatchParams,
@@ -177,10 +181,30 @@ pub(super) async fn add_patch_run(
             "add_patch always carries its lump name".to_owned(),
         ));
     };
-    refuse_working_twin(state, name)?;
+    state.with_session(|session| refuse_working_twin(session, name))?;
     let staged = resolve_staged(state, name, &import).await?;
-    let plan = pnames_plan(state, staged.name, args.add_to_pnames)?;
-    state.with_session(move |session| commit_patch(session, staged, plan))
+    let add_to_pnames = args.add_to_pnames;
+    state.with_session(move |session| land_add_patch(session, staged, add_to_pnames))
+}
+
+/// The whole session half of an `add_patch` under one lock: refuse the
+/// twin the pre-fetch scan could not see coming, plan the `PNAMES` entry
+/// from the effective list as it stands right now, and commit patch and
+/// list together - no other tool's commit can grow the list between the
+/// plan and the write and have its entry overwritten.
+///
+/// # Errors
+///
+/// [`refuse_working_twin`]' [`CyberError::AlreadyExists`],
+/// [`pnames_plan`]' read and write refusals and [`commit_patch`]' errors.
+pub(super) fn land_add_patch(
+    session: &mut Session,
+    staged: Staged,
+    add_to_pnames: Option<bool>,
+) -> Result<PatchOutcome, CyberError> {
+    refuse_working_twin(session, staged.name)?;
+    let plan = pnames_plan(session, staged.name, add_to_pnames)?;
+    commit_patch(session, staged, plan)
 }
 
 /// The synchronous half of a `replace_patch`: one undoable edit writing the
@@ -226,17 +250,17 @@ fn commit_replacement(
     })
 }
 
-/// `replace_patch`' work: validate, locate the patch in the merged view
-/// and decide the write from a read-only working scan before any fetch,
-/// stage the bytes on the shared `add_patch` plumbing, then commit the one
-/// edit - no `PNAMES` write.
+/// `replace_patch`' work: validate, refuse a name no layer holds as a
+/// patch before any fetch, stage the bytes outside every lock, then
+/// re-locate and commit through [`land_replacement`] as one session step.
 ///
 /// # Errors
 ///
 /// [`parse_import`]' argument errors, [`located_patch`]'
-/// [`CyberError::NotFound`] and `format_error`, whatever [`resolve_staged`]
-/// reports for the source and picture, and [`commit_replacement`]' errors;
-/// a refusal leaves the working archive untouched.
+/// [`CyberError::NotFound`] and `format_error` from either the pre-fetch
+/// scan or the land, whatever [`resolve_staged`] reports for the source and
+/// picture, and [`commit_replacement`]' errors; a refusal leaves the
+/// working archive untouched.
 pub(super) async fn replace_patch_run(
     state: &AppState,
     args: &ReplacePatchParams,
@@ -247,7 +271,25 @@ pub(super) async fn replace_patch_run(
             "replace_patch always carries its lump name".to_owned(),
         ));
     };
-    let (in_working, pnames_index) = state.with_session(|session| located_patch(session, name))?;
+    state.with_session(|session| located_patch(session, name).map(|_| ()))?;
     let staged = resolve_staged(state, name, &import).await?;
-    state.with_session(move |session| commit_replacement(session, staged, pnames_index, in_working))
+    state.with_session(move |session| land_replacement(session, staged))
+}
+
+/// The whole session half of a `replace_patch` under one lock:
+/// [`located_patch`] re-reads how the write must land (in-place overwrite
+/// or working override, and the name's unchanged `PNAMES` index) from the
+/// session as it stands right now, and [`commit_replacement`] writes what
+/// that decision calls for - a concurrent `add_patch` or `remove_patch`
+/// cannot move the directory between the scan and the edit.
+///
+/// # Errors
+///
+/// [`located_patch`]' refusals and [`commit_replacement`]' errors.
+pub(super) fn land_replacement(
+    session: &mut Session,
+    staged: Staged,
+) -> Result<ReplaceOutcome, CyberError> {
+    let (in_working, pnames_index) = located_patch(session, staged.name)?;
+    commit_replacement(session, staged, pnames_index, in_working)
 }

@@ -1,6 +1,7 @@
 //! The picture side of one `create_sprite_from_image` call: the automatic
 //! background-removal and trim ops, the height rule, the shaped and
-//! quantized [`BuiltSprite`], the rotation warnings read before the edit,
+//! quantized [`BuiltSprite`], the rotation warnings [`collect_warnings`]
+//! reads in the commit's own lock through [`land_sprite`],
 //! [`commit_sprite`]' single [`Session::edit`] placing every named lump
 //! and the [`CreatedSpriteReport`] [`create_sprite_build`] answers with.
 //!
@@ -258,7 +259,8 @@ pub(super) fn first_name(names: &[Naming]) -> Result<LumpName, CyberError> {
 }
 
 /// The rotation-coverage warnings for every lump of one call, deduplicated
-/// in order, read from the merged sprites region before the edit.
+/// in order, read from the merged sprites region in the same lock as the
+/// commit.
 ///
 /// # Errors
 ///
@@ -275,6 +277,24 @@ pub(super) fn collect_warnings(
             .collect();
         warnings.append(&mut fresh);
     }
+    Ok(warnings)
+}
+
+/// The whole session half of a create-sprite under one lock:
+/// [`collect_warnings`] reads the merged sprites region as it stands right
+/// now - so lumps a concurrent import just placed are counted - and
+/// [`commit_sprite`] then places every named lump as one edit.
+///
+/// # Errors
+///
+/// [`collect_warnings`]' and [`commit_sprite`]' errors.
+pub(super) fn land_sprite(
+    session: &mut Session,
+    request: &SpriteRequest,
+    built: &BuiltSprite,
+) -> Result<Vec<String>, CyberError> {
+    let warnings = collect_warnings(session, &request.names)?;
+    commit_sprite(session, request, built)?;
     Ok(warnings)
 }
 
@@ -335,14 +355,17 @@ pub(super) struct CreatedSpriteReport {
     next_steps: &'static [&'static str],
 }
 
-/// The measured body of [`create_sprite_run`](super::create_sprite_run).
+/// The measured body of [`create_sprite_run`](super::create_sprite_run):
+/// validate, fetch and process outside every lock, then read the warnings
+/// and commit every lump as one session step, and finally publish the
+/// preview.
 ///
 /// # Errors
 ///
 /// [`parse_create`]' argument errors, [`AppState::fetch_source`]' and
-/// [`build_sprite`]' errors, [`collect_warnings`]' and [`commit_sprite`]'
-/// refusals and [`AppState::publish`]' errors; a refusal leaves the
-/// working archive untouched.
+/// [`build_sprite`]' errors, [`land_sprite`]' refusals and
+/// [`AppState::publish`]' errors; a refusal leaves the working archive
+/// untouched.
 pub(super) async fn create_sprite_build(
     state: &AppState,
     args: &CreateSpriteParams,
@@ -350,8 +373,7 @@ pub(super) async fn create_sprite_build(
     let request = parse_create(args)?;
     let fetched = state.fetch_source(&request.source).await?;
     let built = build_sprite(state, &request, &fetched)?;
-    let warnings = state.with_session(|session| collect_warnings(session, &request.names))?;
-    state.with_session(|session| commit_sprite(session, &request, &built))?;
+    let warnings = state.with_session(|session| land_sprite(session, &request, &built))?;
     let first = first_name(&request.names)?;
     let preview = state.publish(
         &format!("{first}_sprite.png"),

@@ -395,3 +395,59 @@ async fn create_texture_fills_transparent_pixels_and_runs_user_ops() {
         "the wall patch is fully opaque"
     );
 }
+
+/// The layer-patch clash reads the working archive's `patches` region, not
+/// just its names: a same-named flat the session holds does not hide the
+/// layer's patch, and only `replace=true` accepts the override.
+#[tokio::test]
+async fn create_texture_clashes_with_a_layer_patch_despite_a_working_flat_twin() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let flat = write_file(
+        dir.path(),
+        "WALLP1.png",
+        &flat_png(64_u32, 64_u32, |_| false),
+    );
+    call(
+        &client,
+        "import_image_as_flat",
+        source_args(&flat, json!({ "name": "WALLP1" })),
+    )
+    .await;
+    let file = write_file(
+        dir.path(),
+        "SHADOW.png",
+        &flat_png(64_u32, 128_u32, |_| false),
+    );
+    let (code, message, _) = call_err(
+        &client,
+        "create_texture_from_image",
+        source_args(&file, json!({ "name": "SHADOW", "patch_name": "WALLP1" })),
+    )
+    .await;
+    assert_eq!(code, "already_exists", "the working flat is no twin");
+    assert!(
+        message.contains("a patch named WALLP1 already exists in the IWAD"),
+        "the message names the layer's patch: {message}"
+    );
+    let session = call(&client, "get_session_info", json!({})).await;
+    assert_eq!(
+        session["undo"],
+        json!(["import_flat WALLP1"]),
+        "the refusal wrote nothing"
+    );
+    let replaced = create_texture(
+        &client,
+        &file,
+        json!({ "name": "SHADOW", "patch_name": "WALLP1", "replace": true }),
+    )
+    .await;
+    assert_eq!(replaced["patch"], json!("WALLP1"), "replace overrides");
+    assert_eq!(
+        replaced["lump"],
+        json!("TEXTURE1"),
+        "the texture is defined"
+    );
+    let flat_back = call(&client, "get_flat", json!({ "name": "WALLP1" })).await;
+    assert_eq!(flat_back["width"], json!(64_u64), "the flat still serves");
+}

@@ -4,10 +4,13 @@
 //! edit.
 //!
 //! [`working_patch_slot`] answers the last [`is_removal_candidate`] of the
-//! name in the working directory, [`remove_patch_run`] plans the `PNAMES`
-//! removal over the merged view before editing so a `conflict` removes
-//! nothing, and [`commit_removal`] deletes the guarded slot through
-//! [`remove_lump_at`] and writes the renumbered list and texture lumps with
+//! name in the working directory, and [`remove_patch_run`] runs the scan,
+//! the [`plan_pnames_removal`] plan over the merged view (so a `conflict`
+//! removes nothing) and [`commit_removal`] together in ONE session lock:
+//! the land deletes the slot it just found through [`remove_lump_at`] - so
+//! no concurrent edit can move the directory between the scan and the
+//! deletion, which would leave the name guard pointing at another
+//! same-named lump - and writes the renumbered list and texture lumps with
 //! the shared [`crate::tools::textures`] machinery. The parameters and the
 //! report shape stay in the group root, [`super`], together with the
 //! candidate rule [`super::write::holds_global_patch`] the scan borrows.
@@ -141,30 +144,59 @@ fn commit_removal(
     })
 }
 
-/// `remove_patch`' work: scan the working archive, plan the `PNAMES`
-/// removal over the merged view before editing (a `conflict` there removes
-/// nothing), refuse a name neither half holds, then commit lump and list
-/// as the one edit. Nothing here touches the network, so the run is
+/// `remove_patch`' work: parse the name and flags, then run [`land_removal`]
+/// as one session step. Nothing here touches the network, so the run is
 /// synchronous behind the `async` tool entry point.
 ///
 /// # Errors
 ///
-/// [`LumpName::parse`]' [`CyberError::InvalidArgument`] for a bad name,
-/// [`plan_pnames_removal`]' [`CyberError::Conflict`] unless `force`,
-/// [`working_removal_missing`]' [`CyberError::NotFound`],
-/// [`crate::tools::imports::current_pnames`]' [`CyberError::Format`] and
-/// [`commit_removal`]' errors.
+/// [`LumpName::parse`]' [`CyberError::InvalidArgument`] for a bad name and
+/// whatever [`land_removal`] reports.
 pub(super) fn remove_patch_run(
     state: &AppState,
     args: &RemovePatchParams,
 ) -> Result<RemoveOutcome, CyberError> {
     let name = LumpName::parse(&args.name)?;
-    let index = state.with_session(|session| working_patch_slot(session, name))?;
-    let rewrite = if args.remove_from_pnames.unwrap_or(false) {
-        let force = args.force.unwrap_or(false);
-        let plan = state.with_session(move |session| {
-            plan_pnames_removal(session, &[name.to_string()], force)
-        })?;
+    let flags = RemovalFlags {
+        from_pnames: args.remove_from_pnames.unwrap_or(false),
+        force: args.force.unwrap_or(false),
+    };
+    state.with_session(move |session| land_removal(session, name, flags))
+}
+
+/// The two booleans one `remove_patch` call carries, bundled so the land
+/// takes a single flags argument.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RemovalFlags {
+    /// Whether the name's `PNAMES` entry goes too, with the renumbering.
+    pub(super) from_pnames: bool,
+    /// Whether a `conflict` of the list plan is accepted.
+    pub(super) force: bool,
+}
+
+/// The whole session half of a `remove_patch` under one lock: scan the
+/// working directory for the name's slot, plan the `PNAMES` removal over
+/// the merged view (a `conflict` there removes nothing), refuse a name
+/// neither half holds, and commit lump and list as the one edit. Because
+/// scan, plan and commit share this lock, the index [`commit_removal`]
+/// deletes is the entry [`working_patch_slot`] found in the directory as
+/// it stands at the commit, not a stale snapshot another edit may have
+/// shifted.
+///
+/// # Errors
+///
+/// [`plan_pnames_removal`]' [`CyberError::Conflict`] unless `force`,
+/// [`working_removal_missing`]' [`CyberError::NotFound`],
+/// [`crate::tools::imports::current_pnames`]' [`CyberError::Format`] and
+/// [`commit_removal`]' errors.
+pub(super) fn land_removal(
+    session: &mut Session,
+    name: LumpName,
+    flags: RemovalFlags,
+) -> Result<RemoveOutcome, CyberError> {
+    let index = working_patch_slot(session, name)?;
+    let rewrite = if flags.from_pnames {
+        let plan = plan_pnames_removal(session, &[name.to_string()], flags.force)?;
         (!plan.removed.is_empty()).then_some(plan)
     } else {
         None
@@ -172,5 +204,5 @@ pub(super) fn remove_patch_run(
     if index.is_none() && rewrite.is_none() {
         return Err(working_removal_missing(name));
     }
-    state.with_session(move |session| commit_removal(session, name, index, rewrite))
+    commit_removal(session, name, index, rewrite)
 }

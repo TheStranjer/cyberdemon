@@ -200,7 +200,7 @@ struct Staged {
 /// now. The passthrough half has no quantization stats to add, so this
 /// report is its own shape, not a flattened
 /// [`crate::tools::imports::image_pipeline::ImportReport`].
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct PatchOutcome {
     /// The name the patch was stored under.
     name: LumpName,
@@ -223,7 +223,7 @@ struct PatchOutcome {
 /// [`PatchOutcome`] facts flattened together with where the write landed.
 /// `PNAMES` is never touched by this tool, so `pnames_index` is the
 /// name's unchanged entry.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct ReplaceOutcome {
     /// The stored patch's facts, flattened into this report.
     #[serde(flatten)]
@@ -238,7 +238,7 @@ struct ReplaceOutcome {
 
 /// Structured result of [`Cyberdemon::remove_patch`]: what the one edit
 /// took out of the working archive.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct RemoveOutcome {
     /// The name the removal was asked for, uppercased.
     name: LumpName,

@@ -12,7 +12,8 @@ use crate::session::{Layer, LayerRole, Session};
 use crate::state::AppState;
 use crate::themes::Role;
 use crate::tools::imports::create_flat::build::{
-    BuiltFlat, apply_role, build_flat, check_flat_clash, commit_flat, create_flat_build, shape_flat,
+    BuiltFlat, apply_role, build_flat, check_flat_clash, commit_flat, create_flat_build, land_flat,
+    shape_flat,
 };
 use crate::tools::imports::create_flat::parse_create_flat;
 use crate::tools::imports::processed::ProcessParams;
@@ -293,27 +294,79 @@ async fn the_run_echoes_the_dither_and_size_it_used() {
 }
 
 /// The session's `Floor` override and its undo depth.
-fn floor_theme(state: &AppState) -> (Option<String>, usize) {
-    state
-        .with_session(|session| {
-            Ok((
-                session.texture_theme().overrides.get(&Role::Floor).cloned(),
-                session.undo_labels().len(),
-            ))
-        })
-        .expect("the read runs")
+fn floor_theme(session: &Session) -> (Option<String>, usize) {
+    (
+        session.texture_theme().overrides.get(&Role::Floor).cloned(),
+        session.undo_labels().len(),
+    )
 }
 
-#[tokio::test]
-async fn the_theme_override_lands_in_session_state_outside_history() {
-    let state = state();
+#[test]
+fn the_theme_override_lands_in_session_state_outside_history() {
+    let mut session = Session::default();
     let mut request = parse_create_flat(&args()).expect("valid");
     request.role = Some(Role::Floor);
-    let role = apply_role(&state, &request).expect("the override sets");
+    let role = apply_role(&mut session, &request);
     assert_eq!(role, Some("floor"), "the role reports back");
-    let (texture, undo_len) = floor_theme(&state);
+    let (texture, undo_len) = floor_theme(&session);
     assert_eq!(texture.as_deref(), Some("MYFLAT"), "the theme points at it");
-    assert_eq!(undo_len, 1_usize, "only the seed edit stands");
+    assert_eq!(undo_len, 0_usize, "the override records no edit");
+    let plain = parse_create_flat(&args()).expect("valid");
+    assert_eq!(apply_role(&mut session, &plain), None, "no role, no word");
+}
+
+/// A built flat with dummy bytes for the land tests.
+fn built_flat() -> BuiltFlat {
+    BuiltFlat {
+        data: vec![7_u8; 4096],
+        preview_png: Vec::new(),
+        steps: Vec::new(),
+        colors_used: 1,
+        max_color_error: 0,
+        warnings: Vec::new(),
+    }
+}
+
+#[test]
+fn one_land_sees_the_flat_the_previous_land_placed() {
+    // Two create-flat calls over one name interleave the way concurrency
+    // puts them: both pictures are built (the runs' outside-the-lock half)
+    // first, the first lands whole, and only then does the second land.
+    // The clash check runs inside the same lock as its commit, so the
+    // second land reads the first's lump: with `replace` it reports the
+    // override it could only guess at from a stale pre-fetch scan.
+    let mut session = Session::default();
+    let built = built_flat();
+    let first = parse_create_flat(&args()).expect("valid");
+    let landed_a = land_flat(&mut session, &first, &built).expect("A lands");
+    assert!(
+        !landed_a.overrides_existing,
+        "the name was free when A landed"
+    );
+    let mut second = parse_create_flat(&args()).expect("valid");
+    second.replace = true;
+    let landed_b = land_flat(&mut session, &second, &built).expect("B overrides");
+    assert!(
+        landed_b.overrides_existing,
+        "B's check reads A's landed flat from the one lock"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec![
+            "create_flat MYFLAT".to_owned(),
+            "create_flat MYFLAT".to_owned()
+        ],
+        "two undoable steps"
+    );
+    let mut clash = parse_create_flat(&args()).expect("valid");
+    clash.role = Some(Role::Ceiling);
+    let refused = land_flat(&mut session, &clash, &built).expect_err("C meets a twin");
+    assert_eq!(code(&refused), "already_exists", "the clash check moved in");
+    let (theme, edits) = floor_theme(&session);
+    assert!(
+        theme.is_none() && edits == 2_usize,
+        "C wrote nothing anywhere: {theme:?} {edits}"
+    );
 }
 
 /// The session's undo labels.

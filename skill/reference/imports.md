@@ -496,10 +496,12 @@ canonical operation reference.
   palette colour nearest to black and a `warning` counts them (for a masked
   patch use `import_image_as_patch`).
 - Collisions refuse **before anything is written**: a patch lump
-  `patch_name` a lower (`IWAD` or resource) layer holds and the working
-  archive does not is `already_exists` (`pass patch_name` for another, or
-  `replace=true` to write a working override), and a `name` the merged view
-  already defines is `already_exists` unless `replace=true`.
+  `patch_name` a lower (`IWAD` or resource) layer holds as a patch and the
+  working archive's patches region does not is `already_exists` (a
+  same-named lump in another working region is no twin and does not hide
+  the layer's; `pass patch_name` for another name, or `replace=true` to
+  write a working override), and a `name` the merged view already defines
+  is `already_exists` unless `replace=true`.
 - Returns:
 
   ```json

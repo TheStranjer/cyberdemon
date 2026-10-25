@@ -1,19 +1,21 @@
 //! Unit tests of the imports group: the shared name and region helpers the
 //! patch and raw imports parse with, the `PNAMES` plan both the imports
-//! and the patch lifecycle tools build their writes from, and the flat
-//! import's argument parsing, shape fitting and alpha counting.
+//! and the patch lifecycle tools build their writes from and that the
+//! patch import's single-lock `land_patch` step recomputes at the commit,
+//! and the flat import's argument parsing, shape fitting and alpha
+//! counting.
 
 use super::flat::{
     ImportFlatParams, ResizeChoice, fit_flat_shape, parse_flat, parse_flat_size, parse_resize,
     transparent_alpha_pixels,
 };
-use super::patch::ImportRawParams;
+use super::image_pipeline::{ImportReport, Patched};
+use super::patch::{ImportRawParams, PatchReport, land_patch};
 use super::{chosen, current_pnames, namespace_names, parse_namespace, pnames_plan, position_of};
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::dither::Dither;
 use crate::session::Session;
-use crate::state::AppState;
 use crate::wad::archive::Lump;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
@@ -108,27 +110,17 @@ fn seed_pnames_session(session: &mut Session, texts: &[&str]) {
         .expect("plain append");
 }
 
-/// Seeds a state's working archive with a `PNAMES` lump.
-fn seed_pnames_state(state: &AppState, texts: &[&str]) {
-    state
-        .with_session(|session| {
-            seed_pnames_session(session, texts);
-            Ok(())
-        })
-        .expect("the seed edit runs");
-}
-
-#[tokio::test]
-async fn pnames_plans_keep_existing_entries_and_append_new_ones() {
-    let state = AppState::default();
-    seed_pnames_state(&state, &["WALLP1", "STEPP1"]);
+#[test]
+fn pnames_plans_keep_existing_entries_and_append_new_ones() {
+    let mut session = Session::default();
+    seed_pnames_session(&mut session, &["WALLP1", "STEPP1"]);
     assert!(
-        pnames_plan(&state, name("NEW"), Some(false))
+        pnames_plan(&session, name("NEW"), Some(false))
             .expect("off stays off")
             .is_none(),
         "add_to_pnames false writes nothing"
     );
-    let kept = pnames_plan(&state, name("wallp1"), None)
+    let kept = pnames_plan(&session, name("wallp1"), None)
         .expect("existing")
         .expect("planned");
     assert_eq!(
@@ -136,11 +128,79 @@ async fn pnames_plans_keep_existing_entries_and_append_new_ones() {
         "the existing entry answers with its index"
     );
     assert!(kept.bytes.is_none(), "the list does not change");
-    let added = pnames_plan(&state, name("NEWART"), None)
+    let added = pnames_plan(&session, name("NEWART"), None)
         .expect("appended")
         .expect("planned");
     assert_eq!(added.index, 2_usize, "the new entry lands last");
     assert!(added.bytes.is_some(), "the grown list gets written");
+}
+
+/// A staged patch import: fixed bytes and the pipeline facts a landing
+/// reports, no real picture behind it.
+fn patched(text: &str) -> Patched {
+    Patched {
+        name: name(text),
+        data: vec![1_u8, 2, 3],
+        report: ImportReport {
+            width: 2_u32,
+            height: 3_u32,
+            left_offset: 0_i32,
+            top_offset: 0_i32,
+            transparent_pixels: 0_usize,
+            colors_used: 1_usize,
+            max_color_error: 0_i32,
+        },
+    }
+}
+
+/// One [`PatchReport`]'s `name` and `pnames_index`, read through the
+/// result's own serialization.
+fn landed_report(report: &PatchReport) -> (String, Option<usize>) {
+    let value = serde_json::to_value(report).expect("a report serializes");
+    (
+        value["name"].as_str().unwrap_or_default().to_owned(),
+        value["pnames_index"]
+            .as_u64()
+            .map(|index| usize::try_from(index).expect("test indices fit usize")),
+    )
+}
+
+#[test]
+fn two_patch_lands_after_both_stages_keep_both_pnames_entries() {
+    // The runs stage their pictures - fetch, decode, quantize - outside
+    // every lock and land them through one `with_session` closure. This
+    // test freezes that seam: both pictures are staged first, then the
+    // second lands - mutating the session between the first call's staging
+    // and its commit - and only then the first lands. Because plan and
+    // commit share the one [`land_patch`] lock, each plan reads the list
+    // exactly as its commit finds it, and both entries survive.
+    let mut session = Session::default();
+    seed_pnames_session(&mut session, &["WALLP1", "STEPP1"]);
+    let first = patched("MYA");
+    let second = patched("MYB");
+    let landed_b = landed_report(&land_patch(&mut session, second, None, false).expect("B lands"));
+    let landed_a = landed_report(&land_patch(&mut session, first, None, false).expect("A lands"));
+    assert_eq!(
+        landed_b,
+        ("MYB".to_owned(), Some(2_usize)),
+        "B appended first"
+    );
+    assert_eq!(landed_a, ("MYA".to_owned(), Some(3_usize)), "A after B");
+    assert_eq!(
+        current_pnames(&session).expect("the list decodes"),
+        vec![
+            "WALLP1".to_owned(),
+            "STEPP1".to_owned(),
+            "MYB".to_owned(),
+            "MYA".to_owned(),
+        ],
+        "neither land overwrote the other's entry"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec!["import_patch MYA", "import_patch MYB", "seed"],
+        "two separate undoable steps"
+    );
 }
 
 /// The raw arguments' wire shape deserializes with the documented flags.

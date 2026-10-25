@@ -170,16 +170,12 @@ pub(super) fn make_built(width: u32, height: u32) -> Built {
     }
 }
 
-/// The session's override for `role` and its undo labels, as read back.
-pub(super) fn theme_state(state: &AppState, role: Role) -> (Option<String>, usize) {
-    state
-        .with_session(move |session| {
-            Ok((
-                session.texture_theme().overrides.get(&role).cloned(),
-                session.undo_labels().len(),
-            ))
-        })
-        .expect("the read runs")
+/// The session's override for `role` and its undo depth, as read back.
+pub(super) fn theme_state(session: &Session, role: Role) -> (Option<String>, usize) {
+    (
+        session.texture_theme().overrides.get(&role).cloned(),
+        session.undo_labels().len(),
+    )
 }
 
 /// Seeds `state`'s session with a PLAYPAL-only `IWAD` layer.

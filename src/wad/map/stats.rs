@@ -17,6 +17,7 @@ use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::consts::{NO_TEXTURE, PLAYER_START_TYPES};
+use crate::wad::map::nodes::{NodeMagic, lump_format};
 use crate::wad::name::LumpName;
 
 /// Bytes in one vanilla `SEGS` record.
@@ -25,8 +26,6 @@ const SEG_RECORD_BYTES: usize = 12;
 const SSECTOR_RECORD_BYTES: usize = 4;
 /// Bytes in one vanilla `NODES` record.
 const NODE_RECORD_BYTES: usize = 28;
-/// Length of the magic number an extended node lump starts with.
-const MAGIC_LEN: usize = 4;
 /// Longest `things_by_type` list a summary carries.
 const THING_TYPE_ROWS: usize = 50;
 
@@ -122,9 +121,10 @@ pub struct NodeSummary {
     /// `NODES` records, like [`NodeSummary::segs`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nodes: Option<usize>,
-    /// The four uppercase letters the `NODES` lump starts with (`XNOD`,
-    /// `ZNOD`, `XGLN`, `ZGLN`, ...) when it holds extended rather than
-    /// vanilla node data; the three record counts are absent then.
+    /// The four letters of the node magic the `NODES` lump starts with
+    /// (`XNOD`, `ZNOD`, `XGLN`, `ZGL2`, `XGL3`, ...; see
+    /// [`crate::wad::map::nodes::NodeMagic`]) when it holds extended rather
+    /// than vanilla node data; the three record counts are absent then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nodes_format: Option<String>,
     /// `REJECT` size in bytes.
@@ -167,10 +167,11 @@ pub struct MapSummary {
 
 /// Summarizes `map` alongside the member lumps `node_lumps` of its block.
 ///
-/// Vanilla node records are counted from their sizes, an extended `NODES`
-/// lump reports its magic instead, and `ZNODES` and `GL_` lumps report
-/// presence. A block that repeats a member name is read last-match-wins,
-/// the way an engine reads one.
+/// Vanilla node records are counted from their sizes. A `NODES` lump whose
+/// head names one of [`crate::wad::map::nodes::NodeMagic`]'s magics reports
+/// that magic instead of the three counts, and `ZNODES` and `GL_` lumps
+/// report presence. A block that repeats a member name is read
+/// last-match-wins, the way an engine reads one.
 #[must_use]
 #[inline]
 pub fn summarize(map: &Map, node_lumps: &[Lump]) -> MapSummary {
@@ -323,8 +324,8 @@ fn node_summary(node_lumps: &[Lump]) -> NodeSummary {
     let nodes_lump = lump_named(node_lumps, lumps::NODES);
     let nodes_bytes = nodes_lump.map_or(0, Lump::size);
     let znodes_lump = lump_named(node_lumps, lumps::ZNODES);
-    let magic = nodes_lump.and_then(|lump| lump_magic(&lump.data));
-    let (segs, subsectors, nodes) = if magic.is_none() {
+    let magic = nodes_lump.map_or(NodeMagic::Vanilla, |lump| lump_format(&lump.data));
+    let (segs, subsectors, nodes) = if magic == NodeMagic::Vanilla {
         let segs_bytes = lump_named(node_lumps, lumps::SEGS).map_or(0, Lump::size);
         let subsector_bytes = lump_named(node_lumps, lumps::SSECTORS).map_or(0, Lump::size);
         (
@@ -340,7 +341,7 @@ fn node_summary(node_lumps: &[Lump]) -> NodeSummary {
         segs,
         subsectors,
         nodes,
-        nodes_format: magic,
+        nodes_format: magic.stored_name().map(str::to_owned),
         reject_bytes: lump_named(node_lumps, lumps::REJECT).map_or(0, Lump::size),
         blockmap_bytes: lump_named(node_lumps, lumps::BLOCKMAP).map_or(0, Lump::size),
         kinds: NodeKinds {
@@ -365,17 +366,6 @@ const fn record_count(bytes: usize, record_bytes: usize) -> usize {
     }
 }
 
-/// The four uppercase letters a node lump starts with, or `None` for
-/// vanilla record data.
-fn lump_magic(data: &[u8]) -> Option<String> {
-    let head = data.get(..MAGIC_LEN)?;
-    if head.iter().all(u8::is_ascii_uppercase) {
-        String::from_utf8(head.to_vec()).ok()
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -384,10 +374,38 @@ mod tests {
     use crate::wad::classify::MapFormat;
     use crate::wad::map::common::fixtures::{lump, marker, name, spawn, two_room_map};
     use crate::wad::map::model::{Map, Thing};
+    use crate::wad::map::nodes::NodeMagic;
+
+    /// Every node magic with the lowercase name it reports as: the pairs a
+    /// `NODES` lump must be read by, digits and all.
+    const NODE_MAGICS: [(&str, &str); 8] = [
+        ("XNOD", "xnod"),
+        ("ZNOD", "znod"),
+        ("XGLN", "xgln"),
+        ("ZGLN", "zgln"),
+        ("XGL2", "xgl2"),
+        ("ZGL2", "zgl2"),
+        ("XGL3", "xgl3"),
+        ("ZGL3", "zgl3"),
+    ];
 
     /// Serialize the summary of `map` over its own block lumps.
     fn value_of(map: &Map) -> Value {
         serde_json::to_value(summarize(map, &map.other)).expect("a summary serializes")
+    }
+
+    /// The `nodes` object of a built block whose `NODES` lump starts with
+    /// `letters` and whose `SEGS` and `SSECTORS` hold whole records.
+    fn nodes_of_a_lump_starting_with(letters: &str) -> Value {
+        let mut data = letters.as_bytes().to_vec();
+        data.extend_from_slice(b" and a payload past the magic");
+        let mut map = Map::new_empty(name("MAP01"), MapFormat::Doom);
+        map.other = vec![
+            lump("SEGS", &[0_u8; 24]),
+            lump("SSECTORS", &[0_u8; 8]),
+            lump("NODES", &data),
+        ];
+        value_of(&map)["nodes"].clone()
     }
 
     /// The complete expected summary of [`two_room_map`].
@@ -542,30 +560,53 @@ mod tests {
     }
 
     #[test]
-    fn an_extended_nodes_lump_reports_its_magic_instead_of_counts() {
-        let mut extended = Map::new_empty(name("MAP01"), MapFormat::Doom);
-        extended.other = vec![
-            marker("SEGS"),
-            lump("NODES", b"XNOD rest of an extended lump"),
-        ];
-        let summary = value_of(&extended);
-        assert_eq!(summary["nodes"]["nodes_format"], json!("XNOD"), "the magic");
-        assert_eq!(summary["nodes"]["present"], json!(true), "it carries bytes");
+    fn every_known_node_magic_replaces_the_counts_with_its_letters() {
+        assert_eq!(
+            NODE_MAGICS.len(),
+            NodeMagic::ALL.len(),
+            "the table covers every magic the shared sniffer knows",
+        );
+        for (stored, reported) in NODE_MAGICS {
+            let nodes = nodes_of_a_lump_starting_with(stored);
+            assert_eq!(
+                nodes["nodes_format"],
+                json!(stored),
+                "{reported} reports its own letters",
+            );
+            assert_eq!(nodes["present"], json!(true), "{reported} carries bytes");
+            counts_replaced(&nodes, reported);
+        }
+    }
+
+    /// Requires the three vanilla record counts to be gone from `nodes`,
+    /// the way a magic replaces them.
+    fn counts_replaced(nodes: &Value, reported: &str) {
         for key in ["segs", "subsectors", "nodes"] {
             assert!(
-                summary["nodes"].get(key).is_none(),
-                "the counts are replaced: {key} must be absent",
+                nodes.get(key).is_none(),
+                "{reported} replaces the count {key}: {nodes}",
             );
         }
+    }
+
+    #[test]
+    fn a_nodes_lump_starting_with_letters_no_magic_names_stays_records() {
+        let mut unknown = Map::new_empty(name("MAP01"), MapFormat::Doom);
+        unknown.other = vec![lump("NODES", b"AAAA plus twenty more record bytes")];
+        let nodes = value_of(&unknown)["nodes"].clone();
+        assert!(
+            nodes.get("nodes_format").is_none(),
+            "no known magic means no format key: {nodes}",
+        );
+        assert_eq!(nodes["nodes"], json!(1_u64), "the 34 bytes hold one record");
         let mut lowercase = Map::new_empty(name("MAP01"), MapFormat::Doom);
         lowercase.other = vec![lump("NODES", b"xnod but lowercase is plain data")];
         let plain = value_of(&lowercase)["nodes"].clone();
-        assert_eq!(
-            plain["nodes"],
-            json!(1_u64),
-            "no magic: 32 bytes hold one record",
+        assert_eq!(plain["nodes"], json!(1_u64), "32 bytes hold one record");
+        assert!(
+            plain.get("nodes_format").is_none(),
+            "and a lowercase head is no magic: {plain}",
         );
-        assert!(plain.get("nodes_format").is_none(), "and no format key");
     }
 
     #[test]

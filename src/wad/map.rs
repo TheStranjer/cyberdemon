@@ -112,8 +112,8 @@ pub use blockmap::Blockmap;
 pub use flags::{FlagFamily, FlagKind, Skill};
 pub use model::{Endpoints, Linedef, Map, Sector, Sidedef, Thing, Vertex};
 pub use nodes::{
-    BoundingBox, Child, Node, NodeSet, NodesFormat, Seg, Subsector, lump_format,
-    parse_extended_nodes, parse_vanilla_nodes,
+    BoundingBox, Child, Node, NodeMagic, NodeSet, NodesFormat, Seg, Subsector, lump_format,
+    lump_head, parse_extended_nodes, parse_vanilla_nodes,
 };
 pub use reject::Reject;
 pub use remove::{

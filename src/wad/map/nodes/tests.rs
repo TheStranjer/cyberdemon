@@ -3,11 +3,27 @@
 //! shapes.
 
 use super::{
-    BoundingBox, Child, NODE_MAGICS, Node, Seg, Subsector, extended::extended_child, lump_format,
-    parse_extended_nodes, parse_vanilla_nodes, vanilla::vanilla_child,
+    BoundingBox, Child, Node, NodeMagic, Seg, Subsector, extended::extended_child, lump_format,
+    lump_head, parse_extended_nodes, parse_vanilla_nodes, vanilla::vanilla_child,
 };
 use crate::fixed::Fixed;
 use crate::wad::bytes::Writer;
+
+/// One node magic with the letters it is stored as and the name it reports.
+type MagicRow = (NodeMagic, &'static [u8; 4], &'static str);
+
+/// Every magic the sniffer knows, spelled out: the digits of the `GL`
+/// variants are the point, and `Vanilla` is the absence of all of them.
+const MAGIC_ROWS: [MagicRow; 8] = [
+    (NodeMagic::Xnod, b"XNOD", "xnod"),
+    (NodeMagic::Znod, b"ZNOD", "znod"),
+    (NodeMagic::Xgln, b"XGLN", "xgln"),
+    (NodeMagic::Zgln, b"ZGLN", "zgln"),
+    (NodeMagic::Xgl2, b"XGL2", "xgl2"),
+    (NodeMagic::Zgl2, b"ZGL2", "zgl2"),
+    (NodeMagic::Xgl3, b"XGL3", "xgl3"),
+    (NodeMagic::Zgl3, b"ZGL3", "zgl3"),
+];
 
 /// Appends one 12-byte vanilla `SEGS` record.
 fn put_seg(w: &mut Writer, fields: (u16, u16, i16, u16, i16, i16)) {
@@ -378,23 +394,99 @@ fn extended_subsector_totals_must_match_the_segs() {
 
 #[test]
 fn lump_format_names_every_known_magic() {
-    for (magic, name) in NODE_MAGICS {
-        assert_eq!(lump_format(magic), Some(name), "the bare {name:?} magic");
-        let mut with_payload = magic.to_vec();
-        with_payload.extend_from_slice(b"more bytes follow");
+    assert_eq!(
+        MAGIC_ROWS.len(),
+        NodeMagic::ALL.len(),
+        "the rows cover every magic the sniffer knows",
+    );
+    for (magic, letters, reported) in MAGIC_ROWS {
+        assert_eq!(lump_format(letters), magic, "the bare {letters:?} magic");
+        assert_eq!(magic.as_str(), reported, "{letters:?} reports {reported:?}");
         assert_eq!(
-            lump_format(&with_payload),
-            Some(name),
-            "{name:?} plus payload"
+            magic.bytes(),
+            Some(letters),
+            "{reported} stores its own letters"
+        );
+        let stored = magic.stored_name().expect("a magic names four letters");
+        assert_eq!(
+            stored.as_bytes(),
+            letters.as_slice(),
+            "{reported} is reported as the stored {stored:?}",
+        );
+        let mut with_payload = letters.to_vec();
+        with_payload.extend_from_slice(b"more bytes follow");
+        assert_eq!(lump_format(&with_payload), magic, "{reported} plus payload");
+    }
+}
+
+#[test]
+fn only_the_two_zdoom_magics_parse_and_the_rest_are_gl_family() {
+    for (magic, letters, _) in MAGIC_ROWS {
+        let zdoom = letters == b"XNOD" || letters == b"ZNOD";
+        assert_eq!(
+            magic.is_extended(),
+            zdoom,
+            "{letters:?} parses as an extended run exactly when ZDoom wrote it",
+        );
+        assert_eq!(
+            magic.is_gl(),
+            !zdoom,
+            "{letters:?} is a reported-only GL magic otherwise",
         );
     }
-    assert_eq!(lump_format(b""), None, "no bytes, no magic");
-    assert_eq!(lump_format(b"abc"), None, "three bytes are no magic");
+    assert!(
+        !NodeMagic::Vanilla.is_extended() && !NodeMagic::Vanilla.is_gl(),
+        "plain record data is neither",
+    );
+}
+
+#[test]
+fn record_data_and_short_heads_sniff_as_vanilla() {
+    assert_eq!(lump_format(b""), NodeMagic::Vanilla, "no bytes, no magic");
+    assert_eq!(
+        lump_format(b"abc"),
+        NodeMagic::Vanilla,
+        "three bytes are no magic",
+    );
     assert_eq!(
         lump_format(b"NODE"),
-        None,
-        "vanilla record data stays unnamed"
+        NodeMagic::Vanilla,
+        "vanilla record data stays unnamed",
     );
+    assert_eq!(
+        lump_format(b"xnod and a payload"),
+        NodeMagic::Vanilla,
+        "the magics are stored uppercase",
+    );
+    assert_eq!(
+        lump_format(b"WTF? and a payload"),
+        NodeMagic::Vanilla,
+        "an unknown head is plain data to the sniffer",
+    );
+    assert_eq!(
+        NodeMagic::Vanilla.as_str(),
+        "vanilla",
+        "the report name of plain records",
+    );
+    assert_eq!(NodeMagic::Vanilla.bytes(), None, "and no letters");
+    assert_eq!(NodeMagic::Vanilla.stored_name(), None, "and no stored name");
+}
+
+#[test]
+fn lump_head_reports_the_letters_a_lump_starts_with() {
+    assert_eq!(
+        lump_head(b"gNd2 rest").as_deref(),
+        Some("gNd2"),
+        "a glBSP magic keeps its case",
+    );
+    assert_eq!(
+        lump_head(b"XGL3 rest").as_deref(),
+        Some("XGL3"),
+        "a node magic's letters read the same way",
+    );
+    assert_eq!(lump_head(b"..!"), None, "too short");
+    assert_eq!(lump_head(b"\x01\x02\x03\x04"), None, "not letters");
+    assert_eq!(lump_head(b"a_b3"), None, "an underscore is no letter");
 }
 
 #[test]

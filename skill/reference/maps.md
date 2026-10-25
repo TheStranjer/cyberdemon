@@ -162,9 +162,11 @@ all share one contract, and each result carries the fragment
     "blockmap_bytes", "znodes", "gl"}` from the block's lump sizes.
     `present` needs bytes in `NODES` or `ZNODES`; `segs`, `subsectors`
     and `nodes` are vanilla record counts (`SEGS`/12, `SSECTORS`/4,
-    `NODES`/28). When `NODES` starts with an extended-format magic
-    (`XNOD`, `ZNOD`, `XGLN`, `ZGLN`, ...) those three counts are replaced
-    by `"nodes_format"` carrying the four-letter magic. `znodes` is true
+    `NODES`/28). When `NODES` starts with one of the eight extended-format
+    magics (`XNOD`, `ZNOD`, `XGLN`, `ZGLN`, `XGL2`, `ZGL2`, `XGL3`,
+    `ZGL3`) those three counts are replaced by `"nodes_format"` carrying
+    the four letters as stored. Any other `NODES` payload, letters or not,
+    counts as vanilla records. `znodes` is true
     when a `ZNODES` lump exists, `gl` when a `GL_` lump does.
 - Errors: `invalid_argument` (unparsable `map`, unknown `scope`, or no map
   resolvable), `not_found` (no such map block in the scope, or the layer

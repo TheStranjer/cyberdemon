@@ -7,8 +7,7 @@
 use crate::session::Scope;
 use crate::tools::maps::common::Directory;
 use crate::tools::nodes::get_nodes::{
-    GlInfo, NodeData, gl_info, lump_magic, nodes_asset_body, nodes_outcome, nodes_run,
-    read_node_data,
+    GlInfo, NodeData, gl_info, nodes_asset_body, nodes_outcome, nodes_run, read_node_data,
 };
 use crate::tools::nodes::get_tables::{
     blockmap_run, blockmap_summary, empty_blockmap_report, reject_run,
@@ -51,21 +50,6 @@ fn parse_detail_accepts_the_two_names_and_defaults_to_summary() {
 }
 
 #[test]
-fn lump_magic_needs_four_printable_letters() {
-    assert_eq!(
-        lump_magic(b"gNd2 rest").as_deref(),
-        Some("gNd2"),
-        "a glBSP magic"
-    );
-    assert_eq!(lump_magic(b"..!").as_deref(), None, "too short");
-    assert_eq!(
-        lump_magic(b"\x01\x02\x03\x04").as_deref(),
-        None,
-        "not printable"
-    );
-}
-
-#[test]
 fn read_node_data_sorts_the_block_into_its_three_shapes() {
     let empty = Map::default();
     assert!(matches!(
@@ -94,6 +78,46 @@ fn read_node_data_sorts_the_block_into_its_three_shapes() {
             assert_eq!(bytes, 22, "the lump size travels with it");
         }
         NodeData::Empty | NodeData::Parsed { .. } => panic!("expected a GL magic"),
+    }
+}
+
+#[test]
+fn every_gl_magic_in_nodes_reports_itself_and_stays_unparsed() {
+    for (stored, reported) in [
+        ("XGLN", "xgln"),
+        ("ZGLN", "zgln"),
+        ("XGL2", "xgl2"),
+        ("ZGL2", "zgl2"),
+        ("XGL3", "xgl3"),
+        ("ZGL3", "zgl3"),
+    ] {
+        let mut data = stored.as_bytes().to_vec();
+        data.extend_from_slice(b" a run this reader never touches");
+        let block = Map {
+            other: vec![lump("NODES", &data)],
+            ..Map::default()
+        };
+        let read = read_node_data(&block).expect("a GL magic is data, not an error");
+        let NodeData::GlMagic { format, bytes } = read else {
+            panic!("{stored} reports its magic, nothing parses: {read:?}");
+        };
+        assert_eq!(format, reported, "{stored} reports the lowercase name");
+        assert_eq!(bytes, data.len(), "the lump size travels with it");
+    }
+}
+
+#[test]
+fn a_gl_magic_in_znodes_reports_itself_too() {
+    let block = Map {
+        other: vec![marker("NODES"), lump("ZNODES", b"XGL3 a run in ZNODES")],
+        ..Map::default()
+    };
+    match read_node_data(&block).expect("a ZNODES GL magic is data") {
+        NodeData::GlMagic { format, bytes } => {
+            assert_eq!(format, "xgl3", "the lowercase magic of the right lump");
+            assert_eq!(bytes, 20, "the ZNODES lump's own size");
+        }
+        NodeData::Empty | NodeData::Parsed { .. } => panic!("a GL magic never parses"),
     }
 }
 

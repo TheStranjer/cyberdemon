@@ -1,8 +1,10 @@
 //! The `get_map_summary` overview and the `set_active_map` selection it
 //! shares with every map tool: the whole fixture summary and the working
 //! copy after a raw lump replace, the `UDMF` and `Hexen` node shapes, the
-//! unknown-map, no-default, bad-scope and empty-session refusals and the
-//! selection's parsing, clearing and `get_session_info` report.
+//! `XGL3` magic a replaced `NODES` lump reports as a format instead of
+//! vanilla counts, the unknown-map, no-default, bad-scope and
+//! empty-session refusals and the selection's parsing, clearing and
+//! `get_session_info` report.
 //!
 //! The expected summary body is `summary_json` here; the loaded fixtures
 //! come from [`crate::maps`].
@@ -117,6 +119,43 @@ async fn get_map_summary_covers_the_udmf_and_hexen_node_shapes() {
         }),
         "8 NODES bytes are present but hold no whole vanilla record",
     );
+}
+
+#[tokio::test]
+async fn get_map_summary_reads_a_gl_magic_in_nodes_as_a_format_not_as_records() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = formats_loaded(dir.path()).await;
+    let before = call(&client, "get_map_summary", json!({ "map": "MAP04" })).await;
+    assert_eq!(
+        before["nodes"]["nodes"],
+        json!(0_u64),
+        "8 plain bytes are no whole 28-byte record",
+    );
+    call(
+        &client,
+        "replace_lump",
+        json!({ "name": "NODES", "text": "XGL3 a run no reader here touches" }),
+    )
+    .await;
+    let summary = call(&client, "get_map_summary", json!({ "map": "MAP04" })).await;
+    assert_eq!(
+        summary["nodes"]["nodes_format"],
+        json!("XGL3"),
+        "the digits of the magic do not hide it",
+    );
+    assert_eq!(summary["nodes"]["present"], json!(true), "it carries bytes");
+    for key in ["segs", "subsectors", "nodes"] {
+        assert!(
+            summary["nodes"].get(key).is_none(),
+            "the format replaces the vanilla counts: {key} must be absent in {}",
+            summary["nodes"],
+        );
+    }
+    let read = call(&client, "get_nodes", json!({ "map": "MAP04" })).await;
+    assert_eq!(read["format"], json!("xgl3"), "the nodes tool's own name");
+    assert_eq!(read["bytes"], json!(33_u64), "the replaced lump's size");
+    assert_eq!(read["segs"], Value::Null, "a GL run is never parsed");
+    assert_eq!(read["depth"], Value::Null, "and has no tree to measure");
 }
 
 #[tokio::test]

@@ -22,13 +22,12 @@ use crate::session::Session;
 use crate::tools::maps::common::Directory;
 use crate::wad::classify::MapBlock;
 use crate::wad::lumps;
-use crate::wad::map::nodes::{self, Node, NodesFormat, Seg, Subsector};
+use crate::wad::map::nodes::{self, Node, NodeMagic, NodesFormat, Seg, Subsector};
 use crate::wad::map::{Map, NodeSet};
 use crate::wad::name::LumpName;
 
 use super::{
-    Detail, JSON_EXTENSION, MAGIC_LEN, Publish, Read, Request, find_lump, json_bytes, lump_bytes,
-    open_map,
+    Detail, JSON_EXTENSION, Publish, Read, Request, find_lump, json_bytes, lump_bytes, open_map,
 };
 
 /// Arguments for [`Cyberdemon::get_nodes`].
@@ -81,27 +80,35 @@ pub(super) enum NodeData {
 /// starts without an extended magic.
 pub(super) fn read_node_data(map: &Map) -> Result<NodeData, CyberError> {
     let nodes_bytes = lump_bytes(&map.other, lumps::NODES);
-    if !nodes_bytes.is_empty() {
-        return Ok(match nodes::lump_format(nodes_bytes) {
-            None => NodeData::Parsed {
-                set: nodes::parse_vanilla_nodes(
-                    lump_bytes(&map.other, lumps::SEGS),
-                    lump_bytes(&map.other, lumps::SSECTORS),
-                    nodes_bytes,
-                )?,
-                bytes: nodes_bytes.len(),
-            },
-            Some("xnod" | "znod") => NodeData::Parsed {
-                set: nodes::parse_extended_nodes(nodes_bytes)?,
-                bytes: nodes_bytes.len(),
-            },
-            Some(other) => NodeData::GlMagic {
-                format: other,
-                bytes: nodes_bytes.len(),
-            },
+    if nodes_bytes.is_empty() {
+        return read_znodes(map);
+    }
+    let bytes = nodes_bytes.len();
+    let magic = nodes::lump_format(nodes_bytes);
+    if magic.is_gl() {
+        return Ok(NodeData::GlMagic {
+            format: magic.as_str(),
+            bytes,
         });
     }
-    read_znodes(map)
+    Ok(NodeData::Parsed {
+        set: read_run(map, magic, nodes_bytes)?,
+        bytes,
+    })
+}
+
+/// The run a magicless or extended `NODES` lump names: the one extended
+/// payload [`nodes::parse_extended_nodes`] reads, or the three vanilla
+/// record lumps read together.
+fn read_run(map: &Map, magic: NodeMagic, nodes_bytes: &[u8]) -> Result<NodeSet, CyberError> {
+    if magic.is_extended() {
+        return nodes::parse_extended_nodes(nodes_bytes);
+    }
+    nodes::parse_vanilla_nodes(
+        lump_bytes(&map.other, lumps::SEGS),
+        lump_bytes(&map.other, lumps::SSECTORS),
+        nodes_bytes,
+    )
 }
 
 /// The `ZNODES` node run of a block whose `NODES` lump holds no bytes.
@@ -110,21 +117,24 @@ fn read_znodes(map: &Map) -> Result<NodeData, CyberError> {
     else {
         return Ok(NodeData::Empty);
     };
-    match nodes::lump_format(&znodes.data) {
-        Some("xnod" | "znod") => Ok(NodeData::Parsed {
+    let magic = nodes::lump_format(&znodes.data);
+    if magic.is_gl() {
+        return Ok(NodeData::GlMagic {
+            format: magic.as_str(),
+            bytes: znodes.size(),
+        });
+    }
+    if magic.is_extended() {
+        return Ok(NodeData::Parsed {
             set: nodes::parse_extended_nodes(&znodes.data)?,
             bytes: znodes.size(),
-        }),
-        Some(other) => Ok(NodeData::GlMagic {
-            format: other,
-            bytes: znodes.size(),
-        }),
-        None => Err(CyberError::Format(
-            "the ZNODES lump starts without an XNOD or ZNOD magic: ZNODES \
-             always holds extended node data; rebuild the nodes"
-                .to_owned(),
-        )),
+        });
     }
+    Err(CyberError::Format(
+        "the ZNODES lump starts without an XNOD or ZNOD magic: ZNODES \
+         always holds extended node data; rebuild the nodes"
+            .to_owned(),
+    ))
 }
 
 /// The attached `GL` node block of one map, as reported.
@@ -230,7 +240,7 @@ pub(super) fn gl_info(dir: &Directory, block: &MapBlock) -> GlInfo {
         };
         lumps.insert(lump.name.to_string(), lump.size());
         if lump.name.as_bytes() == b"GL_VERT" {
-            magic = magic.or_else(|| lump_magic(&lump.data));
+            magic = magic.or_else(|| nodes::lump_head(&lump.data));
         }
     }
     let counts = gl_counts(magic.as_deref(), &lumps);
@@ -243,14 +253,6 @@ pub(super) fn gl_info(dir: &Directory, block: &MapBlock) -> GlInfo {
         vertices: counts.vertices,
         lumps,
     }
-}
-
-/// The four printable-`ASCII` letters a lump starts with, when it does.
-pub(super) fn lump_magic(data: &[u8]) -> Option<String> {
-    let head = data.get(..MAGIC_LEN)?;
-    head.iter()
-        .all(u8::is_ascii_alphanumeric)
-        .then(|| String::from_utf8_lossy(head).into_owned())
 }
 
 /// Structured result of [`Cyberdemon::get_nodes`].

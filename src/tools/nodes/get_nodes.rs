@@ -21,6 +21,7 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common::Directory;
 use crate::wad::classify::MapBlock;
+use crate::wad::lumps;
 use crate::wad::map::nodes::{self, Node, NodesFormat, Seg, Subsector};
 use crate::wad::map::{Map, NodeSet};
 use crate::wad::name::LumpName;
@@ -79,13 +80,13 @@ pub(super) enum NodeData {
 /// [`CyberError::Format`] results, and the same for a `ZNODES` lump that
 /// starts without an extended magic.
 pub(super) fn read_node_data(map: &Map) -> Result<NodeData, CyberError> {
-    let nodes_bytes = lump_bytes(&map.other, b"NODES");
+    let nodes_bytes = lump_bytes(&map.other, lumps::NODES);
     if !nodes_bytes.is_empty() {
         return Ok(match nodes::lump_format(nodes_bytes) {
             None => NodeData::Parsed {
                 set: nodes::parse_vanilla_nodes(
-                    lump_bytes(&map.other, b"SEGS"),
-                    lump_bytes(&map.other, b"SSECTORS"),
+                    lump_bytes(&map.other, lumps::SEGS),
+                    lump_bytes(&map.other, lumps::SSECTORS),
                     nodes_bytes,
                 )?,
                 bytes: nodes_bytes.len(),
@@ -105,7 +106,8 @@ pub(super) fn read_node_data(map: &Map) -> Result<NodeData, CyberError> {
 
 /// The `ZNODES` node run of a block whose `NODES` lump holds no bytes.
 fn read_znodes(map: &Map) -> Result<NodeData, CyberError> {
-    let Some(znodes) = find_lump(&map.other, b"ZNODES").filter(|lump| !lump.data.is_empty()) else {
+    let Some(znodes) = find_lump(&map.other, lumps::ZNODES).filter(|lump| !lump.data.is_empty())
+    else {
         return Ok(NodeData::Empty);
     };
     match nodes::lump_format(&znodes.data) {

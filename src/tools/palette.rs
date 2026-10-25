@@ -32,16 +32,12 @@ use crate::gfx::codec::encode_png;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::palette::Palette;
 use crate::server::Cyberdemon;
-use crate::session::{MergedLump, Session};
+use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::palette::set::{SetPaletteParams, set_palette_run};
 use crate::tools::{fail, ok};
-use crate::wad::name::LumpName;
+use crate::wad::lumps;
 
-/// Raw directory bytes of the palette lump.
-const PLAYPAL_RAW: [u8; 8] = *b"PLAYPAL\0";
-/// Raw directory bytes of the colour translation lump.
-const COLORMAP_RAW: [u8; 8] = *b"COLORMAP";
 /// Bytes one palette occupies inside `PLAYPAL` (256 RGB triples).
 const PALETTE_BYTES: usize = 768;
 /// Colours in one palette.
@@ -126,16 +122,11 @@ pub(crate) fn load_palette(session: &Session, index: usize) -> Result<Palette, C
 /// [`CyberError::NotFound`] naming `open_iwad` when no loaded archive
 /// holds a `PLAYPAL` lump.
 fn require_playpal(session: &Session) -> Result<Vec<u8>, CyberError> {
-    let entry = find_global(session, PLAYPAL_RAW).ok_or_else(|| {
+    let entry = session.find_global(lumps::PLAYPAL).ok_or_else(|| {
         CyberError::NotFound("no PLAYPAL in the session; open an IWAD with open_iwad".to_owned())
             .with_hint("call open_iwad (game data) first, then new_wad or open_wad")
     })?;
     Ok(entry.lump.data.to_vec())
-}
-
-/// The merged view's last lump with the raw directory name `raw`.
-fn find_global(session: &Session, raw: [u8; 8]) -> Option<MergedLump> {
-    session.find(LumpName::from_raw(raw), None)
 }
 
 /// The 256x256 preview image: a 16x16 grid of 16-pixel cells in palette
@@ -175,7 +166,7 @@ fn get_palette_run(state: &AppState, index: usize) -> Result<GetPaletteReport, C
                 .chunks_exact(PALETTE_BYTES)
                 .count(),
             palette,
-            has_colormap: find_global(session, COLORMAP_RAW).is_some(),
+            has_colormap: session.find_global(lumps::COLORMAP).is_some(),
         })
     })?;
     let png = encode_png(&swatch_image(&loaded.palette)?, None)?;

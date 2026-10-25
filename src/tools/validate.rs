@@ -28,6 +28,7 @@ use crate::tools::textures::TextureSet;
 use crate::tools::{fail, ok};
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::game::Game;
+use crate::wad::lumps;
 use crate::wad::map::validate::{self, Context, Issue, ResourceIndex, Severity};
 use crate::wad::name::LumpName;
 
@@ -146,8 +147,8 @@ pub(in crate::tools) fn resource_index(session: &Session) -> Result<ResourceInde
     let dir = common::directory(session, Scope::Merged)?;
     let mut index = ResourceIndex::default();
     for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {
-        let raw = entry.lump.name.as_bytes();
-        if raw == b"TEXTURE1" || raw == b"TEXTURE2" {
+        let name = entry.lump.name;
+        if name == lumps::TEXTURE1 || name == lumps::TEXTURE2 {
             index.has_texture_defs = true;
         }
         if info.kind == LumpKind::Marker {

@@ -94,15 +94,13 @@ use crate::tools::imports::texture::{
 };
 use crate::tools::ok;
 use crate::wad::classify::Namespace;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::textures::{parse_pnames, write_pnames};
 
 pub(in crate::tools) use crate::tools::imports::flat::{
     DEFAULT_FLAT_SIZE, parse_flat_size, transparent_alpha_pixels,
 };
-
-/// Raw directory bytes of the patch-name lump.
-const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
 
 /// The `PNAMES` side of one patch import.
 pub(in crate::tools) struct PnamesPlan {
@@ -158,7 +156,7 @@ fn namespace_names() -> String {
 ///
 /// [`parse_pnames`]' [`CyberError::Format`] for a malformed lump.
 pub(in crate::tools) fn current_pnames(session: &Session) -> Result<Vec<String>, CyberError> {
-    let Some(entry) = session.find(LumpName::from_raw(PNAMES_RAW), None) else {
+    let Some(entry) = session.find_global(lumps::PNAMES) else {
         return Ok(Vec::new());
     };
     parse_pnames(&entry.lump.data)

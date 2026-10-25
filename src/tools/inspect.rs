@@ -389,13 +389,11 @@ fn optimize_run(state: &AppState, args: &OptimizeWadParams) -> Result<OptimizeRe
 ///
 /// # Errors
 ///
-/// [`CyberError::Internal`] never in practice: the [`optimize::apply`]
-/// step cannot fail, so only [`Session::edit`]'s lock-poisoning could.
+/// [`CyberError::Internal`] only from [`optimize::apply`]' vanished lump
+/// slot, which the plan it just made cannot hit; [`Session::edit`]'s
+/// lock-poisoning is the other half.
 fn commit_plan(session: &mut Session, plan: &Plan) -> Result<(), CyberError> {
-    session.edit("optimize_wad", |wad| {
-        optimize::apply(wad, plan);
-        Ok(())
-    })?;
+    session.edit("optimize_wad", |wad| optimize::apply(wad, plan))?;
     Ok(())
 }
 

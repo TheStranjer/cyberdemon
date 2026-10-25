@@ -199,6 +199,42 @@ fn lookups_find_duplicates_in_engine_order() {
 }
 
 #[test]
+fn put_global_overwrites_the_last_copy_in_place() {
+    let mut wad = sample(WadKind::Pwad);
+    wad.put_global(name("TEXTURE1"), vec![9_u8])
+        .expect("the overwrite runs");
+    assert_eq!(wad.len(), 6, "no lump grew in");
+    assert_eq!(
+        wad.lumps.get(4).expect("the last TEXTURE1").data.to_vec(),
+        vec![9_u8],
+        "the last copy changed"
+    );
+    assert_eq!(
+        wad.lumps.get(1).expect("the first TEXTURE1").data.to_vec(),
+        b"dir-bytes".to_vec(),
+        "the earlier copy stands"
+    );
+}
+
+#[test]
+fn put_global_appends_a_lump_the_archive_lacks() {
+    let mut wad = Wad::default();
+    wad.put_global(name("PNAMES"), vec![7_u8])
+        .expect("the append runs");
+    assert_eq!(wad.lumps.len(), 1, "one lump arrived");
+    assert_eq!(
+        wad.lumps.first().expect("one lump").name,
+        name("PNAMES"),
+        "its name"
+    );
+    assert_eq!(
+        wad.lumps.first().expect("one lump").data.to_vec(),
+        vec![7_u8],
+        "its bytes"
+    );
+}
+
+#[test]
 fn read_file_round_trips_a_written_archive() {
     let dir = tempfile::tempdir().expect("create a scratch directory");
     let path = dir.path().join("sample.wad");

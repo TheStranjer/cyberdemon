@@ -23,8 +23,8 @@ use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::edit_result_fragment;
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::Map;
-use crate::wad::name::LumpName;
 
 use super::build_gl::{GlBuild, gl_edit_step, install_gl_nodes};
 use super::build_tables::{NODES_AFTER, SEGS_AFTER, SSECTORS_AFTER, ZNODES_AFTER, install_lump};
@@ -167,24 +167,9 @@ pub(super) fn write_classic_run(map: &mut Map, tree: &BspTree) -> Result<Classic
         warnings: tree.warnings.clone(),
     };
     map.vertices.extend(run.new_vertices);
-    install_lump(
-        map,
-        LumpName::from_raw(*b"SEGS\0\0\0\0"),
-        &run.segs,
-        &SEGS_AFTER,
-    );
-    install_lump(
-        map,
-        LumpName::from_raw(*b"SSECTORS"),
-        &run.ssectors,
-        &SSECTORS_AFTER,
-    );
-    install_lump(
-        map,
-        LumpName::from_raw(*b"NODES\0\0\0"),
-        &run.nodes,
-        &NODES_AFTER,
-    );
+    install_lump(map, lumps::SEGS, &run.segs, &SEGS_AFTER);
+    install_lump(map, lumps::SSECTORS, &run.ssectors, &SSECTORS_AFTER);
+    install_lump(map, lumps::NODES, &run.nodes, &NODES_AFTER);
     Ok(built)
 }
 
@@ -303,27 +288,13 @@ pub(super) fn install_extended_nodes(
         warnings: tree.warnings,
     };
     if map.format == MapFormat::Udmf {
-        map.other.retain(|lump| {
-            !matches!(
-                lump.name.as_bytes(),
-                b"SEGS" | b"SSECTORS" | b"NODES" | b"ZNODES"
-            )
-        });
-        install_lump(
-            map,
-            LumpName::from_raw(*b"ZNODES\0\0"),
-            &run.bytes,
-            &ZNODES_AFTER,
-        );
+        map.other
+            .retain(|lump| !lumps::EXTENDED_NODES_SUPERSEDE_LUMPS.contains(&lump.name));
+        install_lump(map, lumps::ZNODES, &run.bytes, &ZNODES_AFTER);
     } else {
-        install_lump(
-            map,
-            LumpName::from_raw(*b"NODES\0\0\0"),
-            &run.bytes,
-            &NODES_AFTER,
-        );
-        install_lump(map, LumpName::from_raw(*b"SEGS\0\0\0\0"), b"", &SEGS_AFTER);
-        install_lump(map, LumpName::from_raw(*b"SSECTORS"), b"", &SSECTORS_AFTER);
+        install_lump(map, lumps::NODES, &run.bytes, &NODES_AFTER);
+        install_lump(map, lumps::SEGS, b"", &SEGS_AFTER);
+        install_lump(map, lumps::SSECTORS, b"", &SSECTORS_AFTER);
     }
     Ok(built)
 }

@@ -15,7 +15,9 @@
 //! [`optimize`] plans the working archive's redundant-lump cleanup over
 //! the base and merged snapshots, and
 //! [`udmf`] the `UDMF` `TEXTMAP` grammar as a
-//! document of blocks and key/value pairs. Nothing in this module knows
+//! document of blocks and key/value pairs, and [`lumps`] the well-known
+//! lump names with the named sets of them that carry engine meaning.
+//! Nothing in this module knows
 //! about MCP or sessions; it is pure data.
 
 pub mod archive;
@@ -23,6 +25,7 @@ pub mod bytes;
 pub mod classify;
 pub mod diff;
 pub mod game;
+pub mod lumps;
 pub mod map;
 pub mod name;
 pub mod optimize;

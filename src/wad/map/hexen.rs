@@ -23,9 +23,10 @@ use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::bytes::{Reader, Writer};
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::common::{
-    Element, carried, is_editable, member_data, other_lumps, read_sectors, read_side,
-    read_sidedefs, read_vertices, records, write_sectors, write_sidedefs, write_vertexes,
+    Element, carried, member_data, other_lumps, read_sectors, read_side, read_sidedefs,
+    read_vertices, records, write_sectors, write_sidedefs, write_vertexes,
 };
 use crate::wad::map::model::{Linedef, Map, Thing};
 use crate::wad::name::LumpName;
@@ -61,11 +62,11 @@ pub fn read_hexen_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberErro
         name,
         format: MapFormat::Hexen,
         udmf_namespace: None,
-        things: read_things(member_data(members, "THINGS", "Hexen")?)?,
-        vertices: read_vertices(member_data(members, "VERTEXES", "Hexen")?)?,
-        linedefs: read_linedefs(member_data(members, "LINEDEFS", "Hexen")?)?,
-        sidedefs: read_sidedefs(member_data(members, "SIDEDEFS", "Hexen")?)?,
-        sectors: read_sectors(member_data(members, "SECTORS", "Hexen")?)?,
+        things: read_things(member_data(members, lumps::THINGS, "Hexen")?)?,
+        vertices: read_vertices(member_data(members, lumps::VERTEXES, "Hexen")?)?,
+        linedefs: read_linedefs(member_data(members, lumps::LINEDEFS, "Hexen")?)?,
+        sidedefs: read_sidedefs(member_data(members, lumps::SIDEDEFS, "Hexen")?)?,
+        sectors: read_sectors(member_data(members, lumps::SECTORS, "Hexen")?)?,
         other: other_lumps(members),
     })
 }
@@ -95,51 +96,33 @@ pub fn read_hexen_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberErro
 pub fn write_hexen_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
     let mut lumps = Vec::with_capacity(12_usize.saturating_add(map.other.len()));
     lumps.push(Lump::marker(map.name));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"THINGS\0\0"),
-        write_things(&map.things)?,
-    ));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"LINEDEFS"),
-        write_linedefs(&map.linedefs)?,
-    ));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"SIDEDEFS"),
-        write_sidedefs(&map.sidedefs)?,
-    ));
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"VERTEXES"),
-        write_vertexes(&map.vertices)?,
-    ));
-    for raw in [*b"SEGS\0\0\0\0", *b"SSECTORS", *b"NODES\0\0\0"] {
-        lumps.push(carried(&map.other, LumpName::from_raw(raw)));
+    lumps.push(Lump::new(lumps::THINGS, write_things(&map.things)?));
+    lumps.push(Lump::new(lumps::LINEDEFS, write_linedefs(&map.linedefs)?));
+    lumps.push(Lump::new(lumps::SIDEDEFS, write_sidedefs(&map.sidedefs)?));
+    lumps.push(Lump::new(lumps::VERTEXES, write_vertexes(&map.vertices)?));
+    for node in lumps::CLASSIC_NODE_RUN_LUMPS {
+        lumps.push(carried(&map.other, node));
     }
-    lumps.push(Lump::new(
-        LumpName::from_raw(*b"SECTORS\0"),
-        write_sectors(&map.sectors)?,
-    ));
-    for raw in [*b"REJECT\0\0", *b"BLOCKMAP"] {
-        lumps.push(carried(&map.other, LumpName::from_raw(raw)));
+    lumps.push(Lump::new(lumps::SECTORS, write_sectors(&map.sectors)?));
+    for trailing in [lumps::REJECT, lumps::BLOCKMAP] {
+        lumps.push(carried(&map.other, trailing));
     }
     lumps.push(behavior(&map.other));
     lumps.extend(scripts(&map.other));
     lumps.extend(
         map.other
             .iter()
-            .filter(|lump| !is_standard(lump.name.as_bytes()))
+            .filter(|lump| !is_standard(lump.name))
             .cloned(),
     );
     Ok(lumps)
 }
 
 /// Whether `name` is one of the twelve lumps [`write_hexen_map`] emits
-/// itself, `BEHAVIOR` and `SCRIPTS` included.
-const fn is_standard(name: &[u8]) -> bool {
-    is_editable(name)
-        || matches!(
-            name,
-            b"SEGS" | b"SSECTORS" | b"NODES" | b"REJECT" | b"BLOCKMAP" | b"BEHAVIOR" | b"SCRIPTS"
-        )
+/// itself, [`lumps::STANDARD_HEXEN_MAP_LUMPS`], `BEHAVIOR` and `SCRIPTS`
+/// included.
+fn is_standard(name: LumpName) -> bool {
+    lumps::STANDARD_HEXEN_MAP_LUMPS.contains(&name)
 }
 
 /// The `BEHAVIOR` lump to write: the one `other` carries, or a minimal
@@ -147,16 +130,16 @@ const fn is_standard(name: &[u8]) -> bool {
 fn behavior(other: &[Lump]) -> Lump {
     other
         .iter()
-        .find(|lump| lump.name.as_bytes() == b"BEHAVIOR")
+        .find(|lump| lump.name == lumps::BEHAVIOR)
         .cloned()
-        .unwrap_or_else(|| Lump::new(LumpName::from_raw(*b"BEHAVIOR"), empty_behavior()))
+        .unwrap_or_else(|| Lump::new(lumps::BEHAVIOR, empty_behavior()))
 }
 
 /// The `SCRIPTS` lump when `other` carries one.
 fn scripts(other: &[Lump]) -> Option<Lump> {
     other
         .iter()
-        .find(|lump| lump.name.as_bytes() == b"SCRIPTS")
+        .find(|lump| lump.name == lumps::SCRIPTS)
         .cloned()
 }
 

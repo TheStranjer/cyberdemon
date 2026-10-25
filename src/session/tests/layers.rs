@@ -248,6 +248,31 @@ fn find_returns_the_last_match_in_the_merged_view() {
 }
 
 #[test]
+fn find_global_answers_the_winning_lump_whatever_region_it_sits_in() {
+    let session = loaded();
+    assert_eq!(
+        session
+            .find_global(name("GAMEINFO"))
+            .expect("a global lump")
+            .source,
+        Source::Layer(1),
+        "the resource's copy wins, as with an engine lookup"
+    );
+    assert_eq!(
+        session
+            .find_global(name("FLOOR_1"))
+            .expect("a region lump is findable by name alone")
+            .source,
+        Source::Layer(0),
+        "the namespace is not consulted"
+    );
+    assert!(
+        session.find_global(name("NOPE")).is_none(),
+        "an unknown name"
+    );
+}
+
+#[test]
 fn find_reports_the_working_copy_once_it_overrides() {
     let mut session = loaded();
     session.replace_working(pwad(vec![lump("GAMEINFO")]), None);

@@ -40,6 +40,7 @@ mod write;
 use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::udmf::{UdmfDoc, UdmfValue, parse_udmf, write_udmf};
 
@@ -152,9 +153,9 @@ pub fn write_udmf_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
     let text = write_udmf(&document(map)?).into_bytes();
     let mut lumps = Vec::with_capacity(map.other.len().saturating_add(3_usize));
     lumps.push(Lump::marker(map.name));
-    lumps.push(Lump::new(LumpName::from_raw(*b"TEXTMAP\0"), text));
+    lumps.push(Lump::new(lumps::TEXTMAP, text));
     lumps.extend(map.other.iter().cloned());
-    lumps.push(Lump::marker(LumpName::from_raw(*b"ENDMAP\0\0")));
+    lumps.push(Lump::marker(lumps::ENDMAP));
     Ok(lumps)
 }
 
@@ -163,7 +164,7 @@ pub fn write_udmf_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
 fn textmap_source(members: &[Lump]) -> Result<String, CyberError> {
     let lump = members
         .iter()
-        .find(|lump| lump.name.as_bytes() == b"TEXTMAP")
+        .find(|lump| lump.name == lumps::TEXTMAP)
         .ok_or_else(|| {
             CyberError::Format(
                 "the UDMF map block holds no TEXTMAP lump: a TEXTMAP map block runs \
@@ -185,7 +186,7 @@ fn textmap_source(members: &[Lump]) -> Result<String, CyberError> {
 fn carried_members(members: &[Lump]) -> Vec<Lump> {
     members
         .iter()
-        .filter(|lump| !matches!(lump.name.as_bytes(), b"TEXTMAP" | b"ENDMAP"))
+        .filter(|lump| !lumps::UDMF_BLOCK_MEMBERS.contains(&lump.name))
         .cloned()
         .collect()
 }

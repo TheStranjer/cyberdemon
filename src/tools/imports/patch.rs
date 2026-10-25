@@ -14,7 +14,7 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{PNAMES_RAW, PnamesPlan, chosen, parse_namespace, pnames_plan};
+use super::{PnamesPlan, chosen, parse_namespace, pnames_plan};
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, format_name};
 use crate::session::Session;
@@ -25,8 +25,8 @@ use crate::tools::imports::image_pipeline::{
     put_lump,
 };
 use crate::tools::ok;
-use crate::tools::textures::put_global;
 use crate::wad::classify::Namespace;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 
 /// Arguments for [`crate::server::Cyberdemon::import_image_as_patch`] and its alias
@@ -125,7 +125,7 @@ async fn import_patch_run(
 /// # Errors
 ///
 /// [`put_lump`]' placement and `already_exists` errors and
-/// [`crate::tools::textures::put_global`]' stale-index [`CyberError::Internal`].
+/// [`crate::wad::archive::Wad::put_global`]' stale-index [`CyberError::Internal`].
 fn commit_patch(
     session: &mut Session,
     patched: Patched,
@@ -142,7 +142,7 @@ fn commit_patch(
         };
         let lump_index = put_lump(wad, &write)?;
         if let Some(list) = plan.as_ref().and_then(|entry| entry.bytes.as_ref()) {
-            put_global(wad, LumpName::from_raw(PNAMES_RAW), list.clone())?;
+            wad.put_global(lumps::PNAMES, list.clone())?;
         }
         Ok(PatchReport {
             name: patched.name,

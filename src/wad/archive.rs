@@ -324,6 +324,32 @@ impl Wad {
         self.lumps.iter().rposition(|lump| lump.name == name)
     }
 
+    /// Writes `data` as this archive's global lump `name`: over the last
+    /// copy in place, or appended as a new one when the archive holds
+    /// none. This is the one global-lump write every copy-on-write edit of
+    /// `PNAMES`, `TEXTURE1`/`TEXTURE2`, `PLAYPAL` and `COLORMAP` goes
+    /// through.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Internal`] when [`Wad::find_last`] names an index
+    /// this archive has no lump at, which only a concurrent modification
+    /// could cause.
+    #[inline]
+    pub fn put_global(&mut self, name: LumpName, data: Vec<u8>) -> Result<(), CyberError> {
+        let Some(index) = self.find_last(name) else {
+            self.lumps.push(Lump::new(name, data));
+            return Ok(());
+        };
+        let Some(lump) = self.lumps.get_mut(index) else {
+            return Err(CyberError::Internal(format!(
+                "no lump at index {index} of the working archive: {name} was expected there"
+            )));
+        };
+        lump.data = Arc::from(data);
+        Ok(())
+    }
+
     /// The index of the first lump named `name`.
     #[must_use]
     #[inline]

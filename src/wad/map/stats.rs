@@ -15,6 +15,7 @@ use serde::Serialize;
 use super::model::Map;
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::consts::{NO_TEXTURE, PLAYER_START_TYPES};
 use crate::wad::name::LumpName;
 
@@ -319,13 +320,13 @@ fn flats_used(map: &Map) -> Vec<String> {
 
 /// The node picture of a block from its member lumps.
 fn node_summary(node_lumps: &[Lump]) -> NodeSummary {
-    let nodes_lump = lump_named(node_lumps, b"NODES");
+    let nodes_lump = lump_named(node_lumps, lumps::NODES);
     let nodes_bytes = nodes_lump.map_or(0, Lump::size);
-    let znodes_lump = lump_named(node_lumps, b"ZNODES");
+    let znodes_lump = lump_named(node_lumps, lumps::ZNODES);
     let magic = nodes_lump.and_then(|lump| lump_magic(&lump.data));
     let (segs, subsectors, nodes) = if magic.is_none() {
-        let segs_bytes = lump_named(node_lumps, b"SEGS").map_or(0, Lump::size);
-        let subsector_bytes = lump_named(node_lumps, b"SSECTORS").map_or(0, Lump::size);
+        let segs_bytes = lump_named(node_lumps, lumps::SEGS).map_or(0, Lump::size);
+        let subsector_bytes = lump_named(node_lumps, lumps::SSECTORS).map_or(0, Lump::size);
         (
             Some(record_count(segs_bytes, SEG_RECORD_BYTES)),
             Some(record_count(subsector_bytes, SSECTOR_RECORD_BYTES)),
@@ -340,8 +341,8 @@ fn node_summary(node_lumps: &[Lump]) -> NodeSummary {
         subsectors,
         nodes,
         nodes_format: magic,
-        reject_bytes: lump_named(node_lumps, b"REJECT").map_or(0, Lump::size),
-        blockmap_bytes: lump_named(node_lumps, b"BLOCKMAP").map_or(0, Lump::size),
+        reject_bytes: lump_named(node_lumps, lumps::REJECT).map_or(0, Lump::size),
+        blockmap_bytes: lump_named(node_lumps, lumps::BLOCKMAP).map_or(0, Lump::size),
         kinds: NodeKinds {
             znodes: znodes_lump.is_some(),
             gl: node_lumps
@@ -352,11 +353,8 @@ fn node_summary(node_lumps: &[Lump]) -> NodeSummary {
 }
 
 /// The last lump named `wanted`, engines reading the last copy of a run.
-fn lump_named<'lumps>(lumps: &'lumps [Lump], wanted: &[u8]) -> Option<&'lumps Lump> {
-    lumps
-        .iter()
-        .rev()
-        .find(|lump| lump.name.as_bytes() == wanted)
+fn lump_named(lumps: &[Lump], wanted: LumpName) -> Option<&Lump> {
+    lumps.iter().rev().find(|lump| lump.name == wanted)
 }
 
 /// How many whole `record_bytes`-sized records a `bytes`-sized lump holds.

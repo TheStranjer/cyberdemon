@@ -57,8 +57,6 @@ use crate::tools::ok;
 use crate::tools::textures::checked_name;
 use crate::wad::name::LumpName;
 
-/// Raw directory bytes of the patch-name lump.
-const PNAMES_RAW: [u8; 8] = *b"PNAMES\0\0";
 /// Smallest texture width a vanilla engine tiles cleanly.
 const MIN_WIDTH: u32 = 16_u32;
 /// Largest texture edge this tool accepts.

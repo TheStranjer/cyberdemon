@@ -19,6 +19,7 @@ use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::edit_result_fragment;
 use crate::wad::archive::Lump;
+use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::build_blockmap::{self, BlockmapBuild};
 use crate::wad::map::build_reject::{self, RejectBuild, RejectMode};
@@ -54,19 +55,20 @@ pub(super) struct BuildRejectParams {
 /// The canonical neighbours of the written builder lumps: an absent lump
 /// is inserted after the first of these the block carries (the binary
 /// writers normalise the member order anyway).
-pub(super) const BLOCKMAP_AFTER: [&[u8]; 4] = [b"REJECT", b"NODES", b"SSECTORS", b"SEGS"];
+pub(super) const BLOCKMAP_AFTER: [LumpName; 4] =
+    [lumps::REJECT, lumps::NODES, lumps::SSECTORS, lumps::SEGS];
 /// The canonical neighbours of `REJECT`.
-pub(super) const REJECT_AFTER: [&[u8]; 3] = [b"NODES", b"SSECTORS", b"SEGS"];
+pub(super) const REJECT_AFTER: [LumpName; 3] = [lumps::NODES, lumps::SSECTORS, lumps::SEGS];
 /// The canonical neighbours of `SEGS` inside [`Map::other`]: nothing in
 /// the side-bag precedes it.
-pub(super) const SEGS_AFTER: [&[u8]; 0] = [];
+pub(super) const SEGS_AFTER: [LumpName; 0] = [];
 /// The canonical neighbour of `SSECTORS`.
-pub(super) const SSECTORS_AFTER: [&[u8]; 1] = [b"SEGS"];
+pub(super) const SSECTORS_AFTER: [LumpName; 1] = [lumps::SEGS];
 /// The canonical neighbours of `NODES`.
-pub(super) const NODES_AFTER: [&[u8]; 2] = [b"SSECTORS", b"SEGS"];
+pub(super) const NODES_AFTER: [LumpName; 2] = [lumps::SSECTORS, lumps::SEGS];
 /// The position of `ZNODES` inside [`Map::other`]: an absent one appends,
 /// which the `UDMF` writer still places between `TEXTMAP` and `ENDMAP`.
-pub(super) const ZNODES_AFTER: [&[u8]; 0] = [];
+pub(super) const ZNODES_AFTER: [LumpName; 0] = [];
 
 /// The accepted `mode` text, `zero` being the default.
 ///
@@ -81,7 +83,7 @@ pub(super) fn parse_mode(text: Option<&str>) -> Result<RejectMode, CyberError> {
 /// Replaces the first lump named `name` in `map.other` with `data`, or
 /// inserts it after the last copy of the first canonical neighbour from
 /// `after` the block carries (at the end when it carries none).
-pub(super) fn install_lump(map: &mut Map, name: LumpName, data: &[u8], after: &[&[u8]]) {
+pub(super) fn install_lump(map: &mut Map, name: LumpName, data: &[u8], after: &[LumpName]) {
     let bytes = data.to_vec();
     if let Some(at) = map.other.iter().position(|lump| lump.name == name) {
         if let Some(slot) = map.other.get_mut(at) {
@@ -91,11 +93,7 @@ pub(super) fn install_lump(map: &mut Map, name: LumpName, data: &[u8], after: &[
     }
     let at = after
         .iter()
-        .find_map(|wanted| {
-            map.other
-                .iter()
-                .rposition(|lump| lump.name.as_bytes() == *wanted)
-        })
+        .find_map(|wanted| map.other.iter().rposition(|lump| lump.name == *wanted))
         .and_then(|seen| seen.checked_add(1))
         .unwrap_or(map.other.len());
     map.other.insert(at, Lump::new(name, bytes));
@@ -108,12 +106,7 @@ pub(super) fn apply_build_blockmap(
     compress: bool,
 ) -> Result<BlockmapBuild, CyberError> {
     let built = build_blockmap::build(map, compress)?;
-    install_lump(
-        map,
-        LumpName::from_raw(*b"BLOCKMAP"),
-        &built.bytes,
-        &BLOCKMAP_AFTER,
-    );
+    install_lump(map, lumps::BLOCKMAP, &built.bytes, &BLOCKMAP_AFTER);
     Ok(built)
 }
 
@@ -124,12 +117,7 @@ pub(super) fn apply_build_reject(
     mode: RejectMode,
 ) -> Result<RejectBuild, CyberError> {
     let built = build_reject::build(map, mode)?;
-    install_lump(
-        map,
-        LumpName::from_raw(*b"REJECT\0\0"),
-        &built.bytes,
-        &REJECT_AFTER,
-    );
+    install_lump(map, lumps::REJECT, &built.bytes, &REJECT_AFTER);
     Ok(built)
 }
 

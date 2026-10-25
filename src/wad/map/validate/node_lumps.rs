@@ -14,16 +14,18 @@ use alloc::vec::Vec;
 
 use super::{Issue, Severity};
 use crate::wad::classify::MapFormat;
+use crate::wad::lumps;
 use crate::wad::map::model::Map;
 use crate::wad::map::reject::Reject;
+use crate::wad::name::LumpName;
 
 /// The payload of the block's last lump named `wanted`, `None` when the
 /// block carries no such lump.
-fn lump_data<'block>(map: &'block Map, wanted: &[u8]) -> Option<&'block [u8]> {
+fn lump_data(map: &Map, wanted: LumpName) -> Option<&[u8]> {
     map.other
         .iter()
         .rev()
-        .find(|lump| lump.name.as_bytes() == wanted)
+        .find(|lump| lump.name == wanted)
         .map(|lump| lump.data.as_ref())
 }
 
@@ -36,7 +38,7 @@ fn is_binary(map: &Map) -> bool {
 /// needs all three, an extended one lives entirely inside `NODES`, so
 /// any data at all counts as built.
 fn has_tree(map: &Map) -> bool {
-    [b"NODES".as_slice(), b"SEGS", b"SSECTORS"]
+    lumps::CLASSIC_NODE_RUN_LUMPS
         .into_iter()
         .any(|wanted| lump_data(map, wanted).is_some_and(|data| !data.is_empty()))
 }
@@ -62,7 +64,7 @@ pub(super) fn blockmap_missing(map: &Map) -> Vec<Issue> {
     if !is_binary(map) {
         return Vec::new();
     }
-    if lump_data(map, b"BLOCKMAP").is_some_and(|data| !data.is_empty()) {
+    if lump_data(map, lumps::BLOCKMAP).is_some_and(|data| !data.is_empty()) {
         return Vec::new();
     }
     vec![Issue::new(
@@ -79,7 +81,7 @@ pub(super) fn reject_size_mismatch(map: &Map) -> Vec<Issue> {
     if !is_binary(map) {
         return Vec::new();
     }
-    let Some(bits) = lump_data(map, b"REJECT").filter(|data| !data.is_empty()) else {
+    let Some(bits) = lump_data(map, lumps::REJECT).filter(|data| !data.is_empty()) else {
         return Vec::new();
     };
     let sectors = map.sectors.len();

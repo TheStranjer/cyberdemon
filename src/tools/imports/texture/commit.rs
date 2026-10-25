@@ -22,15 +22,15 @@ use crate::session::{LayerRole, Session, Source};
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{LumpWrite, put_lump};
 use crate::tools::textures::{
-    Placement, TextureSet, definition, lump_copy, missing_names, place_definition, put_global,
-    target_lump,
+    Placement, TextureSet, definition, lump_copy, missing_names, place_definition, target_lump,
 };
 use crate::wad::classify::Namespace;
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::textures::{write_pnames, write_texture_lump};
 
 use super::build::Built;
-use super::{CreateRequest, MAX_TEXTURE_EDGE, NEXT_STEPS, PNAMES_RAW};
+use super::{CreateRequest, MAX_TEXTURE_EDGE, NEXT_STEPS};
 
 /// The lumps one commit writes, planned before anything changes.
 #[derive(Debug)]
@@ -39,8 +39,8 @@ pub(super) struct Plan {
     pub(super) pnames_bytes: Option<Vec<u8>>,
     /// The re-encoded target texture lump.
     pub(super) texture_bytes: Vec<u8>,
-    /// The raw directory name of the target lump.
-    pub(super) target_raw: [u8; 8],
+    /// The target lump's name.
+    pub(super) target: LumpName,
     /// The target lump's wire name.
     pub(super) lump: &'static str,
 }
@@ -85,7 +85,7 @@ pub(super) fn plan_create(
             .then(|| write_pnames(&pnames))
             .transpose()?,
         texture_bytes: write_texture_lump(&lump)?,
-        target_raw: target.as_raw(),
+        target: target.name(),
         lump: target.as_str(),
     })
 }
@@ -155,7 +155,7 @@ pub(in crate::tools) fn layer_label(session: &Session, index: usize) -> String {
 /// # Errors
 ///
 /// [`put_lump`]' placement and `already_exists` errors and
-/// [`put_global`]' stale-index [`CyberError::Internal`].
+/// [`crate::wad::archive::Wad::put_global`]' stale-index [`CyberError::Internal`].
 pub(super) fn commit_create(
     session: &mut Session,
     request: &CreateRequest,
@@ -172,13 +172,9 @@ pub(super) fn commit_create(
     session.edit(&label, |wad| {
         put_lump(wad, &write)?;
         if let Some(bytes) = plan.pnames_bytes.as_ref() {
-            put_global(wad, LumpName::from_raw(PNAMES_RAW), bytes.clone())?;
+            wad.put_global(lumps::PNAMES, bytes.clone())?;
         }
-        put_global(
-            wad,
-            LumpName::from_raw(plan.target_raw),
-            plan.texture_bytes.clone(),
-        )?;
+        wad.put_global(plan.target, plan.texture_bytes.clone())?;
         Ok(())
     })?;
     Ok(())

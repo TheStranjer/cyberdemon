@@ -27,22 +27,16 @@ mod redundant;
 mod unused;
 
 use alloc::collections::BTreeSet;
-use alloc::sync::Arc;
 use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, MapBlock, analyze};
-use crate::wad::name::{LumpName, NAME_LEN};
+use crate::wad::lumps;
+use crate::wad::name::LumpName;
 use crate::wad::optimize::redundant::{empty_namespaces, identical_overrides, shadowed_duplicates};
 use crate::wad::optimize::unused::{unused_flats, unused_patches, unused_pnames};
 
-/// The raw directory name of the `PNAMES` lump.
-const PNAMES_RAW: [u8; NAME_LEN] = *b"PNAMES\0\0";
-/// The raw directory name of the `TEXTURE1` lump.
-const TEXTURE1_RAW: [u8; NAME_LEN] = *b"TEXTURE1";
-/// The raw directory name of the `TEXTURE2` lump.
-const TEXTURE2_RAW: [u8; NAME_LEN] = *b"TEXTURE2";
 /// Bytes one `PNAMES` list entry occupies.
 const PNAMES_ENTRY_LEN: usize = 8;
 
@@ -380,8 +374,15 @@ fn run(operation: Operation, context: &Context<'_>, draft: &mut Draft) -> Result
 
 /// Commits `plan` to `wad`: drops the planned directory entries and then
 /// writes the `PNAMES`/texture rewrite, if the plan carries one.
+///
+/// # Errors
+///
+/// [`Wad::put_global`]'s [`CyberError::Internal`] for a vanished lump
+/// slot, which only a concurrent modification of `wad` could cause.
+///
+/// [`Wad::put_global`]: crate::wad::archive::Wad::put_global
 #[inline]
-pub fn apply(wad: &mut Wad, plan: &Plan) {
+pub fn apply(wad: &mut Wad, plan: &Plan) -> Result<(), CyberError> {
     if !plan.remove.is_empty() {
         let kept: Vec<Lump> = core::mem::take(&mut wad.lumps)
             .into_iter()
@@ -392,27 +393,16 @@ pub fn apply(wad: &mut Wad, plan: &Plan) {
         wad.lumps = kept;
     }
     let Some(rewrite) = plan.rewrite.as_ref() else {
-        return;
+        return Ok(());
     };
-    put_global(wad, LumpName::from_raw(PNAMES_RAW), &rewrite.pnames);
+    wad.put_global(lumps::PNAMES, rewrite.pnames.clone())?;
     if let Some(bytes) = rewrite.texture1.as_ref() {
-        put_global(wad, LumpName::from_raw(TEXTURE1_RAW), bytes);
+        wad.put_global(lumps::TEXTURE1, bytes.clone())?;
     }
     if let Some(bytes) = rewrite.texture2.as_ref() {
-        put_global(wad, LumpName::from_raw(TEXTURE2_RAW), bytes);
+        wad.put_global(lumps::TEXTURE2, bytes.clone())?;
     }
-}
-
-/// Writes `data` as `wad`'s global lump `name`: over the last working
-/// copy in place, or appended as a new override.
-fn put_global(wad: &mut Wad, name: LumpName, data: &[u8]) {
-    if let Some(index) = wad.find_last(name) {
-        if let Some(lump) = wad.lumps.get_mut(index) {
-            lump.data = Arc::from(data);
-        }
-        return;
-    }
-    wad.lumps.push(Lump::new(name, data.to_vec()));
+    Ok(())
 }
 
 #[cfg(test)]

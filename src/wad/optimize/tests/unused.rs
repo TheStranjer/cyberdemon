@@ -226,7 +226,7 @@ fn apply_drops_the_planned_entries_and_writes_the_rewrite_in_place() {
         kind: WadKind::Pwad,
         lumps: working,
     };
-    apply(&mut wad, &outcome);
+    apply(&mut wad, &outcome).expect("the plan commits");
     assert_eq!(wad.lumps.len(), 2, "the identical override went");
     assert_eq!(wad.find_first(name("PLAYPAL")), None, "by name");
     let kept = wad.lumps.first().expect("PNAMES is first now");

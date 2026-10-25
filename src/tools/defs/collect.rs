@@ -14,6 +14,7 @@ use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::defs::CustomSources;
 use crate::error::CyberError;
 use crate::session::{MergedLump, Scope, Session};
+use crate::wad::lumps;
 use crate::wad::name::LumpName;
 
 /// Deepest `#include` chain followed below a direct DECORATE/ZSCRIPT lump.
@@ -51,18 +52,19 @@ impl Stream {
 }
 
 /// The stream a merged-view lump name selects, `None` for other names.
+/// [`LumpName`] stores uppercase, so a constant equality is the same
+/// case-insensitive word test the raw bytes went through.
 fn stream_of(name: LumpName) -> Option<Stream> {
-    let bytes = name.as_bytes();
-    if bytes.eq_ignore_ascii_case(b"DEHACKED") {
+    if name == lumps::DEHACKED {
         return Some(Stream::Dehacked);
     }
-    if bytes.eq_ignore_ascii_case(b"DECORATE") {
+    if name == lumps::DECORATE {
         return Some(Stream::Decorate);
     }
-    if bytes.eq_ignore_ascii_case(b"ZSCRIPT") {
+    if name == lumps::ZSCRIPT {
         return Some(Stream::Zscript);
     }
-    if bytes.eq_ignore_ascii_case(b"MAPINFO") || bytes.eq_ignore_ascii_case(b"ZMAPINFO") {
+    if name == lumps::MAPINFO || name == lumps::ZMAPINFO {
         return Some(Stream::Mapinfo);
     }
     None

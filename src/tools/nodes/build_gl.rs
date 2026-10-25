@@ -15,7 +15,7 @@ use crate::error::CyberError;
 use crate::session::MergedLump;
 use crate::session::map_edit::{self, MapEditReport};
 use crate::wad::archive::{Lump, Wad};
-use crate::wad::classify::{Analysis, analyze};
+use crate::wad::classify::{Analysis, analyze, gl_marker_for};
 use crate::wad::map::Map;
 use crate::wad::name::LumpName;
 
@@ -52,27 +52,18 @@ pub(super) fn install_gl_nodes(map: &mut Map, split_cost: i64) -> Result<GlBuild
     Ok(GlBuild { classic, run })
 }
 
-/// The six lump names of one map's `GL` run: the `GL_<MAP>` marker, or
-/// `GL_LEVEL` when the map name leaves no room to embed it.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] should a derived name not parse.
-pub(super) fn gl_lump_names(map: LumpName) -> Result<[LumpName; 6], CyberError> {
-    let map_name = map.to_string();
-    let head = if map.len() > 5 {
-        "GL_LEVEL".to_owned()
-    } else {
-        format!("GL_{map_name}")
-    };
-    Ok([
-        LumpName::parse(&head)?,
-        LumpName::parse("GL_VERT")?,
-        LumpName::parse("GL_SEGS")?,
-        LumpName::parse("GL_SSECT")?,
-        LumpName::parse("GL_NODES")?,
-        LumpName::parse("GL_PVS")?,
-    ])
+/// The six lump names of one map's `GL` run: the [`gl_marker_for`] head
+/// followed by the five record lumps in `glBSP` order.
+#[must_use]
+pub(super) fn gl_lump_names(map: LumpName) -> [LumpName; 6] {
+    [
+        gl_marker_for(map),
+        LumpName::padded(*b"GL_VERT\0"),
+        LumpName::padded(*b"GL_SEGS\0"),
+        LumpName::padded(*b"GL_SSECT"),
+        LumpName::padded(*b"GL_NODES"),
+        LumpName::padded(*b"GL_PVS\0\0"),
+    ]
 }
 
 /// The one edit step of a `gl` build: the classic-plus-GL map rewrite
@@ -120,13 +111,16 @@ pub(super) fn splice_gl_run(
 /// replaced in place, otherwise the block is inserted right after the
 /// map block. The map block has just been re-encoded by the caller's
 /// [`map_edit::edit_in_place`], so the directory is read as it now stands.
+/// A `GL_LEVEL` head (see [`gl_marker_for`]) attaches to the preceding
+/// map block: a fresh run is inserted right after this one, and a
+/// replaced run keeps the position that attached the old one here.
 ///
 /// # Errors
 ///
-/// [`gl_lump_names`]'s refusals and [`CyberError::NotFound`] when the
-/// archive holds no such block (it was just edited: only a bug gets here).
+/// [`CyberError::NotFound`] when the archive holds no such block (it was
+/// just edited: only a bug gets here).
 fn install_gl_run(wad: &mut Wad, map: LumpName, run: &GlNodes) -> Result<(), CyberError> {
-    let [head, vert, segs, ssect, nodes, pvs] = gl_lump_names(map)?;
+    let [head, vert, segs, ssect, nodes, pvs] = gl_lump_names(map);
     let lumps = vec![
         Lump::marker(head),
         Lump::new(vert, run.vertices.clone()),

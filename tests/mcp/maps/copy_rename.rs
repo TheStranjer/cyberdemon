@@ -1,12 +1,13 @@
 //! `copy_map`, `rename_map` and `remove_map`: the byte-for-byte copy of
 //! the `IWAD` block read back through published lump assets, the copy and
 //! removal as single undo steps, the `GL` marker renamed with its block and
-//! dropped for a name that leaves no room for it, and the renames that move
-//! working blocks, follow the active selection and refuse layer maps,
-//! self renames and taken names.
+//! falling back to `GL_LEVEL` for a name that leaves no room behind the
+//! `GL_` prefix, and the renames that move working blocks, follow the
+//! active selection and refuse layer maps, self renames and taken names.
 //!
-//! The faithful-copy `copy_map` call is `copy_to_map07` and the lump rows
-//! as `(name, size, kind)` facts are `lump_facts`, both here; everything
+//! The faithful-copy `copy_map` call is `copy_to_map07`, the plain
+//! two-name calls are `copy` and `rename`, and the lump rows as
+//! `(name, size, kind)` facts are `lump_facts`, all here; everything
 //! else comes from [`crate::maps`].
 
 use serde_json::{Value, json};
@@ -50,7 +51,7 @@ async fn copy_map_copies_the_iwad_map_byte_for_byte() {
     let report = copy_to_map07(&client).await;
     assert_eq!(
         report,
-        json!({"from": "MAP01", "to": "MAP07", "lumps": 11_u64}),
+        json!({"from": "MAP01", "to": "MAP07", "lumps": 11_u64, "warnings": []}),
         "the documented copy result",
     );
     let listing = call(&client, "list_maps", json!({ "scope": "working" })).await;
@@ -113,16 +114,21 @@ async fn copy_map_undoes_as_one_step() {
     assert_eq!(after["maps"], json!([]), "the copy rolled back wholly");
 }
 
+/// A `copy_map` call between two names.
+async fn copy(client: &Client, from: &str, to: &str) -> Value {
+    call(client, "copy_map", json!({ "from": from, "to": to })).await
+}
+
+/// A `rename_map` call between two names.
+async fn rename(client: &Client, from: &str, to: &str) -> Value {
+    call(client, "rename_map", json!({ "from": from, "to": to })).await
+}
+
 #[tokio::test]
-async fn copy_map_renames_the_gl_marker_and_drops_it_for_long_names() {
+async fn copy_map_renames_the_gl_marker_for_a_fitting_name() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = formats_loaded(dir.path()).await;
-    call(
-        &client,
-        "copy_map",
-        json!({ "from": "MAP03", "to": "MAP08" }),
-    )
-    .await;
+    copy(&client, "MAP03", "MAP08").await;
     let listing = call(&client, "list_maps", json!({ "scope": "working" })).await;
     let row = map_named(&listing, "MAP08");
     assert_eq!(row["has_gl_nodes"], json!(true), "the GL run came along");
@@ -158,22 +164,31 @@ async fn copy_map_renames_the_gl_marker_and_drops_it_for_long_names() {
         missing_message.contains("MAP99"),
         "the message names it: {missing_message}",
     );
-    let long = call(
-        &client,
-        "copy_map",
-        json!({ "from": "MAP03", "to": "LONGNAME" }),
-    )
-    .await;
+}
+
+#[tokio::test]
+async fn copy_map_falls_back_to_gl_level_for_a_long_name() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = formats_loaded(dir.path()).await;
+    let long = copy(&client, "MAP03", "LONGNAME").await;
     assert_eq!(
-        long["lumps"],
-        json!(4_u64),
-        "header plus three members, the GL run dropped",
+        long,
+        json!({"from": "MAP03", "to": "LONGNAME", "lumps": 7_u64, "warnings": []}),
+        "header, three members and the whole GL run: nothing dropped",
     );
     let after = call(&client, "list_maps", json!({ "scope": "working" })).await;
+    let long_row = map_named(&after, "LONGNAME");
     assert_eq!(
-        map_named(&after, "LONGNAME")["has_gl_nodes"],
-        json!(false),
-        "no marker for an eight-character name fits",
+        long_row["has_gl_nodes"],
+        json!(true),
+        "the run survives the long name",
+    );
+    assert_eq!(
+        long_row["lumps"],
+        json!([
+            "TEXTMAP", "ZNODES", "ENDMAP", "GL_LEVEL", "GL_VERT", "GL_NODES"
+        ]),
+        "the shared GL_LEVEL fallback attaches it to the copy above",
     );
 }
 
@@ -196,7 +211,7 @@ async fn rename_map_moves_working_blocks_and_follows_the_selection() {
     .await;
     assert_eq!(
         report,
-        json!({"from": "MAP07", "to": "MAP08"}),
+        json!({"from": "MAP07", "to": "MAP08", "warnings": []}),
         "the documented rename result",
     );
     let session = call(&client, "get_session_info", Value::Null).await;
@@ -341,4 +356,75 @@ async fn rename_and_remove_map_track_the_gl_run_and_the_selection() {
         json!(true),
         "undo brings block and GL run back",
     );
+}
+
+#[tokio::test]
+async fn a_copied_gl_run_survives_a_long_name_for_get_nodes() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_loaded(dir.path()).await;
+    call(
+        &client,
+        "build_nodes",
+        json!({ "map": "MAP01", "variant": "gl" }),
+    )
+    .await;
+    let copied = copy(&client, "MAP01", "LONGMAP").await;
+    assert_eq!(
+        copied["lumps"],
+        json!(17_u64),
+        "header, ten members and the six-lump GL run",
+    );
+    assert_eq!(copied["warnings"], json!([]), "the long name cost nothing");
+    let read = call(&client, "get_nodes", json!({ "map": "LONGMAP" })).await;
+    assert_eq!(
+        read["gl"]["present"],
+        json!(true),
+        "get_nodes recognises the GL_LEVEL run",
+    );
+    assert_eq!(
+        read["gl"]["magic"],
+        json!("gNd2"),
+        "the fallback copy is the same run",
+    );
+}
+
+#[tokio::test]
+async fn a_renamed_gl_run_embeds_the_new_name_or_falls_back() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_loaded(dir.path()).await;
+    call(
+        &client,
+        "build_nodes",
+        json!({ "map": "MAP01", "variant": "gl" }),
+    )
+    .await;
+    copy(&client, "MAP01", "MAP08").await;
+    let renamed = rename(&client, "MAP08", "LONGMAP").await;
+    assert_eq!(
+        renamed["warnings"],
+        json!([]),
+        "the adjacent run falls back in place: nothing dropped",
+    );
+    let fallback = call(&client, "get_nodes", json!({ "map": "LONGMAP" })).await;
+    assert_eq!(
+        fallback["gl"]["present"],
+        json!(true),
+        "GL_LEVEL still attaches and get_nodes reads it",
+    );
+    let renamed_back = rename(&client, "LONGMAP", "MAP07").await;
+    assert_eq!(
+        renamed_back,
+        json!({"from": "LONGMAP", "to": "MAP07", "warnings": []}),
+        "a five-character name embeds in the marker again",
+    );
+    let listing = call(&client, "list_maps", json!({ "scope": "working" })).await;
+    let row = map_named(&listing, "MAP07");
+    assert_eq!(row["has_gl_nodes"], json!(true), "still attached");
+    assert_eq!(
+        row["lumps"].as_array().expect("lumps")[10],
+        json!("GL_MAP07"),
+        "the marker carries the new name",
+    );
+    let again = call(&client, "get_nodes", json!({ "map": "MAP07" })).await;
+    assert_eq!(again["gl"]["magic"], json!("gNd2"), "same run all along");
 }

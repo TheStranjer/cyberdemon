@@ -24,9 +24,9 @@ use crate::session::Scope;
 use crate::tools::maps::common::Directory;
 use crate::tools::maps::{CopyMapParams, CreateMapParams};
 use crate::wad::archive::{Lump, Wad};
-use crate::wad::classify::{Analysis, MapBlock, MapFormat, analyze};
+use crate::wad::classify::{Analysis, GL_LEVEL, MapBlock, MapFormat, analyze, gl_marker_for};
 use crate::wad::map::{Map, write_map};
-use crate::wad::name::{LumpName, NAME_LEN};
+use crate::wad::name::LumpName;
 
 use super::{parse_format, resolve_namespace};
 
@@ -38,54 +38,8 @@ pub(super) use runs::{
 #[cfg(test)]
 mod tests;
 
-/// The prefix of a map's `GL` node marker lump.
-const GL_PREFIX: &[u8] = b"GL_";
-/// Longest map name whose `GL_<name>` marker still fits a directory name.
-const GL_NAME_MAX: usize = NAME_LEN - GL_PREFIX.len();
-/// The `GL` marker that attaches to the map block just above it.
-const GL_LEVEL: &[u8] = b"GL_LEVEL";
-
 /// Half-open directory range one lump run covers.
 type Run = (usize, usize);
-
-/// What a rename remembers about one block: its header position and the
-/// `GL` run attached to it.
-type BlockHead = (usize, Option<Run>);
-
-/// What management does with a block's `GL` node run when the map is
-/// copied or renamed to `to`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GlPlan {
-    /// The marker is renamed to this name.
-    Rename(LumpName),
-    /// The marker is `GL_LEVEL`: it stays and attaches to the block written
-    /// just above it in the new position.
-    Keep,
-    /// The run is dropped: `GL_<to>` would not fit eight bytes.
-    Drop,
-}
-
-/// The plan for the `GL` run whose marker lump is named `head`, once the
-/// map itself answers to `to`.
-fn gl_plan(head: LumpName, to: LumpName) -> GlPlan {
-    if head.as_bytes() == GL_LEVEL {
-        return GlPlan::Keep;
-    }
-    gl_marker(to).map_or(GlPlan::Drop, GlPlan::Rename)
-}
-
-/// The `GL_<to>` marker name, `None` when `to` is too long to fit behind
-/// the prefix.
-fn gl_marker(to: LumpName) -> Option<LumpName> {
-    if to.len() > GL_NAME_MAX {
-        return None;
-    }
-    let mut raw = [0_u8; NAME_LEN];
-    for (slot, byte) in raw.iter_mut().zip(GL_PREFIX.iter().chain(to.raw().iter())) {
-        *slot = *byte;
-    }
-    Some(LumpName::from_raw(raw))
-}
 
 /// Whether `name` has one of the two shapes engines load without a
 /// `MAPINFO`: `ExMy` (digits `x` and `y`) or `MAPxx` (two digits).
@@ -216,30 +170,36 @@ fn renamed(lump: &Lump, to: LumpName) -> Lump {
     }
 }
 
-/// The copied `GL` run: dropped whole when the marker cannot carry the new
-/// name, kept verbatim for `GL_LEVEL`, and renamed at its header otherwise.
-fn gl_copies(dir: &Directory, gl: Run, to: LumpName) -> Vec<Lump> {
+/// The copied `GL` run: every lump of `gl` with its marker renamed to the
+/// name `to`'s block gets (see [`gl_marker_for`]). The run is appended
+/// right after the copied block, so even the `GL_LEVEL` fallback attaches
+/// to the block above it. Empty run with a warning when the directory no
+/// longer holds the marker lump where the analysis read it.
+fn gl_copies(dir: &Directory, gl: Run, to: LumpName, warnings: &mut Vec<String>) -> Vec<Lump> {
     let (start, end) = gl;
     let Some(head) = dir.lumps.get(start) else {
+        warnings.push(format!(
+            "the GL node run at {start}..{end} could not be copied: its marker lump is gone, so \
+             the copy holds no node data - run build_nodes variant gl on {to} to rebuild it"
+        ));
         return Vec::new();
     };
-    match gl_plan(head.name, to) {
-        GlPlan::Drop => Vec::new(),
-        GlPlan::Keep => dir.lumps.get(start..end).unwrap_or(&[]).to_vec(),
-        GlPlan::Rename(name) => {
-            let mut copies = vec![renamed(head, name)];
-            let rest = start.saturating_add(1);
-            if let Some(tail) = dir.lumps.get(rest..end) {
-                copies.extend(tail.iter().cloned());
-            }
-            copies
-        }
+    let mut copies = vec![renamed(head, gl_marker_for(to))];
+    let rest = start.saturating_add(1);
+    if let Some(tail) = dir.lumps.get(rest..end) {
+        copies.extend(tail.iter().cloned());
     }
+    copies
 }
 
 /// The lumps to append for a copy of `block` under header name `to`: the
 /// block with its header renamed, plus its `GL` run per [`gl_copies`].
-fn copied_block(dir: &Directory, block: &MapBlock, to: LumpName) -> Vec<Lump> {
+fn copied_block(
+    dir: &Directory,
+    block: &MapBlock,
+    to: LumpName,
+    warnings: &mut Vec<String>,
+) -> Vec<Lump> {
     let mut copies: Vec<Lump> = Vec::new();
     for position in block.header..block.end {
         let Some(lump) = dir.lumps.get(position) else {
@@ -252,7 +212,7 @@ fn copied_block(dir: &Directory, block: &MapBlock, to: LumpName) -> Vec<Lump> {
         }
     }
     if let Some(gl) = block.gl {
-        copies.extend(gl_copies(dir, gl, to));
+        copies.extend(gl_copies(dir, gl, to, warnings));
     }
     copies
 }
@@ -300,24 +260,41 @@ fn set_name(wad: &mut Wad, index: usize, to: LumpName) -> Result<(), CyberError>
     Ok(())
 }
 
-/// Renames `block`'s `GL` marker to match `to`, reporting the run's range
-/// when the marker cannot carry the new name and the whole run goes.
+/// Renames `block`'s `GL` marker to the name `to`'s block gets (see
+/// [`gl_marker_for`]). The run keeps its place unless that is impossible:
+/// the `GL_LEVEL` fallback only attaches to the block right above it, so
+/// a marker that does not sit there cannot carry a too-long name — that
+/// run is reported for removal, with a warning naming the fix.
 ///
 /// # Errors
 ///
 /// [`set_name`]'s refusal for a stale marker position.
-fn rename_gl(wad: &mut Wad, gl: Option<Run>, to: LumpName) -> Result<Option<Run>, CyberError> {
-    let Some((start, end)) = gl else {
+fn rename_gl(
+    wad: &mut Wad,
+    block: &MapBlock,
+    to: LumpName,
+    warnings: &mut Vec<String>,
+) -> Result<Option<Run>, CyberError> {
+    let Some((start, end)) = block.gl else {
         return Ok(None);
     };
-    let Some(head) = wad.lumps.get(start) else {
+    let Some(head) = wad.lumps.get(start).map(|lump| lump.name) else {
         return Ok(None);
     };
-    match gl_plan(head.name, to) {
-        GlPlan::Keep => Ok(None),
-        GlPlan::Drop => Ok(Some((start, end))),
-        GlPlan::Rename(name) => set_name(wad, start, name).map(|()| None),
+    let wanted = gl_marker_for(to);
+    if head == wanted {
+        return Ok(None);
     }
+    if wanted == GL_LEVEL && start != block.end {
+        warnings.push(format!(
+            "the GL node run at {start}..{end} of {to} is dropped: the new name leaves no room \
+             for a GL_<name> marker and the run does not sit right after the block, where \
+             GL_LEVEL would attach - run build_nodes variant gl on {to} to rebuild it"
+        ));
+        return Ok(Some((start, end)));
+    }
+    set_name(wad, start, wanted)?;
+    Ok(None)
 }
 
 /// Renames every working block named `from` to `to`, following each with
@@ -328,13 +305,17 @@ fn rename_gl(wad: &mut Wad, gl: Option<Run>, to: LumpName) -> Result<Option<Run>
 /// [`CyberError::NotFound`] when the working archive holds no such block,
 /// [`CyberError::AlreadyExists`] when it already holds a block named `to`;
 /// nothing changes in either case.
-fn apply_rename(wad: &mut Wad, from: LumpName, to: LumpName) -> Result<(), CyberError> {
+fn apply_rename(
+    wad: &mut Wad,
+    from: LumpName,
+    to: LumpName,
+    warnings: &mut Vec<String>,
+) -> Result<(), CyberError> {
     let analysis = analyze(&wad.lumps);
-    let blocks: Vec<BlockHead> = analysis
+    let blocks: Vec<&MapBlock> = analysis
         .maps
         .iter()
         .filter(|block| block.name == from)
-        .map(|block| (block.header, block.gl))
         .collect();
     if blocks.is_empty() {
         return Err(CyberError::NotFound(format!(
@@ -349,9 +330,9 @@ fn apply_rename(wad: &mut Wad, from: LumpName, to: LumpName) -> Result<(), Cyber
         )));
     }
     let mut doomed: Vec<usize> = Vec::new();
-    for (header, gl) in blocks {
-        set_name(wad, header, to)?;
-        if let Some((start, end)) = rename_gl(wad, gl, to)? {
+    for block in blocks {
+        set_name(wad, block.header, to)?;
+        if let Some((start, end)) = rename_gl(wad, block, to, warnings)? {
             doomed.extend(start..end);
         }
     }

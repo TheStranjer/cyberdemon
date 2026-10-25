@@ -10,7 +10,7 @@ use super::{
 };
 use crate::session::Session;
 use crate::tools::maps::manage::{copy_run, create_run, remove_run, rename_gl, rename_run};
-use crate::wad::classify::analyze;
+use crate::wad::classify::{MapBlock, MapFormat, analyze};
 
 #[test]
 fn create_run_appends_a_doom_block_and_adopts_the_active_map() {
@@ -123,7 +123,9 @@ fn copy_run_copies_a_layer_block_and_renames_the_gl_marker() {
         .expect("the copy lands");
     assert_eq!(
         value(&report),
-        json!({"from": "MAP01", "to": "MAP09", "lumps": 5_u64}),
+        json!({
+            "from": "MAP01", "to": "MAP09", "lumps": 5_u64, "warnings": [],
+        }),
         "the documented result, GL run counted",
     );
     assert_eq!(
@@ -139,7 +141,7 @@ fn copy_run_copies_a_layer_block_and_renames_the_gl_marker() {
 }
 
 #[test]
-fn copy_run_drops_the_gl_run_for_an_oversized_marker_name() {
+fn copy_run_keeps_the_gl_run_under_the_fallback_marker() {
     let mut session = base_session(layer_map());
     let report = copy_run(
         &mut session,
@@ -147,15 +149,24 @@ fn copy_run_drops_the_gl_run_for_an_oversized_marker_name() {
     )
     .expect("the copy lands");
     assert_eq!(
-        value(&report)["lumps"],
-        json!(3_u64),
-        "the GL run is left out"
+        value(&report),
+        json!({
+            "from": "MAP01", "to": "LONGNAME", "lumps": 5_u64, "warnings": [],
+        }),
+        "the GL run comes along: nothing dropped, nothing to warn",
     );
     assert_eq!(
         working_names(&session),
-        vec!["LONGNAME", "THINGS", "LINEDEFS"],
-        "members only",
+        vec!["LONGNAME", "THINGS", "LINEDEFS", "GL_LEVEL", "GL_VERT"],
+        "the run follows the block and GL_LEVEL attaches to it",
     );
+    let analysis = analyze(&session.working().lumps);
+    let block = analysis
+        .maps
+        .iter()
+        .find(|block| block.name == name("LONGNAME"))
+        .expect("the copy");
+    assert_eq!(block.gl, Some((3_usize, 5)), "analyze attaches the run");
 }
 
 #[test]
@@ -209,7 +220,7 @@ fn rename_run_renames_the_block_and_marker_and_follows_the_active_map() {
     let report = rename_run(&mut session, name("MAP08"), name("MAP02")).expect("renamed");
     assert_eq!(
         value(&report),
-        json!({"from": "MAP08", "to": "MAP02"}),
+        json!({"from": "MAP08", "to": "MAP02", "warnings": []}),
         "the documented result",
     );
     assert_eq!(
@@ -241,7 +252,7 @@ fn rename_run_renames_the_block_and_marker_and_follows_the_active_map() {
 }
 
 #[test]
-fn rename_run_keeps_gl_level_and_drops_oversized_markers() {
+fn rename_run_carries_the_gl_run_through_long_names() {
     let mut session = Session::default();
     seed(
         &mut session,
@@ -252,7 +263,12 @@ fn rename_run_keeps_gl_level_and_drops_oversized_markers() {
             carrying("GL_VERT", "g"),
         ],
     );
-    rename_run(&mut session, name("E1M1"), name("ABCDEFGH")).expect("gl_level stays");
+    let stays = rename_run(&mut session, name("E1M1"), name("ABCDEFGH")).expect("gl_level stays");
+    assert!(
+        stays.warnings.is_empty(),
+        "nothing dropped: {:?}",
+        stays.warnings
+    );
     assert_eq!(
         working_names(&session),
         vec!["ABCDEFGH", "THINGS", "GL_LEVEL", "GL_VERT"],
@@ -267,13 +283,47 @@ fn rename_run_keeps_gl_level_and_drops_oversized_markers() {
             carrying("GL_VERT", "y"),
         ],
     );
-    rename_run(&mut session, name("MAP01"), name("TOOLONG6")).expect("the run goes");
+    let fell = rename_run(&mut session, name("MAP01"), name("TOOLONG6")).expect("the run stays");
+    assert!(
+        fell.warnings.is_empty(),
+        "a fallback is not a drop: {:?}",
+        fell.warnings
+    );
     assert_eq!(
         working_names(&session),
         vec![
-            "ABCDEFGH", "THINGS", "GL_LEVEL", "GL_VERT", "TOOLONG6", "THINGS"
+            "ABCDEFGH", "THINGS", "GL_LEVEL", "GL_VERT", "TOOLONG6", "THINGS", "GL_LEVEL",
+            "GL_VERT",
         ],
-        "GL_<name> would not fit, so that block's GL run is dropped",
+        "the adjacent run follows the block down to GL_LEVEL",
+    );
+}
+
+#[test]
+fn rename_run_drops_a_named_run_that_sits_away_from_its_block() {
+    let mut session = Session::default();
+    seed(
+        &mut session,
+        vec![
+            marker("MAP01"),
+            carrying("THINGS", "t"),
+            marker("MAP02"),
+            carrying("THINGS", "u"),
+            marker("GL_MAP01"),
+            carrying("GL_VERT", "g"),
+        ],
+    );
+    let report = rename_run(&mut session, name("MAP01"), name("LONGNAME")).expect("renamed");
+    assert_eq!(
+        working_names(&session),
+        vec!["LONGNAME", "THINGS", "MAP02", "THINGS"],
+        "GL_<name> cannot carry it and GL_LEVEL would attach it to MAP02",
+    );
+    assert_eq!(report.warnings.len(), 1, "the drop is reported");
+    assert!(
+        report.warnings[0].contains("4..6") && report.warnings[0].contains("build_nodes"),
+        "the warning names the run and the fix: {}",
+        report.warnings[0],
     );
 }
 
@@ -308,7 +358,7 @@ fn rename_run_refuses_missing_colliding_and_self_renames() {
 }
 
 #[test]
-fn rename_gl_renames_or_reports_the_run_it_drops() {
+fn rename_gl_renames_the_head_in_place_or_reports_the_run_it_drops() {
     let mut session = Session::default();
     seed(
         &mut session,
@@ -320,22 +370,37 @@ fn rename_gl_renames_or_reports_the_run_it_drops() {
         ],
     );
     let analysis = analyze(&session.working().lumps);
-    let gl = analysis.maps.first().expect("the block").gl;
-    assert_eq!(gl, Some((2_usize, 4)), "the fixture run");
+    let block = analysis.maps.first().expect("the block");
+    assert_eq!(block.gl, Some((2_usize, 4)), "the fixture run");
     let mut working = session.working().clone();
-    let dropped = rename_gl(&mut working, gl, name("MAP02")).expect("renamed");
+    let mut warnings = Vec::new();
+    let dropped = rename_gl(&mut working, block, name("MAP02"), &mut warnings).expect("renamed");
     assert_eq!(dropped, None, "GL_MAP02 fits");
     assert_eq!(
         working.lumps.get(2).expect("marker").name,
         name("GL_MAP02"),
         "the marker was renamed",
     );
-    let mut again = session.working().clone();
+    rename_gl(&mut working, block, name("LONGNAME"), &mut warnings).expect("fell back");
     assert_eq!(
-        rename_gl(&mut again, gl, name("LONGNAME")).expect("dropped"),
-        Some((2_usize, 4)),
-        "the oversized rename reports the run for removal",
+        working.lumps.get(2).expect("marker").name,
+        name("GL_LEVEL"),
+        "the adjacent run keeps its node data under the fallback",
     );
+    assert!(warnings.is_empty(), "nothing was dropped: {warnings:?}");
+    let stale = MapBlock {
+        name: name("MAP01"),
+        header: 0,
+        end: 2,
+        format: MapFormat::Doom,
+        gl: Some((9_usize, 12)),
+    };
+    assert_eq!(
+        rename_gl(&mut working, &stale, name("MAP02"), &mut warnings).expect("no lump"),
+        None,
+        "a run the directory no longer holds is neither renamed nor dropped",
+    );
+    assert!(warnings.is_empty(), "and not warned about: {warnings:?}");
 }
 
 #[test]

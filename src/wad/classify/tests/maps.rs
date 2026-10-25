@@ -1,10 +1,11 @@
 //! The map topic: the binary member run and its `Doom` format, `BEHAVIOR`
 //! making a block `Hexen`, `UDMF` blocks with and without an `ENDMAP`,
-//! back-to-back maps, the three `GL` attachment cases and a `THINGS` run
-//! without a header being no map at all.
+//! back-to-back maps, the three `GL` attachment cases, the one
+//! [`gl_marker_for`] naming rule behind them and a `THINGS` run without a
+//! header being no map at all.
 
 use super::{junk, kind_at, lump, marker, name};
-use crate::wad::classify::{Analysis, LumpKind, MapFormat, analyze};
+use crate::wad::classify::{Analysis, GL_LEVEL, LumpKind, MapFormat, analyze, gl_marker_for};
 use crate::wad::name::LumpName;
 
 /// The map the analysis gave the lump at `index`.
@@ -218,6 +219,47 @@ fn gl_level_attaches_to_the_preceding_map() {
         kind_at(&analysis, 5),
         LumpKind::Unknown,
         "SECTORS after the run is loose"
+    );
+}
+
+#[test]
+fn gl_marker_for_embeds_names_up_to_five_characters() {
+    assert_eq!(gl_marker_for(name("MAP01")), name("GL_MAP01"));
+    assert_eq!(gl_marker_for(name("ABCDE")), name("GL_ABCDE"), "five fits");
+    assert_eq!(gl_marker_for(name("E1M1")), name("GL_E1M1"));
+}
+
+#[test]
+fn gl_marker_for_falls_back_to_level_for_longer_names() {
+    assert_eq!(gl_marker_for(name("ABCDEF")), GL_LEVEL, "six is over");
+    assert_eq!(gl_marker_for(name("LONGMAP")), GL_LEVEL);
+    assert_eq!(gl_marker_for(name("ABCDEFGH")), GL_LEVEL, "eight is over");
+}
+
+#[test]
+fn a_written_gl_level_run_attaches_to_the_map_above_it() {
+    let long = name("LONGMAP");
+    let lumps = vec![
+        marker("LONGMAP"),
+        lump("THINGS", &junk()),
+        marker(&gl_marker_for(long).to_string()),
+        lump("GL_VERT", &junk()),
+        lump("GL_NODES", &junk()),
+    ];
+    let analysis = analyze(&lumps);
+    let block = analysis.maps.first().expect("one map");
+    assert_eq!(block.gl, Some((2, 5)), "the fallback marker attaches");
+    let short = name("MAP07");
+    let named = vec![
+        marker("MAP07"),
+        lump("THINGS", &junk()),
+        marker(&gl_marker_for(short).to_string()),
+        lump("GL_VERT", &junk()),
+    ];
+    assert_eq!(
+        analyze(&named).maps.first().expect("one map").gl,
+        Some((2, 4)),
+        "the embedded marker attaches by name",
     );
 }
 

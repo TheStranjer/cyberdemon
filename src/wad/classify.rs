@@ -12,16 +12,18 @@
 //!
 //! The work is split three ways below this root: the marker names and the
 //! open-namespace tracker are the `namespaces` module, the map-block finding
-//! the private `maps` one and the per-lump type hints the private `kinds`
+//! and the one `gl_marker_for` naming rule the `GL` writers share the
+//! `maps` one and the per-lump type hints the private `kinds`
 //! one. The [`Namespace`], [`MapFormat`] and [`LumpKind`] enums, the shapes
 //! above, the constants they measure against and the [`analyze`] entry point
-//! stay here, with [`is_doom_patch`] re-exported from `kinds` and the two
-//! `namespace_start` and `namespace_end` marker helpers from `namespaces`.
-//! That module is public for one reason: those two are `pub(crate)`, which
+//! stay here, with [`is_doom_patch`] re-exported from `kinds`, `gl_marker_for`
+//! and `GL_LEVEL` from `maps`, and the two `namespace_start` and
+//! `namespace_end` marker helpers from `namespaces`. Those two modules are
+//! public for one reason: their re-exported items are `pub(crate)`, which
 //! `redundant_pub_crate` only accepts inside a public module.
 
 mod kinds;
-mod maps;
+pub mod maps;
 pub mod namespaces;
 
 use serde::Serialize;
@@ -33,6 +35,7 @@ use crate::wad::classify::namespaces::NamespaceState;
 use crate::wad::name::LumpName;
 
 pub use crate::wad::classify::kinds::is_doom_patch;
+pub(crate) use crate::wad::classify::maps::{GL_LEVEL, gl_marker_for};
 pub(crate) use crate::wad::classify::namespaces::{namespace_end, namespace_start};
 
 /// Exact byte size of an `ENDOOM` lump.

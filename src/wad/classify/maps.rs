@@ -1,18 +1,20 @@
-//! The map-block pass: the member names of a binary `Doom`/`Hexen` block
-//! and of a `GL` node block, the header tests that tell a real block from a
-//! loose `THINGS`, [`find_maps`]' walk that records every [`MapBlock`] with
-//! its [`MapFormat`] and attached `GL` range, and [`map_at`]'s answer to
-//! which block owns a directory index.
+//! The map-block pass: the `find_maps` walk that records every [`MapBlock`]
+//! with its [`MapFormat`] and attached `GL` range.
 //!
-//! [`super::analyze`] runs [`find_maps`] once over the directory and asks
-//! [`map_at`] per lump. Marker names are [`super::namespaces`]' business:
-//! [`is_marker_name`] keeps `S_START`-style lumps from being read as map
-//! headers. The [`MapBlock`] and [`MapFormat`] shapes themselves stay in
-//! the root.
+//! The member names of a binary `Doom`/`Hexen` block and of a `GL` node
+//! block, and the header tests that tell a real block from a loose
+//! `THINGS`, are `find_maps`' own business; `map_at` answers which block
+//! owns a directory index. `gl_marker_for` is the one naming rule every
+//! `GL` writer shares: `GL_<map>`, or the name-less `GL_LEVEL` marker for
+//! longer names. [`super::analyze`] runs `find_maps` once over the
+//! directory and asks `map_at` per lump. Marker names are
+//! [`super::namespaces`]' business: `is_marker_name` keeps `S_START`-style
+//! lumps from being read as map headers. The [`MapBlock`] and
+//! [`MapFormat`] shapes themselves stay in the root.
 
 use crate::wad::archive::Lump;
 use crate::wad::lumps;
-use crate::wad::name::LumpName;
+use crate::wad::name::{LumpName, NAME_LEN};
 
 use super::namespaces::is_marker_name;
 use super::{MapBlock, MapFormat};
@@ -21,6 +23,31 @@ use super::{MapBlock, MapFormat};
 const GL_MEMBERS: [&[u8]; 5] = [b"GL_VERT", b"GL_SEGS", b"GL_SSECT", b"GL_NODES", b"GL_PVS"];
 /// The `GL_VERT` first member every `GL` block starts with.
 const GL_VERT: LumpName = LumpName::padded(*b"GL_VERT\0");
+/// The prefix every `GL` node block marker starts with.
+const GL_PREFIX: &[u8] = b"GL_";
+/// Longest map name whose `GL_<name>` marker still fits a directory name.
+const GL_NAME_MAX: usize = NAME_LEN - GL_PREFIX.len();
+/// The `GL` marker that carries no map name and attaches to the map block
+/// right above it: the fallback [`gl_marker_for`] answers with when the
+/// map name leaves no room behind the [`GL_PREFIX`].
+pub(crate) const GL_LEVEL: LumpName = LumpName::padded(*b"GL_LEVEL");
+
+/// The marker name one map's `GL` node block carries: `GL_<map>` when the
+/// map name fits behind the [`GL_PREFIX`], [`GL_LEVEL`] otherwise. The
+/// fallback carries no name, so [`attach_gl`] hangs it off the preceding
+/// map block: whoever writes a `GL_LEVEL` marker must keep the run right
+/// after its block. This is the one rule every `GL` writer follows.
+#[must_use]
+pub(crate) fn gl_marker_for(map: LumpName) -> LumpName {
+    if map.len() > GL_NAME_MAX {
+        return GL_LEVEL;
+    }
+    let mut raw = [0_u8; NAME_LEN];
+    for (slot, byte) in raw.iter_mut().zip(GL_PREFIX.iter().chain(map.raw().iter())) {
+        *slot = *byte;
+    }
+    LumpName::from_raw(raw)
+}
 
 /// Whether `name` is a member of a binary map block, a name from
 /// [`lumps::BINARY_BLOCK_MEMBERS`].
@@ -58,7 +85,7 @@ fn is_gl_header(lumps: &[Lump], index: usize) -> bool {
         return false;
     };
     let name = head.name.as_bytes();
-    name.starts_with(b"GL_") && !is_gl_member(name) && matches_next(lumps, index, GL_VERT)
+    name.starts_with(GL_PREFIX) && !is_gl_member(name) && matches_next(lumps, index, GL_VERT)
 }
 
 /// Finds the map blocks in directory order, recording warnings.
@@ -153,15 +180,15 @@ fn scan_gl(lumps: &[Lump], header: usize) -> usize {
 }
 
 /// Attaches the `GL` block spanning `start..end` to its map: by name for
-/// `GL_<mapname>`, to the preceding map for `GL_LEVEL`.
+/// `GL_<mapname>`, to the preceding map for [`GL_LEVEL`].
 fn attach_gl(maps: &mut [MapBlock], lumps: &[Lump], start: usize, end: usize) {
     let Some(head) = lumps.get(start).map(|lump| lump.name) else {
         return;
     };
-    let target = if head.as_bytes() == b"GL_LEVEL" {
+    let target = if head == GL_LEVEL {
         maps.last_mut()
     } else {
-        let wanted = head.as_bytes().strip_prefix(b"GL_").unwrap_or_default();
+        let wanted = head.as_bytes().strip_prefix(GL_PREFIX).unwrap_or_default();
         maps.iter_mut()
             .find(|block| block.name.as_bytes() == wanted)
     };

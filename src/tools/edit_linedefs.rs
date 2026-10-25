@@ -60,13 +60,9 @@ use crate::tools::edit_linedefs::remove::{
 use crate::tools::maps::params::{FlagsInput, validate_texture_name};
 use crate::tools::{fail, ok};
 use crate::wad::classify::MapFormat;
-use crate::wad::map::flags;
+use crate::wad::map::flags::{self, BLOCKING, TWO_SIDED};
 use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map, Sidedef};
 
-/// The `blocking` linedef flag bit: the default flags of a one-sided line.
-const BLOCKING_BITS: u32 = 1_u32;
-/// The `twosided` linedef flag bit: the default flags of a two-sided line.
-const TWO_SIDED_BITS: u32 = 4_u32;
 /// The all-zero script argument list of a `Doom`-family linedef.
 const ZERO_ARGS: [i32; 5] = [0_i32; 5];
 /// The lowest value any unsigned binary record column holds.
@@ -178,11 +174,7 @@ fn resolve_bits(input: Option<&FlagsInput>, family: FlagFamily) -> Result<u32, C
 /// one-sided default blocks, the two-sided default just is two-sided.
 #[must_use]
 const fn default_line_flags(two_sided: bool) -> u32 {
-    if two_sided {
-        TWO_SIDED_BITS
-    } else {
-        BLOCKING_BITS
-    }
+    if two_sided { TWO_SIDED } else { BLOCKING }
 }
 
 /// The index of the first vertex sitting exactly on `x`/`y`.

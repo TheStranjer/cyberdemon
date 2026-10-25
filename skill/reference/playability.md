@@ -96,8 +96,10 @@ spawn at this skill. Every thing is checked for `outside_map` (no sector
 holds its point). Monsters, player starts and unknown types (treated as
 monsters, radius 20, height 56 - `Doom` things body as axis-aligned
 squares of side 2 r; the definition tables carry no heights, so 56 stands
-in for all) additionally get: `in_wall {line}` when a one-sided or
-blocking line runs strictly through the square (touching is fine),
+in for all) additionally get: `in_wall {line}` when a one-sided line, or a
+line whose flags block players in the map's own family (the shared
+`blocking` bit, plus `blockplayers`/`blockeverything` on `Hexen`-family
+maps), runs strictly through the square (touching is fine),
 `low_ceiling {height}` when the sector leaves it less than 56, and
 `overlaps {other}` when two bodies' squares strictly overlap - reported
 once, lower index first.

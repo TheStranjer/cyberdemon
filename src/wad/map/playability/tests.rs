@@ -27,16 +27,9 @@ use crate::plan::model::{Connection, ConnectionKind, Feature as PlanFeature, Pla
 use crate::plan::textures::{TextureRole, TextureRoles};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::common::fixtures::{name, side, spawn, vertex};
+use crate::wad::map::flags::{BLOCKING, THING_HEXEN_SINGLE, THING_SKILL_BITS, TWO_SIDED};
 use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing};
 
-/// The `Hexen` `playeruse` activation: field value 1 at bit 10.
-pub(super) const PLAYER_USE: u32 = 0x400_u32;
-/// The `Doom` `blocking` bit.
-pub(super) const BLOCKING: u32 = 1_u32;
-/// The `blockmonsters` bit, which a player walks past.
-pub(super) const BLOCK_MONSTERS: u32 = 2_u32;
-/// The shared `twosided` bit.
-pub(super) const TWO_SIDED: u32 = 4_u32;
 /// The blue card key type.
 pub(super) const BLUE_CARD: i32 = 5_i32;
 /// The red skull key type.
@@ -44,7 +37,7 @@ pub(super) const RED_SKULL: i32 = 38_i32;
 /// The teleport destination thing type.
 pub(super) const TELEPORT_DEST: i32 = 14_i32;
 /// The `Hexen` thing bits that put a thing in the single-player game.
-pub(super) const HEXEN_PRESENCE: u32 = 7_u32 | 0x100;
+pub(super) const HEXEN_PRESENCE: u32 = THING_SKILL_BITS | THING_HEXEN_SINGLE;
 
 /// A hand-built room: `floor` under 128 units of ceiling.
 pub(super) fn cell(floor: i32) -> (i32, i32) {

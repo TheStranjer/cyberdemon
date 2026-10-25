@@ -62,7 +62,7 @@ pub use things::{things_from_hexen, things_to_hexen};
 
 use serde::Serialize;
 
-use crate::wad::map::xlat::things::{
+use crate::wad::map::flags::{
     THING_HEXEN_DORMANT, THING_HEXEN_INVISIBLE, THING_HEXEN_STANDING, THING_HEXEN_TRANSLUCENT,
 };
 

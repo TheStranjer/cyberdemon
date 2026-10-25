@@ -88,10 +88,6 @@ use super::stats::ElementCounts;
 use crate::defs::Definitions;
 use crate::wad::classify::MapFormat;
 
-/// The linedef flag bit that blocks a player: the `Doom` family's
-/// `blocking` and the `Hexen` family's shared first bit alike.
-const BLOCKING: u32 = 1_u32;
-
 /// The role and `via` name a door sector answers with.
 const NAME_DOOR: &str = "door";
 /// The role and `via` name a lift platform answers with.

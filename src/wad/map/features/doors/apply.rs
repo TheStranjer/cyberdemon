@@ -12,13 +12,12 @@
 //! setup live in [`super`].
 
 use crate::error::CyberError;
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
+use crate::wad::map::flags::{
+    ACTIVATION_MASK, BLOCKING, DONT_PEG_BOTTOM, DONT_PEG_TOP, FlagFamily, TWO_SIDED,
+};
 use crate::wad::map::model::{Linedef, Map};
 
-use super::{
-    BLOCKING_BIT, DONTPEG_BOTTOM_BIT, DONTPEG_TOP_BIT, DoorLineSetup, DoorSides, DoorTextures,
-    NO_TEXTURE, TWO_SIDED_BIT,
-};
+use super::{DoorLineSetup, DoorSides, DoorTextures, NO_TEXTURE};
 
 /// A validated room line: its two sides, room side first.
 /// [`face_room_line`] decides at write time whether the line must turn
@@ -168,7 +167,7 @@ pub fn face_room_line(map: &mut Map, line: usize, door_sector: usize, setup: &Do
     linedef.special = setup.special;
     linedef.tag = setup.tag;
     linedef.args = setup.args;
-    linedef.flags = (linedef.flags | TWO_SIDED_BIT) & !(BLOCKING_BIT | DONTPEG_TOP_BIT);
+    linedef.flags = (linedef.flags | TWO_SIDED) & !(BLOCKING | DONT_PEG_TOP);
     if hexen {
         linedef.flags = (linedef.flags & !ACTIVATION_MASK) | setup.flags_activation;
     }
@@ -347,7 +346,7 @@ fn dress_jamb_line(map: &mut Map, jamb: JambPlan, textures: &DoorTextures) {
         }
         linedef.front = Some(jamb.door_side);
         linedef.back = None;
-        linedef.flags = (linedef.flags | BLOCKING_BIT | DONTPEG_BOTTOM_BIT) & !TWO_SIDED_BIT;
+        linedef.flags = (linedef.flags | BLOCKING | DONT_PEG_BOTTOM) & !TWO_SIDED;
     }
     if let Some(side) = map.sidedefs.get_mut(jamb.door_side) {
         textures.track.clone_into(&mut side.middle);

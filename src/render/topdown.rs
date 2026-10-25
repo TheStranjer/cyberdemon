@@ -15,13 +15,8 @@ use crate::defs::Definitions;
 use crate::fixed::{Angle, rotate_point};
 use crate::gfx::palette::Palette;
 use crate::render::{Canvas, Pt, Rgba};
+use crate::wad::map::flags::{DONT_DRAW, SECRET};
 use crate::wad::map::{Linedef, Map};
-
-/// `Doom`-family linedef flag bit: the automap must not draw the line.
-const FLAG_DONT_DRAW: u32 = 128;
-/// `Doom`-family linedef flag bit: the line marks a secret; the automap
-/// draws it as a plain wall.
-const FLAG_SECRET: u32 = 32;
 
 /// `PLAYPAL` palette-0 index of the automap one-sided-wall colour.
 const PALETTE_WALL: usize = 176;
@@ -105,10 +100,10 @@ pub fn side_sector(map: &Map, side: Option<usize>) -> Option<usize> {
 #[must_use]
 #[inline]
 pub fn automap_color(map: &Map, line: &Linedef, colors: &AutomapColors) -> Option<Rgba> {
-    if line.flags & FLAG_DONT_DRAW != 0 {
+    if line.flags & DONT_DRAW != 0 {
         return None;
     }
-    let across = if line.flags & FLAG_SECRET == 0 {
+    let across = if line.flags & SECRET == 0 {
         line.back
     } else {
         None

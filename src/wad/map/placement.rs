@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 
 use crate::defs::Definitions;
 use crate::geom::Pt;
-use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::flags::{FlagFamily, blocks_players};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
 use crate::wad::map::model::{Linedef, Map};
 
@@ -51,12 +51,6 @@ pub const CLEARANCE: i64 = 8_i64;
 pub(super) const MAX_AXIS_POINTS: usize = 4_096_usize;
 /// Divisor of the two-endpoint sum that gives a midpoint coordinate.
 const MIDPOINT_DIVISOR: i64 = 2_i64;
-/// The `blocking` linedef bit, the same value in both flag families.
-const BLOCKING: u32 = 1_u32;
-/// The `Hexen` `blockplayers` bit: the player cannot cross, monsters can.
-const BLOCK_PLAYERS: u32 = 0x4000;
-/// The `Hexen` `blockeverything` bit.
-const BLOCK_EVERYTHING: u32 = 0x8000;
 
 /// A map point widened to the exact `i128` space of the distance tests.
 pub(super) type End = (i128, i128);
@@ -296,15 +290,7 @@ pub(super) fn wide(point: Pt) -> End {
 /// Whether `line` is a wall to placement: one-sided, or carrying a bit
 /// that stops bodies in the map's own flag family.
 const fn is_wall(line: &Linedef, family: FlagFamily) -> bool {
-    if line.back.is_none() {
-        return true;
-    }
-    if line.flags & BLOCKING == BLOCKING {
-        return true;
-    }
-    matches!(family, FlagFamily::Hexen)
-        && (line.flags & BLOCK_PLAYERS == BLOCK_PLAYERS
-            || line.flags & BLOCK_EVERYTHING == BLOCK_EVERYTHING)
+    line.back.is_none() || blocks_players(line.flags, family)
 }
 
 /// The segments placement candidates keep clear of: every wall line of

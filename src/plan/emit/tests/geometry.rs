@@ -10,8 +10,9 @@ use super::{
     rooms_plan, two_rooms, vertical_at,
 };
 use crate::geom::Label;
-use crate::plan::emit::{FLAG_BLOCKING, FLAG_TWOSIDED, compiled_plan};
+use crate::plan::emit::compiled_plan;
 use crate::plan::model::{ConnectionKind, DoorStyle};
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::{Linedef, MapFormat};
 
 #[test]
@@ -89,7 +90,7 @@ fn rooms_touching_at_a_corner_share_one_vertex_row() {
     assert!(
         map.linedefs
             .iter()
-            .all(|line| line.back.is_none() && line.flags == FLAG_BLOCKING),
+            .all(|line| line.back.is_none() && line.flags == BLOCKING),
         "point-touching rooms share no line and every wall blocks"
     );
     assert!(geometry_issues(map).is_empty(), "the emission is clean");
@@ -196,7 +197,7 @@ fn a_doors_void_facing_reveals_are_one_sided() {
         "the band's four reveal edges face the wall void, split where the rooms' own line ran"
     );
     assert!(
-        reveals.iter().all(|line| line.flags & FLAG_BLOCKING != 0),
+        reveals.iter().all(|line| line.flags & BLOCKING != 0),
         "the void-facing door reveals block"
     );
 }
@@ -326,7 +327,7 @@ fn zero_thickness_rooms_share_two_sided_lines_through_the_band() {
     assert!(
         shared
             .iter()
-            .all(|&index| line_flags(map, index) == FLAG_TWOSIDED),
+            .all(|&index| line_flags(map, index) == TWO_SIDED),
         "the shared room lines are two-sided"
     );
     let west = lines_between(map, 0, 2);

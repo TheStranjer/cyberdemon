@@ -234,14 +234,10 @@ mod tests {
     use crate::plan::textures::{TextureRole, TextureRoles};
     use crate::wad::classify::MapFormat;
     use crate::wad::map::common::fixtures::{name, side, spawn, vertex};
-    use crate::wad::map::flags::{FlagFamily, Skill};
+    use crate::wad::map::flags::{BLOCKING, FlagFamily, Skill, TWO_SIDED};
     use crate::wad::map::playability::{Playability, analyze_playability};
     use crate::wad::map::{Linedef, Map, Sector, Sidedef};
 
-    /// The `Doom` `blocking` bit.
-    const BLOCKING: u32 = 1_u32;
-    /// The shared `twosided` bit.
-    const TWO_SIDED: u32 = 4_u32;
     /// The blue card thing type.
     const BLUE_CARD: i32 = 5_i32;
     /// The blue door use special.

@@ -30,11 +30,11 @@
 use serde::Serialize;
 
 use crate::error::CyberError;
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
+use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily, PLAYER_USE_BITS};
 use crate::wad::map::model::{Linedef, Map, Vertex};
 use crate::wad::map::ops::{self, Point};
 
-use super::doors::{DoorLineSetup, USE, USE_REPEAT, next_free_tag};
+use super::doors::{DoorLineSetup, USE_REPEAT, next_free_tag};
 use super::place::{VertexPair, door_segment, project_onto_line};
 
 /// What a switch is meant to do when the player uses it.
@@ -171,7 +171,7 @@ const fn hexen_switch(action: SwitchAction, repeatable: bool, tag: i32) -> DoorL
         flags_activation: if repeatable && action.takes_repeat() {
             USE_REPEAT
         } else {
-            USE
+            PLAYER_USE_BITS
         },
     }
 }

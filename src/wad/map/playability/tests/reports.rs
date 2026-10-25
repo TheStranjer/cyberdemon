@@ -10,11 +10,11 @@ use crate::plan::model::ConnectionKind;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::{name, spawn};
-use crate::wad::map::flags::{FlagFamily, Skill};
+use crate::wad::map::flags::{BLOCKING, FlagFamily, PLAYER_USE_BITS, Skill, TWO_SIDED};
 
 use super::{
-    BLOCKING, PLAYER_USE, TELEPORT_DEST, TWO_SIDED, built, cell, hall, hexen_start, link, middle,
-    notes_about, plan, room, sectors, slab, stand, wire,
+    TELEPORT_DEST, built, cell, hall, hexen_start, link, middle, notes_about, plan, room, sectors,
+    slab, stand, wire,
 };
 
 #[test]
@@ -166,7 +166,7 @@ fn a_door_acting_on_nothing_names_the_line_at_fault() {
 #[test]
 fn a_hexen_door_close_special_is_ignored_in_silence() {
     let mut map = hall(&[cell(0_i32), cell(0_i32)]);
-    wire(&mut map, 0, (10_i32, 0_i32, TWO_SIDED | PLAYER_USE));
+    wire(&mut map, 0, (10_i32, 0_i32, TWO_SIDED | PLAYER_USE_BITS));
     hexen_start(&mut map);
     let found = analyze_playability(&map, FlagFamily::Hexen, Skill::Medium);
     assert!(

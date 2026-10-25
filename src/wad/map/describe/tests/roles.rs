@@ -12,17 +12,15 @@ use crate::plan::model::{
 };
 use crate::wad::map::MapFormat;
 use crate::wad::map::common::fixtures::room;
-use crate::wad::map::describe::{BLOCKING, Describe, sector_facts};
+use crate::wad::map::describe::{Describe, sector_facts};
 use crate::wad::map::features::LiftStyle;
+use crate::wad::map::flags::{BLOCKING, PLAYER_USE_BITS};
 
 use super::plans::{built, plan_link, plan_of, plan_room};
 use super::{
     cell, described, doom_defs, has_role, neighbour_across, nested_exit_map, retune, room_sector,
     row, square_map,
 };
-
-/// The `Hexen` `playeruse` activation: field value 1 at bit 10.
-const PLAYER_USE: u32 = 0x400_u32;
 
 #[test]
 fn a_plan_built_door_band_wears_the_door_role_and_offers_its_doors() {
@@ -189,7 +187,7 @@ fn hexen_exits_follow_their_activation_field() {
         has_role(&describe.sector(1).expect("inner"), "exit_room"),
         "a playercross portal walks over into the inner square"
     );
-    let used = nested_exit_map(MapFormat::Hexen, 243_i32, PLAYER_USE);
+    let used = nested_exit_map(MapFormat::Hexen, 243_i32, PLAYER_USE_BITS);
     let pressed = Describe::new(&used, &defs);
     assert!(
         !has_role(&pressed.sector(1).expect("inner"), "exit_room"),

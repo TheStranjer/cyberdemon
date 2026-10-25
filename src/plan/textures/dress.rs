@@ -16,18 +16,8 @@ use crate::geom::label::Label;
 use crate::plan::connectors::ConnectorGeometry;
 use crate::plan::model::ConnectionKind;
 use crate::plan::textures::{Scene, TextureRole, TextureRoles};
+use crate::wad::map::flags::{BLOCKING, DONT_PEG_BOTTOM, TWO_SIDED};
 use crate::wad::map::{Map, Sector};
-
-/// The `Doom` linedef `blocking` bit: engines stop motion at the line.
-const FLAG_BLOCKING: u32 = 1_u32;
-
-/// The `Doom` linedef `twosided` bit: the line has a sector behind it.
-const FLAG_TWOSIDED: u32 = 4_u32;
-
-/// The `Doom` linedef `lower-unpegged` bit (value `16`): the lower
-/// texture is pinned to the floor of its own sector. Door jamb faces
-/// carry it so the track texture stays put while the leaf slides.
-const FLAG_LOWER_UNPEGGED: u32 = 16_u32;
 
 /// The model's name for "draw nothing here" on a texture or flat face.
 const NO_NAME: &str = "-";
@@ -487,7 +477,9 @@ fn dress_band_jamb(dress: &Dresser<'_>, map: &mut Map, line: &Line, connector: u
         ConnectionKind::Opening => set_middle(map, line.front.side, &dress.names.wall),
         ConnectionKind::Door { .. } => {
             set_middle(map, line.front.side, &dress.names.door_track);
-            add_flags(map, line.index, FLAG_LOWER_UNPEGGED);
+            // The lower texture is pinned to the jamb's own floor: the
+            // `dontpegbottom` bit keeps the track put while the leaf slides.
+            add_flags(map, line.index, DONT_PEG_BOTTOM);
         }
         ConnectionKind::Window { .. } | ConnectionKind::Stairs { .. } => {}
     }
@@ -539,7 +531,7 @@ fn dress_room_band(dress: &Dresser<'_>, map: &mut Map, line: &Line) {
         ConnectionKind::Window { .. } => {
             set_lower(map, room.side, &dress.names.sill);
             set_upper(map, room.side, &dress.names.wall);
-            add_flags(map, line.index, FLAG_BLOCKING | FLAG_TWOSIDED);
+            add_flags(map, line.index, BLOCKING | TWO_SIDED);
         }
         ConnectionKind::Door { .. } => set_upper(map, room.side, &dress.names.door),
         ConnectionKind::Stairs { .. }

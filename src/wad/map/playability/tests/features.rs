@@ -5,11 +5,11 @@
 use alloc::vec;
 
 use super::super::{ExitInfo, analyze_playability};
-use crate::wad::map::flags::{FlagFamily, Skill};
+use crate::wad::map::flags::{BLOCKING, FlagFamily, Skill, TWO_SIDED};
 
 use super::{
-    BLOCKING, HEXEN_PRESENCE, TELEPORT_DEST, TWO_SIDED, cell, hall, hexen_start, middle,
-    notes_about, sectors, stand, wire,
+    HEXEN_PRESENCE, TELEPORT_DEST, cell, hall, hexen_start, middle, notes_about, sectors, stand,
+    wire,
 };
 
 #[test]

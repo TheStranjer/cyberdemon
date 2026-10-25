@@ -9,12 +9,13 @@
 
 use alloc::collections::BTreeMap;
 
-use super::{ConnectorInfo, Emitted, FLAG_BLOCKING, FLAG_TWOSIDED, NO_NAME, region_label};
+use super::{ConnectorInfo, Emitted, NO_NAME, region_label};
 use crate::error::CyberError;
 use crate::geom::label::Label;
 use crate::geom::{Piece, Pt};
 use crate::plan::connectors::ConnectorGeometry;
 use crate::plan::model::Plan;
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::{Linedef, Map, Sidedef, Vertex};
 
 /// One linedef (and its sides' [`Sidedef`] rows) per piece, sharing one
@@ -59,8 +60,8 @@ fn push_piece(
         None => None,
     };
     let flags = match back_side {
-        Some(_) => FLAG_TWOSIDED,
-        None => FLAG_BLOCKING,
+        Some(_) => TWO_SIDED,
+        None => BLOCKING,
     };
     map.linedefs.push(Linedef {
         v1,

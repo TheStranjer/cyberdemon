@@ -30,7 +30,9 @@ use serde::Serialize;
 
 use crate::error::CyberError;
 use crate::geom::Pt;
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
+use crate::wad::map::flags::{
+    ACTIVATION_MASK, BLOCKING, FlagFamily, PLAYER_CROSS_BITS, REPEAT_SPECIAL, THING_SKILL_BITS,
+};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Linedef, Map, Sector, Thing};
 use crate::wad::map::ops::Point;
@@ -38,18 +40,10 @@ use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, app
 
 use super::doors::{DoorLineSetup, next_free_tag};
 
-/// The `blocking` linedef flag bit, cleared on the dressed borders so
-/// the player can reach and walk across them (crossing is the trigger).
-const BLOCKING_BIT: u32 = 1_u32;
-/// The `Hexen` `repeatspecial` bit: a teleporter pad keeps working.
-const REPEAT_SPECIAL_BIT: u32 = 0x200;
 /// The `Hexen` trigger bits [`dress_border`] replaces wholesale: the
 /// 3-bit activation field plus the `repeatspecial` bit, so the border
 /// ends up exactly [`teleport_specials`] names.
-const TRIGGER_MASK: u32 = ACTIVATION_MASK | REPEAT_SPECIAL_BIT;
-/// The `Hexen` `playercross` activation: the activation field's zero
-/// value — a line walked over, not used.
-const CROSS: u32 = 0_u32;
+const TRIGGER_MASK: u32 = ACTIVATION_MASK | REPEAT_SPECIAL;
 /// The model's name for "no texture here" on a [`Sidedef`] texture face.
 ///
 /// [`Sidedef`]: crate::wad::map::Sidedef
@@ -71,9 +65,6 @@ pub const TELEPORT_DESTINATION_THING: i32 = 14;
 /// The `add_teleporter` default side length of both squares, in map
 /// units.
 pub const DEFAULT_PAD_SIZE: i32 = 64_i32;
-/// The presence bits of a placed thing: visible on every skill level
-/// (the same bits the binary-format fixtures spawn with).
-const VISIBLE_FLAGS: u32 = 7_u32;
 
 /// Everything one teleporter needs, as the tool layer resolved it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,7 +148,7 @@ pub const fn teleport_specials(family: FlagFamily, tag: i32) -> DoorLineSetup {
             special: HEXEN_TELEPORT,
             tag: 0_i32,
             args: [tag, 0_i32, 0_i32, 0_i32, 0_i32],
-            flags_activation: CROSS | REPEAT_SPECIAL_BIT,
+            flags_activation: PLAYER_CROSS_BITS | REPEAT_SPECIAL,
         },
     }
 }
@@ -354,7 +345,7 @@ fn dress_border(map: &mut Map, edge: EdgePlan, setup: &DoorLineSetup) {
         line.special = setup.special;
         line.tag = setup.tag;
         line.args = setup.args;
-        line.flags &= !BLOCKING_BIT;
+        line.flags &= !BLOCKING;
         if hexen {
             line.flags = (line.flags & !TRIGGER_MASK) | setup.flags_activation;
         }
@@ -391,7 +382,7 @@ fn place_destination(map: &mut Map, at: Point, angle: i32, tid: i32) -> usize {
         y: at.y,
         angle: normalize_angle(angle),
         kind: TELEPORT_DESTINATION_THING,
-        flags: VISIBLE_FLAGS,
+        flags: THING_SKILL_BITS,
         ..Default::default()
     });
     map.things.len().saturating_sub(1)

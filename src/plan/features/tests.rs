@@ -38,13 +38,13 @@ pub(super) const TWO_DOOR_LINES: usize = 2_usize;
 pub(super) const FOUR_JAMBS: usize = 4_usize;
 
 /// The `Hexen` `playeruse` activation bit.
-pub(super) const PLAYER_USE: u32 = 0x400_u32;
+pub(super) use crate::wad::map::flags::PLAYER_USE_BITS as PLAYER_USE;
 
 /// The `Hexen` `repeatspecial` bit.
-pub(super) const REPEAT: u32 = 0x200_u32;
+pub(super) use crate::wad::map::flags::REPEAT_SPECIAL as REPEAT;
 
 /// The `Hexen` `monsteractivate` bit.
-pub(super) const MONSTER: u32 = 0x2000_u32;
+pub(super) use crate::wad::map::flags::MONSTER_ACTIVATE as MONSTER;
 
 /// A theme answering every dressing role with a distinct name.
 pub(super) struct TestRoles;

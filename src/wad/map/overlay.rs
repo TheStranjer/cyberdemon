@@ -58,10 +58,6 @@ use crate::geom::Pt;
 
 use prepared::Prepared;
 
-/// The `blocking` linedef flag bit: the flags of a new one-sided wall.
-const BLOCKING_BIT: u32 = 1_u32;
-/// The `twosided` linedef flag bit, the same value in both flag families.
-const TWO_SIDED_BIT: u32 = 4_u32;
 /// The model's name for "no texture here" on a [`Sidedef`] texture face.
 const NO_TEXTURE: &str = "-";
 /// Half of `SAMPLE_SCALE`: turns an endpoint sum into the scaled midpoint.

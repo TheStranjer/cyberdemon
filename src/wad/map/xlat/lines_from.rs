@@ -10,17 +10,18 @@
 //! activation field the table never writes matches nothing; a `UDMF` line id
 //! whose special translated has nowhere to ride on drops through
 //! [`note_busy_id`]; and the `Hexen`-only blocking bits drop as the pass
-//! masks every line down to [`DOOM_FLAG_BITS`].
+//! masks every line down to [`SHARED_LINEDEF_BITS`].
 //! [`linedefs_to_hexen`](super::linedefs_to_hexen) is the forward half and
 //! [`expected_field`] the activation field both directions agree on.
 
 use crate::error::CyberError;
-use crate::wad::map::flags::{ACTIVATION_MASK, ACTIVATION_SHIFT, MONSTER_ACTIVATE};
+use crate::wad::map::flags::{
+    ACTIVATION_MASK, ACTIVATION_SHIFT, HEXEN_BLOCK_BITS, MONSTER_ACTIVATE, REPEAT_SPECIAL,
+    SHARED_LINEDEF_BITS,
+};
 use crate::wad::map::model::{Linedef, Map};
 
-use super::lines_to::{
-    DOOM_FLAG_BITS, HEXEN_BLOCK_BITS, HEXEN_REPEAT, SET_IDENTIFICATION, linedef_warning,
-};
+use super::lines_to::{SET_IDENTIFICATION, linedef_warning};
 use super::table::{MAX_ARGS, XlatFlags, XlatRow, rows_for_zspecial};
 use super::{LinesReport, Untranslated};
 
@@ -70,7 +71,7 @@ pub fn linedefs_from_hexen(map: &mut Map, source_udmf: bool) -> Result<LinesRepo
         if line.flags & HEXEN_BLOCK_BITS != 0_u32 {
             blocked.push(index);
         }
-        line.flags &= DOOM_FLAG_BITS;
+        line.flags &= SHARED_LINEDEF_BITS;
     }
     if !report.untranslated.is_empty() {
         let lost: Vec<usize> = report
@@ -193,7 +194,7 @@ fn row_matches(row: &XlatRow, line: &Linedef) -> Option<i32> {
     if activation_field(flags) != expected_field(row) {
         return None;
     }
-    if row.activation.contains(XlatFlags::REP) != (flags & HEXEN_REPEAT != 0_u32) {
+    if row.activation.contains(XlatFlags::REP) != (flags & REPEAT_SPECIAL != 0_u32) {
         return None;
     }
     if row.activation.contains(XlatFlags::MONST) != (flags & MONSTER_ACTIVATE != 0_u32) {

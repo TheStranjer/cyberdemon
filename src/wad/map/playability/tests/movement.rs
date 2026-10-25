@@ -6,11 +6,13 @@ use alloc::vec;
 
 use super::super::{BlockerReason, KeyColor, KeyInfo, LockInfo, analyze_playability, blockers};
 use crate::wad::map::common::fixtures::spawn;
-use crate::wad::map::flags::{FlagFamily, Skill};
+use crate::wad::map::flags::{
+    BLOCK_MONSTERS, BLOCKING, FlagFamily, HEXEN_BLOCK_PLAYERS, PLAYER_USE_BITS, Skill, TWO_SIDED,
+};
 
 use super::{
-    BLOCK_MONSTERS, BLOCKING, BLUE_CARD, HEXEN_PRESENCE, PLAYER_USE, RED_SKULL, TWO_SIDED, cell,
-    hall, hexen_start, middle, notes_about, paired_red_door, sectors, slab, stand, wire,
+    BLUE_CARD, HEXEN_PRESENCE, RED_SKULL, cell, hall, hexen_start, middle, notes_about,
+    paired_red_door, sectors, slab, stand, wire,
 };
 
 #[test]
@@ -85,7 +87,7 @@ fn the_blocking_flag_ends_a_connection_whatever_the_heights() {
 #[test]
 fn the_blockplayers_bit_is_a_hexen_wall_and_a_doom_nop() {
     let mut map = hall(&[cell(0_i32), cell(0_i32)]);
-    wire(&mut map, 0, (0_i32, 0_i32, TWO_SIDED | 0x4000));
+    wire(&mut map, 0, (0_i32, 0_i32, TWO_SIDED | HEXEN_BLOCK_PLAYERS));
     let doom = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);
     assert_eq!(
         doom.reachable,
@@ -282,7 +284,7 @@ fn a_multiplayer_only_key_is_no_key() {
 #[test]
 fn a_hexen_locked_door_wants_the_colour_of_its_lock_argument() {
     let mut map = hall(&[cell(0_i32), slab(0_i32), cell(0_i32)]);
-    wire(&mut map, 0, (13_i32, 0_i32, TWO_SIDED | PLAYER_USE));
+    wire(&mut map, 0, (13_i32, 0_i32, TWO_SIDED | PLAYER_USE_BITS));
     map.linedefs.get_mut(0).expect("the divider").args = [0_i32, 16_i32, 150_i32, 130_i32, 0_i32];
     hexen_start(&mut map);
     let shut = analyze_playability(&map, FlagFamily::Hexen, Skill::Medium);
@@ -310,7 +312,7 @@ fn a_hexen_locked_door_wants_the_colour_of_its_lock_argument() {
 #[test]
 fn an_unknown_lock_code_is_read_as_openable_and_says_so() {
     let mut map = hall(&[cell(0_i32), slab(0_i32), cell(0_i32)]);
-    wire(&mut map, 0, (13_i32, 0_i32, TWO_SIDED | PLAYER_USE));
+    wire(&mut map, 0, (13_i32, 0_i32, TWO_SIDED | PLAYER_USE_BITS));
     map.linedefs.get_mut(0).expect("the divider").args = [0_i32, 16_i32, 150_i32, 77_i32, 0_i32];
     hexen_start(&mut map);
     let found = analyze_playability(&map, FlagFamily::Hexen, Skill::Medium);

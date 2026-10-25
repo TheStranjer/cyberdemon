@@ -43,9 +43,11 @@ pub(super) struct Edge {
     pub(super) front: usize,
     /// The back sidedef index when the line carries a resolvable one.
     pub(super) back: Option<usize>,
-    /// Whether the upper texture is unpegged (flag bit 8).
+    /// Whether the upper texture is unpegged (the `Doom`-family
+    /// [`DONT_PEG_TOP`](crate::wad::map::flags::DONT_PEG_TOP) bit).
     pub(super) upper_unpegged: bool,
-    /// Whether the lower texture is unpegged (flag bit 16).
+    /// Whether the lower texture is unpegged (the `Doom`-family
+    /// [`DONT_PEG_BOTTOM`](crate::wad::map::flags::DONT_PEG_BOTTOM) bit).
     pub(super) lower_unpegged: bool,
 }
 

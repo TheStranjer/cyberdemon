@@ -38,11 +38,6 @@ use cascade::{
 };
 use renumber::{Numbering, dropped, keep_linedefs, keep_sidedefs, listed, renumber};
 
-/// The `blocking` linedef flag bit, set when a line becomes one-sided.
-pub(super) const BLOCKING_FLAG: u32 = 1_u32;
-/// The two-sided linedef flag bit, the same value in both flag families;
-/// cleared when a line becomes one-sided.
-pub(super) const TWO_SIDED_FLAG: u32 = 4_u32;
 /// The model's name for "no texture here" on a
 /// [`Sidedef`](super::Sidedef) texture field.
 pub(super) const NO_TEXTURE: &str = "-";

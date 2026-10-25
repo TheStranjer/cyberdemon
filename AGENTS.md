@@ -1271,9 +1271,13 @@ src/
                   the derived fields and the two bounds) and
                   `query/tests/checks.rs` (the `AND`ing, every refusal,
                   the family tables and the wire shape).
-                  `map/flags.rs` names the two families' flag bits and
-                  carries the `Skill` whose bit a thing's presence is
-                  tested against.
+                  `map/flags.rs` names the two families' flag bits once:
+                  every linedef and thing bit, activation field value and
+                  flag mask is a named constant there, the name tables
+                  are built from those constants, `blocks_players` is the
+                  one family-aware answer to "does this line stop a
+                  player", and the `Skill` whose bit a thing's presence is
+                  tested against lives here too.
 data/
   themes/         Per-game texture-theme TSV tables embedded in the binary
                   (`doom.tsv` also serves DOOM II and undetected sessions):
@@ -1516,7 +1520,9 @@ tests/
                     usability.rs; docs.rs: skill/ and README.md layout and
                     tool/doc consistency checks, the guide and `README.md`
                     line budgets and the 1000-line budget on every Rust file
-                    in the repository.
+                    in the repository; and flag_names.rs: the guard that
+                    every linedef/thing flag-bit `const` is defined once,
+                    in `wad/map/flags.rs`, and nowhere else under `src/`.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).
 skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.

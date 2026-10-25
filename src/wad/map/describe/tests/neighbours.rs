@@ -9,7 +9,8 @@ use alloc::vec;
 
 use serde_json::{json, to_value};
 
-use crate::wad::map::describe::{BLOCKING, Describe, Neighbour};
+use crate::wad::map::describe::{Describe, Neighbour};
+use crate::wad::map::flags::BLOCKING;
 
 use super::{
     TWO_SIDED, cell, described, doom_defs, hall, neighbour_across, slab, split_divider_map,

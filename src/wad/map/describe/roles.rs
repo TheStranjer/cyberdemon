@@ -15,7 +15,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::defs::boom::{SectorFamily, SectorFlag, decode_sector_special};
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily};
+use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily, PLAYER_USE_BITS};
 use crate::wad::map::geometry::sector_boundary;
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::playability::MAX_STEP_UP;
@@ -26,8 +26,6 @@ use super::{
     NAME_STEP_UP, Neighbour, Point,
 };
 
-/// The `Hexen` family's `playeruse` activation: field value 1 at bit 10.
-const PLAYER_USE: u32 = 0x400_u32;
 /// The largest footprint of a stair-step sector, square map units:
 /// 64 x 256.
 const STAIR_MAX_AREA: u64 = 0x4000_u64;
@@ -143,7 +141,7 @@ pub(super) fn is_stair_step(area: u64, neighbours: &[Neighbour]) -> bool {
 pub(super) fn walk_over_exit(family: FlagFamily, line: &Linedef) -> bool {
     match family {
         FlagFamily::Doom => DOOM_WALK_EXITS.contains(&line.special),
-        FlagFamily::Hexen => line.flags & ACTIVATION_MASK != PLAYER_USE,
+        FlagFamily::Hexen => line.flags & ACTIVATION_MASK != PLAYER_USE_BITS,
     }
 }
 

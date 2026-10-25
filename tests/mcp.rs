@@ -11,7 +11,10 @@
 //! session-group tests in `session`, the
 //! `save_wad` tests in `save`, the defs-group shared helpers in `defs` with
 //! its `defs/things`, `defs/custom`, `defs/specials` and `defs/sectors` topic
-//! tests, the `lumps`-group tests in `lumps`, the map-edit infrastructure
+//! tests, the `lumps`-group shared helpers in `lumps` with its `lumps/list`,
+//! `lumps/search`, `lumps/get`, `lumps/add`, `lumps/import`, `lumps/replace`,
+//! `lumps/remove`, `lumps/rename` and `lumps/reorder` topic tests, the
+//! map-edit infrastructure
 //! checks in `map_edit`, the maps-group shared helpers in `maps` with its
 //! `maps/list`, `maps/summary`, `maps/assemble`, `maps/create` and
 //! `maps/copy_rename` topic tests, the capstone low-level

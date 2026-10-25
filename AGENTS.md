@@ -1159,6 +1159,24 @@ tests/
                     maps, edit_*, features, graphics, imports, inspect,
                     nodes, palette, patches, plan, playability, query,
                     render, scripts, sketch, themes, validate) with the
+                    `lumps` group's shared helpers in `lumps.rs` (the
+                    merged-layer and `IWAD`-only clients, the fixture lump
+                    sizes, the row, working-name and undo-label readers, the
+                    `path`, `source` and replace-hex argument builders, the
+                    lump seeders and the refused-edit assertion) with its tests
+                    in `lumps/list.rs` (the `list_lumps` scopes, filters and
+                    paging), `lumps/search.rs` (the `search_lumps` globs,
+                    criteria, content needles and truncation flag),
+                    `lumps/get.rs` (`get_lump`'s formats, occurrence, scope and
+                    asset reads beside `extract_lump`'s writes and refusals),
+                    `lumps/add.rs` (`add_lump`'s payloads, placement, namespace
+                    regions and twin rules), `lumps/import.rs` (the two import
+                    tools' shared insert and the uploaded asset `URL`),
+                    `lumps/replace.rs` (`replace_lump` in place, by occurrence
+                    and as a copy-on-write override), `lumps/remove.rs` (the
+                    `remove_lump` selections, rollback and namespace filter),
+                    `lumps/rename.rs` (`rename_lump`'s moves and refusals) and
+                    `lumps/reorder.rs` (the `reorder_lumps` run moves), the
                     `convert` group's shared helpers in `convert.rs` and
                     its tests in `convert/udmf.rs` (same-family rewrites),
                     `convert/forward.rs` (`Doom` into `Hexen` family records)

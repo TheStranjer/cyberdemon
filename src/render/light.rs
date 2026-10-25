@@ -3,11 +3,12 @@
 //! [`colormap_index`] turns a sector light level, a view depth and the
 //! wall's orientation into one of the 32 lighting tables of the scene's
 //! `COLORMAP` (see [`crate::gfx::colormap`]); [`shade`] looks a palette
-//! index up through that table and the settings' gamma curve and answers
-//! with the `RGBA8` pixel to plot. Both are pure: they read no lumps and
-//! hold no state, so the column renderer only does maths.
+//! index up through that table and answers with the `RGBA8` pixel to plot.
+//! Gamma is not part of either: the caller applies the settings' gamma
+//! table once to the finished [`Canvas`](crate::render::canvas::Canvas),
+//! as [`crate::render::canvas`] documents. Both are pure: they read no
+//! lumps and hold no state, so the column renderer only does maths.
 
-use crate::render::gamma_table;
 use crate::render::scene::Scene;
 use crate::render::settings::Lighting;
 
@@ -66,8 +67,12 @@ pub fn colormap_index(mode: Lighting, sector_light: i32, depth: i64, wall_dir: W
 }
 
 /// The `RGBA8` of palette entry `palette_index` under lighting table
-/// `map`: `palette[colormaps[map][index]]`, each channel passed through
-/// the settings' gamma table, fully opaque.
+/// `map`: `palette[colormaps[map][index]]`, fully opaque.
+///
+/// The answer is the lit colour only, whatever the settings' gamma: the
+/// gamma curve is the canvas's single encode-time step (see
+/// [`crate::render::canvas::Canvas::apply_gamma`]), so applying it here
+/// too would correct every texel twice.
 ///
 /// A `map` past the scene's tables uses the first table (full bright),
 /// and an index the tables or palette cannot serve falls back to identity,
@@ -81,13 +86,11 @@ pub fn shade(scene: &Scene, palette_index: u8, map: usize) -> [u8; 4] {
         .or_else(|| scene.colormaps.first())
         .and_then(|table| table.get(usize::from(palette_index)).copied())
         .unwrap_or(palette_index);
-    let gamma = gamma_table(scene.settings.gamma);
     let [red, green, blue] = scene
         .palette
         .color(usize::from(mapped))
         .unwrap_or([0_u8; 3]);
-    let fix = |channel| gamma.get(usize::from(channel)).copied().unwrap_or(channel);
-    [fix(red), fix(green), fix(blue), 255_u8]
+    [red, green, blue, 255_u8]
 }
 
 /// The light-only table of `sector_light`: `(255 - light) >> 3`.
@@ -133,6 +136,7 @@ mod tests {
     use super::{WallDir, colormap_index, shade};
     use crate::gfx::colormap::TABLE_BYTES;
     use crate::gfx::palette::Palette;
+    use crate::render::settings::MAX_GAMMA;
     use crate::render::{Lighting, RenderSettings, scene::Scene};
     use crate::wad::map::{Map, MapFormat};
 
@@ -293,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn shade_maps_colormap_then_palette_then_gamma() {
+    fn shade_maps_colormap_then_palette() {
         let dark = table(|_| 8);
         let scene = shaded_scene(0, vec![identity(), dark]);
         assert_eq!(
@@ -311,17 +315,39 @@ mod tests {
             [3_u8, 252_u8, 3_u8, 255_u8],
             "a table past the end falls back to the first"
         );
-        let lifted = crate::render::gamma_table(2);
-        let gamma_scene = shaded_scene(2, vec![dark]);
-        let lift = |channel: u8| {
-            *lifted
-                .get(usize::from(channel))
-                .expect("gamma tables cover the u8 range")
-        };
+    }
+
+    #[test]
+    fn shade_ignores_the_settings_gamma() {
+        let dark = table(|_| 8);
+        let plain = shaded_scene(0, vec![identity(), dark]);
+        // Every level must answer with the same lit colour: the gamma curve
+        // is the canvas's single encode-time step, so a texel lifted here
+        // would be corrected twice.
+        let shaded = |scene: &Scene| [shade(scene, 3, 0), shade(scene, 3, 1), shade(scene, 3, 99)];
+        let expected = shaded(&plain);
         assert_eq!(
-            shade(&gamma_scene, 3, 0),
-            [lift(8), lift(247), lift(8), 255_u8],
-            "gamma is applied to the shaded colour, not the index"
+            expected[1],
+            [8_u8, 247_u8, 8_u8, 255_u8],
+            "the dark table's colour, straight from the palette"
+        );
+        for level in 0_u8..=MAX_GAMMA {
+            let scene = shaded_scene(level, vec![identity(), dark]);
+            assert_eq!(
+                shaded(&scene),
+                expected,
+                "gamma {level} must answer exactly like gamma 0, for the identity \
+                 table, the dark one and a table past the end"
+            );
+        }
+        let lifted = crate::render::gamma_table(2);
+        assert_ne!(
+            *lifted
+                .get(8_usize)
+                .expect("gamma tables cover the u8 range"),
+            8_u8,
+            "the fixture palette colour 8 is one gamma 2 really lifts, so the \
+             equalities above measure something"
         );
     }
 

@@ -391,6 +391,45 @@ async fn extract_lump_writes_the_bytes_and_replaces_only_when_told() {
 }
 
 #[tokio::test]
+async fn two_concurrent_extracts_to_one_path_never_share_a_staging_file() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_plus_pwad(dir.path()).await;
+    let target = dir.path().join("contested.bin");
+    let playpal = json!({
+        "name": "PLAYPAL",
+        "path": target.display().to_string(),
+        "overwrite": true,
+    });
+    let dehacked = json!({
+        "name": "DEHACKED",
+        "path": target.display().to_string(),
+        "overwrite": true,
+    });
+    let (small, large) = tokio::join!(
+        call(&client, "extract_lump", dehacked),
+        call(&client, "extract_lump", playpal),
+    );
+    assert!(
+        small["bytes"].is_number() && large["bytes"].is_number(),
+        "both writers land: {small} {large}"
+    );
+    let on_disk = fs::read(&target).expect("the file reads back");
+    assert!(
+        on_disk == b"Thing 1 (Troop)\n".to_vec()
+            || on_disk.len() == usize::try_from(PLAYPAL_BYTES).expect("test size fits"),
+        "the target holds one lump whole, never a mix: {} bytes",
+        on_disk.len()
+    );
+    let siblings: Vec<String> = fs::read_dir(dir.path())
+        .expect("read the scratch directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".tmp"))
+        .collect();
+    assert!(siblings.is_empty(), "no staging files remain: {siblings:?}");
+}
+
+#[tokio::test]
 async fn extract_lump_refuses_relative_paths_missing_parents_and_lumps() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = iwad_plus_pwad(dir.path()).await;

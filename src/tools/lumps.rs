@@ -129,7 +129,7 @@ impl Cyberdemon {
 
     /// Writes one lump's raw bytes to a file.
     #[tool(
-        description = "Writes one lump's raw bytes to an absolute filesystem path, atomically (staged beside the target, then renamed). Takes the same selector as get_lump; an existing target is already_exists unless overwrite: true. Returns path and bytes. Use it when the user needs the real file; get_lump format=url only publishes it."
+        description = "Writes one lump's raw bytes to an absolute filesystem path, atomically (staged in a unique file beside the target, then landed). Takes the same selector as get_lump; an existing target, one that appears mid-write included, is already_exists unless overwrite: true. Returns path and bytes. Use it when the user needs the real file; get_lump format=url only publishes it."
     )]
     fn extract_lump(
         &self,
@@ -141,12 +141,12 @@ impl Cyberdemon {
         };
         let bytes = match self
             .state()
-            .with_session(|session| extract_run(session, &args.selector, &target, args.overwrite))
+            .with_session(|session| extract_run(session, &args.selector))
         {
             Ok(bytes) => bytes,
             Err(error) => return fail(&error),
         };
-        match write_file_atomic(&target, &bytes) {
+        match write_file_atomic(&target, &bytes, args.overwrite) {
             Ok(()) => ok(&ExtractReport {
                 path: path_text(&target),
                 bytes: bytes.len(),

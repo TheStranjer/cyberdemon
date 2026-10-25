@@ -5,11 +5,12 @@
 
 use std::path::Path;
 
-use crate::tools::lumps::extract::{parse_target, path_text, refuse_existing};
+use crate::tools::lumps::extract::{parse_target, path_text};
 use crate::tools::lumps::get::{
     Applied, GetLumpParams, Requested, asset_naming, decide, hex_body, parse_format,
     parse_get_options, parse_hex_length, text_body,
 };
+use crate::wad::archive::write_file_atomic;
 use crate::wad::classify::{LumpKind, Namespace};
 
 use super::{code, name, row};
@@ -217,15 +218,24 @@ fn extract_targets_must_be_absolute() {
 fn extract_refuses_an_existing_target_unless_overwriting() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let target = dir.path().join("lump.bin");
-    refuse_existing(&target, false).expect("nothing stands there");
-    std::fs::write(&target, b"old").expect("the scratch file lands");
-    let error = refuse_existing(&target, false).expect_err("the file exists");
+    write_file_atomic(&target, b"first", false).expect("nothing stands there");
+    let error = write_file_atomic(&target, b"second", false).expect_err("the file exists");
     assert_eq!(code(&error), "already_exists", "existing target code");
     assert!(
         error.to_string().contains("overwrite true"),
         "the message names the fix: {error}"
     );
-    refuse_existing(&target, true).expect("overwrite was allowed");
+    assert_eq!(
+        std::fs::read(&target).expect("the target reads back"),
+        b"first",
+        "the refused write left the file alone"
+    );
+    write_file_atomic(&target, b"second", true).expect("overwrite was allowed");
+    assert_eq!(
+        std::fs::read(&target).expect("the target reads back"),
+        b"second",
+        "the overwrite landed"
+    );
 }
 
 #[test]

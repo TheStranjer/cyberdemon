@@ -8,9 +8,11 @@
 //! in directory order, then the directory) and [`Wad::to_bytes_dedup`] the
 //! same with duplicate payloads stored once at shared offsets.
 //! [`Wad::read_file`] and
-//! [`write_file_atomic`] move archives to and from disk, replacing the
-//! target through a synced sibling file so a crash never truncates it.
-//! Nothing here knows about MCP or sessions.
+//! [`write_file_atomic`] move archives to and from disk, landing a synced
+//! unique sibling file on the target (by `rename`, or by a `hard_link` that
+//! refuses an existing name) so a crash never truncates it and concurrent
+//! writes never share a staging file. Nothing here knows about MCP or
+//! sessions.
 //!
 //! Two pieces of the format live in modules beside this file: `directory`
 //! reads the header's two numbers and the raw entries [`Wad::parse`] walks,

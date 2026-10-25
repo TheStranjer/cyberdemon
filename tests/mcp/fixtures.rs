@@ -206,7 +206,7 @@ fn map_block(text: &str) -> Vec<Lump> {
 fn write_wad(dir: &Path, file: &str, wad: &Wad) -> PathBuf {
     let path = dir.join(file);
     let bytes = wad.to_bytes().expect("fixtures serialize");
-    write_file_atomic(&path, &bytes).expect("fixtures write");
+    write_file_atomic(&path, &bytes, true).expect("fixtures write");
     path
 }
 

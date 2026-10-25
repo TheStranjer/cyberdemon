@@ -41,8 +41,11 @@
 //! `imports/patch`, `imports/patch_sources`, `imports/flat`, `imports/raw`,
 //! `imports/sprite`, `imports/process`, `imports/create_texture`,
 //! `imports/create_flat` and `imports/create_sprite` topic tests, the
-//! inspect-group tests in `inspect`, the features-group tests in
-//! `features`, the
+//! inspect-group tests in `inspect`, the features-group shared helpers in
+//! `features` with its `features/door`, `features/window`,
+//! `features/switch`, `features/exit`, `features/secret`, `features/light`,
+//! `features/stairs`, `features/lift`, `features/teleporter` and
+//! `features/place` topic tests, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and

@@ -21,8 +21,10 @@ music lumps a session holds.
     URL or this server's asset URL of the music file.
   - `name` (string, optional): 1 to 8 printable ASCII characters, uppercased.
     Defaults to `D_` plus the file stem uppercased and trimmed: `runnin.mid`
-    becomes `D_RUNNIN`, `E1M2 theme.mid` becomes `D_E1M2TH`. When nothing
-    usable can be derived the call fails asking for this name.
+    becomes `D_RUNNIN`, `E1M2 theme.mid` becomes `D_E1M2TH`. A stem that
+    already starts with `D_` is kept whole, so the prefix never doubles:
+    `D_RUNNIN.mid` becomes `D_RUNNIN`, not `D_D_RUNN`. When nothing usable
+    can be derived the call fails asking for this name.
   - `format` (string, optional): `"mus"` stores a vanilla `MUS` lump —
     `MIDI` is converted (this is where the `Doom` engine's own format comes
     from; `warnings` list the `MIDI` events `MUS` cannot carry), `MUS` is

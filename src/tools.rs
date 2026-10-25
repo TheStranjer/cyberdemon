@@ -16,6 +16,7 @@
 
 pub(crate) mod assets;
 pub(crate) mod audio;
+pub(crate) mod audio_common;
 pub(crate) mod batch;
 pub(crate) mod convert;
 pub(crate) mod defs;

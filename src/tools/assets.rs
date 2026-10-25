@@ -470,7 +470,8 @@ fn embedded_grab(data: &[u8]) -> Result<Option<GrabOffsets>, CyberError> {
 ///
 /// [`sound_to_playable`]' errors for sound bytes that do not decode.
 fn sound_asset(row: &LumpRow) -> Result<Prepared, CyberError> {
-    let (data, extension, _info) = sound_to_playable(&row.lump.data, row.kind, DEFAULT_BITS)?;
+    let (data, extension, _info) =
+        sound_to_playable(row.name, &row.lump.data, row.kind, DEFAULT_BITS)?;
     Ok(Prepared {
         resolved_as: "sound",
         extension,
@@ -485,7 +486,7 @@ fn sound_asset(row: &LumpRow) -> Result<Prepared, CyberError> {
 ///
 /// [`music_to_playable`]' errors for a score or container it cannot read.
 fn music_asset(row: &LumpRow) -> Result<Prepared, CyberError> {
-    let (data, extension, _kind) = music_to_playable(&row.lump.data)?;
+    let (data, extension, _kind) = music_to_playable(row.name, &row.lump.data)?;
     Ok(Prepared {
         resolved_as: "music",
         extension,

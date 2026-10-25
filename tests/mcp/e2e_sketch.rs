@@ -46,7 +46,12 @@
 //! classing exactly like the lit bottom of it. Over that, one wire proof:
 //! `process_image` over the sheet's `PNG` file reports both ops step by
 //! step and its published asset, fetched back over `HTTP`, is the same
-//! clean sheet through the `PNG` encode/decode round trip.
+//! clean sheet through the `PNG` encode/decode round trip. The last link of
+//! the chain rides that same connection: the cleaned sheet's own asset URL
+//! goes into `trace_sketch` with no other parameter and comes back as the
+//! drawn room — one rectangle region covering the interior, enclosing its
+//! probes, whole in area and hole-free, with no second room-shaped region
+//! on the sheet.
 
 #[cfg(test)]
 mod tests {
@@ -1996,5 +2001,202 @@ mod tests {
         assert_the_ruling_is_gone(&clean);
         assert_the_light_is_even(&clean);
         assert_the_frame_is_paper(&clean);
+    }
+
+    // The last link of the chain: the cleaned photo's own asset URL is a
+    // usable trace source, read back through the connection that published
+    // it — assets live in that connection's own store, so both calls ride
+    // one client.
+
+    /// The room's interior as drawn into [`ruled_photo_sheet`]: the paper
+    /// inside `PHOTO_ROOM`'s four [`PHOTO_WALL_PX`] bars, as an inclusive
+    /// `[x0, y0, x1, y1]` pixel box — `[123, 93, 417, 297]` for the fixture.
+    fn room_interior() -> [i64; 4] {
+        let (x0, y0, x1, y1) = PHOTO_ROOM;
+        let wall = i64::from(PHOTO_WALL_PX);
+        [
+            i64::from(x0).checked_add(wall).expect("a test interior"),
+            i64::from(y0).checked_add(wall).expect("a test interior"),
+            i64::from(x1).checked_sub(wall).expect("a test interior"),
+            i64::from(y1).checked_sub(wall).expect("a test interior"),
+        ]
+    }
+
+    /// How far a traced side may stand off the drawn interior side it is
+    /// asked to cover: the wall bars' ink and the ring's rounded corners.
+    const INTERIOR_SLACK: i64 = 4_i64;
+
+    /// The room's centre `(270, 195)` and four probes near its corners, all
+    /// deep inside the interior and clear of [`PHOTO_TICK`]'s mark.
+    const INTERIOR_PROBES: [(i64, i64); 5] = [
+        (270_i64, 195_i64),
+        (140_i64, 110_i64),
+        (400_i64, 110_i64),
+        (140_i64, 280_i64),
+        (400_i64, 280_i64),
+    ];
+
+    /// The narrowest area the unbroken interior can hold: 290 x 200 px,
+    /// far over anything a split or hole-heavy piece leaves and well under
+    /// the measured 63000 px of the grown region.
+    const MIN_ROOM_AREA: u64 = 58_000_u64;
+
+    /// One region's inclusive `[x0, y0, x1, y1]` `bbox` as four integers.
+    fn bbox_of(row: &Value) -> [i64; 4] {
+        let list = row["bbox"].as_array().expect("an [x0, y0, x1, y1] box");
+        assert_eq!(list.len(), 4_usize, "a box has four sides");
+        let mut sides = [0_i64; 4];
+        for (slot, value) in sides.iter_mut().zip(list) {
+            *slot = value.as_i64().expect("a box side");
+        }
+        sides
+    }
+
+    /// Every side of the traced `bbox` stands within [`INTERIOR_SLACK`] of
+    /// the drawn interior side it is asked to cover.
+    fn assert_covers_the_interior(bbox: &[i64; 4]) {
+        for (side, (got, want)) in bbox.iter().zip(room_interior()).enumerate() {
+            let drift = got.saturating_sub(want).abs();
+            assert!(
+                drift <= INTERIOR_SLACK,
+                "the box {bbox:?} stands {drift} off interior side {side} at {want}"
+            );
+        }
+    }
+
+    /// Whether the edge `start` to `end` straddles the east-going ray
+    /// `y = py` of `probe` and crosses it east of the point, in integers
+    /// only and with no division: comparing `rise x run` against
+    /// `(px - ax) x side` says on which side of the point the crossing
+    /// of the two rows' lines falls.
+    fn crosses_east(start: (i64, i64), end: (i64, i64), probe: (i64, i64)) -> bool {
+        let (px, py) = probe;
+        let (ax, ay) = start;
+        let (bx, by) = end;
+        if (ay > py) == (by > py) {
+            return false;
+        }
+        let side = by.checked_sub(ay).expect("a straddling edge");
+        let rise = py.checked_sub(ay).expect("a test row");
+        let run = bx.checked_sub(ax).expect("a test column");
+        let left = rise.checked_mul(run).expect("a test product");
+        let right = px
+            .checked_sub(ax)
+            .expect("a test column")
+            .checked_mul(side)
+            .expect("a test product");
+        if side > 0 { left > right } else { left < right }
+    }
+
+    /// Whether `probe` stands inside the integer ring `ring` by the
+    /// even-odd ray-crossing rule: every edge that crosses the east-going
+    /// ray `y = py` past the point flips the verdict once, and the ring
+    /// closes from its last vertex back to its first.
+    fn inside_ring(probe: (i64, i64), ring: &[(i64, i64)]) -> bool {
+        let mut inside = false;
+        let mut start = match ring.last() {
+            Some(point) => *point,
+            None => return false,
+        };
+        for &end in ring {
+            inside ^= crosses_east(start, end, probe);
+            start = end;
+        }
+        inside
+    }
+
+    /// The region's `points` ring encloses the room's centre and every
+    /// interior probe: the polygon really covers the drawn room.
+    fn assert_encloses_the_room(region: &Value) {
+        let ring = points_of(region);
+        for probe in INTERIOR_PROBES {
+            assert!(
+                inside_ring(probe, &ring),
+                "the probe {probe:?} stands inside the traced region: {ring:?}"
+            );
+        }
+    }
+
+    /// Whether the inclusive box `other` touches the inclusive box `core`.
+    fn boxes_touch(other: &[i64; 4], core: &[i64; 4]) -> bool {
+        other[0] <= core[2] && other[2] >= core[0] && other[1] <= core[3] && other[3] >= core[1]
+    }
+
+    /// No other region grows into the room: every other `bbox` stays clear
+    /// of the interior inset by [`INTERIOR_SLACK`], so no overlap reaches
+    /// more than the slack past an interior side.
+    fn assert_no_second_room(regions: &[Value], room: &Value) {
+        let interior = room_interior();
+        let core = [
+            interior[0]
+                .checked_add(INTERIOR_SLACK)
+                .expect("a test core"),
+            interior[1]
+                .checked_add(INTERIOR_SLACK)
+                .expect("a test core"),
+            interior[2]
+                .checked_sub(INTERIOR_SLACK)
+                .expect("a test core"),
+            interior[3]
+                .checked_sub(INTERIOR_SLACK)
+                .expect("a test core"),
+        ];
+        let strangers: Vec<&Value> = regions
+            .iter()
+            .filter(|row| row["id"] != room["id"])
+            .collect();
+        for row in strangers {
+            let other = bbox_of(row);
+            assert!(
+                !boxes_touch(&other, &core),
+                "the region {} stays out of the room: {other:?} against the core {core:?}",
+                row["id"]
+            );
+        }
+    }
+
+    /// The trace over the cleaned sheet: at least one region, one of them a
+    /// rectangle covering the drawn interior within [`INTERIOR_SLACK`] on
+    /// every side, enclosing its centre and corner probes, whole in area
+    /// and hole-free — and the sheet's background nowhere else room-shaped.
+    fn assert_room_traced(report: &Value) {
+        let regions = report["regions"].as_array().expect("a region list");
+        assert!(
+            !regions.is_empty(),
+            "the cleaned sheet traces a region: {}",
+            report["regions"]
+        );
+        let room = regions
+            .iter()
+            .find(|row| row["is_rectangle"].as_bool().unwrap_or(false))
+            .expect("one region traces as a rectangle");
+        assert_covers_the_interior(&bbox_of(room));
+        assert_encloses_the_room(room);
+        assert!(
+            room["area_px"].as_u64().expect("an area") >= MIN_ROOM_AREA,
+            "the interior comes back whole: {}",
+            room["area_px"]
+        );
+        assert_eq!(room["holes"], json!(0_u64), "the room holds no island");
+        assert_no_second_room(regions, room);
+    }
+
+    /// The chain's last link over one connection: `process_image` cleans
+    /// the ruled photo into a published asset and `trace_sketch` takes that
+    /// asset's own URL with no other parameter — no `units`, no session,
+    /// and the 600x400 sheet sits under the default 1024 `max_size`, so
+    /// every number reads in sheet pixels — and recovers the drawn room.
+    #[tokio::test]
+    async fn the_cleaned_photo_traces_as_the_drawn_room() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let client = connect().await;
+        let sheet = ruled_photo_sheet(SHEET_WIDTH, SHEET_HEIGHT);
+        let file = write_png(dir.path(), "PHOTO.png", &sheet);
+        let processed = call(&client, "process_image", photo_chain_request(&file)).await;
+        let url = processed["processed"]["url"]
+            .as_str()
+            .expect("a processed url");
+        let report = call(&client, "trace_sketch", json!({ "source": url })).await;
+        assert_room_traced(&report);
     }
 }

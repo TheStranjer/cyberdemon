@@ -350,41 +350,58 @@ fn merged_export(session: &Session, kind: Option<WadKind>) -> Wad {
     }
 }
 
-/// `save_wad`'s work: resolve path, mode and kind, write the file and, in
-/// mode `pwad`, record it as the working archive's saved state. With
-/// `dedupe` the write shares duplicate payloads and the report carries the
-/// bytes saved.
+/// `save_wad`'s work: resolve path, mode and kind and snapshot the archive
+/// under the session lock, then serialize and write outside it, so no
+/// filesystem work runs with the session held. In mode `pwad` the finished
+/// write is recorded as the working archive's saved state under its own
+/// short lock. With `dedupe` the write shares duplicate payloads and the
+/// report carries the bytes saved.
 pub(super) fn save_wad_report(
     state: &AppState,
     args: &SaveWadParams,
 ) -> Result<SaveReport, CyberError> {
     let wanted_mode = parse_save_mode(args.mode.as_deref())?;
     let wanted_kind = parse_kind(args.kind.as_deref())?;
-    let dedupe = args.dedupe;
-    state.with_session(|session| {
+    let (target, wad) = state.with_session(|session| {
         let target = resolve_target(session, args.path.as_deref())?;
         ensure_not_layer_file(session, &target)?;
         let wad = match wanted_mode {
             SaveMode::Pwad => working_copy(session, wanted_kind),
             SaveMode::Full => merged_export(session, wanted_kind),
         };
-        let (bytes, bytes_saved_by_dedupe) = if dedupe {
-            wad.to_bytes_dedup()?
-        } else {
-            (wad.to_bytes()?, 0_usize)
-        };
-        write_file_atomic(&target, &bytes)?;
-        if wanted_mode == SaveMode::Pwad {
-            session.mark_saved(target.clone());
+        Ok((target, wad))
+    })?;
+    let (bytes, bytes_saved_by_dedupe) = if args.dedupe {
+        wad.to_bytes_dedup()?
+    } else {
+        (wad.to_bytes()?, 0_usize)
+    };
+    write_file_atomic(&target, &bytes, true)?;
+    let dirty = record_saved(state, wanted_mode, &target)?;
+    Ok(SaveReport {
+        path: path_text(&target),
+        mode: wanted_mode,
+        kind: wad.kind,
+        lumps: wad.len(),
+        bytes: bytes.len(),
+        bytes_saved_by_dedupe,
+        dirty,
+    })
+}
+
+/// The session's dirty flag once a save has landed: a `pwad` write records
+/// `target` as the working archive's saved state, a `full` export leaves
+/// the session untouched. Takes its own short lock, after the filesystem
+/// work is done.
+///
+/// # Errors
+///
+/// [`AppState::with_session`]'s poisoned-lock error.
+fn record_saved(state: &AppState, mode: SaveMode, target: &Path) -> Result<bool, CyberError> {
+    state.with_session(|session| {
+        if mode == SaveMode::Pwad {
+            session.mark_saved(target.to_path_buf());
         }
-        Ok(SaveReport {
-            path: path_text(&target),
-            mode: wanted_mode,
-            kind: wad.kind,
-            lumps: wad.len(),
-            bytes: bytes.len(),
-            bytes_saved_by_dedupe,
-            dirty: session.is_dirty(),
-        })
+        Ok(session.is_dirty())
     })
 }

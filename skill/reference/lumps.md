@@ -211,9 +211,12 @@ Verify any of it with `list_lumps scope=working` (what changed) and
 - Returns: `{"path", "bytes"}` — the file written and its size.
 - Errors: `invalid_argument` (relative `path`, bad selector),
   `not_found` (`path`'s parent directory missing, no matching lump),
-  `already_exists` (the target exists and `overwrite` was not passed),
-  `io_error` (the write failed). The write is atomic: readers see the old
-  file or the complete new one.
+  `already_exists` (the target exists, or appears before the write lands,
+  and `overwrite` was not passed), `io_error` (the write failed). The write
+  is atomic through a uniquely named staging file beside the target:
+  readers see the old file or the complete new one, never a mix, and the
+  no-overwrite refusal is decided by the landing write itself, not by an
+  earlier check a concurrent writer could slip past.
 
 ## Placement
 

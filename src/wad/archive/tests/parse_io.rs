@@ -1,9 +1,16 @@
 //! The parse and I/O topic: every header and entry refusal, the two
 //! directory-width checks, the raw entry's window and the lookups, then the
-//! trips through a real file with its staging behaviour.
+//! trips through a real file with its staging behaviour: uniqueness,
+//! no-replace refusal and concurrent writers.
+
+use std::ffi::OsStr;
+use std::fs;
+use std::path::Path;
+use std::process;
 
 use super::{build_file, fs_entries, name, raw_entry, sample};
 use crate::wad::archive::directory::{DirectoryEntry, directory_start};
+use crate::wad::archive::io::staging_path;
 use crate::wad::archive::{MAX_LUMPS, Wad, WadKind, offset_field, write_file_atomic};
 
 #[test]
@@ -240,14 +247,14 @@ fn read_file_round_trips_a_written_archive() {
     let path = dir.path().join("sample.wad");
     let wad = sample(WadKind::Iwad);
     let encoded = wad.to_bytes().expect("serializes");
-    write_file_atomic(&path, &encoded).expect("the first write succeeds");
+    write_file_atomic(&path, &encoded, true).expect("the first write succeeds");
     assert_eq!(
         Wad::read_file(&path).expect("read back"),
         wad,
         "file round trip"
     );
     let replacement = Wad::default().to_bytes().expect("serializes");
-    write_file_atomic(&path, &replacement).expect("an existing target is replaced");
+    write_file_atomic(&path, &replacement, true).expect("an existing target is replaced");
     assert_eq!(
         Wad::read_file(&path).expect("reread"),
         Wad::default(),
@@ -276,7 +283,7 @@ fn read_file_reports_missing_paths_as_io() {
 fn write_file_atomic_needs_an_existing_parent() {
     let dir = tempfile::tempdir().expect("create a scratch directory");
     let path = dir.path().join("gone").join("out.wad");
-    let error = write_file_atomic(&path, b"PWAD").expect_err("no parent directory");
+    let error = write_file_atomic(&path, b"PWAD", true).expect_err("no parent directory");
     assert_eq!(error.code(), "not_found", "missing parent code");
     assert!(
         error.to_string().contains("parent directory"),
@@ -288,11 +295,129 @@ fn write_file_atomic_needs_an_existing_parent() {
 fn write_file_atomic_removes_its_staging_file_when_rename_fails() {
     let blocker = tempfile::tempdir().expect("a directory cannot be renamed over");
     let target = blocker.path().to_path_buf();
-    let error = write_file_atomic(&target, b"PWAD").expect_err("rename onto a directory");
+    let error = write_file_atomic(&target, b"PWAD", true).expect_err("rename onto a directory");
     assert_eq!(error.code(), "io_error", "failed rename code");
     assert_eq!(
         fs_entries(&target),
         Vec::<String>::new(),
+        "no staging files remain"
+    );
+}
+
+#[test]
+fn staging_names_are_unique_per_call_and_beside_the_target() {
+    let dir = tempfile::tempdir().expect("create a scratch directory");
+    let target = dir.path().join("sample.wad");
+    let first = staging_path(&target).expect("a staging name");
+    let second = staging_path(&target).expect("another staging name");
+    assert_ne!(first, second, "two calls never draw the same staging name");
+    for staging in [&first, &second] {
+        assert_eq!(staging.parent(), target.parent(), "beside the target");
+        assert_eq!(
+            staging.extension(),
+            Some(OsStr::new("tmp")),
+            "a .tmp sibling"
+        );
+        let name = staging
+            .file_name()
+            .expect("a staging file name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            name.starts_with("sample.wad."),
+            "extends the target: {name}"
+        );
+        assert!(
+            name.contains(&process::id().to_string()),
+            "carries the pid: {name}"
+        );
+    }
+}
+
+#[test]
+fn staging_path_needs_a_file_name_to_extend() {
+    let error = staging_path(Path::new("/")).expect_err("a root has no file name");
+    assert_eq!(error.code(), "invalid_argument", "no file name code");
+    assert!(
+        error.to_string().contains("no file name"),
+        "the message says why: {error}"
+    );
+}
+
+#[test]
+fn a_no_replace_write_refuses_a_target_created_after_an_existence_check() {
+    let dir = tempfile::tempdir().expect("create a scratch directory");
+    let target = dir.path().join("late.wad");
+    assert!(!target.exists(), "nothing stands there when the check runs");
+    fs::write(&target, b"OTHER").expect("a concurrent writer lands first");
+    let error = write_file_atomic(&target, b"PWAD", false).expect_err("the name is taken");
+    assert_eq!(error.code(), "already_exists", "taken target code");
+    assert!(
+        error.to_string().contains("overwrite true"),
+        "the message names the fix: {error}"
+    );
+    assert_eq!(
+        fs::read(&target).expect("the winner's file reads back"),
+        b"OTHER",
+        "the refused write left the winner's bytes alone"
+    );
+    assert_eq!(
+        fs_entries(dir.path()),
+        vec!["late.wad".to_owned()],
+        "no staging files remain"
+    );
+}
+
+#[test]
+fn a_no_replace_write_lands_a_free_target_whole() {
+    let dir = tempfile::tempdir().expect("create a scratch directory");
+    let target = dir.path().join("fresh.wad");
+    write_file_atomic(&target, b"PWAD", false).expect("the free name is taken");
+    assert_eq!(
+        fs::read(&target).expect("the file reads back"),
+        b"PWAD",
+        "the bytes landed"
+    );
+    assert_eq!(
+        fs_entries(dir.path()),
+        vec!["fresh.wad".to_owned()],
+        "no staging files remain"
+    );
+}
+
+#[test]
+fn concurrent_writes_to_one_target_never_interleave() {
+    let dir = tempfile::tempdir().expect("create a scratch directory");
+    let target = dir.path().join("race.wad");
+    let small = vec![b's'; 0x1000];
+    let large = vec![b'L'; 0x4000];
+    let first = {
+        let raced = target.clone();
+        let bytes = small.clone();
+        std::thread::spawn(move || write_file_atomic(&raced, &bytes, true))
+    };
+    let second = {
+        let raced = target.clone();
+        let bytes = large.clone();
+        std::thread::spawn(move || write_file_atomic(&raced, &bytes, true))
+    };
+    first
+        .join()
+        .expect("the first writer ran")
+        .expect("small write");
+    second
+        .join()
+        .expect("the second writer ran")
+        .expect("large write");
+    let on_disk = fs::read(&target).expect("the file reads back");
+    assert!(
+        on_disk == small || on_disk == large,
+        "the target holds one writer's bytes whole, not a mix ({} bytes)",
+        on_disk.len()
+    );
+    assert_eq!(
+        fs_entries(dir.path()),
+        vec!["race.wad".to_owned()],
         "no staging files remain"
     );
 }

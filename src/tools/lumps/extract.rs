@@ -1,11 +1,13 @@
 //! `extract_lump`: its arguments, the destination it names and the read
 //! that hands the bytes over.
 //!
-//! [`parse_target`] checks the absolute path, [`refuse_existing`] the
-//! overwrite rule and [`extract_run`] the selector read through
-//! [`crate::tools::lumps::select`]; [`path_text`] and [`ExtractReport`] are
-//! what the call reports once the router has written the file with
-//! [`crate::wad::archive::write_file_atomic`].
+//! [`parse_target`] checks the absolute path and [`extract_run`] the
+//! selector read through [`crate::tools::lumps::select`]; [`path_text`] and
+//! [`ExtractReport`] are what the call reports once the router has written
+//! the file with [`crate::wad::archive::write_file_atomic`]. The overwrite
+//! rule is not a separate existence check: the atomic write itself refuses
+//! to land on a name that exists (or appeared) when `overwrite` is `false`,
+//! so there is no window between check and write to lose a file to.
 
 use std::path::{Path, PathBuf};
 
@@ -60,35 +62,18 @@ pub(super) fn parse_target(raw: &str) -> Result<PathBuf, CyberError> {
     )))
 }
 
-/// Refuse to replace an existing target unless `overwrite` allows it.
+/// Resolve the selector and copy out the raw bytes. Whether the target may
+/// be replaced is decided by the atomic write that follows this read, not
+/// by a check here that a concurrent writer could invalidate before the
+/// write lands.
 ///
 /// # Errors
 ///
-/// [`CyberError::AlreadyExists`] when the target exists and `overwrite` is
-/// `false`.
-pub(super) fn refuse_existing(target: &Path, overwrite: bool) -> Result<(), CyberError> {
-    if !overwrite && target.try_exists().is_ok_and(|exists| exists) {
-        return Err(CyberError::AlreadyExists(format!(
-            "{} already exists: pass overwrite true to replace it",
-            target.display()
-        )));
-    }
-    Ok(())
-}
-
-/// Resolve the selector and copy out the raw bytes, refusing an existing
-/// target unless `overwrite` says to replace it.
-///
-/// # Errors
-///
-/// [`resolve`]'s errors and [`refuse_existing`]'s.
+/// [`resolve`]'s errors.
 pub(super) fn extract_run(
     session: &Session,
     selector: &LumpSelector,
-    target: &Path,
-    overwrite: bool,
 ) -> Result<Vec<u8>, CyberError> {
     let row = resolve(session, selector)?;
-    refuse_existing(target, overwrite)?;
     Ok(row.lump.data.to_vec())
 }

@@ -5,8 +5,9 @@
 //! default (`base` against `working`) and any other question of the same
 //! shape by naming two sides: session scopes, a single layer or an archive
 //! file on disk. The comparison itself is the pure [`crate::wad::diff`];
-//! this module only resolves side strings to directories, runs the diff
-//! under the session lock and pages the result.
+//! this module only resolves side strings to directories, reading a file
+//! side from disk before the session lock is taken, cloning a session side
+//! under it, and running the diff and its paging outside both.
 //!
 //! [`Cyberdemon::optimize_wad`] answers "what can my `PWAD` drop?": it
 //! runs the pure [`crate::wad::optimize`] planner over the working, base
@@ -156,16 +157,47 @@ fn owned(view: Vec<MergedLump>) -> Vec<Lump> {
     view.into_iter().map(|entry| entry.lump).collect()
 }
 
-/// The directory one side names.
+/// A file side's directory, read from disk before the session lock, or a
+/// session view that must be cloned under it.
+enum SideRead {
+    /// The lumps of an archive file, already loaded.
+    OnDisk(Vec<Lump>),
+    /// The session view to clone.
+    Session(View),
+}
+
+/// The session-only halves of [`Side`], the ones that need the lock.
+enum View {
+    /// The merged view of the read-only layers alone.
+    Base,
+    /// A scope inside the session.
+    Scope(Scope),
+}
+
+/// Read a file side from disk. Session sides are left for the lock.
 ///
 /// # Errors
 ///
-/// [`Side::Scope`]'s out-of-range layer and [`read_archive`]'s file errors.
-fn side_lumps(session: &Session, side: Side) -> Result<Vec<Lump>, CyberError> {
+/// [`read_archive_at`]'s file errors for a [`Side::File`].
+fn read_side(side: Side) -> Result<SideRead, CyberError> {
     match side {
-        Side::Base => Ok(owned(session.base_lumps())),
-        Side::Scope(scope) => Ok(owned(session.lumps_in(scope)?)),
-        Side::File(path) => Ok(read_archive_at(&path)?.lumps),
+        Side::File(path) => Ok(SideRead::OnDisk(read_archive_at(&path)?.lumps)),
+        Side::Base => Ok(SideRead::Session(View::Base)),
+        Side::Scope(scope) => Ok(SideRead::Session(View::Scope(scope))),
+    }
+}
+
+/// The directory one side names: the bytes read before the lock for a
+/// file, a clone of the session's view taken under the lock.
+///
+/// # Errors
+///
+/// [`Scope`]'s out-of-range layer index.
+fn side_lumps(session: &Session, read: SideRead) -> Result<Vec<Lump>, CyberError> {
+    match read {
+        SideRead::OnDisk(lumps) => Ok(lumps),
+        SideRead::Session(View::Base) => Ok(owned(session.base_lumps())),
+        SideRead::Session(View::Scope(scope)) => Ok(owned(session.lumps_in(scope)?)),
     }
 }
 
@@ -222,20 +254,22 @@ fn viewed(args: ReportArgs, outcome: Diff) -> DiffReport {
     }
 }
 
-/// Run one `diff_wads` call end to end.
+/// Run one `diff_wads` call end to end: file sides are read from disk
+/// before the session lock is taken, session views are cloned under it,
+/// and the comparison runs outside the lock on the owned directories.
 ///
 /// # Errors
 ///
-/// [`plan`]'s errors and whatever [`side_lumps`] reports under the session
-/// lock.
+/// [`plan`]'s errors, [`read_side`]'s file errors and whatever
+/// [`side_lumps`] reports under the session lock.
 fn diff_run(state: &AppState, args: &DiffWadsParams) -> Result<DiffReport, CyberError> {
     let (a, b, limit) = plan(args)?;
     let mode = pick_mode(&a.side, &b.side);
-    let outcome = state.with_session(|session| {
-        let left = side_lumps(session, a.side.clone())?;
-        let right = side_lumps(session, b.side.clone())?;
-        Ok(diff(&left, &right, mode))
-    })?;
+    let a_read = read_side(a.side)?;
+    let b_read = read_side(b.side)?;
+    let (left, right) = state
+        .with_session(|session| Ok((side_lumps(session, a_read)?, side_lumps(session, b_read)?)))?;
+    let outcome = diff(&left, &right, mode);
     Ok(viewed(
         ReportArgs {
             a: a.text,
@@ -626,6 +660,44 @@ mod tests {
             "nothing to compare"
         );
         assert!(!report.truncated, "and nothing to page");
+    }
+
+    #[test]
+    fn two_file_sides_diff_from_disk_outside_the_session() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let left = dir.path().join("left.wad");
+        let right = dir.path().join("right.wad");
+        let left_bytes = Wad {
+            kind: WadKind::Pwad,
+            lumps: vec![carrying("PLAYPAL", "base bytes"), carrying("NOTE", "gone")],
+        }
+        .to_bytes()
+        .expect("the left archive serializes");
+        let right_bytes = Wad {
+            kind: WadKind::Pwad,
+            lumps: vec![carrying("PLAYPAL", "new bytes")],
+        }
+        .to_bytes()
+        .expect("the right archive serializes");
+        std::fs::write(&left, &left_bytes).expect("the left file lands");
+        std::fs::write(&right, &right_bytes).expect("the right file lands");
+        let server = Cyberdemon::new();
+        let report = diff_run(
+            server.state(),
+            &args(
+                Some(&left.display().to_string()),
+                Some(&right.display().to_string()),
+                None,
+            ),
+        )
+        .expect("two files on disk diff");
+        assert_eq!(report.lumps.len(), 2, "the override and the removed lump");
+        assert!(!report.truncated, "two rows are no page");
+        let depth = server
+            .state()
+            .with_session(|session| Ok(session.undo_depth()))
+            .expect("the lock is free");
+        assert_eq!(depth, 0, "diffing files leaves the session untouched");
     }
 
     #[test]

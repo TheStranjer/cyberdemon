@@ -1,8 +1,9 @@
 //! Unit tests of the patch group: the three tools' wire forms folded into
 //! the shared import parameters, the passthrough staging of bytes that
 //! already are a `Doom` patch, the merged-view scans that decide where a
-//! replacement lands and which working lump a removal takes, and the
-//! removal's guarded slot deletion.
+//! replacement lands and which working lump a removal takes, the removal's
+//! guarded slot deletion, and the single-lock lands that re-read those
+//! scans, plan the `PNAMES` side and commit together.
 //!
 //! The fixtures are built with the library's own types: a session whose
 //! working archive holds the region markers, a decodable 2x3 patch and, for
@@ -10,20 +11,24 @@
 
 use serde_json::json;
 
-use super::remove::{remove_lump_at, working_patch_slot, working_removal_missing};
-use super::write::{holds_patch, located_patch};
+use super::remove::{
+    RemovalFlags, land_removal, remove_lump_at, working_patch_slot, working_removal_missing,
+};
+use super::write::{holds_patch, land_add_patch, land_replacement, located_patch};
 use super::{
-    AddPatchParams, PatchSourceParams, RemovePatchParams, ReplacePatchParams, looks_like_patch,
-    passthrough_staged,
+    AddPatchParams, PatchSourceParams, RemovePatchParams, ReplacePatchParams, Staged,
+    looks_like_patch, passthrough_staged,
 };
 use crate::error::CyberError;
 use crate::gfx::image::IndexedImage;
 use crate::gfx::patch::{Patch, encode_patch};
-use crate::session::Session;
+use crate::session::{Layer, LayerRole, Session};
+use crate::tools::imports::current_pnames;
 use crate::tools::imports::image_pipeline::{
     DEFAULT_PALETTE, OffsetMode, OffsetsParam, TransparencyParams, parse_import,
 };
-use crate::wad::archive::Lump;
+use crate::wad::archive::{Lump, Wad, WadKind};
+use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 use crate::wad::textures::write_pnames;
 
@@ -454,5 +459,189 @@ fn the_missing_working_removal_hint_names_replace_patch() {
     assert!(
         message.contains("replace_patch") && message.contains("working"),
         "the hint says what only works on working lumps: {message}"
+    );
+}
+
+/// Lump and `PNAMES` entry both go, without overriding a `conflict`.
+fn list_flags() -> RemovalFlags {
+    RemovalFlags {
+        from_pnames: true,
+        force: false,
+    }
+}
+
+/// The working lump only: the list is left as it stands.
+fn lump_only_flags() -> RemovalFlags {
+    RemovalFlags {
+        from_pnames: false,
+        force: false,
+    }
+}
+
+/// Staged bytes over `text`: the tiny fixture patch with its header facts.
+fn staged(text: &str) -> Staged {
+    Staged {
+        name: name(text),
+        data: tiny_patch(),
+        converted: true,
+        width: 2_u32,
+        height: 3_u32,
+        left_offset: -3_i32,
+        top_offset: -2_i32,
+    }
+}
+
+#[test]
+fn two_add_lands_after_both_stagings_keep_both_pnames_entries() {
+    // Both pictures stage (fetch, decode) outside every lock first; B's
+    // whole land then mutates the session between A's staging and A's
+    // commit. Plan and commit share the one land lock, so A reads the list
+    // B grew and neither entry is written over.
+    let mut session = session_listed(&["PNAMES"], &["WALLP1"]);
+    let landed_b = land_add_patch(&mut session, staged("MYARTB"), None).expect("B lands");
+    let landed_a = land_add_patch(&mut session, staged("MYARTA"), None).expect("A lands");
+    assert_eq!(
+        landed_b.pnames_index,
+        Some(1_usize),
+        "B appended after the fixture name"
+    );
+    assert_eq!(landed_a.pnames_index, Some(2_usize), "A appended after B");
+    assert_eq!(
+        current_pnames(&session).expect("the grown list decodes"),
+        vec![
+            "WALLP1".to_owned(),
+            "MYARTB".to_owned(),
+            "MYARTA".to_owned()
+        ],
+        "neither land overwrote the other's entry"
+    );
+}
+
+#[test]
+fn a_twin_placed_after_the_precheck_refuses_the_add_land() {
+    // The pre-fetch twin scan cannot see what a concurrent add placed in
+    // between; the land's own guard catches it before anything is written.
+    let mut session = Session::default();
+    land_add_patch(&mut session, staged("MYART"), None).expect("the first lands");
+    let error = land_add_patch(&mut session, staged("MYART"), None).expect_err("the twin stands");
+    assert_eq!(code(&error), "already_exists");
+    assert!(
+        error.to_string().contains("replace_patch"),
+        "the message names the way out: {error}"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec!["add_patch MYART"],
+        "the second land wrote nothing"
+    );
+}
+
+/// A session on an `IWAD` layer whose `patches` region holds `MYART` with
+/// a `PNAMES` entry, for the replacement lands.
+fn layer_patch_session() -> Session {
+    let mut session = Session::default();
+    session.set_iwad(Layer::new(
+        "base.wad".into(),
+        LayerRole::Iwad,
+        Wad {
+            kind: WadKind::Iwad,
+            lumps: vec![
+                Lump::marker(name("P_START")),
+                Lump::new(name("MYART"), tiny_patch()),
+                Lump::marker(name("P_END")),
+                Lump::new(
+                    name("PNAMES"),
+                    write_pnames(&["MYART".to_owned()]).expect("test names store"),
+                ),
+            ],
+        },
+    ));
+    session
+}
+
+#[test]
+fn a_replace_land_overrides_the_layer_then_overwrites_its_own_copy() {
+    // The write's decision (in place or as an override, at which unchanged
+    // `PNAMES` index) is re-read inside the land's own lock, so the second
+    // land sees the working copy the first one placed.
+    let mut session = layer_patch_session();
+    let first = land_replacement(&mut session, staged("MYART")).expect("the override lands");
+    assert!(
+        first.created_override,
+        "the working archive had no copy yet"
+    );
+    assert_eq!(
+        first.patch.pnames_index,
+        Some(0_usize),
+        "the unchanged entry rides along"
+    );
+    let second = land_replacement(&mut session, staged("MYART")).expect("the overwrite lands");
+    assert!(
+        !second.created_override,
+        "the land re-read its own working copy"
+    );
+    assert_eq!(second.lump_index, first.lump_index, "overwritten in place");
+    assert_eq!(
+        session.undo_labels(),
+        vec![
+            "replace_patch MYART".to_owned(),
+            "replace_patch MYART".to_owned()
+        ],
+        "one undoable step each"
+    );
+}
+
+#[test]
+fn one_removal_land_takes_the_slot_and_the_list_together() {
+    // Scan, plan and commit run under one lock, so the index the guarded
+    // deletion takes is the entry the scan found in the directory as the
+    // commit finds it.
+    let mut session = session_listed(&["P_START", "MYART", "P_END", "PNAMES"], &["MYART"]);
+    let outcome =
+        land_removal(&mut session, name("MYART"), list_flags()).expect("the removal lands");
+    assert!(
+        outcome.removed_lump && outcome.removed_from_pnames,
+        "lump and entry went together"
+    );
+    assert_eq!(
+        outcome.textures_changed, 0_usize,
+        "no texture referred to it"
+    );
+    assert!(
+        current_pnames(&session)
+            .expect("the emptied list decodes")
+            .is_empty(),
+        "the entry left the list"
+    );
+    assert!(
+        session
+            .find(name("MYART"), Some(Namespace::Patches))
+            .is_none(),
+        "the lump left the merged view"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec!["remove_patch MYART", "seed"],
+        "one undoable step"
+    );
+}
+
+#[test]
+fn a_pnames_only_removal_land_still_removes_the_entry() {
+    let mut session = session_listed(&["PNAMES"], &["MYART"]);
+    let outcome = land_removal(&mut session, name("MYART"), list_flags()).expect("the entry goes");
+    assert!(!outcome.removed_lump, "no working lump stood there");
+    assert!(outcome.removed_from_pnames, "the entry went alone");
+}
+
+#[test]
+fn a_removal_land_refuses_a_name_nothing_holds() {
+    let mut session = Session::default();
+    let error =
+        land_removal(&mut session, name("MYART"), lump_only_flags()).expect_err("nothing there");
+    assert_eq!(code(&error), "not_found", "the documented code");
+    assert!(
+        session.undo_labels().is_empty(),
+        "the refused land recorded nothing"
     );
 }

@@ -2,12 +2,16 @@
 //! patch lump out, or a validated image's bytes stored unchanged.
 //!
 //! [`import_patch_run`] runs the shared pipeline of [`super::image_pipeline`]
-//! and adds the `PNAMES` half: [`pnames_plan`] works out whether the
-//! effective list grows and [`commit_patch`] places the patch and, when it
-//! does, the written list, in one undoable edit. [`import_raw_run`] skips
-//! the conversion: it decodes the bytes only to prove they are a readable
-//! image and [`commit_raw`] stores them exactly as they arrived, in the
-//! region `namespace` names or loose in the global area.
+//! and adds the `PNAMES` half outside any lock, then lands everything
+//! through [`land_patch`]: one [`crate::state::AppState::with_session`]
+//! closure in which [`pnames_plan`] works out from the session as it stands
+//! whether the effective list grows and [`commit_patch`] places the patch
+//! and, when it does, the written list, in one undoable edit - no other
+//! tool's commit can slip between the plan and the write.
+//! [`import_raw_run`] skips the conversion: it decodes the bytes only to
+//! prove they are a readable image and [`commit_raw`] stores them exactly
+//! as they arrived, in the region `namespace` names or loose in the global
+//! area.
 
 use rmcp::ErrorData;
 use rmcp::model::CallToolResult;
@@ -67,10 +71,11 @@ pub(super) struct ImportRawParams {
     pub(super) replace: bool,
 }
 
-/// Structured result of [`crate::server::Cyberdemon::import_image_as_patch`] and its
-/// alias: the shared pipeline report with the placement facts.
+/// Structured result of [`crate::server::Cyberdemon::import_image_as_patch`]
+/// and its alias: the shared pipeline report with the placement facts. The
+/// fields read back through [`serde_json`] in tests of the landing step.
 #[derive(Serialize)]
-struct PatchReport {
+pub(super) struct PatchReport {
     /// The name the patch was stored under.
     name: LumpName,
     /// Its directory position in the working archive.
@@ -98,23 +103,42 @@ pub(super) struct RawReport {
     height: u32,
 }
 
-/// `import_image_as_patch`' work: run the pipeline, plan the `PNAMES`
-/// entry, then commit patch and list as one undoable edit.
+/// `import_image_as_patch`' work: run the pipeline (fetch, decode,
+/// quantize) outside any lock, then plan and commit the `PNAMES` entry and
+/// the patch under one session lock.
 ///
 /// # Errors
 ///
 /// Whatever [`build_patch`] reports for the source and picture, plus
-/// [`pnames_plan`]' and [`put_lump`]' errors; a refusal leaves the working
-/// archive untouched.
+/// [`land_patch`]' errors; a refusal leaves the working archive untouched.
 async fn import_patch_run(
     state: &AppState,
     args: &ImportPatchParams,
 ) -> Result<PatchReport, CyberError> {
     let import = parse_import(&args.common)?;
     let patched = build_patch(state, &import, OffsetDefault::Zero).await?;
-    let plan = pnames_plan(state, patched.name, args.add_to_pnames)?;
+    let add_to_pnames = args.add_to_pnames;
     let replace = import.replace;
-    state.with_session(move |session| commit_patch(session, patched, plan, replace))
+    state.with_session(move |session| land_patch(session, patched, add_to_pnames, replace))
+}
+
+/// The whole session half of a patch import under one lock: [`pnames_plan`]
+/// reads the effective `PNAMES` as they stand at this moment and
+/// [`commit_patch`] writes what it planned, so a concurrent commit cannot
+/// wedge itself between the two and lose either side's entry.
+///
+/// # Errors
+///
+/// [`pnames_plan`]' format and store refusals and [`commit_patch`]'
+/// placement, `already_exists` and stale-index errors.
+pub(super) fn land_patch(
+    session: &mut Session,
+    patched: Patched,
+    add_to_pnames: Option<bool>,
+    replace: bool,
+) -> Result<PatchReport, CyberError> {
+    let plan = pnames_plan(session, patched.name, add_to_pnames)?;
+    commit_patch(session, patched, plan, replace)
 }
 
 /// The synchronous half of a patch import: one undoable edit that places

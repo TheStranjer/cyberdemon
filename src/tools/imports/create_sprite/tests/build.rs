@@ -1,18 +1,80 @@
 //! The picture side: the automatic chain measured on a fixture drawing,
 //! the fully-background refusal, the one edit that writes every named lump
 //! and undoes together, the working twin that refuses it, the rotation
-//! warnings read for every lump and the first name that labels the edit.
+//! warnings read for every lump in the land's own lock, the first name
+//! that labels the edit, and the single `land_sprite` step that reads the
+//! session exactly as its commit finds it.
 
 use crate::gfx::image::RgbaImage;
 use crate::session::Session;
 use crate::tools::imports::create_sprite::build::{
-    BuiltSprite, build_sprite, collect_warnings, commit_sprite, first_name,
+    BuiltSprite, build_sprite, collect_warnings, commit_sprite, first_name, land_sprite,
 };
 use crate::tools::imports::create_sprite::parse_sprite_names;
 use crate::wad::archive::Lump;
 use crate::wad::classify::Namespace;
 
 use super::{by_name, by_sprite, code, fetched, name, request, state, white_with_red};
+
+/// A built sprite with dummy bytes for the land tests.
+fn built_sprite() -> BuiltSprite {
+    BuiltSprite {
+        data: vec![0_u8; 12],
+        preview_png: Vec::new(),
+        width: 2,
+        height: 3,
+        left_offset: 1,
+        top_offset: 3,
+        steps: Vec::new(),
+        colors_used: 1,
+        transparent_pixels: 4,
+        notes: Vec::new(),
+    }
+}
+
+#[test]
+fn one_land_reads_the_region_the_previous_land_placed() {
+    // Two create-sprite calls over one frame interleave the way
+    // concurrency puts them: both pictures are built (the runs'
+    // outside-the-lock half) first, the first lands whole, and only then
+    // does the second land. The rotation warnings are read inside the same
+    // lock as their commit, so the second land sees the first's lump and
+    // warns about the overlap the first created.
+    let mut session = Session::default();
+    let built = built_sprite();
+    let first = request(&by_name("BOBAA0"));
+    let warnings_a = land_sprite(&mut session, &first, &built).expect("A lands");
+    assert!(warnings_a.is_empty(), "the region was empty when A landed");
+    let second = request(&by_name("BOBAA2"));
+    let warnings_b = land_sprite(&mut session, &second, &built).expect("B lands");
+    assert!(
+        warnings_b
+            .iter()
+            .any(|w| w.contains("BOBAA0") && w.contains("frame A")),
+        "B's warnings read A's landed lump from the one lock: {warnings_b:?}"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec!["create_sprite BOBAA2", "create_sprite BOBAA0"],
+        "two undoable steps"
+    );
+}
+
+#[test]
+fn a_twin_land_refuses_and_writes_nothing() {
+    let mut session = Session::default();
+    let built = built_sprite();
+    let naming = request(&by_name("BOBAA0"));
+    land_sprite(&mut session, &naming, &built).expect("A lands");
+    let twin = request(&by_name("BOBAA0"));
+    let error = land_sprite(&mut session, &twin, &built).expect_err("B meets a twin");
+    assert_eq!(code(&error), "already_exists", "the working twin stands");
+    assert_eq!(
+        session.undo_labels(),
+        vec!["create_sprite BOBAA0"],
+        "the refused land recorded nothing"
+    );
+}
 
 #[tokio::test]
 async fn build_removes_the_background_and_anchors_the_feet() {

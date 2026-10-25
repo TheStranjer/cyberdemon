@@ -70,7 +70,6 @@ use rmcp::{ErrorData, tool, tool_router};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::Session;
-use crate::state::AppState;
 use crate::tools::imports::create_flat::{
     CREATE_FLAT_TOOL_DESCRIPTION, CreateFlatParams, create_flat_run,
 };
@@ -169,7 +168,9 @@ fn position_of(list: &[String], name: &str) -> Option<usize> {
 
 /// What an import with `add_to_pnames` answers and writes: the entry index
 /// (existing or freshly appended) and, only when the effective list grew,
-/// the new lump bytes.
+/// the new lump bytes. It reads the session it is handed, so a caller runs
+/// it inside the same [`crate::state::AppState::with_session`] closure as
+/// its commit and the plan cannot go stale under a concurrent edit.
 ///
 /// # Errors
 ///
@@ -177,14 +178,14 @@ fn position_of(list: &[String], name: &str) -> Option<usize> {
 /// [`write_pnames`]' [`CyberError::InvalidArgument`] for a name it cannot
 /// store.
 pub(in crate::tools) fn pnames_plan(
-    state: &AppState,
+    session: &Session,
     name: LumpName,
     add: Option<bool>,
 ) -> Result<Option<PnamesPlan>, CyberError> {
     if !add.unwrap_or(true) {
         return Ok(None);
     }
-    let current = state.with_session(|session| current_pnames(session))?;
+    let current = current_pnames(session)?;
     let text = name.to_string();
     if let Some(index) = position_of(&current, &text) {
         return Ok(Some(PnamesPlan { index, bytes: None }));

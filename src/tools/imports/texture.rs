@@ -15,13 +15,16 @@
 //! keeping the wall opaque, and `encode_patch` stores it with zero
 //! offsets. The collision rules ([`commit::check_patch_clash`] and the
 //! texture-name refusal) run before anything is written;
-//! [`commit::plan_create`] and [`commit::commit_create`] reuse the
-//! [`crate::tools::textures`] internals behind `build_texture` so patch,
-//! `PNAMES` and the definition land as ONE
-//! [`crate::session::Session::edit`] labelled `create_texture NAME`. An
-//! `assign_role` request afterwards points a theme wall role at the new
-//! texture; theme state is session state and is not part of the undo
-//! history, which the result notes say.
+//! [`commit::land_create`] plans over [`commit::plan_create`] and commits
+//! over [`commit::commit_create`] - reusing the [`crate::tools::textures`]
+//! internals behind `build_texture` - inside ONE
+//! [`crate::state::AppState::with_session`] lock, so patch, `PNAMES` and
+//! the definition land as ONE [`crate::session::Session::edit`] labelled
+//! `create_texture NAME` and no concurrent create's plan can be computed
+//! from a list this call has already grown. An `assign_role` request in
+//! the same step points a theme wall role at the new texture; theme state
+//! is session state and is not part of the undo history, which the result
+//! notes say.
 //!
 //! The work is split: this root keeps what one call validates - the
 //! limits, [`CreateTextureParams`] with its [`TextureSizeParams`] half,
@@ -37,7 +40,7 @@ mod commit;
 mod size;
 
 use build::build_picture;
-use commit::{CreatedTextureReport, Landed, apply_role, commit_create, plan_create, report_of};
+use commit::{CreatedTextureReport, land_create, report_of};
 use size::{check_height, check_width};
 
 pub(in crate::tools) use commit::layer_label;
@@ -216,8 +219,9 @@ fn parse_assign_role(text: Option<&str>) -> Result<Option<Role>, CyberError> {
     Ok(Some(role))
 }
 
-/// `create_texture_from_image`' work: validate, fetch and process, plan,
-/// commit as one edit, then the theme override and the preview publish.
+/// `create_texture_from_image`' work: validate, fetch and process outside
+/// every lock, then plan, commit and assign the theme role through
+/// [`land_create`] as one session step, and finally publish the preview.
 pub(in crate::tools) async fn create_texture_run(
     state: &AppState,
     args: &CreateTextureParams,
@@ -230,9 +234,9 @@ pub(in crate::tools) async fn create_texture_run(
 /// # Errors
 ///
 /// [`parse_create`]' argument errors, [`AppState::fetch_source`]' and
-/// [`build_picture`]' errors, [`plan_create`]' and [`commit_create`]'
-/// refusals, [`apply_role`]' and [`AppState::publish`]' errors; a refusal
-/// leaves the working archive untouched.
+/// [`build_picture`]' errors, [`land_create`]' refusals and
+/// [`AppState::publish`]' errors; a refusal leaves the working archive
+/// untouched.
 async fn create_texture_build(
     state: &AppState,
     args: &CreateTextureParams,
@@ -240,21 +244,13 @@ async fn create_texture_build(
     let request = parse_create(args)?;
     let fetched = state.fetch_source(&request.source).await?;
     let built = build_picture(state, &request, &fetched)?;
-    let plan = state.with_session(|session| plan_create(session, &request, &built))?;
-    let lump = plan.lump;
-    state.with_session(|session| commit_create(session, &request, &built, &plan))?;
-    let role = apply_role(state, &request)?;
+    let landed = state.with_session(|session| land_create(session, &request, &built))?;
     let preview = state.publish(
         &format!("{}_texture.png", request.name),
         PNG_MIME,
         built.preview_png.clone(),
     )?;
-    let landed = Landed {
-        lump,
-        role,
-        preview,
-    };
-    Ok(report_of(&request, &built, landed))
+    Ok(report_of(&request, &built, landed, preview))
 }
 
 #[cfg(test)]

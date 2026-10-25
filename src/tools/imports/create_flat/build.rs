@@ -1,8 +1,9 @@
 //! The picture side of one `create_flat_from_image` call: the automatic
 //! square fit and tiling ops, the quantized and encoded [`BuiltFlat`], the
-//! name-collision rule [`check_flat_clash`] reads before anything is
-//! written, [`commit_flat`]' single [`Session::edit`] placing the lump, the
-//! theme override [`apply_role`] sets outside that history and the
+//! name-collision rule [`check_flat_clash`] reads in the same lock as its
+//! commit, [`commit_flat`]' single [`Session::edit`] placing the lump, the
+//! theme override [`apply_role`] setting outside that history, the whole
+//! session half landed as one [`land_flat`] step, and the
 //! [`CreatedFlatReport`] [`create_flat_build`] answers with.
 //!
 //! The arguments are validated in the tool's root: [`super::parse_create_flat`]
@@ -213,23 +214,15 @@ pub(super) fn commit_flat(
 }
 
 /// Point the requested theme role at the new flat. Theme state is session
-/// state: no undo step records it.
-///
-/// # Errors
-///
-/// [`AppState::with_session`]' lock errors.
-pub(super) fn apply_role(
-    state: &AppState,
-    request: &FlatRequest,
-) -> Result<Option<&'static str>, CyberError> {
-    let Some(role) = request.role else {
-        return Ok(None);
-    };
-    let name = request.name.to_string();
-    state.with_session(move |session| {
-        session.texture_theme_mut().overrides.insert(role, name);
-        Ok(Some(role.as_str()))
-    })
+/// state: no undo step records it. Runs inside [`land_flat`]' lock, after
+/// the commit succeeded.
+pub(super) fn apply_role(session: &mut Session, request: &FlatRequest) -> Option<&'static str> {
+    let role = request.role?;
+    session
+        .texture_theme_mut()
+        .overrides
+        .insert(role, request.name.to_string());
+    Some(role.as_str())
 }
 
 /// Structured result of [`crate::server::Cyberdemon::create_flat_from_image`].
@@ -260,18 +253,45 @@ pub(super) struct CreatedFlatReport {
 }
 
 /// The committed facts a report is assembled from.
-struct Landed {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Landed {
     /// Whether this call overwrote or overrode a same-name flat.
-    overrides_existing: bool,
+    pub(super) overrides_existing: bool,
     /// The theme role now standing for this flat, if any.
-    role: Option<&'static str>,
-    /// The published preview.
-    preview: AssetRef,
+    pub(super) role: Option<&'static str>,
+}
+
+/// The whole session half of a create-flat under one lock:
+/// [`check_flat_clash`] reads the merged view as it stands right now (a
+/// concurrent add cannot slip between the check and the write),
+/// [`commit_flat`] places the bytes, and [`apply_role`] points the theme
+/// at the result only after the commit succeeded.
+///
+/// # Errors
+///
+/// [`check_flat_clash`]' [`CyberError::AlreadyExists`] and
+/// [`commit_flat`]' placement errors.
+pub(super) fn land_flat(
+    session: &mut Session,
+    request: &FlatRequest,
+    built: &BuiltFlat,
+) -> Result<Landed, CyberError> {
+    let overrides_existing = check_flat_clash(session, request.name, request.replace)?;
+    commit_flat(session, request, built)?;
+    Ok(Landed {
+        overrides_existing,
+        role: apply_role(session, request),
+    })
 }
 
 /// Fold the request, the built flat and the landed facts into the
 /// documented result.
-fn report_of(request: &FlatRequest, built: &BuiltFlat, landed: Landed) -> CreatedFlatReport {
+fn report_of(
+    request: &FlatRequest,
+    built: &BuiltFlat,
+    landed: Landed,
+    preview: AssetRef,
+) -> CreatedFlatReport {
     let mut warnings = built.warnings.clone();
     if let Some(assigned) = landed.role {
         warnings.push(format!(
@@ -288,7 +308,7 @@ fn report_of(request: &FlatRequest, built: &BuiltFlat, landed: Landed) -> Create
         colors_used: built.colors_used,
         max_color_error: built.max_color_error,
         overrides_existing: landed.overrides_existing,
-        preview: landed.preview,
+        preview,
         role: landed.role,
         warnings,
         next_steps: &NEXT_STEPS,
@@ -296,15 +316,16 @@ fn report_of(request: &FlatRequest, built: &BuiltFlat, landed: Landed) -> Create
 }
 
 /// The measured body of [`crate::tools::imports::create_flat::create_flat_run`]:
-/// validate, fetch and process, check the collisions, commit as one edit,
-/// then the theme override and the preview publish.
+/// validate, fetch and process outside every lock, then check the
+/// collisions and commit as one session step, and finally publish the
+/// preview.
 ///
 /// # Errors
 ///
 /// [`parse_create_flat`]' argument errors, [`AppState::fetch_source`]' and
-/// [`build_flat`]' errors, [`check_flat_clash`]' and [`commit_flat`]'
-/// refusals, [`apply_role`]' and [`AppState::publish`]' errors; a refusal
-/// leaves the working archive untouched.
+/// [`build_flat`]' errors, [`land_flat`]' refusals and
+/// [`AppState::publish`]' errors; a refusal leaves the working archive
+/// untouched.
 pub(super) async fn create_flat_build(
     state: &AppState,
     args: &CreateFlatParams,
@@ -312,22 +333,11 @@ pub(super) async fn create_flat_build(
     let request = parse_create_flat(args)?;
     let fetched = state.fetch_source(&request.source).await?;
     let built = build_flat(state, &request, &fetched)?;
-    let overrides_existing =
-        state.with_session(|session| check_flat_clash(session, request.name, request.replace))?;
-    state.with_session(|session| commit_flat(session, &request, &built))?;
-    let role = apply_role(state, &request)?;
+    let landed = state.with_session(|session| land_flat(session, &request, &built))?;
     let preview = state.publish(
         &format!("{}_flat.png", request.name),
         PNG_MIME,
         built.preview_png.clone(),
     )?;
-    Ok(report_of(
-        &request,
-        &built,
-        Landed {
-            overrides_existing,
-            role,
-            preview,
-        },
-    ))
+    Ok(report_of(&request, &built, landed, preview))
 }

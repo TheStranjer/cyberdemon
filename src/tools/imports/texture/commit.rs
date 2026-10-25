@@ -1,12 +1,14 @@
 //! Landing one `create_texture_from_image` call: [`plan_create`] runs the
 //! collision rules ([`check_patch_clash`] and the texture-name refusal)
 //! over a [`Session`] and grows the `PNAMES` list and the target
-//! `TEXTURE1`/`TEXTURE2` record in memory as a [`Plan`];
-//! [`commit_create`] writes patch, `PNAMES` and definition as ONE
-//! [`crate::session::Session::edit`] labelled `create_texture NAME`,
+//! `TEXTURE1`/`TEXTURE2` record in memory as a [`Plan`]; [`land_create`]
+//! runs plan and write under the tool's single session lock -
+//! [`commit_create`] places patch, `PNAMES` and definition as ONE
+//! [`crate::session::Session::edit`] labelled `create_texture NAME` and
 //! [`apply_role`] points a theme wall role at the result (session state,
-//! outside that history) and [`report_of`] folds the [`Built`] picture
-//! with the [`Landed`] facts into the [`CreatedTextureReport`].
+//! outside that history) - so a concurrent commit cannot grow the list
+//! between one call's plan and its write; [`report_of`] folds the [`Built`]
+//! picture with the [`Landed`] facts into the [`CreatedTextureReport`].
 //!
 //! The texture internals behind `build_texture` are reused through
 //! [`crate::tools::textures`]; the arguments come from
@@ -19,7 +21,6 @@ use serde_json::Value;
 use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::session::{LayerRole, Session, Source};
-use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{LumpWrite, put_lump};
 use crate::tools::textures::{
     Placement, TextureSet, definition, lump_copy, missing_names, place_definition, target_lump,
@@ -112,29 +113,40 @@ fn oversize(what: &str, value: u32) -> CyberError {
     ))
 }
 
-/// Refuse a patch name a read-only layer holds while the working archive
-/// does not - unless `replace` was given. A working-name twin is
-/// `put_lump`' own refusal, with its own hint.
+/// Refuse a patch name a read-only layer holds as a patch while the
+/// working archive holds none in its `patches` region - unless `replace`
+/// was given. Only the region lookup can answer a working `patches` twin:
+/// a same-named lump in another working region is no patch and must not
+/// hide the layer's. A working `patches`-region twin is `put_lump`' own
+/// refusal, with its own hint.
 ///
 /// # Errors
 ///
 /// [`CyberError::AlreadyExists`] naming the layer and the way out.
 fn check_patch_clash(session: &Session, patch: LumpName, replace: bool) -> Result<(), CyberError> {
-    if replace || session.working().find_last(patch).is_some() {
+    if replace {
         return Ok(());
     }
-    let Some(entry) = session.find(patch, None) else {
-        return Ok(());
-    };
-    match entry.source {
-        Source::Working => Ok(()),
-        Source::Layer(index) => Err(CyberError::AlreadyExists(format!(
-            "a patch named {patch} already exists in {} and other textures use it: pass \
-             patch_name to store yours under another name, or replace=true to override the \
-             layer's copy in the working archive",
-            layer_label(session, index),
-        ))),
+    if let Some(entry) = session.find(patch, Some(Namespace::Patches)) {
+        return match entry.source {
+            Source::Working => Ok(()),
+            Source::Layer(index) => Err(layer_clash(session, patch, index)),
+        };
     }
+    match session.find(patch, None).map(|entry| entry.source) {
+        Some(Source::Layer(index)) => Err(layer_clash(session, patch, index)),
+        Some(Source::Working) | None => Ok(()),
+    }
+}
+
+/// The refusal for a patch name a read-only layer stands on.
+fn layer_clash(session: &Session, patch: LumpName, index: usize) -> CyberError {
+    CyberError::AlreadyExists(format!(
+        "a patch named {patch} already exists in {} and other textures use it: pass patch_name \
+         to store yours under another name, or replace=true to override the layer's copy in the \
+         working archive",
+        layer_label(session, index),
+    ))
 }
 
 /// What a layer reads as in a message: the base game archive or a
@@ -181,33 +193,48 @@ pub(super) fn commit_create(
 }
 
 /// Point the requested theme role at the new texture. Theme state is
-/// session state: no undo step records it.
-///
-/// # Errors
-///
-/// [`AppState::with_session`]' lock errors.
-pub(super) fn apply_role(
-    state: &AppState,
-    request: &CreateRequest,
-) -> Result<Option<&'static str>, CyberError> {
-    let Some(role) = request.role else {
-        return Ok(None);
-    };
-    let name = request.name.clone();
-    state.with_session(move |session| {
-        session.texture_theme_mut().overrides.insert(role, name);
-        Ok(Some(role.as_str()))
-    })
+/// session state: no undo step records it. Runs inside [`land_create`]'
+/// lock, after the commit succeeded.
+pub(super) fn apply_role(session: &mut Session, request: &CreateRequest) -> Option<&'static str> {
+    let role = request.role?;
+    session
+        .texture_theme_mut()
+        .overrides
+        .insert(role, request.name.clone());
+    Some(role.as_str())
 }
 
 /// The committed facts a report is assembled from.
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Landed {
     /// The lump that now defines the texture.
     pub(super) lump: &'static str,
     /// The role the theme now points at the texture, if any.
     pub(super) role: Option<&'static str>,
-    /// The published composited preview.
-    pub(super) preview: AssetRef,
+}
+
+/// The whole session half of a create-texture under one lock:
+/// [`plan_create`] grows `PNAMES` and the target definition from the
+/// merged view exactly as it stands at this moment, [`commit_create`]
+/// writes that plan as one edit, and [`apply_role`] lands the theme
+/// override only once the commit took - so two concurrent creates each
+/// keep their patch, their `PNAMES` entry and their definition.
+///
+/// # Errors
+///
+/// [`plan_create`]' refusals and read errors and [`commit_create`]'
+/// placement and stale-index errors.
+pub(super) fn land_create(
+    session: &mut Session,
+    request: &CreateRequest,
+    built: &Built,
+) -> Result<Landed, CyberError> {
+    let plan = plan_create(session, request, built)?;
+    commit_create(session, request, built, &plan)?;
+    Ok(Landed {
+        lump: plan.lump,
+        role: apply_role(session, request),
+    })
 }
 
 /// Structured result of
@@ -242,12 +269,13 @@ pub(super) struct CreatedTextureReport {
     pub(super) next_steps: &'static [&'static str],
 }
 
-/// Fold the request, the built picture and the landed facts into the
-/// documented result.
+/// Fold the request, the built picture, the landed facts and the published
+/// preview into the documented result.
 pub(super) fn report_of(
     request: &CreateRequest,
     built: &Built,
     landed: Landed,
+    preview: AssetRef,
 ) -> CreatedTextureReport {
     let mut notes = built.notes.clone();
     if let Some(role) = landed.role {
@@ -268,7 +296,7 @@ pub(super) fn report_of(
         max_color_error: built.max_color_error,
         notes,
         warnings: built.warnings.clone(),
-        preview: landed.preview,
+        preview,
         role: landed.role,
         next_steps: &NEXT_STEPS,
     }

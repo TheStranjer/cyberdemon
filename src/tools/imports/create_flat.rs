@@ -11,10 +11,11 @@
 //! opaquely against the session palette in the call's `Dither` mode,
 //! [`crate::gfx::flat::encode_flat`] writes the raw index plane and
 //! [`crate::gfx::flat::decode_flat`] reads it back for the preview. The
-//! collision rules ([`build::check_flat_clash`]) run before anything is
+//! collision rule ([`build::check_flat_clash`]) reads the session in the
+//! same single lock as [`build::land_flat`]'s commit, before anything is
 //! written - flats are referenced by name everywhere, so a layer-held name
-//! refuses until `replace` - and [`build::commit_flat`] places the lump as
-//! one [`crate::session::Session::edit`] labelled `create_flat NAME`. An
+//! refuses until `replace` - and the edit places the lump as one
+//! [`crate::session::Session::edit`] labelled `create_flat NAME`. An
 //! `assign_role` request afterwards points a theme flat role at the new
 //! flat; theme state is session state and is not part of the undo
 //! history, which the result warnings say. A side above the vanilla `64`

@@ -7,27 +7,31 @@
 //! the composited preview, the order of the argument checks and the two
 //! whole builds.
 
+use std::path::PathBuf;
+
 use crate::gfx::codec::encode_png;
 use crate::gfx::image::IndexedImage;
 use crate::gfx::ops::{FitMode, ImageOp};
 use crate::gfx::palette::Palette;
+use crate::session::{Layer, LayerRole, Session};
 use crate::state::AppState;
 use crate::themes::Role;
 use crate::tools::imports::current_pnames;
 use crate::tools::imports::processed::Processed;
 use crate::tools::imports::texture::build::{composite_png, shape_picture};
 use crate::tools::imports::texture::commit::{
-    apply_role, commit_create, plan_create, texture_size,
+    apply_role, commit_create, land_create, plan_create, texture_size,
 };
 use crate::tools::imports::texture::size::WallSize;
 use crate::tools::imports::texture::{NEXT_STEPS, create_texture_build};
 use crate::tools::textures::{TextureSet, WhichLump};
+use crate::wad::archive::{Lump, Wad, WadKind};
 use crate::wad::classify::Namespace;
 use crate::wad::textures::write_pnames;
 
 use super::{
-    args, code, make_built, name, picture, playpal, request_for, seed_palette_layer, session,
-    theme_state,
+    args, code, make_built, name, picture, playpal, pnames_lump, request_for, seed_palette_layer,
+    session, texture1_lump, theme_state,
 };
 
 #[test]
@@ -61,6 +65,120 @@ fn a_layer_patch_name_clashes_with_a_hint() {
     assert!(
         message.contains("pass patch_name"),
         "and the way out: {message}"
+    );
+}
+
+/// An `IWAD` layer whose fixture texture set lives in a `patches` region,
+/// optionally with a working flats-region lump of the patch's own name.
+fn region_iwad_session(working_flat: bool) -> Session {
+    let mut session = Session::default();
+    session.set_iwad(Layer::new(
+        PathBuf::from("base.wad"),
+        LayerRole::Iwad,
+        Wad {
+            kind: WadKind::Iwad,
+            lumps: vec![
+                Lump::new(name("PLAYPAL"), playpal()),
+                pnames_lump(),
+                texture1_lump(),
+                Lump::marker(name("P_START")),
+                Lump::new(name("WALLP1"), vec![b'P']),
+                Lump::marker(name("P_END")),
+            ],
+        },
+    ));
+    if working_flat {
+        session
+            .edit("seed-flat", |wad| {
+                wad.lumps.push(Lump::marker(name("F_START")));
+                wad.lumps.push(Lump::new(name("WALLP1"), vec![1_u8; 4096]));
+                wad.lumps.push(Lump::marker(name("F_END")));
+                Ok(())
+            })
+            .expect("plain append");
+    }
+    session
+}
+
+#[test]
+fn a_working_flat_named_like_the_layer_patch_still_clashes() {
+    // The old skip only asked whether the working archive held the name at
+    // all, so a flats-region twin hid the layer's patch and the create
+    // overrode it without `replace`. A working lump counts as a twin only
+    // in the patches namespace.
+    let session = region_iwad_session(true);
+    let request = request_for("MYTEX", "WALLP1");
+    let error = plan_create(&session, &request, &make_built(64_u32, 64_u32))
+        .expect_err("the IWAD region patch stands");
+    assert_eq!(code(&error), "already_exists");
+    let message = error.to_string();
+    assert!(
+        message.contains("a patch named WALLP1 already exists in the IWAD"),
+        "the message names the layer: {message}"
+    );
+}
+
+#[test]
+fn a_working_region_patch_twin_defers_to_the_placement_refusal() {
+    let mut session = region_iwad_session(false);
+    session
+        .edit("seed-patch", |wad| {
+            wad.lumps.push(Lump::marker(name("P_START")));
+            wad.lumps.push(Lump::new(name("WALLP1"), vec![b'W']));
+            wad.lumps.push(Lump::marker(name("P_END")));
+            Ok(())
+        })
+        .expect("plain region append");
+    let request = request_for("MYTEX", "WALLP1");
+    let built = make_built(64_u32, 64_u32);
+    let error = land_create(&mut session, &request, &built).expect_err("the twin stands");
+    assert_eq!(code(&error), "already_exists");
+    assert!(
+        error.to_string().contains("patches region"),
+        "put_lump's own twin message: {error}"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        ["seed-patch"],
+        "the refused create recorded nothing"
+    );
+}
+
+#[test]
+fn two_lands_after_both_pictures_keep_both_entries_and_definitions() {
+    // Both pictures are built (the runs' fetch/decode/quantize half) before
+    // either lands, exactly as two concurrent calls interleave; B's whole
+    // land then mutates the session between A's picture and A's commit.
+    // Because plan and commit share the one `land_create` lock, each plan
+    // grows the list as its own commit finds it and nothing is overwritten.
+    let mut session = session();
+    let request_a = request_for("MYTEXA", "PATCHA");
+    let request_b = request_for("MYTEXB", "PATCHB");
+    let built = make_built(64_u32, 128_u32);
+    let landed_b = land_create(&mut session, &request_b, &built).expect("B lands");
+    let landed_a = land_create(&mut session, &request_a, &built).expect("A lands");
+    assert_eq!(landed_a.lump, "TEXTURE1", "both defined in TEXTURE1");
+    assert_eq!(landed_b.lump, "TEXTURE1");
+    assert_eq!(landed_a.role, None, "no theme role asked");
+    assert_eq!(
+        current_pnames(&session).expect("the grown list decodes"),
+        vec![
+            "WALLP1".to_owned(),
+            "STEPP1".to_owned(),
+            "PATCHB".to_owned(),
+            "PATCHA".to_owned(),
+        ],
+        "neither land dropped the other's entry"
+    );
+    let set = TextureSet::load(&session).expect("both definitions decode");
+    assert!(
+        set.find("MYTEXA").is_some() && set.find("MYTEXB").is_some(),
+        "both textures stand",
+    );
+    assert_eq!(
+        session.undo_labels(),
+        ["create_texture MYTEXA", "create_texture MYTEXB"],
+        "one undoable step each"
     );
 }
 
@@ -224,16 +342,16 @@ fn a_one_pixel_axis_refuses_the_tileable_op_naming_the_automatic_step() {
     );
 }
 
-#[tokio::test]
-async fn the_theme_override_lands_in_session_state_outside_history() {
-    let state = AppState::default();
+#[test]
+fn the_theme_override_lands_in_session_state_outside_history() {
+    let mut session = session();
     let mut request = request_for("MYTEX", "MYTEX");
     request.role = Some(Role::Wall);
-    let role = apply_role(&state, &request).expect("the override sets");
+    let role = apply_role(&mut session, &request);
     assert_eq!(role, Some("wall"), "the role reports back");
     let clean = request_for("MYTEX", "MYTEX");
-    assert_eq!(apply_role(&state, &clean).expect("nothing to set"), None);
-    let (override_name, edits) = theme_state(&state, Role::Wall);
+    assert_eq!(apply_role(&mut session, &clean), None);
+    let (override_name, edits) = theme_state(&session, Role::Wall);
     assert_eq!(
         override_name.as_deref(),
         Some("MYTEX"),

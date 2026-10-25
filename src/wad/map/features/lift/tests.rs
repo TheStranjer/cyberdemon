@@ -330,10 +330,14 @@ fn an_isolated_platform_names_its_missing_neighbour() {
 #[test]
 fn an_out_of_range_platform_refuses_with_the_current_count() {
     let mut map = two_room_map();
-    let message =
-        refuse(&build_lift(&mut map, &spec(LiftPlatform::Existing(99_usize))).unwrap_err());
-    assert!(message.contains("sector 99 is out of range"), "{message}");
-    assert!(message.contains("holds 2 of them"), "{message}");
+    let error = build_lift(&mut map, &spec(LiftPlatform::Existing(99_usize))).unwrap_err();
+    assert_eq!(code(&error), "not_found", "a missing sector is not_found");
+    let message = error.to_string();
+    assert!(message.contains("sector 99 does not exist"), "{message}");
+    assert!(
+        message.contains("the map has 2 sectors, valid indices are 0..=1"),
+        "the message states the range: {message}"
+    );
     assert_eq!(map, two_room_map(), "the refusal wrote nothing");
 }
 

@@ -22,12 +22,13 @@ use crate::plan::things::presence_flags;
 use crate::session::{Scope, Session};
 use crate::tools::edit_things::{check_binary_ranges, check_doom_plain};
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{ElementKind, edit_result_fragment};
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::placement::{
     Area, DistributeSpec, Distribution, Facing, distribute, player_start, split_proportional,
     thing_clearance,
 };
+use crate::wad::map::query::check_indices;
 use crate::wad::map::{Map, Thing};
 use crate::wad::name::LumpName;
 
@@ -120,17 +121,12 @@ pub(super) fn target_areas(map: &Map, request: &PlaceRequest) -> Result<AreaPlan
     }
 }
 
-/// Refuse the first sector index `list` holds past the map's sectors.
+/// Refuse the first sector index `list` holds past the map's sectors,
+/// through the shared [`check_indices`] guard.
+///
+/// [`check_indices`]: crate::wad::map::query::check_indices
 pub(super) fn check_sectors(map: &Map, list: &[usize]) -> Result<(), CyberError> {
-    for sector in list {
-        if map.sectors.get(*sector).is_none() {
-            return Err(CyberError::NotFound(format!(
-                "sector {sector} is out of range: the map holds {}; get_map_summary lists them",
-                map.sectors.len()
-            )));
-        }
-    }
-    Ok(())
+    check_indices(ElementKind::Sectors, list, map)
 }
 
 /// Run the whole placement over `map` and append the thing rows: one

@@ -16,6 +16,7 @@ use crate::wad::map::flags::{
     ACTIVATION_MASK, BLOCKING, DONT_PEG_BOTTOM, DONT_PEG_TOP, FlagFamily, TWO_SIDED,
 };
 use crate::wad::map::model::{Linedef, Map};
+use crate::wad::map::query::{ElementKind, check_index, missing_index};
 
 use super::{DoorLineSetup, DoorSides, DoorTextures, NO_TEXTURE};
 
@@ -94,8 +95,9 @@ struct DoorAction<'dress> {
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] when `sides.door_sector` is not a
-/// sector of the map, when a line index is not a linedef, when a line
+/// [`CyberError::NotFound`] when `sides.door_sector` is not a sector of
+/// the map or a line index is not a linedef (naming the door role and
+/// the valid range), [`CyberError::InvalidArgument`] when a line
 /// references a sidedef the map does not hold, when a room line is not
 /// two-sided or does not separate a room sector from the door sector, or
 /// when a jamb line has no side facing the door sector. Build the
@@ -184,13 +186,8 @@ fn front_side_of(map: &Map, index: usize) -> Option<usize> {
 /// Check every [`DoorSides`] reference against `map` and resolve each
 /// line into its plan, before any mutation.
 fn plan_door(map: &Map, sides: &DoorSides) -> Result<DoorPlan, CyberError> {
-    if map.sectors.get(sides.door_sector).is_none() {
-        return Err(range_error(
-            "door sector",
-            sides.door_sector,
-            map.sectors.len(),
-        ));
-    }
+    check_index(ElementKind::Sectors, sides.door_sector, map.sectors.len())
+        .map_err(|error| error.map_message(|message| format!("door {message}")))?;
     let rooms = sides
         .room_lines
         .iter()
@@ -274,11 +271,13 @@ fn plan_jamb_line(map: &Map, line: usize, door_sector: usize) -> Result<JambPlan
     }
 }
 
-/// The linedef `index` of `map`, named by its door role `role`.
+/// The linedef `index` of `map`, named by its door role `role`, refused
+/// with the shared index guard's message carrying the role as context.
 fn line_at<'held>(map: &'held Map, index: usize, role: &str) -> Result<&'held Linedef, CyberError> {
-    map.linedefs
-        .get(index)
-        .ok_or_else(|| range_error(&format!("{role} linedef"), index, map.linedefs.len()))
+    map.linedefs.get(index).ok_or_else(|| {
+        missing_index(ElementKind::Linedefs, index, map.linedefs.len())
+            .map_message(|message| format!("{role} {message}"))
+    })
 }
 
 /// The front and back sidedef indices of a two-sided line.
@@ -297,15 +296,6 @@ fn jamb_not_at_door(line: usize, door_sector: usize) -> CyberError {
     CyberError::InvalidArgument(format!(
         "jamb linedef {line} does not border door sector {door_sector}: pass the wall \
          lines between the recess and its neighbours"
-    ))
-}
-
-/// `InvalidArgument` naming the reference `kind`, its out-of-range
-/// `index` and how many the map holds.
-fn range_error(kind: &str, index: usize, len: usize) -> CyberError {
-    CyberError::InvalidArgument(format!(
-        "{kind} {index} is out of range: the map holds {len} of them; re-read the map \
-         and pass current indices"
     ))
 }
 

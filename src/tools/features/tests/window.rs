@@ -14,7 +14,7 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::features::WindowHeights;
 use crate::wad::map::{Linedef, Map};
 
-use super::{one_room, refuse, room_and_hall, two_rooms};
+use super::{missing, one_room, refuse, room_and_hall, two_rooms};
 
 /// The skins the tests dress windows with.
 fn window_skins() -> WindowSkins {
@@ -201,8 +201,8 @@ fn a_one_sided_window_wall_with_nothing_behind_refuses() {
 #[test]
 fn window_targets_are_validated_like_the_door_s() {
     let checked = two_rooms();
-    let message = refuse(&choose_between(&checked, 0, 42, None).unwrap_err());
-    assert!(message.contains("sector 42 is out of range"), "{message}");
+    let message = missing(&choose_between(&checked, 0, 42, None).unwrap_err());
+    assert!(message.contains("sector 42 does not exist"), "{message}");
     let mut map = two_rooms();
     map.format = MapFormat::Hexen;
     let built = build_window(&mut map, &window_spec(Target::Between { a: 0, b: 1 }))

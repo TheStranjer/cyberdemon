@@ -32,6 +32,13 @@ pub(super) fn refuse(error: &CyberError) -> String {
     error.to_string()
 }
 
+/// The message of a refusal that must be a `NotFound`, as the shared
+/// index guard phrases its refusals.
+pub(super) fn missing(error: &CyberError) -> String {
+    assert_eq!(code(error), "not_found", "index-refusal code");
+    error.to_string()
+}
+
 /// A vertex at `x`/`y`.
 pub(super) fn vertex(x: i32, y: i32) -> Vertex {
     Vertex {

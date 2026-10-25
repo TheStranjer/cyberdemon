@@ -123,29 +123,13 @@ impl PointParam {
     }
 }
 
-/// Refuses an element `index` outside `0..len`.
+/// Refuses an element `index` outside `0..len` of one `kind` of map
+/// element.
 ///
-/// The message states the valid range `0..=N-1`; the hint names the tools
-/// that answer with real indices.
-///
-/// # Errors
-///
-/// [`CyberError::NotFound`] phrased for `kind` (e.g. `"linedef 12 does not
-/// exist (the map has 7 linedefs, valid indices are 0..=6)"`).
-#[inline]
-pub fn check_index(kind: &str, index: usize, len: usize) -> Result<(), CyberError> {
-    if index < len {
-        return Ok(());
-    }
-    let range = len.checked_sub(1).map_or_else(
-        || format!("the map has no {kind}s"),
-        |last| format!("the map has {len} {kind}s, valid indices are 0..={last}"),
-    );
-    Err(
-        CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
-            .with_hint("describe_map or find_elements returns indices"),
-    )
-}
+/// This is [`crate::wad::map::query::check_index`], the one index guard
+/// every tool and pure engine shares, re-exported for the editing tools'
+/// import path.
+pub use crate::wad::map::query::{ElementKind, check_index};
 
 /// Validates one texture or flat name and returns it uppercased.
 ///
@@ -213,7 +197,7 @@ mod tests {
     use serde_json::{from_str, json};
 
     use super::{
-        FlagsInput, IndexSelector, PointParam, check_index, edit_result_fragment,
+        ElementKind, FlagsInput, IndexSelector, PointParam, check_index, edit_result_fragment,
         validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
@@ -330,24 +314,27 @@ mod tests {
     }
 
     #[test]
-    fn check_index_accepts_the_range_and_names_the_bounds() {
-        assert!(check_index("linedef", 6, 7).is_ok(), "the last index is in");
-        let error = check_index("linedef", 12, 7).expect_err("12 is out");
+    fn check_index_refuses_with_the_spelled_plural_and_the_index_hint() {
+        assert!(
+            check_index(ElementKind::Linedefs, 6, 7).is_ok(),
+            "the last index is in"
+        );
+        let error = check_index(ElementKind::Vertices, 40, 6).expect_err("40 is out");
         assert_eq!(error.code(), "not_found", "out of range code");
         assert_eq!(
             error.message(),
-            "linedef 12 does not exist (the map has 7 linedefs, valid indices are 0..=6)",
-            "the documented phrasing names the valid range"
+            "vertex 40 does not exist (the map has 6 vertices, valid indices are 0..=5)",
+            "vertices, never vertexs"
         );
         assert_eq!(
             error.hint(),
             "describe_map or find_elements returns indices",
             "the hint names the index-listing tools"
         );
-        let zero = check_index("sector", 0, 0).expect_err("an empty map has none");
+        let zero = check_index(ElementKind::Vertices, 0, 0).expect_err("an empty map has none");
         assert_eq!(
             zero.message(),
-            "sector 0 does not exist (the map has no sectors)",
+            "vertex 0 does not exist (the map has no vertices)",
             "the empty-map phrasing"
         );
     }

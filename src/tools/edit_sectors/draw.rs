@@ -29,6 +29,7 @@ use crate::tools::maps::params::{PointParam, edit_result_fragment, validate_text
 use crate::tools::themes::theme_texture;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
+use crate::wad::map::query::{ElementKind, missing_index};
 use crate::wad::map::{Map, Sector};
 
 use super::{
@@ -200,25 +201,22 @@ fn points_of(format: MapFormat, points: &[PointParam]) -> Result<Vec<Pt>, CyberE
         .collect())
 }
 
-/// The index form: every corner resolved to its vertex' coordinates.
+/// The index form: every corner resolved to its vertex' coordinates,
+/// through the shared [`check_index`] guard with the loop's own advice
+/// kept as message context.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] naming the first index past [`Map::vertices`].
+///
+/// [`check_index`]: crate::tools::maps::params::check_index
 fn vertices_of(map: &Map, indices: &[usize]) -> Result<Vec<Pt>, CyberError> {
     let mut corners: Vec<Pt> = Vec::with_capacity(indices.len());
     for index in indices {
         let vertex = map.vertices.get(*index).ok_or_else(|| {
-            let count = map.vertices.len();
-            let range = count.checked_sub(1).map_or_else(
-                || "the map has no vertices".to_owned(),
-                |last| format!("the map has {count} vertices, valid indices are 0..={last}"),
-            );
-            CyberError::NotFound(format!(
-                "vertex {index} does not exist ({range}): pass existing indices, or draw with \
-                 points"
-            ))
-            .with_hint("describe_map or find_elements returns indices")
+            missing_index(ElementKind::Vertices, *index, map.vertices.len()).map_message(
+                |message| format!("{message}: pass existing indices, or draw with points"),
+            )
         })?;
         corners.push((i64::from(vertex.x), i64::from(vertex.y)));
     }

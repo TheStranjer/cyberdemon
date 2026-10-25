@@ -131,10 +131,9 @@ pub(super) fn doom_setup() -> DoorLineSetup {
     door_specials(FlagFamily::Doom, DoorStyle::Normal, SAMPLE_TAG)
 }
 
-/// Whether `error` is the `InvalidArgument` mentioning `needle`.
-pub(super) fn refuses(error: CyberError, needle: &str) -> bool {
-    let CyberError::InvalidArgument(message) = error else {
-        panic!("not an InvalidArgument: {error:?}");
-    };
-    message.contains(needle)
+/// Whether `error` mentions `needle` in its message, whatever code it
+/// carries: shape refusals are `InvalidArgument`, index refusals the
+/// shared guard's `NotFound`.
+pub(super) fn refuses(error: &CyberError, needle: &str) -> bool {
+    error.message().contains(needle)
 }

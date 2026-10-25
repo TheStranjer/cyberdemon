@@ -20,6 +20,7 @@ use crate::geom::label::{Label, ScaledPt, contains_point};
 use crate::geom::segment::{ExternalSegment, SourceId, cross, delta, dot};
 use crate::geom::{Piece, Pt};
 use crate::wad::map::model::{Linedef, Map, Sector, Vertex};
+use crate::wad::map::query::{ElementKind, check_index};
 
 use super::labeler::{label_at, side_samples};
 use super::rebuilt::Plan;
@@ -170,26 +171,24 @@ pub(super) fn external_segments(source: &Source) -> (Vec<ExternalSegment>, Vec<u
     (external, unresolved)
 }
 
-/// Refuse an [`Outside::Face`] sector the map does not hold.
+/// Refuse an [`Outside::Face`] sector the map does not hold, through the
+/// shared [`check_index`] guard with the overlay's own advice kept as
+/// message context.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] naming the index and the sector count.
+///
+/// [`check_index`]: crate::wad::map::query::check_index
 pub(super) fn check_outside(request: &OverlayRequest, map: &Map) -> Result<(), CyberError> {
     match request.outside {
-        Outside::Face(index) if index >= map.sectors.len() => {
-            let count = map.sectors.len();
-            let range = count.checked_sub(1).map_or_else(
-                || "the map has no sectors".to_owned(),
-                |last| format!("the map has {count} sectors, valid indices are 0..={last}"),
-            );
-            Err(CyberError::NotFound(format!(
-                "sector {index} does not exist ({range}): pass an existing \
-                 sector index, \"auto\", or \"none\""
-            ))
-            .with_hint("describe_map or find_elements returns indices"))
-        }
-        Outside::Original | Outside::Solid | Outside::Face(_) => Ok(()),
+        Outside::Face(index) => check_index(ElementKind::Sectors, index, map.sectors.len())
+            .map_err(|error| {
+                error.map_message(|message| {
+                    format!("{message}: pass an existing sector index, \"auto\", or \"none\"")
+                })
+            }),
+        Outside::Original | Outside::Solid => Ok(()),
     }
 }
 

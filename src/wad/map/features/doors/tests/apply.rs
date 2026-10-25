@@ -186,21 +186,30 @@ fn apply_door_refuses_indices_the_map_does_not_hold() {
         let error = apply_door(&mut map, &door_sides, &doom_setup(), &textures())
             .expect_err("the index is out of range");
         assert_eq!(map, before, "a refused call leaves the map alone");
+        assert_eq!(error.code(), "not_found", "a missing element is not_found");
+        assert_eq!(
+            error.hint(),
+            "describe_map or find_elements returns indices",
+            "the shared hint names the index-listing tools"
+        );
         error
     };
     let mut missing_sector = sides();
     missing_sector.door_sector = 9_usize;
-    assert!(refuses(outside(missing_sector), "sector 9"), "the sector");
+    assert!(
+        refuses(&outside(missing_sector), "door sector 9 does not exist"),
+        "the sector, named by its door role"
+    );
     let mut missing_line = sides();
     missing_line.room_lines = vec![0_usize, 77_usize];
     assert!(
-        refuses(outside(missing_line), "room linedef 77"),
+        refuses(&outside(missing_line), "room linedef 77 does not exist"),
         "the room line"
     );
     let mut missing_jamb = sides();
     missing_jamb.jamb_lines = vec![88_usize];
     assert!(
-        refuses(outside(missing_jamb), "jamb linedef 88"),
+        refuses(&outside(missing_jamb), "jamb linedef 88 does not exist"),
         "the jamb line"
     );
 }
@@ -213,13 +222,16 @@ fn apply_door_refuses_lines_that_are_not_doorways() {
     one_sided_room.room_lines = vec![4_usize];
     let first_error = apply_door(&mut map, &one_sided_room, &doom_setup(), &textures())
         .expect_err("a one-sided line is no use line");
-    assert!(refuses(first_error, "not two-sided"), "the hint says why");
+    assert!(refuses(&first_error, "not two-sided"), "the hint says why");
 
     let mut plain_jamb = sides();
     plain_jamb.jamb_lines = vec![4_usize];
     let second_error = apply_door(&mut map, &plain_jamb, &doom_setup(), &textures())
         .expect_err("the wall does not border the recess");
-    assert!(refuses(second_error, "jamb linedef 4"), "the jamb is named");
+    assert!(
+        refuses(&second_error, "jamb linedef 4"),
+        "the jamb is named"
+    );
     assert_eq!(map, before, "both refused calls leave the map alone");
 
     let mut dangling = map.linedefs.remove(0_usize);
@@ -228,7 +240,7 @@ fn apply_door_refuses_lines_that_are_not_doorways() {
     let third_error = apply_door(&mut map, &sides(), &doom_setup(), &textures())
         .expect_err("the sidedef reference dangles");
     assert!(
-        refuses(third_error, "sidedef 99"),
+        refuses(&third_error, "sidedef 99"),
         "the missing side is named"
     );
 }

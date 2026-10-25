@@ -47,8 +47,10 @@
 //! simply match nothing.
 //!
 //! This file keeps the shapes a query is phrased in, the bound its `within`
-//! clause resolves to, the context [`run_query`] reads through and that
-//! entry point itself. The field tables and the widened value one read
+//! clause resolves to, the context [`run_query`] reads through, that entry
+//! point itself, and the shared element-index guard [`check_index`] every
+//! tool and pure engine taking element indices runs through. The field
+//! tables and the widened value one read
 //! answers with are the private `fields` module; the checked filters, the
 //! lazily built derived reads and the per-element matching are `engine`; and
 //! the field, op and value checks and the comparisons they promise are
@@ -120,6 +122,28 @@ impl ElementKind {
         }
     }
 
+    /// The lowercase name of one row of this kind (`"vertex"`).
+    #[must_use]
+    #[inline]
+    pub const fn singular(self) -> &'static str {
+        match self {
+            Self::Sectors => "sector",
+            Self::Linedefs => "linedef",
+            Self::Sidedefs => "sidedef",
+            Self::Things => "thing",
+            Self::Vertices => "vertex",
+        }
+    }
+
+    /// The lowercase name of several rows of this kind (`"vertices"`).
+    /// Every plural is spelled per kind, never by appending an `s`, and
+    /// equals the [`Self::as_str`] wire name.
+    #[must_use]
+    #[inline]
+    pub const fn plural(self) -> &'static str {
+        self.as_str()
+    }
+
     /// How many rows of this kind `map` holds.
     #[must_use]
     #[inline]
@@ -132,6 +156,74 @@ impl ElementKind {
             Self::Vertices => map.vertices.len(),
         }
     }
+}
+
+/// The hint [`missing_index`] attaches: the tools that answer with real
+/// element indices.
+const INDEX_HINT: &str = "describe_map or find_elements returns indices";
+
+/// The [`CyberError::NotFound`] saying `index` is at or past a block of
+/// `len` rows of `kind`, stating the valid range and hinting at the
+/// index-listing tools.
+#[must_use]
+#[inline]
+pub fn missing_index(kind: ElementKind, index: usize, len: usize) -> CyberError {
+    let range = len.checked_sub(1).map_or_else(
+        || format!("the map has no {}", kind.plural()),
+        |last| {
+            format!(
+                "the map has {len} {}, valid indices are 0..={last}",
+                kind.plural()
+            )
+        },
+    );
+    CyberError::NotFound(format!(
+        "{} {index} does not exist ({range})",
+        kind.singular()
+    ))
+    .with_hint(INDEX_HINT)
+}
+
+/// Refuses an element `index` outside `0..len` of one `kind` of map
+/// element.
+///
+/// The message states the valid range `0..=N-1` with the kind's spelled
+/// plural (`"vertices"`, never `"vertexs"`); the hint names the tools
+/// that answer with real indices. Callers keep tool-specific context by
+/// rebuilding this error with its message text run through a change
+/// closure.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] phrased for `kind` (e.g. `"linedef 12 does
+/// not exist (the map has 7 linedefs, valid indices are 0..=6)"`).
+#[inline]
+pub fn check_index(kind: ElementKind, index: usize, len: usize) -> Result<(), CyberError> {
+    if index < len {
+        return Ok(());
+    }
+    Err(missing_index(kind, index, len))
+}
+
+/// Refuses the first of `indices` at or past the `kind` block of `map`.
+///
+/// # Errors
+///
+/// The [`check_index`] refusal for the first offending index, in the
+/// order `indices` is iterated.
+#[inline]
+pub fn check_indices<'index, List>(
+    kind: ElementKind,
+    indices: List,
+    map: &Map,
+) -> Result<(), CyberError>
+where
+    List: IntoIterator<Item = &'index usize>,
+{
+    let count = kind.count_on(map);
+    indices
+        .into_iter()
+        .try_for_each(|index| check_index(kind, *index, count))
 }
 
 /// How a [`Filter`] compares its field with its value.

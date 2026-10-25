@@ -9,7 +9,9 @@
 
 use serde_json::{Value, json};
 
-use crate::features::secret::{EffectCase, doom_cases, hexen_cases, refuse_secret, set_special};
+use crate::features::secret::{
+    EffectCase, doom_cases, hexen_cases, refuse_missing_secret, refuse_secret, set_special,
+};
 use crate::features::{
     Client, expect_rooms, features_loaded, formats_loaded, validate_clean, working_sector,
     working_sectors,
@@ -211,10 +213,10 @@ async fn the_two_special_tools_validate_their_arguments() {
     let dir = tempfile::tempdir().expect("temp dir");
     let client = features_loaded(dir.path()).await;
     refuse_secret(&client, json!({"sectors": []}), "sectors is empty").await;
-    refuse_secret(
+    refuse_missing_secret(
         &client,
         json!({"sectors": [99_i32]}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
     refuse_light(
@@ -241,12 +243,21 @@ async fn the_two_special_tools_validate_their_arguments() {
         "light -1 is out of range",
     )
     .await;
-    refuse_light(
+    let (light_code, light_message, light_hint) = call_err(
         &client,
+        "set_light_effect",
         json!({"sectors": [42_i32], "effect": "glow"}),
-        "sector 42 is out of range",
     )
     .await;
+    assert_eq!(light_code, "not_found", "a missing sector is not_found");
+    assert!(
+        light_message.contains("sector 42 does not exist"),
+        "the refusal names the sector: {light_message}"
+    );
+    assert_eq!(
+        light_hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
     let (code, _, _) = call_err(
         &client,
         "assemble_map",

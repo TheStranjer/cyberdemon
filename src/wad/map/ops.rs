@@ -27,6 +27,7 @@ use serde::Serialize;
 use crate::error::CyberError;
 use crate::fixed::{self, narrow_i32};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::query::{ElementKind, missing_index};
 
 use super::model::{Linedef, Map, Sidedef, Vertex};
 use super::remove::RemovalReport;
@@ -202,7 +203,7 @@ pub(super) fn linedef_row(map: &Map, index: usize) -> Result<Linedef, CyberError
     map.linedefs
         .get(index)
         .cloned()
-        .ok_or_else(|| missing("linedef", index, map.linedefs.len()))
+        .ok_or_else(|| missing_index(ElementKind::Linedefs, index, map.linedefs.len()))
 }
 
 /// The coordinates of vertex `index`.
@@ -217,17 +218,7 @@ pub(super) fn endpoint(map: &Map, index: usize) -> Result<Point, CyberError> {
             x: vertex.x,
             y: vertex.y,
         })
-        .ok_or_else(|| missing("vertex", index, map.vertices.len()))
-}
-
-/// The `NotFound` saying `kind` `index` is past a block of `count`.
-fn missing(kind: &str, index: usize, count: usize) -> CyberError {
-    let range = count.checked_sub(1).map_or_else(
-        || format!("the map has no {kind}s"),
-        |last| format!("the map has {count} {kind}s, valid indices are 0..={last}"),
-    );
-    CyberError::NotFound(format!("{kind} {index} does not exist ({range})"))
-        .with_hint("describe_map or find_elements returns indices")
+        .ok_or_else(|| missing_index(ElementKind::Vertices, index, map.vertices.len()))
 }
 
 /// The `InvalidArgument` telling the caller to pass a point on the segment

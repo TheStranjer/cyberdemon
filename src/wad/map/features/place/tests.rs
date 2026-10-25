@@ -22,12 +22,11 @@ use crate::wad::map::ops::Point;
 
 use super::DoorWall;
 
-/// Whether `error` is the `InvalidArgument` mentioning `needle`.
-pub(super) fn refuses(error: CyberError, needle: &str) -> bool {
-    let CyberError::InvalidArgument(message) = error else {
-        panic!("not an InvalidArgument: {error:?}");
-    };
-    message.contains(needle)
+/// Whether `error` mentions `needle`, whatever code it carries: shape
+/// refusals are `InvalidArgument`, missing-element refusals the shared
+/// guard's `NotFound`.
+pub(super) fn refuses(error: &CyberError, needle: &str) -> bool {
+    error.message().contains(needle)
 }
 
 /// A point at `x`/`y`.

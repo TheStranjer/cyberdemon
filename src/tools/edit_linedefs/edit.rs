@@ -23,7 +23,9 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{FlagsInput, IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::params::{
+    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::{FlagFamily, Linedef, Map};
 
@@ -317,7 +319,7 @@ pub(super) fn edit_in_place(
     plan: &EditPlan<'_>,
 ) -> Result<Vec<EditRow>, CyberError> {
     for index in &plan.indices {
-        check_index("linedef", *index, map.linedefs.len())?;
+        check_index(ElementKind::Linedefs, *index, map.linedefs.len())?;
     }
     check_requested_references(map, plan.args)?;
     let format = map.format;
@@ -347,16 +349,16 @@ pub(super) fn edit_in_place(
 /// reference the request replaces.
 fn check_requested_references(map: &Map, args: &EditLinedefParams) -> Result<(), CyberError> {
     if let Some(vertex) = args.v1 {
-        check_index("vertex", vertex, map.vertices.len())?;
+        check_index(ElementKind::Vertices, vertex, map.vertices.len())?;
     }
     if let Some(vertex) = args.v2 {
-        check_index("vertex", vertex, map.vertices.len())?;
+        check_index(ElementKind::Vertices, vertex, map.vertices.len())?;
     }
     if let Some(SideRef::Index(side)) = args.front {
-        check_index("sidedef", side, map.sidedefs.len())?;
+        check_index(ElementKind::Sidedefs, side, map.sidedefs.len())?;
     }
     if let Some(SideRef::Index(side)) = args.back {
-        check_index("sidedef", side, map.sidedefs.len())?;
+        check_index(ElementKind::Sidedefs, side, map.sidedefs.len())?;
     }
     Ok(())
 }

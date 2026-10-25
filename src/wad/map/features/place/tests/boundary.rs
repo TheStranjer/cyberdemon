@@ -138,31 +138,35 @@ fn door_segment_refuses_widths_past_the_wall_with_its_length() {
     let map = wide_wall_map();
     let error = door_segment(&map, 0, point(64, 0), 129_i32).expect_err("one unit too wide");
     assert_eq!(error.code(), "invalid_argument", "fit refusal");
-    assert!(refuses(error, "128"), "the message carries the length");
+    assert!(refuses(&error, "128"), "the message carries the length");
     let off_centre =
         door_segment(&map, 0, point(16, 0), 64_i32).expect_err("the chunk runs past v1");
-    assert!(refuses(off_centre, "128"), "and says so with the length");
+    assert!(refuses(&off_centre, "128"), "and says so with the length");
 }
 
 #[test]
 fn door_segment_refuses_bad_walls_centres_and_widths() {
     let map = wide_wall_map();
     let missing = door_segment(&map, 9, point(64, 0), 32_i32).expect_err("no linedef 9");
-    assert!(refuses(missing, "linedef 9"), "the index is named");
+    assert_eq!(missing.code(), "not_found", "a missing line is not_found");
+    assert!(
+        refuses(&missing, "door linedef 9 does not exist"),
+        "the role and the index are named"
+    );
     let mut dangling = map.clone();
     dangling.linedefs.get_mut(0).expect("the line").v2 = 9;
     let broken = door_segment(&dangling, 0, point(64, 0), 32_i32).expect_err("vertex 9 gone");
-    assert!(refuses(broken, "vertex"), "the dangling vertex is named");
+    assert!(refuses(&broken, "vertex"), "the dangling vertex is named");
     let flat = Map {
         vertices: vec![vertex(0, 0), vertex(0, 0)],
         ..wide_wall_map()
     };
     let zero = door_segment(&flat, 0, point(0, 0), 32_i32).expect_err("nothing to span");
-    assert!(refuses(zero, "zero-length"), "the degenerate line");
+    assert!(refuses(&zero, "zero-length"), "the degenerate line");
     let off = door_segment(&map, 0, point(64, 20), 32_i32).expect_err("centre off the wall");
-    assert!(refuses(off, "project_onto_line"), "the fix is named");
+    assert!(refuses(&off, "project_onto_line"), "the fix is named");
     let none = door_segment(&map, 0, point(64, 0), 0_i32).expect_err("no such door");
-    assert!(refuses(none, "positive"), "the width rule");
+    assert!(refuses(&none, "positive"), "the width rule");
 }
 
 #[test]
@@ -170,7 +174,7 @@ fn door_wall_composes_projection_and_fit() {
     let map = wide_wall_map();
     let error = door_wall(&map, 0, Some(point(200, 10)), 64_i32)
         .expect_err("clamped onto v2 there is no room");
-    assert!(refuses(error, "128"), "the fit refusal names the length");
+    assert!(refuses(&error, "128"), "the fit refusal names the length");
     let centred = door_wall(&map, 0, None, 64_i32).expect("the midpoint fits");
     assert_eq!(centred.linedef, 0_usize, "the chosen line");
     assert_eq!(centred.point, point(64, 0), "the line midpoint");

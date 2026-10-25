@@ -5,10 +5,12 @@
 //!
 //! `filters` runs every op over the fixture's stored and derived fields and
 //! both `within` bounds; `checks` combines filters, reads every refusal and
-//! the family tables, and checks the wire shape and the plain context reads.
+//! the family tables, and checks the wire shape and the plain context reads;
+//! `index` runs the shared element-index guard's own checks.
 
 mod checks;
 mod filters;
+mod index;
 
 use serde_json::Value;
 

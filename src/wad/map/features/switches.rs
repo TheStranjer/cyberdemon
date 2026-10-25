@@ -33,6 +33,7 @@ use crate::error::CyberError;
 use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily, PLAYER_USE_BITS};
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::{self, Point};
+use crate::wad::map::query::{ElementKind, check_index, missing_index};
 
 use super::doors::{DoorLineSetup, USE_REPEAT, next_free_tag};
 use super::place::{VertexPair, door_segment, endpoints, project_onto_line};
@@ -192,19 +193,6 @@ pub const fn action_name(action: SwitchAction) -> &'static str {
     }
 }
 
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
-}
-
-/// The `invalid_argument` for `kind` `index` past the map's `count`.
-fn out_of_range(kind: &str, index: usize, count: usize) -> CyberError {
-    invalid(&format!(
-        "{kind} {index} is out of range: the map holds {count} of them; re-read the map \
-         and pass current indices"
-    ))
-}
-
 /// Everything [`build_switch`] needs once the wire parameters resolved.
 #[derive(Debug)]
 pub struct SwitchSpec {
@@ -230,16 +218,14 @@ pub struct SwitchSpec {
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] when `index` is past the map's
-/// linedefs or names a line whose vertices do not resolve.
+/// [`CyberError::NotFound`] when `index` is past the map's linedefs,
+/// [`CyberError::InvalidArgument`] when the line names a vertex the map
+/// does not hold.
 #[inline]
 pub fn switch_span(map: &Map, index: usize) -> Result<(Point, Point), CyberError> {
-    let count = map.linedefs.len();
-    if index >= count {
-        return Err(out_of_range("linedef", index, count));
-    }
+    check_index(ElementKind::Linedefs, index, map.linedefs.len())?;
     endpoints(map, index).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "switch linedef {index} references a vertex the map does not hold: resolve \
              its endpoints first"
         ))
@@ -262,7 +248,7 @@ pub fn switch_span(map: &Map, index: usize) -> Result<(Point, Point), CyberError
 pub fn switch_cut(map: &Map, spec: &SwitchSpec) -> Result<(VertexPair, i32), CyberError> {
     switch_span(map, spec.linedef)?;
     if spec.width <= 0_i32 {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "the switch width must be a positive number of map units (the default 32 \
              covers one switch panel)",
         ));
@@ -317,7 +303,7 @@ pub fn isolate_chunk(
 
 /// The refusal for a sector-moving action that names no target sector.
 fn target_required(action: SwitchAction) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "the {} action needs target_sector: pass the index of the sector the switch \
          moves (add_door reports the door sector of its remote door)",
         action_name(action)
@@ -331,7 +317,8 @@ fn target_required(action: SwitchAction) -> CyberError {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] when a sector-moving action names no
-/// `target_sector` or an index past the map's sectors.
+/// `target_sector`, [`CyberError::NotFound`] for a `target_sector` past
+/// the map's sectors.
 #[inline]
 pub fn switch_tag(map: &mut Map, spec: &SwitchSpec) -> Result<i32, CyberError> {
     if !spec.action.needs_target() {
@@ -343,7 +330,7 @@ pub fn switch_tag(map: &mut Map, spec: &SwitchSpec) -> Result<i32, CyberError> {
     let current = map
         .sectors
         .get(index)
-        .ok_or_else(|| out_of_range("sector", index, map.sectors.len()))?
+        .ok_or_else(|| missing_index(ElementKind::Sectors, index, map.sectors.len()))?
         .tag;
     if current != 0_i32 {
         return Ok(current);
@@ -381,7 +368,7 @@ pub fn dress_switch(
 ) -> Result<(), CyberError> {
     let hexen = map.flag_family() == FlagFamily::Hexen;
     let Some(side) = switch_side(map, line) else {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "linedef {line} has no front sidedef to wear the switch: give the wall a \
              front side facing the triggering room first (see add_sidedef)"
         )));
@@ -511,9 +498,7 @@ pub fn build_walk_over_exit(
     sector: usize,
     secret: bool,
 ) -> Result<WalkOverExit, CyberError> {
-    if map.sectors.get(sector).is_none() {
-        return Err(out_of_range("sector", sector, map.sectors.len()));
-    }
+    check_index(ElementKind::Sectors, sector, map.sectors.len())?;
     let special = walk_over_special(map.flag_family(), secret);
     let hexen = map.flag_family() == FlagFamily::Hexen;
     let lines: Vec<usize> = map
@@ -524,7 +509,7 @@ pub fn build_walk_over_exit(
         .map(|(index, _line)| index)
         .collect();
     if lines.is_empty() {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "sector {sector} has no two-sided boundary to walk over: draw a shared wall \
              to the next sector (add_door, or create_sector_from_loop overlapping it) or \
              trigger the exit with kind \"switch\" instead"

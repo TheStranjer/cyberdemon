@@ -30,7 +30,7 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    IndexSelector, check_index, edit_result_fragment, validate_texture_name,
+    ElementKind, IndexSelector, check_index, edit_result_fragment, validate_texture_name,
 };
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
@@ -301,7 +301,7 @@ fn edited_sidedef(
 /// `add_sidedef`'s step: check the sector, append the described sidedef and
 /// report its row.
 fn add_in_place(map: &mut Map, args: &AddSidedefParams) -> Result<EditRow, CyberError> {
-    check_index("sector", args.sector, map.sectors.len())?;
+    check_index(ElementKind::Sectors, args.sector, map.sectors.len())?;
     let side = new_sidedef(args, map.format)?;
     check_binary_offsets(map.format, &side)?;
     let index = map.sidedefs.len();
@@ -371,10 +371,10 @@ fn edit_in_place(
     indices: &[usize],
 ) -> Result<Vec<EditRow>, CyberError> {
     for index in indices {
-        check_index("sidedef", *index, map.sidedefs.len())?;
+        check_index(ElementKind::Sidedefs, *index, map.sidedefs.len())?;
     }
     if let Some(sector) = args.sector {
-        check_index("sector", sector, map.sectors.len())?;
+        check_index(ElementKind::Sectors, sector, map.sectors.len())?;
     }
     let format = map.format;
     let mut rows = Vec::new();
@@ -430,7 +430,7 @@ fn remove_in_place(
     indices: &[usize],
 ) -> Result<RemovalReport, CyberError> {
     for index in indices {
-        check_index("sidedef", *index, map.sidedefs.len())?;
+        check_index(ElementKind::Sidedefs, *index, map.sidedefs.len())?;
     }
     let removal = sidedef_removal(indices);
     if !args.cascade {

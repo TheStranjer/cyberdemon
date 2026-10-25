@@ -151,11 +151,6 @@ struct Prep {
     climb: Climb,
 }
 
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
-}
-
 /// A `usize` widened to exact arithmetic, saturated (defensive).
 fn tall(value: usize) -> i128 {
     i128::try_from(value).unwrap_or(i128::MAX)
@@ -170,13 +165,13 @@ fn tall64(value: usize) -> i64 {
 /// non-positive step depth.
 fn check_shape(spec: &StairSpec) -> Result<(), CyberError> {
     if spec.width <= 0_i32 {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "the stair width must be a positive number of map units (the default 64 \
              lets two players pass)",
         ));
     }
     if !(MIN_STEP_HEIGHT..=MAX_STEP_HEIGHT).contains(&spec.step_height) {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "step_height {} is out of range: one step climbs between \
              {MIN_STEP_HEIGHT} and {MAX_STEP_HEIGHT} map units (the player steps up \
              at most {MAX_STEP_HEIGHT}; 16 is gentler)",
@@ -184,7 +179,7 @@ fn check_shape(spec: &StairSpec) -> Result<(), CyberError> {
         )));
     }
     if spec.step_depth.is_some_and(|depth| depth <= 0_i32) {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "step_depth must be a positive number of map units (the tread every step \
              gets along the path)",
         ));
@@ -198,7 +193,7 @@ fn path_run(spec: &StairSpec) -> Result<PathRun, CyberError> {
     let dy = i128::from(spec.to.y).saturating_sub(i128::from(spec.from.y));
     let length = i64::try_from(hypot(narrow_i64(dx), narrow_i64(dy))).unwrap_or(i64::MAX);
     if length == 0_i64 {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "the stair path is zero-length: `from` and `to` name the same point; \
              give a path that runs from the lower area into the higher one",
         ));
@@ -221,7 +216,7 @@ fn endpoint_floor(
     given: Option<i32>,
 ) -> Result<i32, CyberError> {
     let base = sector_under(map, point).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "the {role} point {}, {} lies in no sector: `from` stands in the lower \
              area and `to` in the higher one; move the point onto a sector \
              (get_map_summary lists the rooms)",
@@ -243,7 +238,7 @@ fn endpoint_floors(map: &Map, spec: &StairSpec) -> Result<(i32, i32), CyberError
 fn climb_count(floor_from: i32, floor_to: i32, step_height: i32) -> Result<usize, CyberError> {
     let rise = i64::from(floor_to).saturating_sub(i64::from(floor_from));
     if rise == 0_i64 {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "both ends of the path sit at floor {floor_from}: there is no step to \
              build; move `to` into the higher area or pass a floor_from/floor_to \
              pair that differs",
@@ -269,7 +264,7 @@ fn check_depth(run: &PathRun, count: usize, depth: i32) -> Result<(), CyberError
     }
     let length = i128::from(run.length);
     let fit = div_round(length, tall(count)).unwrap_or(length);
-    Err(invalid(&format!(
+    Err(CyberError::invalid(&format!(
         "step_depth {depth} with {count} steps wants a path {wanted} map units long \
          (tolerance {DEPTH_TOLERANCE}): this path is {} units; pass step_depth {} to \
          divide it evenly, or drop step_depth to let the steps fill the path",
@@ -288,7 +283,7 @@ fn prepare(map: &Map, spec: &StairSpec) -> Result<Prep, CyberError> {
         check_depth(&run, count, depth)?;
     }
     if run.length < tall64(count) {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "the stair path is only {} map units long: {count} steps need at least a \
              unit of tread each; shorten the climb or lengthen the path",
             run.length
@@ -374,7 +369,7 @@ fn middle(from: Point, to: Point) -> Point {
 /// solid rock (steps are 1-based in the message).
 fn probe_base(map: &Map, centre: Point, index: usize) -> Result<&Sector, CyberError> {
     sector_under(map, centre).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "step {} at {}, {} lies in no sector: the stair path crosses solid rock; \
              reroute it through the rooms",
             index.saturating_add(1),
@@ -389,7 +384,7 @@ fn require_headroom(floor: i32, ceiling: i32, index: usize) -> Result<(), CyberE
     if ceiling >= floor.saturating_add(MIN_HEADROOM) {
         return Ok(());
     }
-    Err(invalid(&format!(
+    Err(CyberError::invalid(&format!(
         "step {} would stand at floor {floor} under a ceiling of {ceiling}: not \
          enough headroom (a player needs {MIN_HEADROOM} map units); raise the \
          ceiling over the path or end the climb lower",

@@ -13,24 +13,23 @@ use crate::error::CyberError;
 use crate::geom::segment::{Delta, cross, delta, dot};
 use crate::wad::map::model::Map;
 use crate::wad::map::ops::Point;
+use crate::wad::map::query::{ElementKind, check_index};
 
 use super::{
-    DoorWall, ORIGIN, VertexPair, endpoints, from_axes, half_axis, invalid, length_of, moved,
-    scale_shift, vector, wide,
+    DoorWall, ORIGIN, VertexPair, endpoints, from_axes, half_axis, length_of, moved, scale_shift,
+    vector, wide,
 };
 
 /// The linedef `index` endpoints for a `role` that must exist: refuses
-/// out-of-range lines and dangling vertices with instructions.
+/// out-of-range lines with the shared [`check_index`] guard, the role
+/// kept as message context, and dangling vertices with instructions.
+///
+/// [`check_index`]: crate::wad::map::query::check_index
 pub(super) fn span(map: &Map, index: usize, role: &str) -> Result<(Point, Point), CyberError> {
-    let count = map.linedefs.len();
-    if index >= count {
-        return Err(invalid(&format!(
-            "{role} linedef {index} is out of range: the map holds {count} of them; \
-             re-read the map and pass current indices"
-        )));
-    }
+    check_index(ElementKind::Linedefs, index, map.linedefs.len())
+        .map_err(|error| error.map_message(|message| format!("{role} {message}")))?;
     endpoints(map, index).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "{role} linedef {index} references a vertex the map does not hold: resolve \
              its endpoints first"
         ))
@@ -104,7 +103,7 @@ pub fn door_segment(
 ) -> Result<(VertexPair, i32), CyberError> {
     let (from, to) = span(map, linedef, "door")?;
     if width <= 0_i32 {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "the door width must be a positive number of map units; pass the width the \
              door texture covers",
         ));
@@ -112,7 +111,7 @@ pub fn door_segment(
     let run = delta(wide(from), wide(to));
     let squared = dot(run, run);
     if squared == 0_i128 {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "linedef {linedef} is zero-length: it cannot carry a door; delete it or \
              move a vertex first"
         )));
@@ -139,7 +138,7 @@ pub fn door_segment(
 fn require_on_line(cut: &CutLine, centre: Point, offset: Delta) -> Result<(), CyberError> {
     let perpendicular = cross(cut.run, offset);
     if perpendicular.saturating_mul(perpendicular) > cut.squared {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "the door centre {}, {} is more than one map unit off linedef {} (it is {} \
              map units long): project the point with project_onto_line first",
             centre.x, centre.y, cut.linedef, cut.available
@@ -159,7 +158,7 @@ fn require_fits(cut: &CutLine, offset: Delta, width: i32) -> Result<(), CyberErr
     let rest = cut.squared.saturating_sub(along);
     let high = rest.saturating_mul(rest).saturating_mul(4_i128);
     if along < 0_i128 || along > cut.squared || low < need || high < need {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "a {width}-unit door does not fit linedef {} centred here: the wall is only \
              {available} map units long; shrink the width or pick another wall \
              (nearest_boundary reports the candidates)",

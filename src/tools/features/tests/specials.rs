@@ -12,7 +12,7 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::features::LightEffect;
 
-use super::{refuse, two_rooms};
+use super::{missing, refuse, two_rooms};
 
 /// A `mark_secret` request parsed from `json`.
 fn secret_args(json: &str) -> MarkSecretParams {
@@ -275,8 +275,8 @@ fn a_doom_namespace_udmf_map_keeps_the_boom_bit() {
 fn the_secret_step_names_the_sector_the_map_does_not_hold() {
     let mut map = rooms_special([0_i32, 0_i32]);
     let message =
-        refuse(&mark_secrets(&mut map, &secret_spec(&[1_usize, 99_usize], true)).unwrap_err());
-    assert!(message.contains("sector 99 is out of range"), "{message}");
+        missing(&mark_secrets(&mut map, &secret_spec(&[1_usize, 99_usize], true)).unwrap_err());
+    assert!(message.contains("sector 99 does not exist"), "{message}");
     assert_eq!(special_of(&map, 0), 0_i32, "a refusal wrote nothing");
     assert_eq!(
         special_of(&map, 1),
@@ -369,13 +369,13 @@ fn a_light_repaint_that_changes_nothing_reports_nothing() {
 #[test]
 fn the_light_step_names_the_sector_the_map_does_not_hold() {
     let mut map = rooms_special([0_i32, 0_i32]);
-    let message = refuse(
+    let message = missing(
         &set_lights(
             &mut map,
             &light_spec(&[0_usize, 42_usize], LightEffect::Glow, None),
         )
         .unwrap_err(),
     );
-    assert!(message.contains("sector 42 is out of range"), "{message}");
+    assert!(message.contains("sector 42 does not exist"), "{message}");
     assert_eq!(special_of(&map, 0), 0_i32, "a refusal wrote nothing");
 }

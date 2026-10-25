@@ -12,8 +12,9 @@
 use serde_json::{Value, json};
 
 use crate::features::{
-    count_pixels, features_loaded, formats_loaded, l_room_loaded, note_mentions, refuse_with,
-    rendered_image, reported_lines, validate_clean, working_sector,
+    count_pixels, features_loaded, formats_loaded, l_room_loaded, note_mentions,
+    refuse_missing_with, refuse_with, rendered_image, reported_lines, validate_clean,
+    working_sector,
 };
 use crate::support::{call, call_err};
 
@@ -257,22 +258,22 @@ async fn the_wall_parameter_needs_exactly_one_form() {
 async fn bad_indices_and_styles_are_refused() {
     let dir = tempfile::tempdir().expect("temp dir");
     let client = features_loaded(dir.path()).await;
-    refuse_with(
+    refuse_missing_with(
         &client,
         json!({"between": [0_i32, 99_i32]}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
-    refuse_with(
+    refuse_missing_with(
         &client,
         json!({"between": [99_i32, 0_i32]}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
-    refuse_with(
+    refuse_missing_with(
         &client,
         json!({"linedef": 999_i32}),
-        "linedef 999 is out of range",
+        "linedef 999 does not exist",
     )
     .await;
     refuse_with(

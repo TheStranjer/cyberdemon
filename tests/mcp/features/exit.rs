@@ -23,6 +23,22 @@ async fn refuse_exit(client: &Client, args: Value, needle: &str) {
     );
 }
 
+/// Requires `add_exit` to reject `args` naming a missing element with
+/// the shared `not_found` index refusal mentioning `needle`.
+async fn refuse_missing_exit(client: &Client, args: Value, needle: &str) {
+    let note = args.to_string();
+    let (code, message, hint) = call_err(client, "add_exit", args).await;
+    assert_eq!(code, "not_found", "index-refusal code for {note}");
+    assert!(
+        message.contains(needle) && message.contains("does not exist"),
+        "the refusal for {note} must mention {needle:?}: {message}"
+    );
+    assert_eq!(
+        hint, "describe_map or find_elements returns indices",
+        "the shared index hint names the readers"
+    );
+}
+
 #[tokio::test]
 async fn an_exit_switch_mounts_on_the_wall_it_names() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -197,16 +213,16 @@ async fn exit_arguments_are_validated() {
         "is not an exit kind",
     )
     .await;
-    refuse_exit(
+    refuse_missing_exit(
         &client,
         json!({"kind": "walk_over", "sector": 99_i32}),
-        "sector 99 is out of range",
+        "sector 99 does not exist",
     )
     .await;
-    refuse_exit(
+    refuse_missing_exit(
         &client,
         json!({"kind": "switch", "linedef": 999_i32}),
-        "linedef 999 is out of range",
+        "linedef 999 does not exist",
     )
     .await;
     let (code, _, _) = call_err(

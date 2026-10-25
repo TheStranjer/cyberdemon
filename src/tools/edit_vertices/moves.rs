@@ -13,8 +13,9 @@
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{ElementKind, edit_result_fragment};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::query::check_indices;
 use crate::wad::map::{Linedef, Map, Vertex};
 
 use super::{MoveReport, MoveVertexParams, Moves, VertexRow, check_binary_coords};
@@ -101,33 +102,16 @@ fn new_positions(
     Ok(moved)
 }
 
-/// Refuses unless every index in `indices` is a vertex of a `map` that
-/// holds `count` of them.
-///
-/// [`check_index`] spells its plural with a plain `s`, which "vertex" does
-/// not take, so the wording lives here and matches the shared shape:
-/// `"vertex 9 does not exist (the map has 6 vertices, valid indices are
-/// 0..=5)"`.
+/// Refuses unless every index in `indices` is a vertex of `map`, through
+/// the shared [`check_indices`] guard.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] for the first out-of-range index.
 ///
-/// [`check_index`]: crate::tools::maps::params::check_index
-pub(super) fn check_vertices(indices: &[usize], count: usize) -> Result<(), CyberError> {
-    for index in indices {
-        if *index >= count {
-            let range = count.checked_sub(1).map_or_else(
-                || "the map has no vertices".to_owned(),
-                |last| format!("the map has {count} vertices, valid indices are 0..={last}"),
-            );
-            return Err(
-                CyberError::NotFound(format!("vertex {index} does not exist ({range})"))
-                    .with_hint("describe_map or find_elements returns indices"),
-            );
-        }
-    }
-    Ok(())
+/// [`check_indices`]: crate::wad::map::query::check_indices
+pub(super) fn check_vertices(indices: &[usize], map: &Map) -> Result<(), CyberError> {
+    check_indices(ElementKind::Vertices, indices, map)
 }
 
 /// The `(x, y)` of vertex `index` as `map` stores it.
@@ -189,7 +173,7 @@ pub(super) fn move_in_place(
     args: &MoveVertexParams,
     indices: &[usize],
 ) -> Result<Vec<VertexRow>, CyberError> {
-    check_vertices(indices, map.vertices.len())?;
+    check_vertices(indices, map)?;
     let moved = new_positions(map, args, indices)?;
     let collapsed = collapsed_linedefs(map, &moved);
     if !collapsed.is_empty() {

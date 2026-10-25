@@ -17,7 +17,7 @@ use crate::wad::map::model::Map;
 use crate::wad::map::ops::Point;
 
 use super::cut::span;
-use super::{BoundaryStrip, ORIGIN, half_vector, invalid, length_of, moved, scale_shift, wide};
+use super::{BoundaryStrip, ORIGIN, half_vector, length_of, moved, scale_shift, wide};
 
 /// The shared boundary `boundaries` thickened into one carve strip:
 /// every line offset half of `thickness` toward each side, joined into
@@ -53,7 +53,7 @@ pub fn void_strip(
 /// the strip spans the full requested thickness across.
 fn checked_half_thickness(thickness: i32) -> Result<i32, CyberError> {
     if thickness <= 0_i32 {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "the void strip thickness must be a positive number of map units; the door \
              tools carve with 16",
         ));
@@ -67,7 +67,7 @@ fn checked_half_thickness(thickness: i32) -> Result<i32, CyberError> {
 /// re-oriented to follow its neighbour.
 fn boundary_chain(map: &Map, boundaries: &[usize]) -> Result<VecDeque<Point>, CyberError> {
     if boundaries.is_empty() {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "no boundary linedefs were given: pass the lines longest_boundary reports",
         ));
     }
@@ -75,7 +75,7 @@ fn boundary_chain(map: &Map, boundaries: &[usize]) -> Result<VecDeque<Point>, Cy
     for position in boundaries {
         let (from, to) = span(map, *position, "boundary")?;
         if from == to {
-            return Err(invalid(&format!(
+            return Err(CyberError::invalid(&format!(
                 "boundary linedef {position} is zero-length: it offsets to nothing; \
                  leave it out of the boundary"
             )));
@@ -89,7 +89,7 @@ fn boundary_chain(map: &Map, boundaries: &[usize]) -> Result<VecDeque<Point>, Cy
     let mut ends = (head, tail);
     while chain_step(&mut open, &mut ordered, &mut ends) {}
     if let Some(&(index, _, _)) = open.first() {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "boundary linedef {index} does not touch the run started by linedef {first}: \
              the shared boundary is not one connected run; carve each run with its own \
              void_strip call"

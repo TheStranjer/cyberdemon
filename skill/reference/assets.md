@@ -84,7 +84,7 @@ session resource to you as a file you can look at or listen to.
   | a `PNG`, `JPEG` or `GIF` lump | `image` | the same picture re-encoded as `PNG`, keeping a `PNG`'s `grAb` offsets |
   | a `DMX`, `PC` speaker, `WAV`, `OGG`, `MP3` or `FLAC` sound lump | `sound` | what `preview_sound` publishes: a `WAV`, or the original container |
   | a `MUS`, `MIDI` or tracker-module lump | `music` | what `preview_music` publishes: `MIDI` for a `MUS` lump |
-  | `PLAYPAL` | `palette` | the swatch `get_palette` publishes, of the requested entry |
+  | `PLAYPAL` | `palette` | the swatch `get_palette` publishes, of the requested entry, drawn from the selected lump's own bank (so `scope` and `occurrence` pick the colours) |
   | `COLORMAP`, or any lump in the `colormaps` region | `colormap` | a `PNG` one row per light table, one column per palette index, drawn through `PLAYPAL` entry 0 |
   | anything else | - | `unsupported`, naming `get_lump format=url` as the way out |
 

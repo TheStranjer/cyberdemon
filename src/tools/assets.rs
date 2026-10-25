@@ -495,15 +495,16 @@ fn music_asset(row: &LumpRow) -> Result<Prepared, CyberError> {
 }
 
 /// The palette preview: the `256x256` swatch `get_palette` publishes, of the
-/// requested entry.
+/// requested entry of the selected lump's own bank, so a `scope` or
+/// `occurrence` naming one `PLAYPAL` shows that bank's colours.
 ///
 /// # Errors
 ///
-/// [`View::palette`]' [`CyberError::NotFound`] and [`RgbaImage::new`]' error
-/// for the grid.
+/// [`Palette::from_playpal`]' [`CyberError::NotFound`] for an entry the
+/// selected lump does not hold and [`RgbaImage::new`]' error for the grid.
 fn palette_asset(view: &View<'_>, row: &LumpRow) -> Result<Prepared, CyberError> {
-    debug_assert_eq!(row.kind, LumpKind::Palette, "only palettes route here");
-    let grid = swatch_image(&view.palette()?)?;
+    let palette = Palette::from_playpal(&row.lump.data, view.palette)?;
+    let grid = swatch_image(&palette)?;
     png_asset("palette", &grid, None)
 }
 

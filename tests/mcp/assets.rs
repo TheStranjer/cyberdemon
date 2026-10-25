@@ -462,6 +462,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_palette_swatch_is_drawn_from_the_selected_lump_not_the_winner() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = iwad_client(dir.path()).await;
+        add(&client, "PLAYPAL", &grey_playpal(), None).await;
+        let report = call(
+            &client,
+            "get_asset_url",
+            json!({ "name": "PLAYPAL", "scope": "layer:0" }),
+        )
+        .await;
+        check(&report, "palette", "image/png", "PLAYPAL.png");
+        check_dims(&report, 256, 256);
+        let image = fetch_image(url_of(&report)).await;
+        assert_eq!(
+            image.get(0, 0),
+            Some([0_u8, 255, 0, 255]),
+            "the IWAD's entry 0, not the working override's black"
+        );
+        assert_eq!(
+            image.get(16, 0),
+            Some([1_u8, 254, 1, 255]),
+            "the IWAD's colours survive the override"
+        );
+        let merged = call(
+            &client,
+            "get_asset_url",
+            json!({ "name": "PLAYPAL", "palette": 7_usize }),
+        )
+        .await;
+        let winner = fetch_image(url_of(&merged)).await;
+        assert_eq!(
+            winner.get(16, 0),
+            Some([7_u8, 7, 7, 255]),
+            "the merged view still answers its own bank"
+        );
+        let (code, message, _) = call_err(
+            &client,
+            "get_asset_url",
+            json!({ "name": "PLAYPAL", "scope": "layer:0", "palette": 20_usize }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "past the bank's last entry: {message}");
+    }
+
+    #[tokio::test]
     async fn the_colormap_lump_publishes_one_row_per_table() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = iwad_client(dir.path()).await;

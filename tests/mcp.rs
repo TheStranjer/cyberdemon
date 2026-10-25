@@ -63,8 +63,9 @@
 //! playability-group tests in `playability`, the query-group shared
 //! helpers in `query` with its
 //! `query/find`, `query/replace_surfaces`, `query/replace_things` and
-//! `query/bulk` topic tests, the sketch-group tests in
-//! `sketch`, the textures-group shared helpers in
+//! `query/bulk` topic tests, the sketch-group shared helpers in
+//! `sketch` with its `sketch/noise`, `sketch/trace`, `sketch/params` and
+//! `sketch/build` topic tests, the textures-group shared helpers in
 //! `textures` with its `textures/list`, `textures/pnames` and
 //! `textures/build` topic tests, the themes-group tests in
 //! `themes`, the validate-group tests in `validate`, the usability-pass
@@ -74,7 +75,8 @@
 //! `SKILL.md` tool-index, guide-link and tool/schema description
 //! consistency checks,
 //! the `json plan-example` builds and the `json recipe` `run_batch`
-//! checks); every helper is exercised by a test in
+//! checks, and the 1000-line budget on every Rust file in the repository,
+//! walked past `target/` and the hidden directories); every helper is exercised by a test in
 //! `server`, and
 //! the real result/error contract is checked end to end through a small
 //! probe server.

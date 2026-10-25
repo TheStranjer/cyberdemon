@@ -7,7 +7,9 @@
 //! guide's `Tools:` line names real tools the guide also uses, every
 //! `json plan-example` block in the guides compiles into a playable map,
 //! and every `json recipe` block is a well-formed `run_batch` payload whose
-//! fixture-runnable steps actually succeed on the features fixture session.
+//! fixture-runnable steps actually succeed on the features fixture session,
+//! and no Rust file in the repository is longer than the 1000-line budget the
+//! contributor rules set.
 
 #[cfg(test)]
 mod tests {
@@ -228,6 +230,135 @@ mod tests {
     fn root_readme_stays_within_100_lines() {
         let lines = read("README.md").lines().count();
         assert!(lines <= 100, "README.md is {lines} lines, the limit is 100");
+    }
+
+    /// The most lines one Rust file of this repository may hold; `Clippy` has
+    /// no file-length lint (`too_many_lines` is per function), so this test is
+    /// what enforces it.
+    const MAX_RUST_FILE_LINES: usize = 1_000_usize;
+
+    /// The one directory name the repository walk never enters (build
+    /// products, and any `.hidden` directory, are not this rule's business).
+    const SKIPPED_DIRECTORY: &str = "target";
+
+    /// The fix a reported file needs, as the failing assert's last line.
+    const SPLIT_FIX: &str = "split the file into submodules (x.rs + x/y.rs, aim \
+                             for 500 lines or fewer); see AGENTS.md";
+
+    /// Lines in a file, `str::lines` so a trailing newline counts as `wc -l`
+    /// does; a file that is not UTF-8 text counts as empty and is skipped.
+    fn line_count(path: &Path) -> usize {
+        fs::read_to_string(path).map_or(0, |text| text.lines().count())
+    }
+
+    /// Whether one directory entry's name is walked: `target/` and every
+    /// hidden directory are not.
+    fn is_walked_dir(name: &OsStr) -> bool {
+        let text = name.to_string_lossy();
+        text != SKIPPED_DIRECTORY && !text.starts_with('.')
+    }
+
+    /// Whether one path names Rust source, the way `cargo` itself does.
+    fn is_rust_file(path: &Path) -> bool {
+        path.extension() == Some(OsStr::new("rs"))
+    }
+
+    /// Appends every `*.rs` file under `dir` holding more than `limit` lines
+    /// to `found`, recursing into the directories the walk keeps.
+    fn collect_over_limit(dir: &Path, limit: usize, found: &mut Vec<(PathBuf, usize)>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            follow_dir(&entry, limit, found);
+            count_file(&entry, limit, found);
+        }
+    }
+
+    /// Recurses into one entry when it is a directory the walk keeps.
+    fn follow_dir(entry: &fs::DirEntry, limit: usize, found: &mut Vec<(PathBuf, usize)>) {
+        if !entry.path().is_dir() {
+            return;
+        }
+        if is_walked_dir(&entry.file_name()) {
+            collect_over_limit(&entry.path(), limit, found);
+        }
+    }
+
+    /// Appends one entry when it is a `*.rs` file past `limit` lines.
+    fn count_file(entry: &fs::DirEntry, limit: usize, found: &mut Vec<(PathBuf, usize)>) {
+        let path = entry.path();
+        if path.is_dir() || !is_rust_file(&path) {
+            return;
+        }
+        let lines = line_count(&path);
+        if lines > limit {
+            found.push((path, lines));
+        }
+    }
+
+    /// The `(path, lines)` pairs of every `*.rs` file under `root` longer than
+    /// `limit` lines, sorted by path.
+    fn oversized_rust_files(root: &Path, limit: usize) -> Vec<(PathBuf, usize)> {
+        let mut found: Vec<(PathBuf, usize)> = Vec::new();
+        collect_over_limit(root, limit, &mut found);
+        found.sort();
+        found
+    }
+
+    /// One offender of a report, as the assert names it.
+    fn offender_row(entry: &(PathBuf, usize)) -> String {
+        format!("{}: {} lines", entry.0.display(), entry.1)
+    }
+
+    #[test]
+    fn rust_files_stay_within_1000_lines() {
+        let offenders =
+            oversized_rust_files(Path::new(env!("CARGO_MANIFEST_DIR")), MAX_RUST_FILE_LINES);
+        let rows: Vec<String> = offenders.iter().map(offender_row).collect();
+        assert!(
+            rows.is_empty(),
+            "these Rust files are over {MAX_RUST_FILE_LINES} lines:\n{}\n{SPLIT_FIX}",
+            rows.join("\n"),
+        );
+    }
+
+    /// Writes `lines` lines of text into `path`, ending with a newline so
+    /// `str::lines` counts exactly what `wc -l` does.
+    fn write_lines(path: &Path, lines: usize) {
+        fs::write(path, "fn row() {}\n".repeat(lines)).expect("write a test file");
+    }
+
+    #[test]
+    fn the_rust_file_walk_counts_and_skips_what_it_must() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        write_lines(&root.join("budget.rs"), MAX_RUST_FILE_LINES);
+        let nested = root.join("src").join("deep");
+        fs::create_dir_all(&nested).expect("make a nested directory");
+        write_lines(&nested.join("one_over.rs"), MAX_RUST_FILE_LINES + 1_usize);
+        write_lines(&root.join("notes.md"), MAX_RUST_FILE_LINES + 4_000_usize);
+        fs::write(
+            root.join("binary.rs"),
+            [0xFF_u8, 0xFE, b'\n'].repeat(4_000_usize),
+        )
+        .expect("write the unreadable file");
+        let built = root.join(SKIPPED_DIRECTORY).join("out");
+        fs::create_dir_all(&built).expect("make a target directory");
+        write_lines(
+            &built.join("generated.rs"),
+            MAX_RUST_FILE_LINES + 9_000_usize,
+        );
+        let hidden = root.join(".hidden");
+        fs::create_dir_all(&hidden).expect("make a hidden directory");
+        write_lines(&hidden.join("cached.rs"), MAX_RUST_FILE_LINES + 9_000_usize);
+        let want = nested.join("one_over.rs");
+        let want_lines = MAX_RUST_FILE_LINES + 1_usize;
+        assert_eq!(
+            oversized_rust_files(root, MAX_RUST_FILE_LINES),
+            vec![(want, want_lines)],
+            "only the nested file past the budget is reported",
+        );
     }
 
     /// The `(tool, reference)` rows of `SKILL.md`'s tool index table: the

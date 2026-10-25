@@ -53,8 +53,17 @@ src/
                   `gfx/sprite_name.rs` the sprite lump name grammar,
                   `gfx/sprite_rotation.rs` the engine's viewer-angle to
                   rotation-number bucketing (`rotation_for`),
-                  `gfx/ops.rs` the image-op framework (`ImageOp`, `apply_ops`,
-                  reports, hex/luminance helpers) with `gfx/ops/geometry.rs`
+                  `gfx/ops.rs` the image-op framework's root (`ImageOp` with
+                  its `FitMode`/`Filter` knobs and serde defaults, the shared
+                  re-exports) on `gfx/ops/apply.rs` (`apply_ops`, `OpsReport`
+                  and the three dispatchers), `gfx/ops/colour.rs` (the hex
+                  form, `luminance` and the channel clamp) and
+                  `gfx/ops/checks.rs` (the `ops[i].field` error, the range
+                  guards, the pixel reader and the rounded divisions), with
+                  that framework's tests in `gfx/ops/tests.rs` (the shared
+                  `quad` picture) plus `gfx/ops/tests/colour.rs`,
+                  `gfx/ops/tests/dispatch.rs` and `gfx/ops/tests/json.rs`;
+                  with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
                   bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
                   adjust/grayscale, `gfx/ops/blur.rs` the separable alpha-weighted
@@ -271,9 +280,14 @@ src/
                   placeholder sides, shared vertices and the connector
                   door-line pairing), with that module's tests in
                   `plan/emit/tests.rs` plus
-                  `plan/emit/tests/geometry.rs`, `plan/textures.rs` the eight `TextureRole`
-                  dressings of the emitted map (non-door band flats
-                  inherited from the adjoining rooms), `plan/features.rs` the
+                  `plan/emit/tests/geometry.rs`, `plan/textures.rs` the root of
+                  the eight `TextureRole` dressings of the emitted map (the
+                  roles, the `TextureRoles` theme, the `Scene` bag and the
+                  `apply_textures` entry point) on
+                  `plan/textures/dress.rs` (the faces a piece resolves into,
+                  the `Dresser` and every pass writing a sidedef or sector
+                  row; non-door band flats inherited from the adjoining
+                  rooms), its tests inline in the root, `plan/features.rs` the
                   fixed-order feature pipeline's root (the dress, the rows,
                   the run and its re-face and line-endpoint report) on
                   `plan/features/doors.rs` (the door wiring),
@@ -297,7 +311,13 @@ src/
                   `plan/things.rs` the name
                   resolution, in-room grid placement and presence flags,
                   and `plan/compile.rs` the `compile` pipeline folding it
-                  all into a `CompiledPlan`.
+                  all into a `CompiledPlan` (the reachability, coverage and
+                  floor-gap warnings it adds), with that pipeline's tests in
+                  `plan/compile/tests.rs` (the `TestRoles` theme, the room,
+                  connection and plan builders and the validation readers)
+                  plus `plan/compile/tests/openings.rs`,
+                  `plan/compile/tests/dressing.rs` and
+                  `plan/compile/tests/warnings.rs`.
   assets.rs       LRU asset store for generated files (`assets/store.rs`),
                   the lazy localhost asset HTTP server (`assets/server.rs`)
                   and the one client->bytes input reader for import tools
@@ -414,7 +434,14 @@ src/
                   one-edit commit, the theme role and the report), and that
                   tool's tests in `texture/tests.rs` plus
                   `texture/tests/size.rs` and `texture/tests/plan.rs`,
-                  `imports/create_flat.rs`,
+                  `imports/create_flat.rs` (the constants, the parameters,
+                  the validated request and the flat-role check) with
+                  `create_flat/build.rs` (the automatic ops, the built flat,
+                  the collision rule, the one-edit commit, the theme
+                  override and the report) and that tool's tests in
+                  `create_flat/tests.rs` plus
+                  `create_flat/tests/request.rs` and
+                  `create_flat/tests/build.rs`,
                   `imports/create_sprite.rs` (the constants, the parameters,
                   the validated request and the three naming forms) with
                   `create_sprite/build.rs` (the cleanup ops, the height
@@ -1458,7 +1485,20 @@ tests/
                     squares, the `two_way` return leg and the `Hexen` TID
                     threading, with the `place`-shared `reported_things`) and
                     `features/place.rs` (the `place_things` spreads, facings,
-                    shortfall, dry run, undo and refusal catalogue);
+                    shortfall, dry run, undo and refusal catalogue); the
+                    `sketch` group's shared sheet builders in `sketch.rs`
+                    (the paper and pen colours, the bar and cross primitives,
+                    the three-room sketch and the two-pen fixture, the `PNG`
+                    writer, the trace arguments and the region, point, colour
+                    and overlay readers) with its tests in `sketch/noise.rs`
+                    (the noisy scan's bounded lists, totals and warnings, the
+                    noise floor, `verbose` and the cap refusals),
+                    `sketch/trace.rs` (the three rooms' regions, welded wall,
+                    door gap, marks and debug overlay), `sketch/params.rs`
+                    (the downscale, `units`, `crop`, `ink.mode`, the blank
+                    sheet and the argument refusals) and `sketch/build.rs`
+                    (the traced plan building an error-free map, twice over
+                    identically);
                     the flagship chains in e2e_sketch.rs (the drawn sheet,
                     the session, the report readers and the plan builders
                     every slice shares) with its topic files
@@ -1474,7 +1514,9 @@ tests/
                     spawned-binary asset-server proof in e2e.rs; a
                     usability pass over hints and descriptions in
                     usability.rs; docs.rs: skill/ and README.md layout and
-                    tool/doc consistency checks.
+                    tool/doc consistency checks, the guide and `README.md`
+                    line budgets and the 1000-line budget on every Rust file
+                    in the repository.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).
 skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.
@@ -1511,5 +1553,5 @@ The repo's deny list goes well beyond `pedantic`. Accepted fixes (tests are exem
 - No `v[i]`/`v[a..b]` in production code → `.get()`, `.split_at_checked()`, `.chunks_exact()`, iterators.
 - No `unwrap`/`expect`/`panic!`/`todo!`/`unreachable!` in production; never print (stdout is the MCP channel).
 - Doc comments on every item, including private fields and functions.
-- Budgets: functions ≤ 60 lines, ≤ 4 parameters, cognitive complexity ≤ 10, nesting ≤ 3.
+- Budgets: functions ≤ 60 lines, ≤ 4 parameters, cognitive complexity ≤ 10, nesting ≤ 3; files ≤ 1000 lines, aim for ≤ 500; enforced by `tests/mcp/docs.rs`, not Clippy, which has no such lint.
 - Modules are `src/a.rs` + `src/a/b.rs`, never `mod.rs`. Prefer `core::`/`alloc::` paths where they exist; `.to_owned()` on `&str`; no shadowing; suffixed literals (`0_u32`); no `_ =>` on enums; `else if` chains end with `else`.

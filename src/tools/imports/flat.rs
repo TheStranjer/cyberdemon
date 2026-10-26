@@ -19,15 +19,14 @@ use crate::error::CyberError;
 use crate::gfx::codec::decode_image;
 use crate::gfx::flat::{encode_flat, is_flat_shape};
 use crate::gfx::image::{RgbaImage, resize_nearest};
-use crate::gfx::ops::dither::{Dither, quantize_dithered};
-use crate::gfx::quantize::{
-    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize_stats,
-};
+use crate::gfx::ops::dither::{Dither, quantize_dithered_measured};
+use crate::gfx::quantize::{DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::imports::image_pipeline::{DEFAULT_PALETTE, LumpWrite, chosen_name, put_lump};
+use crate::tools::imports::image_pipeline::{DEFAULT_PALETTE, chosen_name};
 use crate::tools::imports::processed::dither_or_default;
+use crate::tools::imports::{put_lump, region_write};
 use crate::tools::palette::load_palette;
 use crate::tools::reply;
 use crate::wad::classify::Namespace;
@@ -268,7 +267,8 @@ async fn import_flat_run(
 
 /// Fetch, decode, scale, quantize and encode one flat: the shared pipeline
 /// with [`Transparency::None`], because flats have no holes, and the
-/// call's [`Dither`] mode.
+/// call's [`Dither`] mode. The one quantization pass yields both the index
+/// plane that is stored and the colour measures that are reported.
 ///
 /// # Errors
 ///
@@ -288,9 +288,8 @@ async fn build_flat(state: &AppState, import: &ParsedFlat) -> Result<FlatImporte
         reserved: Vec::new(),
     };
     let palette = state.with_session(|session| load_palette(session, import.palette))?;
-    let indexed = quantize_dithered(&picture, &palette, &options, import.dither);
-    let (colors_used, max_color_error) = quantize_stats(&picture, &palette, &options);
-    let (data, _) = encode_flat(&indexed)?;
+    let measured = quantize_dithered_measured(&picture, &palette, &options, import.dither);
+    let (data, _) = encode_flat(&measured.image)?;
     Ok(FlatImported {
         name,
         data,
@@ -299,8 +298,8 @@ async fn build_flat(state: &AppState, import: &ParsedFlat) -> Result<FlatImporte
         size: import.size,
         dither: import.dither,
         resized,
-        colors_used,
-        max_color_error,
+        colors_used: measured.colors_used,
+        max_color_error: measured.max_color_error,
         transparent_pixels_ignored: ignored,
     })
 }
@@ -318,12 +317,7 @@ fn commit_flat(
 ) -> Result<FlatReport, CyberError> {
     let label = format!("import_flat {}", built.name);
     session.edit(&label, move |wad| {
-        let write = LumpWrite {
-            name: built.name,
-            data: &built.data,
-            namespace: Some(Namespace::Flats),
-            replace,
-        };
+        let write = region_write(built.name, &built.data, Namespace::Flats, replace);
         let lump_index = put_lump(wad, &write)?;
         Ok(FlatReport {
             name: built.name,

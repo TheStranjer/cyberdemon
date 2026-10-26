@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::session::{LayerRole, Session, Source};
-use crate::tools::imports::image_pipeline::{LumpWrite, put_lump};
+use crate::tools::imports::{apply_role, put_lump, region_write};
 use crate::tools::textures::{
     Placement, TextureSet, definition, lump_copy, missing_names, place_definition, target_lump,
 };
@@ -175,12 +175,12 @@ pub(super) fn commit_create(
     plan: &Plan,
 ) -> Result<(), CyberError> {
     let label = format!("create_texture {}", request.name);
-    let write = LumpWrite {
-        name: request.patch,
-        data: &built.patch_bytes,
-        namespace: Some(Namespace::Patches),
-        replace: request.replace,
-    };
+    let write = region_write(
+        request.patch,
+        &built.patch_bytes,
+        Namespace::Patches,
+        request.replace,
+    );
     session.edit(&label, |wad| {
         put_lump(wad, &write)?;
         if let Some(bytes) = plan.pnames_bytes.as_ref() {
@@ -190,18 +190,6 @@ pub(super) fn commit_create(
         Ok(())
     })?;
     Ok(())
-}
-
-/// Point the requested theme role at the new texture. Theme state is
-/// session state: no undo step records it. Runs inside [`land_create`]'
-/// lock, after the commit succeeded.
-pub(super) fn apply_role(session: &mut Session, request: &CreateRequest) -> Option<&'static str> {
-    let role = request.role?;
-    session
-        .texture_theme_mut()
-        .overrides
-        .insert(role, request.name.clone());
-    Some(role.as_str())
 }
 
 /// The committed facts a report is assembled from.
@@ -233,7 +221,7 @@ pub(super) fn land_create(
     commit_create(session, request, built, &plan)?;
     Ok(Landed {
         lump: plan.lump,
-        role: apply_role(session, request),
+        role: apply_role(session, request.role, &request.name),
     })
 }
 

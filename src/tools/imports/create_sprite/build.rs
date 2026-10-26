@@ -17,7 +17,7 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::{Filter, FitMode, ImageOp, OpsReport, apply_ops, rounded_div};
+use crate::gfx::ops::{Filter, FitMode, ImageOp, rounded_div};
 use crate::gfx::patch::{Patch, decode_patch, encode_patch};
 use crate::gfx::quantize::{DEFAULT_ALPHA_THRESHOLD, Transparency};
 use crate::session::Session;
@@ -26,11 +26,10 @@ use crate::tools::imports::create_sprite::{
     AUTO_HEIGHT, Cleanup, CreateSpriteParams, NEXT_STEPS, PNG_MIME, SpriteRequest, TALL_HEIGHT,
     parse_create,
 };
-use crate::tools::imports::image_pipeline::{
-    LumpWrite, OffsetDefault, put_lump, resolve_offsets, to_i16_offsets,
-};
+use crate::tools::imports::image_pipeline::{OffsetDefault, resolve_offsets, to_i16_offsets};
 use crate::tools::imports::processed::{Processed, process, to_indexed};
 use crate::tools::imports::sprite::{Naming, warnings_for};
+use crate::tools::imports::{apply_extra, put_lump, region_write};
 use crate::tools::palette::load_palette;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
@@ -51,20 +50,6 @@ pub(super) fn background_ops(cleanup: &Cleanup) -> Vec<ImageOp> {
         });
     }
     ops
-}
-
-/// Run `ops` over `processed`, appending their measurements to the report.
-pub(super) fn apply_extra(processed: Processed, ops: &[ImageOp]) -> Result<Processed, CyberError> {
-    if ops.is_empty() {
-        return Ok(processed);
-    }
-    let (rgba, second) = apply_ops(processed.rgba, ops)?;
-    let mut steps = processed.report.steps;
-    steps.extend(second.steps);
-    Ok(Processed {
-        rgba,
-        report: OpsReport { steps },
-    })
 }
 
 /// The `height` plan for the final picture, and the note the automatic
@@ -223,10 +208,11 @@ pub(super) fn build_sprite(
         &shaped.rgba,
     );
     let (left_offset, top_offset) = to_i16_offsets(pair)?;
+    let (colors_used, transparent_pixels) = (indexed.colors_used, indexed.transparent_pixels);
     let patch = Patch {
         left_offset,
         top_offset,
-        image: indexed.image.clone(),
+        image: indexed.image,
     };
     let data = encode_patch(&patch)?;
     let decoded = decode_patch(&data)?;
@@ -240,8 +226,8 @@ pub(super) fn build_sprite(
         left_offset: i32::from(left_offset),
         top_offset: i32::from(top_offset),
         steps: shaped.report.steps,
-        colors_used: indexed.colors_used,
-        transparent_pixels: indexed.transparent_pixels,
+        colors_used,
+        transparent_pixels,
         notes: note.into_iter().collect(),
     })
 }
@@ -315,12 +301,12 @@ pub(super) fn commit_sprite(
     let label = format!("create_sprite {}", first_name(&request.names)?);
     session.edit(&label, |wad| {
         for naming in &request.names {
-            let write = LumpWrite {
-                name: naming.name,
-                data: &built.data,
-                namespace: Some(Namespace::Sprites),
-                replace: request.replace,
-            };
+            let write = region_write(
+                naming.name,
+                &built.data,
+                Namespace::Sprites,
+                request.replace,
+            );
             put_lump(wad, &write)?;
         }
         Ok(())

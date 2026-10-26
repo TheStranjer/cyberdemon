@@ -30,9 +30,9 @@ use crate::gfx::sprite_name::{
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{
-    ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched, build_patch, parse_import,
-    put_lump,
+    ImageImportParams, ImportReport, OffsetDefault, Patched, build_patch, parse_import,
 };
+use crate::tools::imports::{put_lump, region_write};
 use crate::tools::lumps::rows::build_rows;
 use crate::tools::reply;
 use crate::wad::classify::{LumpKind, Namespace};
@@ -517,12 +517,7 @@ fn commit_sprite(session: &mut Session, plan: SpritePlan) -> Result<SpriteReport
     let label = format!("import_sprite {name}");
     let Patched { data, report, .. } = patched;
     session.edit(&label, move |wad| {
-        let write = LumpWrite {
-            name,
-            data: &data,
-            namespace: Some(Namespace::Sprites),
-            replace,
-        };
+        let write = region_write(name, &data, Namespace::Sprites, replace);
         let lump_index = put_lump(wad, &write)?;
         Ok(SpriteReport {
             name,

@@ -16,7 +16,7 @@
 //! ([`crate::tools::imports::image_pipeline::OffsetDefault::CenterBottom`]),
 //! and one [`crate::session::Session::edit`] labelled `create_sprite NAME`
 //! places every lump through
-//! [`crate::tools::imports::image_pipeline::put_lump`], carrying the
+//! [`crate::tools::imports::put_lump`], carrying the
 //! rotation-coverage warnings of
 //! [`crate::tools::imports::sprite::warnings_for`] through untouched.
 //!

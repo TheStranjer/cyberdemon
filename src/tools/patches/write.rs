@@ -17,8 +17,8 @@
 use crate::error::CyberError;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
-use crate::tools::imports::image_pipeline::{LumpWrite, parse_import, put_lump};
-use crate::tools::imports::{PnamesPlan, current_pnames, pnames_plan};
+use crate::tools::imports::image_pipeline::parse_import;
+use crate::tools::imports::{PnamesPlan, current_pnames, pnames_plan, put_lump, region_write};
 use crate::wad::archive::Lump;
 use crate::wad::classify::{LumpKind, Namespace, analyze};
 use crate::wad::lumps;
@@ -138,12 +138,7 @@ fn commit_patch(
 ) -> Result<PatchOutcome, CyberError> {
     let label = format!("add_patch {}", staged.name);
     session.edit(&label, move |wad| {
-        let write = LumpWrite {
-            name: staged.name,
-            data: &staged.data,
-            namespace: Some(Namespace::Patches),
-            replace: false,
-        };
+        let write = region_write(staged.name, &staged.data, Namespace::Patches, false);
         put_lump(wad, &write)?;
         if let Some(list) = plan.as_ref().and_then(|entry| entry.bytes.as_ref()) {
             wad.put_global(lumps::PNAMES, list.clone())?;
@@ -227,12 +222,7 @@ fn commit_replacement(
 ) -> Result<ReplaceOutcome, CyberError> {
     let label = format!("replace_patch {}", staged.name);
     session.edit(&label, move |wad| {
-        let write = LumpWrite {
-            name: staged.name,
-            data: &staged.data,
-            namespace: Some(Namespace::Patches),
-            replace: in_working,
-        };
+        let write = region_write(staged.name, &staged.data, Namespace::Patches, in_working);
         let lump_index = put_lump(wad, &write)?;
         Ok(ReplaceOutcome {
             patch: PatchOutcome {

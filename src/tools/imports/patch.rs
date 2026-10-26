@@ -18,14 +18,13 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{PnamesPlan, chosen, parse_namespace, pnames_plan};
+use super::{LumpWrite, PnamesPlan, chosen, parse_namespace, pnames_plan, put_lump, region_write};
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, format_name};
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{
-    ImageImportParams, ImportReport, LumpWrite, OffsetDefault, Patched, build_patch, parse_import,
-    put_lump,
+    ImageImportParams, ImportReport, OffsetDefault, Patched, build_patch, parse_import,
 };
 use crate::tools::reply;
 use crate::wad::classify::Namespace;
@@ -157,12 +156,7 @@ fn commit_patch(
 ) -> Result<PatchReport, CyberError> {
     let label = format!("import_patch {}", patched.name);
     session.edit(&label, |wad| {
-        let write = LumpWrite {
-            name: patched.name,
-            data: &patched.data,
-            namespace: Some(Namespace::Patches),
-            replace,
-        };
+        let write = region_write(patched.name, &patched.data, Namespace::Patches, replace);
         let lump_index = put_lump(wad, &write)?;
         if let Some(list) = plan.as_ref().and_then(|entry| entry.bytes.as_ref()) {
             wad.put_global(lumps::PNAMES, list.clone())?;

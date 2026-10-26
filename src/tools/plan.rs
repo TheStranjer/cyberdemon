@@ -151,7 +151,10 @@ struct ResolvedTheme {
 
 /// The compiler's theme for this call, the [`crate::plan::features`]
 /// step's dressed names, and the notes for the roles that answered
-/// `"-"`.
+/// `"-"`. An unknown `theme` override is refused with the `theme` plan
+/// path leading, so the caller sees which request field to fix; a stale
+/// session theme (no override) keeps the bare refusal, naming the themes
+/// that would clear it with `set_texture_theme`.
 ///
 /// # Errors
 ///
@@ -159,7 +162,8 @@ struct ResolvedTheme {
 fn plan_theme(session: &Session, theme: Option<&str>) -> Result<ResolvedTheme, CyberError> {
     let mut wanted: Vec<Role> = THEME_ROLES.iter().map(|&(_, role)| role).collect();
     wanted.extend(FEATURE_ROLES);
-    let resolved = theme_roles(session, theme, &wanted)?;
+    let resolved =
+        theme_roles(session, theme, &wanted).map_err(|error| with_theme_path(error, theme))?;
     let mut names = Vec::new();
     let mut notes = Vec::new();
     for (plan_role, role) in THEME_ROLES {
@@ -174,6 +178,19 @@ fn plan_theme(session: &Session, theme: Option<&str>) -> Result<ResolvedTheme, C
         features,
         notes,
     })
+}
+
+/// The `theme` plan path on an override refusal: exactly how
+/// `with_plan_path` in `build.rs` leads a compiler refusal with its
+/// `rooms[i]`, an unknown `theme` name is refused with `theme:` leading,
+/// so the caller sees which request field to fix.
+/// Refusals that are not the caller's argument error (a broken texture
+/// read), and calls that carry no override, keep their own words.
+fn with_theme_path(error: CyberError, theme: Option<&str>) -> CyberError {
+    if theme.is_some() && error.is_invalid_argument() {
+        return error.map_message(|old| format!("theme: {old}"));
+    }
+    error
 }
 
 /// The advisory note for a theme role the session answered `"-"`.

@@ -197,17 +197,37 @@ mod tests {
         );
     }
 
+    /// Requires a theme refusal `message` to echo the wanted name and list
+    /// every theme the `DOOM II` fixture's table offers.
+    fn refusal_lists_the_choices(message: &str, wanted: &str) {
+        assert!(message.contains(wanted), "names {wanted}: {message}");
+        for name in ["brick", "hell", "rock", "tech"] {
+            assert!(
+                message.contains(name),
+                "the refusal lists {name}: {message}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn set_texture_theme_refuses_noise() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        let (code, message, _) =
-            call_err(&client, "set_texture_theme", json!({"theme": "pastel"})).await;
+        let (code, message, hint) =
+            call_err(&client, "set_texture_theme", json!({"theme": "nope"})).await;
         assert_eq!(code, "invalid_argument", "unknown theme");
+        refusal_lists_the_choices(&message, "nope");
         assert!(
-            message.contains("tech") && message.contains("hell"),
-            "the refusal lists the themes: {message}"
+            hint.contains("get_texture_theme"),
+            "the hint points at the listing tool: {hint}"
         );
+        let (spelt_code, spelt_message, _) =
+            call_err(&client, "set_texture_theme", json!({"theme": "tech_base"})).await;
+        assert_eq!(
+            spelt_code, "invalid_argument",
+            "a misspelt theme is refused, not defaulted"
+        );
+        refusal_lists_the_choices(&spelt_message, "tech_base");
         refuse(
             &client,
             "set_texture_theme",
@@ -232,6 +252,39 @@ mod tests {
         let view = theme(&client).await;
         assert_eq!(view["theme"], json!("castle"), "the heretic default");
         assert_eq!(view["available_themes"], json!(["castle"]));
+    }
+
+    #[tokio::test]
+    async fn a_theme_that_stops_matching_the_game_is_refused_not_defaulted() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        call(&client, "set_texture_theme", json!({"theme": "hell"})).await;
+        let heretic = iwad_heretic(dir.path());
+        call(
+            &client,
+            "open_iwad",
+            json!({"path": heretic.display().to_string()}),
+        )
+        .await;
+        let (code, message, hint) = call_err(&client, "get_texture_theme", Value::Null).await;
+        assert_eq!(
+            code, "invalid_argument",
+            "the doom theme is not a heretic one and does not silently become castle"
+        );
+        assert!(
+            message.contains("hell") && message.contains("castle"),
+            "the refusal names the stale theme and the game's choices: {message}"
+        );
+        assert!(
+            hint.contains("get_texture_theme"),
+            "the hint points at the listing tool: {hint}"
+        );
+        let healed = call(&client, "set_texture_theme", json!({"theme": "castle"})).await;
+        assert_eq!(
+            healed["theme"],
+            json!("castle"),
+            "a listed name clears the refusal"
+        );
     }
 
     #[tokio::test]

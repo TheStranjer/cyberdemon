@@ -372,8 +372,9 @@ answers `"-"` leaves its faces as the compiler dressed them — a locked
 door's jambs in the plain track, a switch panel on the wall's own
 middle — and adds its own note. `theme`
 names a different theme **for this call only**
-(case-insensitive; unknown names fail `invalid_argument` listing the
-game's themes); the session's theme and per-role overrides never
+(case-insensitive; unknown names fail `invalid_argument` with the
+`theme` plan path leading, listing the game's themes); the session's
+theme and per-role overrides never
 change, and they still apply under the override. A room's own
 `floor_flat` / `ceiling_flat` / `wall_texture` beat the theme. A role
 the theme answers `"-"` (an empty session) leaves its faces undressed

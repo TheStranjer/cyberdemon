@@ -23,7 +23,8 @@ sounds a session holds.
     can be derived the call fails asking for this name.
   - `format` (string, optional): `"doom"` (the default) stores a vanilla
     `DMX` `DS*` lump (unsigned 8-bit mono, the engine's 16 pad bytes at each
-    end); `"passthrough"` validates that the bytes decode, then stores the
+    end, each filled with repeats of the adjacent sample byte);
+    `"passthrough"` validates that the bytes decode, then stores the
     original file unchanged.
   - `sample_rate` (integer, optional, `doom` only): target rate in
     `4000..=48000`, default 11025.
@@ -89,7 +90,13 @@ sounds a session holds.
     unchanged.
 - Behaviour by the lump's detected kind:
   - `doom_sound` (a `DMX` `DS*` lump): decoded and re-encoded as
-    `NAME.wav`.
+    `NAME.wav`. The 16 leading (and 16 trailing) pad bytes are recognised
+    by their shape — a body longer than 32 bytes whose first (last) 16
+    bytes all repeat the byte next to them — and dropped; a body that does
+    not look padded is kept whole, so an unpadded lump plays every sample.
+    A lump whose sound itself begins or ends with 16 identical bytes is
+    indistinguishable from a padded one and is trimmed. Lumps written
+    big-endian (byte-swapped format tag) are read with the swap undone.
   - `pc_speaker` (a `DP*` tone-list lump: `u16` format `0`, `u16` tick
     count, one byte per 1/140 s tick): synthesized into a mono 11025 Hz
     square-wave `WAV`. Each tick keeps its exact share of samples, so

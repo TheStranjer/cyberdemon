@@ -503,6 +503,20 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_rate_fmt_is_a_format_error() {
+        // The decode cap in audio/decode.rs measures length in
+        // milliseconds; a 0 Hz stream would measure as 0 ms, so the
+        // reader refuses it before anything can trust the rate.
+        let file = wav_data(&fmt_body(1, 1, 0, 16), &0_i16.to_le_bytes());
+        let error = decode_wav(&file).expect_err("0 Hz is not playable audio");
+        assert_eq!(error.code(), "format_error", "zero rate code");
+        assert!(
+            error.to_string().contains("zero"),
+            "the message names the rate: {error}"
+        );
+    }
+
+    #[test]
     fn float_input_is_unsupported() {
         let file = wav_data(&fmt_body(3, 2, 48000, 32), &[0_u8; 8]);
         let error = decode_wav(&file).expect_err("IEEE float is rejected");

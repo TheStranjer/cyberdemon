@@ -9,7 +9,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use cyberdemon::audio::{Pcm, decode_wav, encode_dmx, encode_wav};
+    use cyberdemon::audio::{Pcm, decode_dmx, decode_wav, encode_dmx, encode_wav};
     use rmcp::RoleClient;
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
@@ -255,6 +255,70 @@ mod tests {
             json!("03 00 22 56 42 56 00 00"),
             "rate 0x5622 = 22050, count 22082 with the pads"
         );
+    }
+
+    #[tokio::test]
+    async fn an_imported_lump_previews_with_every_stored_sample() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let wav = write_stereo_wav(dir.path(), "pistol", ONE_SECOND);
+        let report = call(&client, "import_sound", source_arg(&wav)).await;
+        assert_eq!(report["sample_rate"], json!(11025_u64), "the vanilla rate");
+        let stored_bytes = report["bytes"].as_u64().expect("a byte count");
+        let stored = usize::try_from(stored_bytes).expect("a size that fits");
+        let frames = stored
+            .checked_sub(DMX_HEADER)
+            .and_then(|body| body.checked_sub(DMX_PAD.saturating_mul(2)))
+            .expect("the lump is header, samples and pads");
+        let lump = lump_bytes(&client, "DSPISTOL", dir.path(), "stored").await;
+        let decoded = decode_dmx(&lump).expect("the stored lump decodes");
+        assert_eq!(
+            decoded.frames(),
+            frames,
+            "the pads are the only trimmed bytes"
+        );
+        assert_eq!(decoded.sample_rate, 11025, "the stored rate");
+        let preview = call(&client, "preview_sound", json!({ "name": "DSPISTOL" })).await;
+        assert_eq!(preview["sample_rate"], json!(11025_u64), "the lump's rate");
+        assert_eq!(
+            preview["duration_ms"], report["duration_ms"],
+            "the same length on both sides"
+        );
+        let body = fetch_asset(&asset_url(&preview)).await;
+        let played = decode_wav(&body).expect("the published WAV decodes");
+        assert_eq!(played.channels, 1, "DMX audio is mono");
+        assert_eq!(
+            played.frames(),
+            decoded.frames(),
+            "the preview plays every stored sample"
+        );
+        assert_eq!(played.samples, decoded.samples, "and every value");
+    }
+
+    #[tokio::test]
+    async fn preview_sound_of_an_unpadded_lump_keeps_every_sample() {
+        let client = connect().await;
+        let payload: Vec<u8> = (0_u8..64)
+            .map(|index| index.wrapping_mul(5).wrapping_add(9))
+            .collect();
+        let pcm = Pcm::from_u8_unsigned(&payload, SOURCE_RATE);
+        let lump = encode_dmx(&pcm, false).expect("mono encodes unpadded");
+        add_working_lump(&client, "DSNOPAD", &lump).await;
+        let report = call(&client, "preview_sound", json!({ "name": "DSNOPAD" })).await;
+        assert_eq!(
+            report["kind"],
+            json!("doom_sound"),
+            "a DS lump reads as DMX"
+        );
+        assert_eq!(report["sample_rate"], json!(22050_u64), "the lump's rate");
+        let body = fetch_asset(&asset_url(&report)).await;
+        let played = decode_wav(&body).expect("the published WAV decodes");
+        assert_eq!(
+            played.frames(),
+            payload.len(),
+            "nothing was trimmed off the unpadded body"
+        );
+        assert_eq!(played.samples, pcm.samples, "and every value survived");
     }
 
     #[tokio::test]

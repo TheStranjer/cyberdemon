@@ -3,7 +3,7 @@
 //! [`compose`] draws a list of [`Component`] patches onto a transparent
 //! indexed canvas in record order (later patches overdraw earlier ones)
 //! and reports which components had no pixels to draw. It is pure: lump
-//! lookup and decoding happen in `tools/graphics/resolve.rs`, which feeds
+//! lookup and decoding happen in `session/resolve/texture.rs`, which feeds
 //! this with whatever it found.
 
 use crate::error::CyberError;

@@ -4,15 +4,20 @@
 //! `ok` and `fail` are public so later tool groups (and callers embedding
 //! this library) can build results with them; the tool group modules
 //! themselves stay crate-private, except `textures`, whose session-level
-//! [`textures::TextureSet`] loader is public API texture editing will grow
-//! around, `maps`, whose [`maps::params`] wire types and validators the
-//! element-editing tools are built from, `graphics` and `palette`, whose
-//! resolvers the renderers share, `themes`, whose [`themes::theme_texture`]
+//! [`crate::session::textures::TextureSet`] loader this group re-exports is
+//! public API texture editing will grow around, `maps`, whose [`maps::params`]
+//! wire types and validators the element-editing tools are built from,
+//! `graphics` and `palette`, which re-export the shared session resolvers
+//! (`crate::session::resolve`, `crate::session::palette`) the image tools and
+//! renderers use, `themes`, whose [`themes::theme_texture`]
 //! is how every role-asking tool (drawing, doors, stairs, the plan builder)
 //! resolves its textures, and `query`, whose [`query::replace`] bulk-edit
-//! machinery is public for the same reason as [`textures::TextureSet`]:
+//! machinery is public for the same reason as the texture loader:
 //! not-yet-wired crate-private items would not survive the `dead_code`
-//! check until the `replace_*` tool slices build on them.
+//! check until the `replace_*` tool slices build on them. Those two
+//! re-exporting groups (`graphics`, `palette`) and the loader re-export in
+//! `textures` stay `pub` so their `pub(crate) use` re-exports are not flagged
+//! as redundant.
 
 pub(crate) mod assets;
 pub(crate) mod audio;

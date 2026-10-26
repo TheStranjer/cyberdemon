@@ -28,7 +28,10 @@
 //! preview built on the session's definitions and `decode` the patch
 //! reader that answers with both encodings.
 
-pub mod resolve;
+// The shared picture resolvers now live beside the session they read, in
+// [`crate::session::resolve`]; this group re-exports them so the image tools
+// keep reaching them at [`crate::tools::graphics::resolve`].
+pub(crate) use crate::session::resolve;
 
 mod decode;
 mod get;

@@ -1,166 +1,23 @@
-//! The shared map helpers behind every tool that acts on a map: name
-//! resolution, one map block read and the one locked read of a merged-view
-//! map with the session's definitions.
+//! The shared map helpers behind every tool that acts on a map.
 //!
-//! `resolve_map_name` picks the map a call works on; `load_map`
-//! decodes one block out of a scope, through the `Directory` wrapper
-//! around a scope's classified listing. Every later map tool takes an
-//! optional `map` parameter and starts with these two. `load` adds
-//! [`Session::definitions`] in the same lock and answers with the
-//! `Prepared` pair the analysing tools (`find_elements`,
-//! `check_playability`, `describe_map`) read from.
+//! The block-level machinery - the `map`-parameter resolvers
+//! (`resolve_map_name`, `load_map`) and the `Directory` wrapper around a
+//! scope's classified listing - lives beside the session it reads, in
+//! [`crate::session::mapdir`]; this module re-exports it so every map tool
+//! keeps reaching it at [`crate::tools::maps::common`]. On top of those,
+//! `load` adds [`crate::session::Session::definitions`] in the same lock
+//! and answers with the `Prepared` pair the analysing tools
+//! (`find_elements`, `check_playability`, `describe_map`) read from.
 
 use crate::defs::Definitions;
 use crate::error::CyberError;
-use crate::session::{MergedLump, Scope, Session};
+use crate::session::Scope;
+pub(crate) use crate::session::mapdir::load_map;
+pub(in crate::tools) use crate::session::mapdir::{
+    Directory, directory, missing_map, resolve_map_name,
+};
 use crate::state::AppState;
-use crate::wad::archive::Lump;
-use crate::wad::classify::{Analysis, MapBlock, analyze};
-use crate::wad::lumps;
 use crate::wad::map::Map;
-use crate::wad::map::read_map;
-use crate::wad::name::LumpName;
-
-/// One scope read as a directory: the tagged entries, the plain lumps
-/// (index-aligned with them) and the [`analyze`] result over the listing.
-pub(in crate::tools) struct Directory {
-    /// The scope's lumps with their origins, in directory order.
-    pub(in crate::tools) entries: Vec<MergedLump>,
-    /// The same lumps without origin tags, index-aligned with `entries`.
-    pub(in crate::tools) lumps: Vec<Lump>,
-    /// The classification of `lumps`.
-    pub(in crate::tools) analysis: Analysis,
-}
-
-impl Directory {
-    /// The map block named `name`; when the scope holds two blocks with one
-    /// name, the last in directory order wins, the way an engine reads it.
-    pub(in crate::tools) fn find_block(&self, name: LumpName) -> Option<&MapBlock> {
-        self.analysis
-            .maps
-            .iter()
-            .rev()
-            .find(|block| block.name == name)
-    }
-
-    /// The directory positions one block covers past its header: the member
-    /// lumps first, then the attached `GL` node run when there is one.
-    pub(in crate::tools) fn block_positions(block: &MapBlock) -> Vec<usize> {
-        let members = block.header.saturating_add(1)..block.end;
-        let Some((gl_start, gl_end)) = block.gl else {
-            return members.collect();
-        };
-        members.chain(gl_start..gl_end).collect()
-    }
-
-    /// The member lump names of `block`, [`Self::block_positions`] spelled
-    /// out, for `list_maps` rows.
-    pub(in crate::tools) fn block_lump_names(&self, block: &MapBlock) -> Vec<String> {
-        self.block_lumps(block)
-            .map(|lump| lump.name.to_string())
-            .collect()
-    }
-
-    /// The lumps of [`Self::block_positions`], in directory order.
-    fn block_lumps<'dir>(&'dir self, block: &MapBlock) -> impl Iterator<Item = &'dir Lump> {
-        Self::block_positions(block)
-            .into_iter()
-            .filter_map(|position| self.lumps.get(position))
-    }
-
-    /// Whether `block` carries node data: a non-empty `NODES` lump, or a
-    /// `ZNODES` lump (the `UDMF` node run, present is enough).
-    pub(in crate::tools) fn block_has_nodes(&self, block: &MapBlock) -> bool {
-        self.block_lumps(block).any(is_node_lump)
-    }
-}
-
-/// Whether a block member is node data: a name from
-/// [`lumps::NODE_DATA_LUMPS`], where `ZNODES` counts by mere presence
-/// and `NODES` only when it carries bytes (an empty one is an
-/// invalidated placeholder).
-fn is_node_lump(lump: &Lump) -> bool {
-    lumps::NODE_DATA_LUMPS.contains(&lump.name) && (lump.name == lumps::ZNODES || lump.size() > 0)
-}
-
-/// Read `scope` into a [`Directory`].
-///
-/// # Errors
-///
-/// [`Session::lumps_in`]'s [`CyberError::NotFound`] for a [`Scope::Layer`]
-/// that is not loaded.
-pub(in crate::tools) fn directory(
-    session: &Session,
-    scope: Scope,
-) -> Result<Directory, CyberError> {
-    let entries = session.lumps_in(scope)?;
-    let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
-    let analysis = analyze(&lumps);
-    Ok(Directory {
-        entries,
-        lumps,
-        analysis,
-    })
-}
-
-/// The map one tool should act on: the explicit `requested` name (parsed
-/// strictly as a [`LumpName`]), else the session's active map, else the
-/// merged view's only map when it holds exactly one.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for a name that does not parse, and for
-/// the no-default case (no name, no active map, merged view empty or with
-/// several maps).
-pub(in crate::tools) fn resolve_map_name(
-    session: &Session,
-    requested: Option<&str>,
-) -> Result<LumpName, CyberError> {
-    if let Some(text) = requested {
-        return LumpName::parse(text);
-    }
-    if let Some(active) = session.active_map() {
-        return Ok(active);
-    }
-    let dir = directory(session, Scope::Merged)?;
-    let mut blocks = dir.analysis.maps.iter();
-    let only = blocks.next().filter(|_| blocks.next().is_none());
-    only.map_or_else(|| Err(no_map_error()), |block| Ok(block.name))
-}
-
-/// The refusal when no map was given, none is active and the merged view
-/// does not hold exactly one map.
-fn no_map_error() -> CyberError {
-    CyberError::InvalidArgument(
-        "no map given and no active map; pass map or call set_active_map".to_owned(),
-    )
-    .with_hint(MAP_LIST_HINT)
-}
-
-/// The hint attached to every refusal about a map the session does not
-/// name: list what exists, or make a new one.
-const MAP_LIST_HINT: &str = "list_maps shows the maps; create_map makes a new one";
-
-/// Read the map named `name` out of `scope`, decoding its block.
-///
-/// # Errors
-///
-/// [`CyberError::NotFound`] when the scope holds no such block,
-/// [`CyberError::Format`] when the block's decoder rejects its members, and
-/// [`Session::lumps_in`]'s errors for an unloaded layer scope.
-pub(crate) fn load_map(session: &Session, name: LumpName, scope: Scope) -> Result<Map, CyberError> {
-    let dir = directory(session, scope)?;
-    let Some(block) = dir.find_block(name) else {
-        return Err(missing_map(name, scope));
-    };
-    read_map(&dir.lumps, block)
-}
-
-/// The `not_found` refusal for a map a scope does not hold.
-pub(in crate::tools) fn missing_map(name: LumpName, scope: Scope) -> CyberError {
-    CyberError::NotFound(format!("no map block named {name} in the {scope} scope"))
-        .with_hint(MAP_LIST_HINT)
-}
 
 /// The map and the session's definitions, read together out of one
 /// session lock: what the analysing tools (`find_elements`,
@@ -182,7 +39,7 @@ pub(crate) struct Prepared {
 /// # Errors
 ///
 /// [`resolve_map_name`] and [`load_map`]'s errors and
-/// [`Session::definitions`]' collection errors.
+/// [`crate::session::Session::definitions`]' collection errors.
 pub(crate) fn load(state: &AppState, requested: Option<&str>) -> Result<Prepared, CyberError> {
     state.with_session(|session| {
         let name = resolve_map_name(session, requested)?;

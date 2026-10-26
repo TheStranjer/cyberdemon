@@ -10,20 +10,18 @@ use super::{
 use crate::gfx::image::IndexedImage;
 use crate::gfx::patch::Patch;
 use crate::session::Session;
-use crate::tools::graphics::resolve::sprite::{
-    clamp_offset, find_rotation, mirror_patch, sprite_rows,
-};
-use crate::tools::graphics::resolve::{
+use crate::session::resolve::Entry;
+use crate::session::resolve::sprite::{clamp_offset, find_rotation, mirror_patch, sprite_entries};
+use crate::session::resolve::{
     Place, Serving, decode_patch_bytes, load_flat, load_patch, load_sprite, load_sprite_cached,
     load_sprite_lump, locate, lump_bytes, merged_rows, not_found,
 };
-use crate::tools::lumps::rows::LumpRow;
 use crate::wad::archive::Lump;
 use crate::wad::classify::Namespace;
 
-/// The sprite rows of the fixture session.
-fn rows(session: &Session) -> Vec<LumpRow> {
-    sprite_rows(session).expect("the fixture lists")
+/// The sprite entries of the fixture session.
+fn rows(session: &Session) -> Vec<Entry> {
+    sprite_entries(session).expect("the fixture lists")
 }
 
 #[test]

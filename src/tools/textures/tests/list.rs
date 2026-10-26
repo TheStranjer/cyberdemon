@@ -6,7 +6,9 @@
 
 use crate::session::{Session, Source};
 use crate::tools::Page;
-use crate::tools::textures::list::{PnamesReport, list_pnames_run, list_textures_run};
+use crate::tools::textures::list::{
+    PnamesReport, list_pnames_run, list_textures_run, texture_rows,
+};
 use crate::tools::textures::{DEFAULT_LIMIT, MAX_LIMIT, TextureSet, WhichLump};
 use crate::wad::archive::Lump;
 use crate::wad::lumps;
@@ -50,7 +52,7 @@ fn texture2_entries_override_texture1_names_in_find() {
 
 #[test]
 fn the_listing_rows_carry_lump_and_source() {
-    let rows = set_of(&session()).texture_rows();
+    let rows = texture_rows(&set_of(&session()));
     assert_eq!(rows.len(), 2, "both textures");
     assert_eq!(rows[0].lump, "TEXTURE1", "TEXTURE1 rows first");
     assert_eq!(rows[1].patches, 1, "the mappatch count");
@@ -155,7 +157,7 @@ fn a_missing_pnames_lump_leaves_the_index_unbounded() {
     .expect("plain append");
     let loaded = set_of(&bare);
     assert!(loaded.pnames.is_empty(), "no names");
-    assert_eq!(loaded.texture_rows().len(), 2, "the lump still decodes");
+    assert_eq!(texture_rows(&loaded).len(), 2, "the lump still decodes");
     let report = list_pnames_run(&bare, &page(0, 10), None).expect("runs");
     assert_eq!(report.total, 0, "an empty list is not an error");
 }

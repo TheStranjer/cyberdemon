@@ -54,8 +54,12 @@ pub mod cow;
 mod custom;
 pub mod history;
 pub mod map_edit;
+pub mod mapdir;
 pub mod merge;
+pub mod palette;
+pub mod resolve;
 mod scope;
+pub mod textures;
 mod views;
 
 pub use scope::{MergedLump, Scope, Source};

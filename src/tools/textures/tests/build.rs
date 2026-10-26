@@ -8,6 +8,7 @@ use crate::tools::textures::WhichLump;
 use crate::tools::textures::build::{
     BuildTextureParams, RemoveTextureParams, build_texture_run, remove_texture_run,
 };
+use crate::tools::textures::list::texture_rows;
 use crate::wad::archive::Lump;
 
 use super::{build_args, code, name, session, session_with_shadow, set_of, working_names};
@@ -134,7 +135,7 @@ fn a_taken_name_conflicts_until_replaced_in_place() {
     let (wall, which) = loaded.find("WALL1").expect("still defined");
     assert_eq!(which, WhichLump::Texture1, "the same lump");
     assert_eq!((wall.width, wall.height), (8, 8), "the new size");
-    let rows = loaded.texture_rows();
+    let rows = texture_rows(&loaded);
     assert_eq!(rows.len(), 2, "no third record");
     assert_eq!(rows[0].name, "WALL1", "the position was kept");
     let again = build_texture_run(&mut session, &replace).expect("a second replace");
@@ -154,7 +155,7 @@ fn an_explicit_texture2_target_creates_the_lump() {
     assert_eq!(working_names(&session), vec!["TEXTURE2"], "one new lump");
     let loaded = set_of(&session);
     assert_eq!(
-        loaded.texture_rows().len(),
+        texture_rows(&loaded).len(),
         3,
         "the fixture pair plus the newcomer"
     );
@@ -187,7 +188,7 @@ fn a_target_lump_can_shadow_a_name_the_other_lump_holds() {
     let after = set_of(&session);
     assert!(after.find("WALL1").is_none(), "gone from TEXTURE1 as well");
     assert_eq!(
-        after.texture_rows().len(),
+        texture_rows(&after).len(),
         1,
         "only STEP1 stands in TEXTURE1"
     );
@@ -222,7 +223,7 @@ fn removing_a_shadowed_name_strips_every_lump_that_holds_it() {
         vec!["WALLP1".to_owned(), "STEPP1".to_owned()],
         "PNAMES is not touched"
     );
-    assert_eq!(loaded.texture_rows().len(), 1, "only STEP1 stands");
+    assert_eq!(texture_rows(&loaded).len(), 1, "only STEP1 stands");
 }
 
 #[test]

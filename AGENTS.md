@@ -420,7 +420,28 @@ src/
                   folds, rollbacks and refusals) and
                   `session/tests/state.rs` (the active map, the render
                   settings and theme, the layer-only view, game detection, the
-                  effective-game/definitions reads and the copy-on-write step).
+                  effective-game/definitions reads and the copy-on-write step),
+                  and the resource readers the tools re-export so no core module
+                  imports `crate::tools`: `session/resolve.rs` the shared picture
+                  resolvers (a lump name in, decoded pixels out: `load_flat`,
+                  `load_patch`, `load_texture`, `load_sprite`,
+                  `load_sprite_cached`, `load_sprite_lump`, `lump_bytes`, the
+                  `Place`/`locate` lookup over `merged_rows` and the
+                  PNG-quantizing decoders) on `session/resolve/texture.rs` (the
+                  `TEXTURE1`/`TEXTURE2` composite) and `session/resolve/sprite.rs`
+                  (the sprite rotation grammar, mirroring and cache), with those
+                  resolvers' tests in `session/resolve/tests.rs` plus
+                  `session/resolve/tests/pictures.rs` and
+                  `session/resolve/tests/textures.rs`; `session/textures.rs` the
+                  merged view's `TextureSet`/`WhichLump` definition loader (the
+                  `find`/`widths`/`textures`/`texture_entries` reads the texture
+                  tools, resolvers, themes and validator share);
+                  `session/palette.rs` the `load_palette`/`require_playpal`
+                  reader of the winning `PLAYPAL`; and `session/mapdir.rs` the
+                  `Directory` scope wrapper with
+                  `directory`/`resolve_map_name`/`missing_map`/`load_map`, the
+                  map-block lookup and decode every map tool and the 3D scene
+                  builder read through.
   state.rs        AppState: session and asset store behind mutexes; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.
@@ -633,21 +654,18 @@ src/
                   argument builders) plus `graphics/tests/list.rs` (the three
                   listings with their paging, grouping and override checks)
                   and `graphics/tests/picture.rs` (the image options,
-                  selectors, offsets, renders and thing-sprite checks).
-                  `tools/graphics/resolve.rs` holds the shared picture
-                  resolvers' name lookup (`Place`, `locate`, `lump_bytes`),
-                  flat and patch loading and `PNG` quantizing,
-                  `resolve/texture.rs` the composite texture definitions
-                  and `resolve/sprite.rs` the sprite rotations (`Sprite`,
-                  served by `Request`), that every tool and the renderers
-                  decode graphic lumps through, with those resolvers'
-                  tests in `resolve/tests.rs` plus
-                  `resolve/tests/pictures.rs` and
-                  `resolve/tests/textures.rs`;
-                  `tools/maps/common.rs` holds the shared `map`-parameter
-                  resolvers (`resolve_map_name`, `load_map`) every map
-                  tool builds on, the one locked `load` of a merged-view map
-                  with the session's definitions (`Prepared`) the analysing
+                  selectors, offsets, renders and thing-sprite checks). The
+                  shared picture resolvers now live in `session/resolve.rs`
+                  (see the `session/` entry); `tools/graphics.rs` re-exports
+                  them as `crate::tools::graphics::resolve` so the image tools
+                  and `tools/assets.rs` keep reaching `locate`/`lump_bytes`,
+                  the flat/patch/texture/sprite loaders and the `PNG`
+                  quantizing decoders at the same path;
+                  `tools/maps/common.rs` re-exports the `map`-parameter
+                  resolvers (`resolve_map_name`, `load_map`) and the
+                  `Directory` wrapper from `session/mapdir.rs` and keeps the
+                  one locked `load` of a merged-view map with the session's
+                  definitions (`Prepared`) the analysing
                   tools share, and `tools/maps/params.rs` the shared
                   editing parameter types (`FlagsInput`, `IndexSelector`,
                   `PointParam`, the re-exported `check_index` guard,
@@ -829,20 +847,24 @@ src/
                   `sketch/tests/thin.rs` (the floor, the ranking, the caps
                   and the warnings);
                   `tools/palette.rs` is the `palette` group: `get_palette`
-                  beside the shared `load_palette` reader, the swatch
+                  beside the `load_palette` reader it re-exports from
+                  `session/palette.rs`, the swatch
                   builder, the constants both halves share and the two
                   router methods, with `set_palette`'s parameter, payload
                   and request types, source resolution and commit steps in
                   `palette/set.rs` and the group's unit tests in
                   `palette/tests.rs`;
                   `tools/textures.rs` is the `textures` group: its root keeps
-                  the constants, the merged view's `TextureSet` loader with
-                  its `WhichLump` (whose `name` is one of the
-                  `wad::lumps` texture constants), decode and paging
-                  helpers, the re-exports those groups import and the
+                  the constants, the re-exported `TextureSet` loader and its
+                  `WhichLump` (whose `name` is one of the
+                  `wad::lumps` texture constants) from `session/textures.rs`,
+                  the glob helper the listings share,
+                  the re-exports those groups import and the
                   router methods; every global-lump write these tools
                   commit is `Wad::put_global`, over `textures/list.rs` (the
-                  `list_textures` and `list_pnames` arguments, rows and runs),
+                  `list_textures` and `list_pnames` arguments, the
+                  `TextureRow`s built from `TextureSet::texture_entries`, and
+                  the runs),
                   `textures/pnames.rs` (the `edit_pnames` arguments, the
                   `Operation` they carry and the `Plan` `plan_edit` computes),
                   `textures/pnames_rewrite.rs` (the committed change:
@@ -1663,6 +1685,12 @@ tests/
                     block once inside the group) and that no file of the
                     group reads a palette with the two-pass form the single
                     quantization replaced;
+                    layering.rs: the guard that no file outside `src/tools/` or
+                    `src/server.rs` imports `crate::tools` (the picture,
+                    texture, palette and map-block resolvers the render core
+                    needs live in `session/` and the tools re-export them),
+                    checked over the real `src/` tree and a walk fixture, and
+                    that `render/scene.rs` reads the session resolvers;
                     docs.rs:
                     skill/ and README.md layout and tool/doc consistency
                     checks, the guide and `README.md`

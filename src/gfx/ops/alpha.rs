@@ -10,12 +10,12 @@ use serde_json::{Value, json};
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::{MAX_OP_DIMENSION, arg_error, parse_hex_color};
+use crate::gfx::ops::{MAX_OP_DIMENSION, arg_error, parse_hex_colour};
 use crate::gfx::{BYTES_PER_PIXEL, pixel_count, pixel_index, to_pixel};
 
 /// Parameters of [`crate::gfx::ops::ImageOp::ColorKey`].
 pub(crate) struct ColorKeySpec<'key> {
-    /// Key colour as text, validated by [`parse_hex_color`].
+    /// Key colour as text, validated by [`parse_hex_colour`].
     pub(crate) color: &'key str,
     /// Per-channel match tolerance.
     pub(crate) tolerance: u8,
@@ -36,7 +36,7 @@ pub(crate) fn color_key(
     index: usize,
     spec: &ColorKeySpec<'_>,
 ) -> Result<(RgbaImage, Value), CyberError> {
-    let Ok(key) = parse_hex_color(spec.color) else {
+    let Ok(key) = parse_hex_colour(spec.color, true) else {
         return Err(arg_error(
             index,
             "color",

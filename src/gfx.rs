@@ -32,6 +32,9 @@ pub const MAX_DIMENSION: u32 = 8_192;
 /// Bytes per `RGBA8` pixel.
 pub(crate) const BYTES_PER_PIXEL: usize = 4;
 
+/// One `RGBA8` colour.
+pub type Rgba = [u8; BYTES_PER_PIXEL];
+
 /// Rejects an image dimension outside `1..=MAX_DIMENSION`.
 pub(crate) fn check_dimension(name: &str, value: u32) -> Result<(), CyberError> {
     if value == 0 || value > MAX_DIMENSION {

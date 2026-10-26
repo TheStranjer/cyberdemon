@@ -45,7 +45,11 @@ fn apply_options_keeps_every_field_it_was_not_given() {
     let args = options_with(Some("FLAT"), None, Some("#102030"));
     apply_options(&mut settings, &args).expect("a valid lighting and colour");
     assert_eq!(settings.lighting, Lighting::Flat, "lighting applied");
-    assert_eq!(settings.background, "#102030", "background applied");
+    assert_eq!(
+        settings.background,
+        [16, 32, 48, 255],
+        "background applied as the parsed colour"
+    );
     assert_eq!(settings.width, before.width, "resolution kept");
     assert_eq!(settings.height, before.height, "resolution kept");
     assert_eq!(settings.show_things, before.show_things, "markers kept");

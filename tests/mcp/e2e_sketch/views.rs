@@ -13,7 +13,7 @@
 //! linedefs.
 
 use cyberdemon::gfx::image::RgbaImage;
-use cyberdemon::gfx::ops::parse_hex_color;
+use cyberdemon::gfx::ops::parse_hex_colour;
 use cyberdemon::plan::Units;
 use cyberdemon::render::{AutomapColors, Pt, Rgba, scale_down};
 use serde_json::{Value, json};
@@ -342,7 +342,7 @@ async fn ground_pixel(client: &Client) -> Rgba {
     let text = settings["background"]
         .as_str()
         .expect("a background colour");
-    parse_hex_color(text).expect("the settings' own colour parses")
+    parse_hex_colour(text, true).expect("the settings' own colour parses")
 }
 
 /// The pixels of the frame's centre column that are not the ground:

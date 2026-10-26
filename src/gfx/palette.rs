@@ -1,6 +1,7 @@
 //! 256-colour `Doom` palettes: `PLAYPAL` storage and `#RRGGBB` lists.
 
 use crate::error::CyberError;
+use crate::gfx::ops::parse_hex_colour;
 
 /// Entries in one palette.
 const PALETTE_SIZE: usize = 256;
@@ -8,8 +9,6 @@ const PALETTE_SIZE: usize = 256;
 const PLAYPAL_ENTRY_BYTES: usize = 768;
 /// Bytes of one palette colour.
 const COLOR_BYTES: usize = 3;
-/// Hex digits of an `RRGGBB` colour.
-const HEX_DIGITS: usize = 6;
 
 /// A 256-entry `RGB` palette, as stored in `PLAYPAL`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,7 +67,8 @@ impl Palette {
         }
         let mut colors = [[0_u8; COLOR_BYTES]; PALETTE_SIZE];
         for (color, value) in colors.iter_mut().zip(values) {
-            *color = parse_hex_color(value)?;
+            let [red, green, blue, _] = parse_hex_colour(value, false)?;
+            *color = [red, green, blue];
         }
         Ok(Self(colors))
     }
@@ -96,28 +96,6 @@ impl Palette {
     pub fn colors(&self) -> core::slice::Iter<'_, [u8; 3]> {
         self.0.iter()
     }
-}
-
-/// Parses one `#RRGGBB` or `RRGGBB` colour string.
-fn parse_hex_color(value: &str) -> Result<[u8; 3], CyberError> {
-    let digits = value.strip_prefix('#').unwrap_or(value);
-    let malformed = || {
-        CyberError::InvalidArgument(format!(
-            "palette colour {value} is not a #RRGGBB or RRGGBB hex triple"
-        ))
-    };
-    if digits.len() != HEX_DIGITS || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(malformed());
-    }
-    let Some(packed) = u32::from_str_radix(digits, 16).ok() else {
-        return Err(malformed());
-    };
-    // Big-endian bytes (the denied `to_be_bytes`) by reversing the
-    // little-endian form: [zero, red, green, blue] for a 24-bit value.
-    let mut words = packed.to_le_bytes();
-    words.reverse();
-    let [_zero, r, g, b] = words;
-    Ok([r, g, b])
 }
 
 #[cfg(test)]

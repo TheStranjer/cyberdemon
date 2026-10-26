@@ -18,8 +18,7 @@ use super::texels::{
     edge, flat_texel, masked_tex_top, part, pierce, plane_point, side, texture_u16, wrap16,
 };
 use super::walk::{Edge, FacePlan, FlatRun, Hit, Part, Side, Slot, Surface, Visit, Walk};
-use super::{BLACK, MaskedMiddle, ONE_16, ViewCamera};
-use crate::gfx::ops::parse_hex_color;
+use super::{MaskedMiddle, ONE_16, ViewCamera};
 use crate::render::canvas::Rgba;
 use crate::render::light::{WallDir, colormap_index, shade};
 use crate::render::scene::Scene;
@@ -64,7 +63,7 @@ impl<'scene> Caster<'scene> {
             proj: Projection::new(camera, width, height),
             edges,
             sides,
-            background: parse_hex_color(&scene.settings.background).unwrap_or(BLACK),
+            background: scene.settings.background,
             lighting: scene.settings.lighting,
         }
     }

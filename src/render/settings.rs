@@ -13,8 +13,11 @@
 //! values, so a client can correct a call from the message alone.
 
 use serde::Serialize;
+use serde::ser::SerializeMap as _;
 
 use crate::error::CyberError;
+use crate::gfx::Rgba;
+use crate::gfx::ops::parse_hex_colour;
 
 /// Smallest edge, in pixels, a render resolution accepts.
 pub const MIN_DIMENSION: u32 = 16;
@@ -45,10 +48,7 @@ const DEFAULT_HEIGHT: u32 = 400;
 const DEFAULT_FOV: u32 = 90;
 
 /// Default background colour: black, as an unlit void reads on screen.
-const DEFAULT_BACKGROUND: &str = "#000000";
-
-/// Number of hex digits after the `#` in a background colour.
-const HEX_DIGITS: usize = 6;
+const DEFAULT_BACKGROUND: Rgba = [0_u8, 0, 0, 255];
 
 /// How a 3D view is lit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -114,7 +114,7 @@ impl From<bool> for Switch {
 /// leaves the settings untouched when it does) and read the fields directly.
 /// The three [`Switch`] fields are the render's on/off overlays and
 /// serialize as plain JSON booleans.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderSettings {
     /// Output width in pixels, `MIN_DIMENSION..=MAX_DIMENSION`.
     pub width: u32,
@@ -137,9 +137,35 @@ pub struct RenderSettings {
     pub gamma: u8,
     /// How top-down renders draw the map; see [`TopdownStyle`].
     pub topdown_style: TopdownStyle,
-    /// Background colour as `#RRGGBB` hex: the void outside the map, and the
-    /// sky colour when [`RenderSettings::sky`] is off.
-    pub background: String,
+    /// Background colour: the void outside the map, and the sky colour
+    /// when [`RenderSettings::sky`] is off. Parsed and stored as one pixel
+    /// by [`RenderSettings::set_background`]; [`Serialize`] writes it back
+    /// as its lowercase `#rrggbb` hex text.
+    pub background: Rgba,
+}
+
+/// Field count of [`RenderSettings`]' serialized shape.
+const SETTING_FIELDS: usize = 10;
+
+/// The [`RenderSettings`] wire shape: every field by name, with the parsed
+/// [`RenderSettings::background`] reported as its lowercase `#rrggbb` text.
+impl Serialize for RenderSettings {
+    #[inline]
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(SETTING_FIELDS))?;
+        map.serialize_entry("width", &self.width)?;
+        map.serialize_entry("height", &self.height)?;
+        map.serialize_entry("lighting", &self.lighting)?;
+        map.serialize_entry("show_things", &self.show_things)?;
+        map.serialize_entry("show_sprites", &self.show_sprites)?;
+        map.serialize_entry("sky", &self.sky)?;
+        map.serialize_entry("fov", &self.fov)?;
+        map.serialize_entry("gamma", &self.gamma)?;
+        map.serialize_entry("topdown_style", &self.topdown_style)?;
+        let [red, green, blue, _] = self.background;
+        map.serialize_entry("background", &format!("#{red:02x}{green:02x}{blue:02x}"))?;
+        map.end()
+    }
 }
 
 impl Default for RenderSettings {
@@ -158,7 +184,7 @@ impl Default for RenderSettings {
             fov: DEFAULT_FOV,
             gamma: 0_u8,
             topdown_style: TopdownStyle::Editor,
-            background: DEFAULT_BACKGROUND.to_owned(),
+            background: DEFAULT_BACKGROUND,
         }
     }
 }
@@ -227,15 +253,16 @@ impl RenderSettings {
         Ok(())
     }
 
-    /// Sets the background colour from a `#RRGGBB` hex string, either case.
+    /// Sets the background colour from a `#RRGGBB` hex string, either case,
+    /// the `#` optional; the stored colour keeps no text - see
+    /// [`parse_hex_colour`] for the exact shape.
     ///
     /// # Errors
     ///
     /// [`CyberError::InvalidArgument`] naming the required shape.
     #[inline]
     pub fn set_background(&mut self, color: &str) -> Result<(), CyberError> {
-        check_background(color)?;
-        color.clone_into(&mut self.background);
+        self.background = parse_hex_colour(color, false)?;
         Ok(())
     }
 }
@@ -295,22 +322,6 @@ fn check_gamma(level: u8) -> Result<(), CyberError> {
     }
     Err(CyberError::InvalidArgument(format!(
         "render gamma must be within 0..={MAX_GAMMA}, got {level}"
-    )))
-}
-
-/// Refuses a background colour that is not `#` plus [`HEX_DIGITS`] hex
-/// digits.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] showing the required shape.
-fn check_background(color: &str) -> Result<(), CyberError> {
-    let digits = color.strip_prefix('#').unwrap_or_default();
-    if digits.len() == HEX_DIGITS && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "render background must be a \"#RRGGBB\" hex colour such as \"#000000\", got {color:?}"
     )))
 }
 
@@ -385,7 +396,7 @@ mod tests {
             TopdownStyle::Editor,
             "default top-down style"
         );
-        assert_eq!(settings.background, "#000000", "default background");
+        assert_eq!(settings.background, [0, 0, 0, 255], "default background");
     }
 
     #[test]
@@ -577,26 +588,42 @@ mod tests {
     fn background_accepts_six_hex_digits_either_case() {
         let mut settings = RenderSettings::default();
         settings.set_background("#ff8800").expect("lowercase hex");
-        assert_eq!(settings.background, "#ff8800", "stored verbatim");
+        assert_eq!(settings.background, [255, 136, 0, 255], "parsed red");
         settings.set_background("#A1B2C3").expect("uppercase hex");
-        assert_eq!(settings.background, "#A1B2C3", "stored verbatim");
+        assert_eq!(settings.background, [161, 178, 195, 255], "parsed digits");
+        assert_eq!(
+            to_json(&settings)["background"],
+            json!("#a1b2c3"),
+            "the report is the parsed colour, lowercased"
+        );
+        settings
+            .set_background("102030")
+            .expect("the # is optional");
+        assert_eq!(settings.background, [16, 32, 48, 255], "bare six digits");
     }
 
     #[test]
     fn background_refuses_anything_that_is_not_a_colour() {
         let mut settings = RenderSettings::default();
-        for value in ["", "red", "#fff", "#gggggg", "0xffffff", "#0000000"] {
+        for value in [
+            "", "red", "#fff", "#gggggg", "0xffffff", "#0000000", "#+f+f+f", "+1f2e3", "#1f_2e3",
+            "#12345",
+        ] {
             let error = settings
                 .set_background(value)
                 .expect_err("text that is not a colour is refused");
-            assert_eq!(error.code(), "invalid_argument", "background code");
+            assert_eq!(error.code(), "invalid_argument", "{value} code");
             let message = error.to_string();
             assert!(
                 message.contains("#RRGGBB"),
                 "the message shows the shape to use: {message}"
             );
         }
-        assert_eq!(settings.background, "#000000", "a refusal changes nothing");
+        assert_eq!(
+            settings.background,
+            [0, 0, 0, 255],
+            "a refusal changes nothing"
+        );
     }
 
     #[test]

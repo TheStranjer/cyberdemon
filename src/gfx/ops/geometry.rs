@@ -10,7 +10,7 @@ use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::resample::resample;
 use crate::gfx::ops::{
-    Filter, FitMode, arg_error, check_op_dimension, div_ceil, parse_hex_color, pixel_at,
+    Filter, FitMode, arg_error, check_op_dimension, div_ceil, parse_hex_colour, pixel_at,
 };
 use crate::gfx::{BYTES_PER_PIXEL, MAX_DIMENSION, pixel_index, rgba_byte_count};
 
@@ -198,7 +198,7 @@ pub(crate) fn fit(
     check_op_dimension(index, "height", spec.height)?;
     let background = match spec.background {
         None => [0_u8; 4],
-        Some(text) => match parse_hex_color(text) {
+        Some(text) => match parse_hex_colour(text, true) {
             Ok(color) => color,
             Err(_) => {
                 return Err(arg_error(
@@ -331,9 +331,11 @@ fn deciding_scale(img: &RgbaImage, spec: &FitSpec<'_>, cover: bool) -> (u64, u64
     }
 }
 
-/// Saturates a computed scale result into the core image dimension limit.
+/// Saturates a computed scale result into the core image dimension limit,
+/// `1..=MAX_DIMENSION`: a uniform scale whose floor rounds the short edge
+/// to `0` keeps it a pixel wide instead of resampling it away.
 fn as_dimension(value: u64) -> u32 {
-    u32::try_from(value).unwrap_or(MAX_DIMENSION)
+    u32::try_from(value).unwrap_or(MAX_DIMENSION).max(1_u32)
 }
 
 /// A `width` x `height` canvas uniformly filled with `color`; the
@@ -599,6 +601,33 @@ mod tests {
         assert_eq!(step["scale_den"], 3_i32, "source height is the denominator");
         assert_eq!(step["offset_x"], 1_i32, "centre padding to the left");
         assert_eq!(step["offset_y"], 0_i32, "no vertical padding");
+    }
+
+    #[test]
+    fn fit_contain_never_scales_an_edge_away() {
+        // A 4000x1 line contain-fit into 64x64 scales the height by
+        // `64/4000`: the floor division rounds it to `0` px, so the scale
+        // result must clamp to one kept row.
+        let pixels = vec![7_u8; 4_000_usize.saturating_mul(4)];
+        let strip = RgbaImage::new(4_000, 1, pixels).expect("4000x1 is valid");
+        let ops = [ImageOp::Fit {
+            width: 64,
+            height: 64,
+            mode: FitMode::Contain,
+            filter: Filter::Nearest,
+            background: Some("#00000000".to_owned()),
+        }];
+        let (out, report) = apply_ops(strip, &ops).expect("contain fits");
+        assert_eq!((out.width, out.height), (64, 64), "canvas shape");
+        let step = &report.steps[0];
+        assert_eq!(step["scale_den"], 4_000_i32, "the width decides");
+        assert_eq!(step["offset_y"], 31_i32, "the kept row centres at 31");
+        assert_eq!(out.get(0, 31), Some([7, 7, 7, 7]), "the row survived");
+        assert_eq!(
+            out.get(0, 0),
+            Some([0, 0, 0, 0]),
+            "the padding is the canvas"
+        );
     }
 
     #[test]

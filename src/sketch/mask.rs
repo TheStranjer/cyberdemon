@@ -10,7 +10,7 @@
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::parse_hex_color;
+use crate::gfx::ops::parse_hex_colour;
 use crate::gfx::ops::threshold::{OPAQUE_ALPHA, binary_mask, luminance_histogram, otsu_level};
 use crate::gfx::{BYTES_PER_PIXEL, in_shape, pixel_count, pixel_index, to_pixel};
 
@@ -119,7 +119,7 @@ pub enum InkMode {
 }
 
 impl InkMode {
-    /// Parses a mode from a colour string as [`parse_hex_color`] accepts
+    /// Parses a mode from a colour string as [`parse_hex_colour`] accepts
     /// it, with a per-channel `tolerance`: an [`InkMode::Color`] over the
     /// `RGB` part.
     ///
@@ -129,7 +129,7 @@ impl InkMode {
     /// colour.
     #[inline]
     pub fn from_hex(value: &str, tolerance: u8) -> Result<Self, CyberError> {
-        let [red, green, blue, _] = parse_hex_color(value)?;
+        let [red, green, blue, _] = parse_hex_colour(value, true)?;
         Ok(Self::Color {
             rgb: [red, green, blue],
             tolerance,

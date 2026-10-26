@@ -12,7 +12,7 @@ use crate::wad::game::Game;
 use crate::wad::map::{Linedef, Map};
 
 use crate::tools::render::frame::{Plane, bounds_plane, fit, height_span, iso_plane};
-use crate::tools::render::paint::{Scene, background_pixel, editor_line_color, light_grey};
+use crate::tools::render::paint::{Scene, editor_line_color, light_grey};
 use crate::tools::render::params::{
     BoundsParams, HighlightParams, Projection, RenderTopdownParams,
 };
@@ -174,16 +174,6 @@ fn highlight_indices_must_exist_and_the_refusal_names_them() {
             "the message names the parameter, element, index and rule: {message}"
         );
     }
-}
-
-#[test]
-fn background_parses_the_settings_colour() {
-    assert_eq!(background_pixel("#1A2b3C"), rgb(26, 43, 60), "either case");
-    assert_eq!(
-        background_pixel("nonsense"),
-        rgb(0, 0, 0),
-        "junk reads as black"
-    );
 }
 
 #[test]

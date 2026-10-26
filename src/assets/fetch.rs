@@ -18,6 +18,7 @@ use std::path::Path;
 
 use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
+use crate::gfx::ops::hex_digit;
 use crate::state::AppState;
 use crate::wad::name::{LumpName, MAX_NAME_LEN};
 
@@ -180,22 +181,9 @@ fn escape_error(text: &str) -> CyberError {
 
 /// The byte denoted by two hex digits, if both are hex digits.
 fn hex_pair(first: u8, second: u8) -> Option<u8> {
-    hex_value(first)?
+    hex_digit(first)?
         .checked_mul(16_u8)?
-        .checked_add(hex_value(second)?)
-}
-
-/// The nibble a hex digit denotes, if it is a hex digit.
-fn hex_value(digit: u8) -> Option<u8> {
-    if digit.is_ascii_digit() {
-        digit.checked_sub(b'0')
-    } else if (b'a'..=b'f').contains(&digit) {
-        digit.checked_sub(b'a')?.checked_add(10_u8)
-    } else if (b'A'..=b'F').contains(&digit) {
-        digit.checked_sub(b'A')?.checked_add(10_u8)
-    } else {
-        None
-    }
+        .checked_add(hex_digit(second)?)
 }
 
 /// Read an absolute local file, rejecting directories and oversized files.

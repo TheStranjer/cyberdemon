@@ -127,6 +127,12 @@ fn pair_parsing_is_strict() {
     assert_eq!(parse_pair(&['4', 'd']), Some(0x4D), "mixed case digits");
     assert_eq!(parse_pair(&['F', 'F']), Some(0xFF), "top of the range");
     assert_eq!(parse_pair(&['Z', 'Q']), None, "non-hex characters");
+    assert_eq!(parse_pair(&['+', 'f']), None, "a sign is not a hex digit");
+    assert_eq!(
+        parse_pair(&['\u{663}', '4']),
+        None,
+        "non-ASCII digits are refused"
+    );
     assert_eq!(parse_pair(&[]), None, "an empty pair is not a byte");
     assert_eq!(parse_pair(&['7']), None, "a lone digit is not a byte");
 }

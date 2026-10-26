@@ -24,7 +24,7 @@ use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, is_png};
 use crate::gfx::grab::{GrabOffsets, read_grab};
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::parse_hex_color;
+use crate::gfx::ops::parse_hex_colour;
 use crate::gfx::patch::{Patch, encode_patch};
 use crate::gfx::quantize::{
     DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize, quantize_stats,
@@ -218,10 +218,10 @@ pub(in crate::tools) fn parse_transparency(
 ///
 /// # Errors
 ///
-/// [`parse_hex_color`]' [`CyberError::InvalidArgument`] for anything that
+/// [`parse_hex_colour`]' [`CyberError::InvalidArgument`] for anything that
 /// is not a hex colour.
 fn key_color(text: Option<&str>) -> Result<[u8; 3], CyberError> {
-    let [red, green, blue, _] = parse_hex_color(text.unwrap_or(DEFAULT_KEY_COLOR))?;
+    let [red, green, blue, _] = parse_hex_colour(text.unwrap_or(DEFAULT_KEY_COLOR), true)?;
     Ok([red, green, blue])
 }
 

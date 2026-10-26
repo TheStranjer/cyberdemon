@@ -115,7 +115,8 @@ struct SetRenderOptionsParams {
     /// How top-down renders draw the map: `"editor"` or `"automap"`.
     #[serde(default)]
     topdown_style: Option<String>,
-    /// Background colour as `"#RRGGBB"` hex.
+    /// Background colour as `#RRGGBB` hex: either case, the `#`
+    /// optional; it reports back lower-cased.
     #[serde(default)]
     background: Option<String>,
 }

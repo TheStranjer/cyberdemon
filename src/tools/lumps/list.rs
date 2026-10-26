@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::gfx::ops::hex_digit;
 use crate::session::{Scope, Session};
 use crate::tools::lumps::parse::{parse_hex, parse_kind, parse_map, parse_namespace};
 use crate::tools::parse_limit;
@@ -215,21 +216,22 @@ pub(super) fn find_needle(data: &[u8], needle: &Needle<'_>) -> Option<usize> {
         .position(|window| window == needle.bytes)
 }
 
-/// The value of one hex digit, `None` for any other character.
-fn hex_digit(ch: char) -> Option<u8> {
-    ch.to_digit(16).and_then(|value| u8::try_from(value).ok())
-}
-
 /// The byte two hex characters spell, `None` unless the slice is exactly
 /// two characters and both are hex digits.
 pub(super) fn parse_pair(pair: &[char]) -> Option<u8> {
     let &[high, low] = pair else {
         return None;
     };
-    let (Some(h), Some(l)) = (hex_digit(high), hex_digit(low)) else {
+    let (Some(h), Some(l)) = (ascii_hex_digit(high), ascii_hex_digit(low)) else {
         return None;
     };
     h.checked_mul(16)?.checked_add(l)
+}
+
+/// The value of one `ASCII` hex character through the shared [`hex_digit`],
+/// `None` for anything else.
+fn ascii_hex_digit(ch: char) -> Option<u8> {
+    u8::try_from(ch).ok().and_then(hex_digit)
 }
 
 /// Structured result of [`Cyberdemon::list_lumps`].

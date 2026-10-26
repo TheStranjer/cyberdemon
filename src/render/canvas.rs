@@ -21,7 +21,7 @@ use crate::gfx::{
 pub type Pt = (i64, i64);
 
 /// One `RGBA8` colour.
-pub type Rgba = [u8; BYTES_PER_PIXEL];
+pub use crate::gfx::Rgba;
 
 /// One polygon edge: a pair of [`Pt`] endpoints.
 pub type Edge = (Pt, Pt);

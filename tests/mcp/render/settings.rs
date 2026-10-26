@@ -239,10 +239,46 @@ async fn a_number_or_colour_outside_its_range_is_refused() {
     refused(&client, json!({ "gamma": 9_u64 }), "0..=4").await;
     refused(&client, json!({ "background": "blue" }), "#RRGGBB").await;
     refused(&client, json!({ "background": "#12345" }), "#RRGGBB").await;
+    refused(&client, json!({ "background": "#+f+f+f" }), "#RRGGBB").await;
+    refused(&client, json!({ "background": "+ffffff" }), "#RRGGBB").await;
+    refused(&client, json!({ "background": "#ff_ff_ff" }), "#RRGGBB").await;
+    refused(&client, json!({ "background": "#ff0000ff" }), "#RRGGBB").await;
     assert_eq!(
         settings(&client).await,
         defaults(),
         "no refused option landed"
+    );
+}
+
+#[tokio::test]
+async fn a_background_colour_reports_as_lowercase_hex() {
+    let client = connect().await;
+    let report = call(
+        &client,
+        "set_render_options",
+        json!({ "background": "#A1B2C3" }),
+    )
+    .await;
+    assert_eq!(
+        report["background"],
+        json!("#a1b2c3"),
+        "the parsed colour reports in lowercase"
+    );
+    let bare = call(
+        &client,
+        "set_render_options",
+        json!({ "background": "10f40c" }),
+    )
+    .await;
+    assert_eq!(
+        bare["background"],
+        json!("#10f40c"),
+        "the # is optional on the way in"
+    );
+    assert_eq!(
+        settings(&client).await,
+        bare,
+        "and the stored colour is the parsed one"
     );
 }
 

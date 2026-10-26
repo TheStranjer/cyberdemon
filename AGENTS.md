@@ -42,7 +42,9 @@ src/
                   `gfx/image.rs` RGBA/indexed images and resize/flip,
                   `gfx/codec.rs` PNG/JPEG/GIF/BMP decode and PNG encode,
                   `gfx/grab.rs` the `grAb` PNG chunk, `gfx/palette.rs`
-                  PLAYPAL/hex palettes, `gfx/quantize.rs` quantization,
+                  PLAYPAL/hex palettes, `gfx/quantize.rs` quantization, one
+                  walk folding the indexed picture, the colour measures or
+                  both,
                   `gfx/colormap.rs` the COLORMAP reader and palette
                   generator (34 tables), `gfx/composite.rs` texture
                   patch-stack folding (`compose`, `Composite`),
@@ -88,7 +90,9 @@ src/
                   background-flattening binarizer (local means from
                   `gfx::filter::box_sums`) behind `adaptive_threshold`,
                   `gfx/ops/dither.rs` the
-                  `Dither`-knopped quantization (Floyd–Steinberg serpentine),
+                  `Dither`-knopped quantization (Floyd–Steinberg serpentine)
+                  and its measured form, which folds the plain mode's picture
+                  and measures into that one walk,
                   and `gfx/ops/tile.rs` the seam-blend behind
                   `make_tileable`, and `gfx/ops/perspective.rs` the
                   corner-quad-to-rectangle homography warp (16.16 DLT
@@ -479,12 +483,18 @@ src/
                   in `lumps/tests.rs` plus `lumps/tests/parse_search.rs`,
                   `lumps/tests/get.rs` and `lumps/tests/add.rs`,
                   `tools/imports.rs` (the
-                  `PNAMES` reader and plan, the name and region parsers, the
-                  tool descriptions and the router) with
+                  `PNAMES` reader and plan, the name and region parsers with
+                  the region wording, the one working-archive write every
+                  commit places its payload through with its overwrite rule,
+                  the extra-ops fold every automatic step runs through and
+                  the theme-role step both creates end with, the tool
+                  descriptions and the router) with
                   `imports/patch.rs` (the patch and raw
                   imports), `imports/flat.rs` (the flat import with its size
                   and shape parsing), `imports/image_pipeline.rs` (the shared
-                  patch-import run), `imports/sprite.rs`,
+                  patch-import run, quantized once into the indexed image
+                  both the encoded patch and the reported measures come
+                  from), `imports/sprite.rs`,
                   `imports/texture.rs` (the limits, the parameters, the
                   validated request and the run) with `texture/size.rs` (the
                   tiling size rule), `texture/build.rs` (the automatic shape
@@ -1633,6 +1643,12 @@ tests/
                     helper names are defined only in `defs/tsv.rs` and the
                     editor category path words only in `defs/table.rs`'s
                     `Category::parse`, nowhere else in production `src/`;
+                    imports_shared.rs: the guard that the imports group's
+                    shared role, extra-ops and working-archive-write helpers
+                    are defined only in `tools/imports.rs` (their landing
+                    block once inside the group) and that no file of the
+                    group reads a palette with the two-pass form the single
+                    quantization replaced;
                     docs.rs:
                     skill/ and README.md layout and tool/doc consistency
                     checks, the guide and `README.md`

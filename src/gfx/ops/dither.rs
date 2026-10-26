@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use crate::gfx::image::{IndexedImage, RgbaImage};
 use crate::gfx::ops::clamp_u8;
 use crate::gfx::palette::Palette;
-use crate::gfx::quantize::{QuantizeOptions, is_transparent, nearest_index, quantize};
+use crate::gfx::quantize::{
+    QuantizeOptions, Quantized, is_transparent, nearest_index, quantize, quantize_measured,
+    quantize_stats,
+};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
 /// Colour channels of a pixel.
@@ -63,6 +66,35 @@ pub fn quantize_dithered(
         Dither::None => quantize(img, palette, options),
         Dither::FloydSteinberg => floyd_steinberg(img, palette, options),
         Dither::Ordered => ordered(img, palette, options),
+    }
+}
+
+/// [`quantize_dithered`] with the measures of the same picture, so a caller
+/// that stores the dithered plane and reports on it never builds a second
+/// indexed image.
+///
+/// [`Dither::None`] is the plain nearest-colour walk, so its picture and its
+/// measures come off [`crate::gfx::quantize::quantize_measured`]' one pass
+/// over the pixels. The two error-spreading modes answer each pixel from the
+/// colour its accumulated or `Bayer`-offset neighbours adjusted it to, which
+/// is not the nearest index of the source colour the measures are defined
+/// over, so their measures read the source colours beside the plane.
+#[must_use]
+#[inline]
+pub fn quantize_dithered_measured(
+    img: &RgbaImage,
+    palette: &Palette,
+    options: &QuantizeOptions,
+    dither: Dither,
+) -> Quantized {
+    if dither == Dither::None {
+        return quantize_measured(img, palette, options);
+    }
+    let (colors_used, max_color_error) = quantize_stats(img, palette, options);
+    Quantized {
+        image: quantize_dithered(img, palette, options, dither),
+        colors_used,
+        max_color_error,
     }
 }
 
@@ -362,7 +394,7 @@ fn ordered(img: &RgbaImage, palette: &Palette, options: &QuantizeOptions) -> Ind
 
 #[cfg(test)]
 mod tests {
-    use super::{Dither, quantize_dithered};
+    use super::{Dither, quantize_dithered, quantize_dithered_measured};
     use crate::gfx::image::{IndexedImage, RgbaImage};
     use crate::gfx::palette::Palette;
     use crate::gfx::quantize::{QuantizeOptions, Transparency};
@@ -571,6 +603,70 @@ mod tests {
         let dithered = quantize_dithered(&img, &pal, &options, Dither::None);
         let plain = crate::gfx::quantize::quantize(&img, &pal, &options);
         assert_eq!(dithered, plain, "None is quantize");
+    }
+
+    /// A `size x size` opaque picture of one uniform grey `shade`.
+    fn shade_square(size: u32, shade: u8) -> RgbaImage {
+        let pixels: Vec<u8> = (0..size.saturating_mul(size))
+            .flat_map(|_| [shade, shade, shade, 255_u8])
+            .collect();
+        RgbaImage::new(size, size, pixels).expect("square is valid")
+    }
+
+    /// One mode's fused answer: the plane the plain walk stores and the
+    /// measures the two-walk form reports, so the single pass cannot quietly
+    /// change what an import stores or answers.
+    fn assert_measured_matches(img: &RgbaImage, mode: Dither) {
+        let pal = black_white();
+        let options = two_colours();
+        let measured = quantize_dithered_measured(img, &pal, &options, mode);
+        assert_eq!(
+            measured.image,
+            quantize_dithered(img, &pal, &options, mode),
+            "the stored plane is {mode:?}'s own"
+        );
+        let (colors_used, max_color_error) =
+            crate::gfx::quantize::quantize_stats(img, &pal, &options);
+        assert_eq!(
+            measured.colors_used, colors_used,
+            "one colour counted once for {mode:?}"
+        );
+        assert_eq!(
+            measured.max_color_error, max_color_error,
+            "the measures the two-walk form gave, for {mode:?}"
+        );
+    }
+
+    #[test]
+    fn measured_dither_stores_the_plane_and_measures_the_source() {
+        for mode in [Dither::None, Dither::FloydSteinberg, Dither::Ordered] {
+            assert_measured_matches(&grey_square(4_u32), mode);
+            assert_measured_matches(&grey_square(8_u32), mode);
+        }
+    }
+
+    #[test]
+    fn the_dithered_measures_stay_the_source_colour_s_nearest_distance() {
+        let img = shade_square(8, 200);
+        let pal = black_white();
+        let options = two_colours();
+        let diffused = quantize_dithered_measured(&img, &pal, &options, Dither::FloydSteinberg);
+        assert!(
+            diffused.image.indices.contains(&0),
+            "the diffusion stores black pixels beside white ones: {:?}",
+            &diffused.image.indices[..8]
+        );
+        assert_eq!(
+            diffused.max_color_error, 9_075_i32,
+            "the distance of (200,200,200) to white: the stored black pixels are the \
+             diffusion's doing, not a worse source colour"
+        );
+        assert_eq!(diffused.colors_used, 1_usize, "one distinct source colour");
+        let plain = quantize_dithered_measured(&img, &pal, &options, Dither::None);
+        assert_eq!(
+            plain.max_color_error, diffused.max_color_error,
+            "both modes measure the same source: the report does not move with the dither"
+        );
     }
 
     #[test]

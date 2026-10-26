@@ -4,16 +4,21 @@
 //! preview, the whole run's echo, the theme override outside the history
 //! and the refusal that writes nothing.
 
+use alloc::collections::BTreeSet;
+
 use crate::assets::fetch::Fetched;
 use crate::error::CyberError;
+use crate::gfx::codec::{decode_image, encode_png};
 use crate::gfx::flat::decode_flat;
+use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::{FitMode, dither::Dither};
+use crate::gfx::palette::Palette;
 use crate::session::{Layer, LayerRole, Session};
 use crate::state::AppState;
 use crate::themes::Role;
+use crate::tools::imports::apply_role;
 use crate::tools::imports::create_flat::build::{
-    BuiltFlat, apply_role, build_flat, check_flat_clash, commit_flat, create_flat_build, land_flat,
-    shape_flat,
+    BuiltFlat, build_flat, check_flat_clash, commit_flat, create_flat_build, land_flat, shape_flat,
 };
 use crate::tools::imports::create_flat::parse_create_flat;
 use crate::tools::imports::processed::ProcessParams;
@@ -247,6 +252,50 @@ async fn build_quantizes_opaquely_and_reads_the_flat_back() {
     assert!(built.warnings.is_empty(), "the picture is opaque");
 }
 
+/// A `size x size` fetched picture of one uniform grey: off every fixture
+/// palette colour, so the default diffusion really scatters indices.
+fn grey_fetched(size: u32, shade: u8) -> Fetched {
+    let pixels: Vec<u8> = (0..size.saturating_mul(size))
+        .flat_map(|_| [shade, shade, shade, 255_u8])
+        .collect();
+    let image = RgbaImage::new(size, size, pixels).expect("square is valid");
+    Fetched {
+        bytes: encode_png(&image, None).expect("test PNG encodes"),
+        filename: "grey.png".to_owned(),
+        mime: Some("image/png".to_owned()),
+    }
+}
+
+#[tokio::test]
+async fn the_preview_paints_the_index_plane_the_flat_stored() {
+    // One quantization feeds both halves: `build_flat` keeps the single
+    // indexed image it measured and hands it to the flat encoder and to the
+    // preview alike. A preview built from its own pass over the source - the
+    // way a second quantize would do it - could not answer with the stored
+    // plane, which is what the diffusion of an off-palette grey makes
+    // visible here: the plane is mixed, not one nearest colour.
+    let state = state();
+    let mut call = args();
+    call.tileable = false;
+    let request = parse_create_flat(&call).expect("valid");
+    let built =
+        build_flat(&state, &request, &grey_fetched(64_u32, 200_u8)).expect("the build runs");
+    let palette = Palette::from_playpal(&playpal(), 0).expect("the fixture palette");
+    let stored = decode_flat(&built.data).expect("the stored flat decodes");
+    let distinct = stored.indices.iter().collect::<BTreeSet<&u8>>().len();
+    assert!(
+        distinct > 1_usize,
+        "the default floyd_steinberg diffusion mixed {distinct} indices"
+    );
+    let preview = decode_image(&built.preview_png).expect("the preview decodes");
+    assert_eq!((preview.width, preview.height), (64_u32, 64_u32));
+    assert_eq!(
+        preview.pixels,
+        stored.to_rgba(&palette).pixels,
+        "every preview pixel is the palette colour of the index the lump stores"
+    );
+}
+
 #[tokio::test]
 async fn build_at_a_bigger_side_stores_that_square_and_warns() {
     let state = state();
@@ -308,13 +357,17 @@ fn the_theme_override_lands_in_session_state_outside_history() {
     let mut session = Session::default();
     let mut request = parse_create_flat(&args()).expect("valid");
     request.role = Some(Role::Floor);
-    let role = apply_role(&mut session, &request);
+    let role = apply_role(&mut session, request.role, &request.name.to_string());
     assert_eq!(role, Some("floor"), "the role reports back");
     let (texture, undo_len) = floor_theme(&session);
     assert_eq!(texture.as_deref(), Some("MYFLAT"), "the theme points at it");
     assert_eq!(undo_len, 0_usize, "the override records no edit");
     let plain = parse_create_flat(&args()).expect("valid");
-    assert_eq!(apply_role(&mut session, &plain), None, "no role, no word");
+    assert_eq!(
+        apply_role(&mut session, plain.role, &plain.name.to_string()),
+        None,
+        "no role, no word"
+    );
 }
 
 /// A built flat with dummy bytes for the land tests.

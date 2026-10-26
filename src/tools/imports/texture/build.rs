@@ -17,11 +17,12 @@ use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::composite::{Component, compose};
 use crate::gfx::image::IndexedImage;
-use crate::gfx::ops::{FitMode, ImageOp, OpsReport, apply_ops};
+use crate::gfx::ops::{FitMode, ImageOp};
 use crate::gfx::palette::Palette;
 use crate::gfx::patch::{Patch, encode_patch};
 use crate::gfx::quantize::Transparency;
 use crate::state::AppState;
+use crate::tools::imports::apply_extra;
 use crate::tools::imports::processed::{Processed, fill_low_alpha, process, to_indexed};
 use crate::tools::palette::load_palette;
 
@@ -33,7 +34,7 @@ use super::size::{WallSize, choose_size};
 ///
 /// # Errors
 ///
-/// [`apply_ops`]' [`CyberError::InvalidArgument`] widened to say the
+/// [`apply_extra`]' [`CyberError::InvalidArgument`] widened to say the
 /// failure came from the automatic step, not the user's ops.
 pub(super) fn shape_picture(
     processed: Processed,
@@ -58,20 +59,11 @@ pub(super) fn shape_picture(
             vertical: true,
         });
     }
-    if extra.is_empty() {
-        return Ok(processed);
-    }
-    let (rgba, second) = apply_ops(processed.rgba, &extra).map_err(|error| {
+    apply_extra(processed, &extra).map_err(|error| {
         CyberError::InvalidArgument(format!(
             "the automatic resize/tiling step failed: {error}: adjust width/height or pass \
              tileable=false"
         ))
-    })?;
-    let mut steps = processed.report.steps;
-    steps.extend(second.steps);
-    Ok(Processed {
-        rgba,
-        report: OpsReport { steps },
     })
 }
 
@@ -99,7 +91,10 @@ pub(super) struct Built {
 
 /// Run the whole picture side: user ops, the size rule, the automatic
 /// shape ops, opaque quantization, patch encoding and the composited
-/// preview. The palette read is the only session access here.
+/// preview. One quantization pass answers with the indexed image both
+/// halves are made from: the preview paints it and the patch stores it, so
+/// what an asset server serves is the plane the lump carries. The palette
+/// read is the only session access here.
 ///
 /// # Errors
 ///
@@ -119,21 +114,22 @@ pub(super) fn build_picture(
     let dither = request.shared.dither_choice();
     let mut indexed = to_indexed(&shaped, &palette, Transparency::None, dither);
     let filled = fill_low_alpha(&mut indexed.image, &shaped.rgba, &palette);
+    let (colors_used, max_color_error) = (indexed.colors_used, indexed.max_color_error);
+    let preview_png = composite_png(&request.name, &indexed.image, &palette)?;
     let patch = Patch {
         left_offset: 0_i16,
         top_offset: 0_i16,
-        image: indexed.image.clone(),
+        image: indexed.image,
     };
     let patch_bytes = encode_patch(&patch)?;
-    let preview_png = composite_png(&request.name, &indexed.image, &palette)?;
     Ok(Built {
         width: size.width,
         height: size.height,
         patch_bytes,
         preview_png,
         steps: shaped.report.steps,
-        colors_used: indexed.colors_used,
-        max_color_error: indexed.max_color_error,
+        colors_used,
+        max_color_error,
         notes: size.note.into_iter().collect(),
         warnings: filled_warning(filled),
     })

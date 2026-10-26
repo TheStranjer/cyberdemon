@@ -7,20 +7,23 @@
 //! the composited preview, the order of the argument checks and the two
 //! whole builds.
 
+use alloc::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::gfx::codec::encode_png;
 use crate::gfx::image::IndexedImage;
 use crate::gfx::ops::{FitMode, ImageOp};
 use crate::gfx::palette::Palette;
+use crate::gfx::patch::decode_patch;
 use crate::session::{Layer, LayerRole, Session};
 use crate::state::AppState;
 use crate::themes::Role;
+use crate::tools::imports::apply_role;
 use crate::tools::imports::current_pnames;
 use crate::tools::imports::processed::Processed;
-use crate::tools::imports::texture::build::{composite_png, shape_picture};
+use crate::tools::imports::texture::build::{build_picture, composite_png, shape_picture};
 use crate::tools::imports::texture::commit::{
-    apply_role, commit_create, land_create, plan_create, texture_size,
+    commit_create, land_create, plan_create, texture_size,
 };
 use crate::tools::imports::texture::size::WallSize;
 use crate::tools::imports::texture::{NEXT_STEPS, create_texture_build};
@@ -349,10 +352,10 @@ fn the_theme_override_lands_in_session_state_outside_history() {
     let mut session = session();
     let mut request = request_for("MYTEX", "MYTEX");
     request.role = Some(Role::Wall);
-    let role = apply_role(&mut session, &request);
+    let role = apply_role(&mut session, request.role, &request.name);
     assert_eq!(role, Some("wall"), "the role reports back");
     let clean = request_for("MYTEX", "MYTEX");
-    assert_eq!(apply_role(&mut session, &clean), None);
+    assert_eq!(apply_role(&mut session, clean.role, &clean.name), None);
     let (override_name, edits) = theme_state(&session, Role::Wall);
     assert_eq!(
         override_name.as_deref(),
@@ -374,6 +377,43 @@ fn the_preview_is_the_composited_picture() {
         back.get(0, 0).map(|[r, g, _, _]| [r, g]),
         Some([4_u8, 251]),
         "the palette colours carried"
+    );
+}
+
+#[tokio::test]
+async fn the_patch_and_the_preview_are_the_one_indexed_picture() {
+    // `build_picture` quantizes once and makes both halves from what that
+    // pass stored: the patch lump encodes the indexed image and the
+    // published preview is the same image composited. Re-quantizing the
+    // source for the preview - the duplicate pass this replaced - cannot
+    // answer with the plane inside the stored patch, which the default
+    // floyd_steinberg diffusion of an off-palette colour scatters.
+    let state = AppState::default();
+    seed_palette_layer(&state);
+    let request = request_for("MYTEX", "MYTEX");
+    let png = encode_png(&picture(64_u32, 128_u32), None).expect("a test PNG");
+    let fetched = crate::assets::fetch::Fetched {
+        bytes: png,
+        filename: "art.png".to_owned(),
+        mime: Some("image/png".to_owned()),
+    };
+    let built = build_picture(&state, &request, &fetched).expect("the build runs");
+    let palette = Palette::from_playpal(&playpal(), 0).expect("the fixture palette");
+    let stored = decode_patch(&built.patch_bytes).expect("the stored patch decodes");
+    assert_eq!(
+        (stored.image.width, stored.image.height),
+        (64_u32, 128_u32),
+        "the patch carries the texture size"
+    );
+    let from_stored = composite_png("MYTEX", &stored.image, &palette).expect("compositing works");
+    let distinct = stored.image.indices.iter().collect::<BTreeSet<&u8>>().len();
+    assert!(
+        distinct > 1_usize,
+        "the diffusion scattered {distinct} indices, so a plain second pass could not match them"
+    );
+    assert_eq!(
+        built.preview_png, from_stored,
+        "the preview is exactly what the lump stores"
     );
 }
 

@@ -48,11 +48,18 @@
 //!
 //! The two picture converters that write lumps keep their files beside
 //! this one: [`patch`] is the patch and raw imports, [`flat`] the flat
-//! import. This root holds what they and the other modules share - the
+//! import. This root holds what they and the other modules share: the
 //! effective-`PNAMES` reader [`current_pnames`] with its [`pnames_plan`],
-//! the name and region parsers [`chosen`] and [`parse_namespace`] - plus
-//! the tool descriptions and the router itself. The unit tests of that
-//! shared machinery live in the `tests` module.
+//! the name and region parsers [`chosen`] and [`parse_namespace`] beside the
+//! region wording [`region_text`], the one working-archive write every
+//! commit places a payload through ([`LumpWrite`], its [`region_write`]
+//! constructor and [`put_lump`]' overwrite rule), the [`apply_extra`] fold
+//! that puts a tool's automatic image ops behind the caller's own, and the
+//! [`apply_role`] step that points a theme role at a finished create. The
+//! picture side stays in [`image_pipeline`]: parse the shared parameters,
+//! quantize once and encode. Plus the tool descriptions and the router
+//! itself. The unit tests of that shared machinery live in the `tests`
+//! module.
 
 pub(in crate::tools) mod create_flat;
 pub(in crate::tools) mod create_sprite;
@@ -63,13 +70,17 @@ pub(in crate::tools) mod processed;
 mod sprite;
 mod texture;
 
+use alloc::sync::Arc;
+
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
 
 use crate::error::CyberError;
+use crate::gfx::ops::{ImageOp, OpsReport, apply_ops};
 use crate::server::Cyberdemon;
 use crate::session::Session;
+use crate::themes::Role;
 use crate::tools::imports::create_flat::{
     CREATE_FLAT_TOOL_DESCRIPTION, CreateFlatParams, create_flat_run,
 };
@@ -82,7 +93,7 @@ use crate::tools::imports::patch::{
     ImportPatchParams, ImportRawParams, import_raw_run, patch_imported,
 };
 use crate::tools::imports::processed::{
-    PROCESS_TOOL_DESCRIPTION, ProcessImageParams, process_image_run,
+    PROCESS_TOOL_DESCRIPTION, ProcessImageParams, Processed, process_image_run,
 };
 use crate::tools::imports::sprite::{
     ALIASED_SPRITE_TOOL_DESCRIPTION, ImportSpriteParams, SPRITE_TOOL_DESCRIPTION, sprite_imported,
@@ -90,8 +101,10 @@ use crate::tools::imports::sprite::{
 use crate::tools::imports::texture::{
     CREATE_TEXTURE_TOOL_DESCRIPTION, CreateTextureParams, create_texture_run,
 };
+use crate::tools::lumps::place::{self, Placement};
 use crate::tools::reply;
-use crate::wad::classify::Namespace;
+use crate::wad::archive::{Lump, Wad};
+use crate::wad::classify::{Namespace, analyze};
 use crate::wad::lumps;
 use crate::wad::name::LumpName;
 use crate::wad::textures::{parse_pnames, write_pnames};
@@ -197,6 +210,166 @@ pub(in crate::tools) fn pnames_plan(
         index,
         bytes: Some(write_pnames(&names)?),
     }))
+}
+
+/// One lump write into the working archive.
+#[derive(Debug)]
+pub(in crate::tools) struct LumpWrite<'data> {
+    /// The name to insert under.
+    pub(in crate::tools) name: LumpName,
+    /// The payload bytes.
+    pub(in crate::tools) data: &'data [u8],
+    /// The region to place it in; `None` is the loose global area.
+    pub(in crate::tools) namespace: Option<Namespace>,
+    /// Whether a same-name working lump may be overwritten in place.
+    pub(in crate::tools) replace: bool,
+}
+
+/// The [`LumpWrite`] of one picture payload: `data` stored as `name` inside
+/// `namespace` under the group's one overwrite rule, which [`put_lump`]
+/// applies - a same-name working twin refuses with `already_exists` until
+/// the call's `replace` says to overwrite it in place. Every import, create
+/// and patch-lifecycle commit writes its lump through this and [`put_lump`]
+/// inside its own [`crate::session::Session::edit`].
+pub(in crate::tools) const fn region_write(
+    name: LumpName,
+    data: &[u8],
+    namespace: Namespace,
+    replace: bool,
+) -> LumpWrite<'_> {
+    LumpWrite {
+        name,
+        data,
+        namespace: Some(namespace),
+        replace,
+    }
+}
+
+/// Insert (or replace) one lump of the working archive, reporting its
+/// final directory index.
+///
+/// A name the working archive does not hold in `namespace` goes through the
+/// shared placement helper, creating the region's markers when the working
+/// archive has none; a name only a read-only layer holds is fine and
+/// becomes an override.
+///
+/// # Errors
+///
+/// [`CyberError::AlreadyExists`] for a same-name working lump in the same
+/// namespace when `replace` is `false`, [`place::insert`]' placement errors
+/// and [`CyberError::Internal`] for a stale overwrite index.
+pub(in crate::tools) fn put_lump(
+    wad: &mut Wad,
+    write: &LumpWrite<'_>,
+) -> Result<usize, CyberError> {
+    let LumpWrite {
+        name,
+        data,
+        namespace,
+        replace,
+    } = *write;
+    if let Some(index) = working_match(wad, name, namespace) {
+        if !replace {
+            return Err(CyberError::AlreadyExists(exists_message(name, namespace)));
+        }
+        return overwrite(wad, index, name, data);
+    }
+    let placement = Placement {
+        namespace,
+        ..Placement::default()
+    };
+    place::insert(wad, &placement, Lump::new(name, data.to_vec()))
+}
+
+/// The working index of the last lump named `name` inside `namespace`.
+fn working_match(wad: &Wad, name: LumpName, namespace: Option<Namespace>) -> Option<usize> {
+    analyze(&wad.lumps)
+        .lumps
+        .into_iter()
+        .filter(|info| info.name == name && info.namespace == namespace)
+        .map(|info| info.index)
+        .next_back()
+}
+
+/// The `already_exists` text: names the region and the way out.
+fn exists_message(name: LumpName, namespace: Option<Namespace>) -> String {
+    format!(
+        "lump {name} already exists in {} of the working archive: pass replace=true to \
+         overwrite it in place, or import under another name",
+        region_text(namespace)
+    )
+}
+
+/// The region a message places a lump in.
+pub(in crate::tools) fn region_text(namespace: Option<Namespace>) -> String {
+    namespace.map_or_else(
+        || "the global area".to_owned(),
+        |wanted| format!("the {} region", wanted.as_str()),
+    )
+}
+
+/// Puts `data` into the lump at `index`, keeping its name and position.
+///
+/// # Errors
+///
+/// [`CyberError::Internal`] when the directory holds no lump there.
+fn overwrite(
+    wad: &mut Wad,
+    index: usize,
+    name: LumpName,
+    data: &[u8],
+) -> Result<usize, CyberError> {
+    let Some(lump) = wad.lumps.get_mut(index) else {
+        return Err(CyberError::Internal(format!(
+            "no lump at index {index} of the working archive: {name} was expected there"
+        )));
+    };
+    lump.data = Arc::from(data);
+    Ok(index)
+}
+
+/// Run `ops` over `processed` and append their measurements to its report:
+/// the one fold every automatic step a tool adds after the caller's own
+/// `ops` goes through - the flat's square fit and tiling, the texture's
+/// resize and tiling, the sprite's background cleanup and height fit. Empty
+/// `ops` leave the picture and its report exactly as they were.
+///
+/// # Errors
+///
+/// [`apply_ops`]' errors naming the failing extra op; each caller rewords
+/// them into its own "the automatic step failed" instruction.
+pub(in crate::tools) fn apply_extra(
+    processed: Processed,
+    ops: &[ImageOp],
+) -> Result<Processed, CyberError> {
+    if ops.is_empty() {
+        return Ok(processed);
+    }
+    let (rgba, second) = apply_ops(processed.rgba, ops)?;
+    let mut steps = processed.report.steps;
+    steps.extend(second.steps);
+    Ok(Processed {
+        rgba,
+        report: OpsReport { steps },
+    })
+}
+
+/// Point the theme role `wanted` at the lump `name` a create just committed
+/// and answer the role's wire word, `None` when the call asked for no role.
+/// Theme state is session state: no [`crate::session::Session::edit`]
+/// records it, which each caller's report says in its own note. Every
+/// create runs this inside its own lock, right after its commit took.
+pub(in crate::tools) fn apply_role(
+    session: &mut Session,
+    wanted: Option<Role>,
+    name: &str,
+) -> Option<&'static str> {
+    let role = wanted?;
+    session
+        .texture_theme_mut()
+        .overrides
+        .insert(role, name.to_owned());
+    Some(role.as_str())
 }
 
 /// The full documentation of the patch import, shared by the tool and its

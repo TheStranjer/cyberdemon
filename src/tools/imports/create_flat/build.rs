@@ -19,17 +19,17 @@ use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::flat::{decode_flat, encode_flat};
 use crate::gfx::ops::dither::Dither;
-use crate::gfx::ops::{Filter, FitMode, ImageOp, OpsReport, apply_ops};
+use crate::gfx::ops::{Filter, FitMode, ImageOp};
 use crate::gfx::quantize::Transparency;
 use crate::session::{Session, Source};
 use crate::state::AppState;
 use crate::tools::imports::create_flat::{
     CreateFlatParams, FLAT_SIDE, FlatRequest, NEXT_STEPS, PNG_MIME, TILE_BAND, parse_create_flat,
 };
-use crate::tools::imports::image_pipeline::{LumpWrite, put_lump};
 use crate::tools::imports::processed::{Processed, process, to_indexed};
 use crate::tools::imports::texture::layer_label;
 use crate::tools::imports::transparent_alpha_pixels;
+use crate::tools::imports::{apply_extra, apply_role, put_lump, region_write};
 use crate::tools::palette::load_palette;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
@@ -39,7 +39,7 @@ use crate::wad::name::LumpName;
 ///
 /// # Errors
 ///
-/// [`apply_ops`]' [`CyberError::InvalidArgument`] widened to say the
+/// [`apply_extra`]' [`CyberError::InvalidArgument`] widened to say the
 /// failure came from the automatic step, not the user's ops.
 pub(super) fn shape_flat(
     processed: Processed,
@@ -61,17 +61,11 @@ pub(super) fn shape_flat(
             vertical: true,
         });
     }
-    let (rgba, second) = apply_ops(processed.rgba, &extra).map_err(|error| {
+    apply_extra(processed, &extra).map_err(|error| {
         CyberError::InvalidArgument(format!(
             "the automatic flat sizing step failed: {error}: adjust fit or size, or pass \
              tileable=false"
         ))
-    })?;
-    let mut steps = processed.report.steps;
-    steps.extend(second.steps);
-    Ok(Processed {
-        rgba,
-        report: OpsReport { steps },
     })
 }
 
@@ -203,26 +197,9 @@ pub(super) fn commit_flat(
     built: &BuiltFlat,
 ) -> Result<(), CyberError> {
     let label = format!("create_flat {}", request.name);
-    let write = LumpWrite {
-        name: request.name,
-        data: &built.data,
-        namespace: Some(Namespace::Flats),
-        replace: request.replace,
-    };
+    let write = region_write(request.name, &built.data, Namespace::Flats, request.replace);
     session.edit(&label, |wad| put_lump(wad, &write).map(|_| ()))?;
     Ok(())
-}
-
-/// Point the requested theme role at the new flat. Theme state is session
-/// state: no undo step records it. Runs inside [`land_flat`]' lock, after
-/// the commit succeeded.
-pub(super) fn apply_role(session: &mut Session, request: &FlatRequest) -> Option<&'static str> {
-    let role = request.role?;
-    session
-        .texture_theme_mut()
-        .overrides
-        .insert(role, request.name.to_string());
-    Some(role.as_str())
 }
 
 /// Structured result of [`crate::server::Cyberdemon::create_flat_from_image`].
@@ -280,7 +257,7 @@ pub(super) fn land_flat(
     commit_flat(session, request, built)?;
     Ok(Landed {
         overrides_existing,
-        role: apply_role(session, request),
+        role: apply_role(session, request.role, &request.name.to_string()),
     })
 }
 

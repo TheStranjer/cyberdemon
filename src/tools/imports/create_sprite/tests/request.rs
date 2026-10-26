@@ -9,7 +9,7 @@ use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::{ImageOp, apply_ops};
 use crate::tools::imports::create_sprite::build::{
-    apply_extra, background_ops, choose_height, emptied, fit_step, scaled_width,
+    background_ops, choose_height, emptied, fit_step, scaled_width,
 };
 use crate::tools::imports::create_sprite::{
     CREATE_SPRITE_TOOL_DESCRIPTION, CreateSpriteParams, check_background_color, check_height,
@@ -217,13 +217,6 @@ fn fit_appends_the_step_and_keeps_the_report_in_order() {
     assert_eq!(shaped.report.steps.len(), 1_usize, "one automatic step");
     let kept = fit_step(processed(20_u32, 40_u32), &call).expect("nothing to do");
     assert!(kept.0.report.steps.is_empty(), "an equal size adds no step");
-}
-
-#[test]
-fn apply_extra_without_ops_is_the_identity() {
-    let picture = processed(4_u32, 4_u32);
-    let same = apply_extra(picture, &[]).expect("no ops run");
-    assert_eq!((same.rgba.width, same.rgba.height), (4_u32, 4_u32));
 }
 
 /// The wire arguments of a `TROOA1` call that trims without removing a

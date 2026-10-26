@@ -50,6 +50,8 @@
 //! luminance-weight duplication guard in `shared_math`, the big-endian-helper
 //! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the shared
 //! TSV-reader and category-word single-owner guard in `tsv_tables`, the
+//! imports-group shared-helper and one-quantization guard in
+//! `imports_shared`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
@@ -164,6 +166,9 @@ mod graphics;
 #[cfg(test)]
 #[path = "mcp/imports.rs"]
 mod imports;
+#[cfg(test)]
+#[path = "mcp/imports_shared.rs"]
+mod imports_shared;
 #[cfg(test)]
 #[path = "mcp/inspect.rs"]
 mod inspect;

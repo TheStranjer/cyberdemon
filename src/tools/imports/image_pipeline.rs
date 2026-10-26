@@ -5,16 +5,18 @@
 //! `source` (never holding the session lock), [`decode_image`] it, quantize
 //! against the session's `PLAYPAL` entry under the call's `transparency`
 //! rule, resolve the drawing `offsets` (a `PNG`'s `grAb` chunk, a preset or
-//! an explicit pair) and [`encode_patch`] the result. The flat importer
-//! reaches around [`ImageImportParams`] for the same pieces (`source` fetch,
-//! [`decode_image`], quantization, [`chosen_name`]) plus [`put_lump`], the
-//! matching insertion helper: it drops the finished bytes into a namespace
-//! of the working archive through [`crate::tools::lumps::place`], refusing
-//! a same-name twin unless `replace` overwrites it in place. Everything here
-//! is visible to the whole tools tree, so the patch lifecycle tools share
-//! the same pipeline, [`put_lump`] and [`chosen_name`].
-
-use alloc::sync::Arc;
+//! an explicit pair) and [`encode_patch`] the result. The quantization
+//! happens once: [`build_patch`] folds the indexed image and the reported
+//! colour measures off [`quantize_measured`]' single walk and hands that
+//! one image to the encoder. The flat importer reaches around
+//! [`ImageImportParams`] for the same pieces (`source` fetch,
+//! [`decode_image`], quantization, [`chosen_name`]). Landing the finished
+//! bytes is the group root's work: [`crate::tools::imports::put_lump`]
+//! drops them into a namespace of the working archive through
+//! [`crate::tools::lumps::place`], refusing a same-name twin unless
+//! `replace` overwrites it in place. Everything here is visible to the
+//! whole tools tree, so the patch lifecycle tools share the same pipeline
+//! and [`chosen_name`].
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -27,13 +29,10 @@ use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::parse_hex_colour;
 use crate::gfx::patch::{Patch, encode_patch};
 use crate::gfx::quantize::{
-    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize, quantize_stats,
+    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, quantize_measured,
 };
 use crate::state::AppState;
-use crate::tools::lumps::place::{self, Placement};
 use crate::tools::palette::load_palette;
-use crate::wad::archive::{Lump, Wad};
-use crate::wad::classify::{Namespace, analyze};
 use crate::wad::name::LumpName;
 
 /// Default `PLAYPAL` entry image imports quantize against.
@@ -290,7 +289,9 @@ pub(in crate::tools) struct Patched {
 /// Run the shared pipeline: fetch, decode, quantize, offset and encode.
 ///
 /// The `source` is fetched before any lock is taken; the `PLAYPAL` read is
-/// the only session access here.
+/// the only session access here. One [`quantize_measured`] pass stores the
+/// indexed image the patch encodes and measures the colour facts the report
+/// carries, so the picture is never quantized twice for one import.
 ///
 /// # Errors
 ///
@@ -321,12 +322,12 @@ pub(in crate::tools) async fn build_patch(
         reserved: Vec::new(),
     };
     let palette = state.with_session(|session| load_palette(session, import.palette))?;
+    let measured = quantize_measured(&image, &palette, &options);
     let patch = Patch {
         left_offset,
         top_offset,
-        image: quantize(&image, &palette, &options),
+        image: measured.image,
     };
-    let (colors_used, max_color_error) = quantize_stats(&image, &palette, &options);
     let data = encode_patch(&patch)?;
     Ok(Patched {
         name,
@@ -337,8 +338,8 @@ pub(in crate::tools) async fn build_patch(
             left_offset: i32::from(left_offset),
             top_offset: i32::from(top_offset),
             transparent_pixels: transparent_pixels(&patch),
-            colors_used,
-            max_color_error,
+            colors_used: measured.colors_used,
+            max_color_error: measured.max_color_error,
         },
     })
 }
@@ -451,108 +452,12 @@ fn transparent_pixels(patch: &Patch) -> usize {
         .count()
 }
 
-/// One lump write into the working archive.
-#[derive(Debug)]
-pub(in crate::tools) struct LumpWrite<'data> {
-    /// The name to insert under.
-    pub(in crate::tools) name: LumpName,
-    /// The payload bytes.
-    pub(in crate::tools) data: &'data [u8],
-    /// The region to place it in; `None` is the loose global area.
-    pub(in crate::tools) namespace: Option<Namespace>,
-    /// Whether a same-name working lump may be overwritten in place.
-    pub(in crate::tools) replace: bool,
-}
-
-/// Insert (or replace) one lump of the working archive, reporting its
-/// final directory index.
-///
-/// A name the working archive does not hold in `namespace` goes through the
-/// shared placement helper, creating the region's markers when the working
-/// archive has none; a name only a read-only layer holds is fine and
-/// becomes an override.
-///
-/// # Errors
-///
-/// [`CyberError::AlreadyExists`] for a same-name working lump in the same
-/// namespace when `replace` is `false`, [`place::insert`]' placement errors
-/// and [`CyberError::Internal`] for a stale overwrite index.
-pub(in crate::tools) fn put_lump(
-    wad: &mut Wad,
-    write: &LumpWrite<'_>,
-) -> Result<usize, CyberError> {
-    let LumpWrite {
-        name,
-        data,
-        namespace,
-        replace,
-    } = *write;
-    if let Some(index) = working_match(wad, name, namespace) {
-        if !replace {
-            return Err(CyberError::AlreadyExists(exists_message(name, namespace)));
-        }
-        return overwrite(wad, index, name, data);
-    }
-    let placement = Placement {
-        namespace,
-        ..Placement::default()
-    };
-    place::insert(wad, &placement, Lump::new(name, data.to_vec()))
-}
-
-/// The working index of the last lump named `name` inside `namespace`.
-fn working_match(wad: &Wad, name: LumpName, namespace: Option<Namespace>) -> Option<usize> {
-    analyze(&wad.lumps)
-        .lumps
-        .into_iter()
-        .filter(|info| info.name == name && info.namespace == namespace)
-        .map(|info| info.index)
-        .next_back()
-}
-
-/// The `already_exists` text: names the region and the way out.
-fn exists_message(name: LumpName, namespace: Option<Namespace>) -> String {
-    format!(
-        "lump {name} already exists in {} of the working archive: pass replace=true to \
-         overwrite it in place, or import under another name",
-        region_text(namespace)
-    )
-}
-
-/// The region a message places a lump in.
-fn region_text(namespace: Option<Namespace>) -> String {
-    namespace.map_or_else(
-        || "the global area".to_owned(),
-        |wanted| format!("the {} region", wanted.as_str()),
-    )
-}
-
-/// Puts `data` into the lump at `index`, keeping its name and position.
-///
-/// # Errors
-///
-/// [`CyberError::Internal`] when the directory holds no lump there.
-fn overwrite(
-    wad: &mut Wad,
-    index: usize,
-    name: LumpName,
-    data: &[u8],
-) -> Result<usize, CyberError> {
-    let Some(lump) = wad.lumps.get_mut(index) else {
-        return Err(CyberError::Internal(format!(
-            "no lump at index {index} of the working archive: {name} was expected there"
-        )));
-    };
-    lump.data = Arc::from(data);
-    Ok(index)
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
-        ImageImportParams, LumpWrite, OffsetDefault, OffsetMode, OffsetsParam, ParsedImport,
+        ImageImportParams, OffsetDefault, OffsetMode, OffsetsParam, ParsedImport,
         TransparencyParams, build_patch, chosen_name, grab_of, parse_import, parse_offset_preset,
         preset_offsets, resolve_offsets, to_i16_offsets, transparent_pixels,
     };
@@ -563,8 +468,6 @@ mod tests {
     use crate::gfx::patch::Patch;
     use crate::gfx::quantize::Transparency;
     use crate::state::AppState;
-    use crate::wad::archive::{Lump, Wad, WadKind};
-    use crate::wad::classify::Namespace;
     use crate::wad::name::LumpName;
 
     /// The error code of a [`CyberError`], for compact asserts.
@@ -867,77 +770,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn put_lump_creates_the_region_and_refuses_twins_until_replace() {
-        let mut wad = Wad {
-            kind: WadKind::Pwad,
-            lumps: vec![Lump::new(name("PLAYPAL"), vec![1_u8])],
-        };
-        let fresh = LumpWrite {
-            name: name("MYPATCH"),
-            data: b"one",
-            namespace: Some(Namespace::Patches),
-            replace: false,
-        };
-        let first = super::put_lump(&mut wad, &fresh).expect("the region takes the lump");
-        assert_eq!(first, 2_usize, "after the created P_START");
-        assert_eq!(
-            directory(&wad),
-            vec!["PLAYPAL", "P_START", "MYPATCH", "P_END"]
-        );
-        let twin = LumpWrite {
-            data: b"two",
-            ..fresh
-        };
-        let clash = super::put_lump(&mut wad, &twin).expect_err("the twin stands");
-        assert_eq!(code(&clash), "already_exists");
-        assert!(
-            clash.to_string().contains("replace=true"),
-            "the message names the way out: {clash}"
-        );
-        let over = LumpWrite {
-            replace: true,
-            ..twin
-        };
-        let again = super::put_lump(&mut wad, &over).expect("replace overwrites");
-        assert_eq!(again, first, "the copy keeps its place");
-        assert_eq!(payload(&wad, again), b"two".to_vec(), "in place");
-        assert_eq!(
-            directory(&wad),
-            vec!["PLAYPAL", "P_START", "MYPATCH", "P_END"]
-        );
-    }
-
-    #[test]
-    fn put_lump_scopes_twins_to_their_region_and_the_global_area_too() {
-        let mut wad = Wad {
-            kind: WadKind::Pwad,
-            lumps: vec![Lump::new(name("ART"), vec![1_u8])],
-        };
-        let loose = LumpWrite {
-            name: name("ART"),
-            data: b"2",
-            namespace: None,
-            replace: false,
-        };
-        let refused = super::put_lump(&mut wad, &loose).expect_err("the global twin clashes");
-        assert_eq!(code(&refused), "already_exists");
-        assert!(
-            refused.to_string().contains("global area"),
-            "no region is named as such: {refused}"
-        );
-        let in_region = LumpWrite {
-            name: name("ART"),
-            data: b"3",
-            namespace: Some(Namespace::Patches),
-            replace: false,
-        };
-        let region = super::put_lump(&mut wad, &in_region)
-            .expect("a region copy beside a loose one is not a twin");
-        assert_eq!(directory(&wad), vec!["ART", "P_START", "ART", "P_END"]);
-        assert_eq!(payload(&wad, region), b"3".to_vec());
-    }
-
     #[tokio::test]
     async fn build_patch_reports_the_fetch_errors_before_touching_a_session() {
         let state = AppState::default();
@@ -974,18 +806,5 @@ mod tests {
             "the key colour"
         );
         assert!(import.replace, "the flag carries");
-    }
-
-    /// The directory names of an archive, in order.
-    fn directory(wad: &Wad) -> Vec<String> {
-        wad.lumps.iter().map(|lump| lump.name.to_string()).collect()
-    }
-
-    /// The payload of the lump at `index`.
-    fn payload(wad: &Wad, index: usize) -> Vec<u8> {
-        wad.lumps
-            .get(index)
-            .map(|lump| lump.data.to_vec())
-            .expect("test indices exist")
     }
 }

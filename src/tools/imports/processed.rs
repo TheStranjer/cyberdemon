@@ -7,8 +7,9 @@
 //! [`Dither`] mode and the `PLAYPAL` entry. [`process`] decodes the fetched
 //! bytes with [`decode_image`] and runs [`apply_ops`], keeping the picture
 //! and the per-op [`OpsReport`]; [`to_indexed`] folds a [`Processed`]
-//! picture onto a session palette through [`quantize_dithered`] and
-//! measures it with [`quantize_stats`]. The fetch and the palette read
+//! picture onto a session palette through [`quantize_dithered_measured`]:
+//! one pass whose indexed image is both what a caller stores and what the
+//! reported measures were taken from. The fetch and the palette read
 //! happen in the calling tool: nothing here touches a session or a file,
 //! so the whole helper is unit-testable.
 
@@ -21,12 +22,10 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, encode_png};
 use crate::gfx::image::{IndexedImage, RgbaImage};
-use crate::gfx::ops::dither::{Dither, quantize_dithered};
+use crate::gfx::ops::dither::{Dither, quantize_dithered_measured};
 use crate::gfx::ops::{ImageOp, OpsReport, apply_ops};
 use crate::gfx::palette::Palette;
-use crate::gfx::quantize::{
-    DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, nearest_index, quantize_stats,
-};
+use crate::gfx::quantize::{DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, nearest_index};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{
@@ -136,7 +135,7 @@ pub(in crate::tools) fn process(
 }
 
 /// Quantize `processed` to `palette` under `transparency` and `dither`,
-/// measuring the result.
+/// measuring the picture the one quantization pass stored.
 #[must_use]
 pub(in crate::tools) fn to_indexed(
     processed: &Processed,
@@ -148,13 +147,17 @@ pub(in crate::tools) fn to_indexed(
         transparency,
         reserved: Vec::new(),
     };
-    let image = quantize_dithered(&processed.rgba, palette, &options, dither);
-    let (colors_used, max_color_error) = quantize_stats(&processed.rgba, palette, &options);
-    let transparent_pixels = image.opaque.iter().filter(|visible| !**visible).count();
+    let measured = quantize_dithered_measured(&processed.rgba, palette, &options, dither);
+    let transparent_pixels = measured
+        .image
+        .opaque
+        .iter()
+        .filter(|visible| !**visible)
+        .count();
     Indexed {
-        image,
-        colors_used,
-        max_color_error,
+        image: measured.image,
+        colors_used: measured.colors_used,
+        max_color_error: measured.max_color_error,
         transparent_pixels,
     }
 }

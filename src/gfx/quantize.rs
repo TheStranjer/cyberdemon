@@ -4,6 +4,11 @@
 //! by the lower palette index; per-colour answers are memoised in a
 //! [`HashMap`] that is only ever looked up, never iterated, so the output
 //! is independent of hashing order.
+//!
+//! One pass over the pixels folds the picture ([`quantize`]), the measures
+//! ([`quantize_stats`]), or both at once ([`quantize_measured`]), so a
+//! caller that stores a picture and reports on it searches the palette once
+//! per distinct colour and reads its numbers off the indices it stored.
 
 use std::collections::{HashMap, HashSet};
 
@@ -103,6 +108,139 @@ pub fn nearest_index(rgb: [u8; 3], palette: &Palette, reserved: &[u8]) -> u8 {
     best.map_or(0_u8, |(_, index)| u8::try_from(index).unwrap_or(0_u8))
 }
 
+/// What one [`Walk`] folds out of the pixels it sees.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Gather {
+    /// The indexed picture, nothing else.
+    Picture,
+    /// The measures of the opaque colours, nothing else.
+    Measures,
+    /// Both, from the one walk.
+    Both,
+}
+
+impl Gather {
+    /// Whether this walk stores an index and an opacity flag per pixel.
+    const fn pictures(self) -> bool {
+        matches!(self, Self::Picture | Self::Both)
+    }
+
+    /// Whether this walk folds the measures of the opaque colours.
+    const fn measures(self) -> bool {
+        matches!(self, Self::Measures | Self::Both)
+    }
+}
+
+/// The answer of one quantization walk: the indexed picture beside the
+/// colour measures taken from the very indices it stored.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Quantized {
+    /// The palette indices and opacity flags of the source picture.
+    pub image: IndexedImage,
+    /// Distinct colours among the opaque pixels.
+    pub colors_used: usize,
+    /// Worst squared `RGB` distance from an opaque colour to its palette
+    /// entry.
+    pub max_color_error: i32,
+}
+
+/// The state of one walk of a picture against a palette: every distinct
+/// `RGB` triple is searched once and the picture, the measures, or both are
+/// folded off that single search.
+struct Walk<'pal> {
+    /// Palette to match against.
+    palette: &'pal Palette,
+    /// Transparency and reserved-index policy of the call.
+    options: &'pal QuantizeOptions,
+    /// What the walk folds.
+    gather: Gather,
+    /// `RGB` to its nearest index: every colour searched at most once.
+    cache: HashMap<[u8; 3], u8>,
+    /// Distinct opaque colours seen so far.
+    unique: HashSet<[u8; 3]>,
+    /// Worst squared distance from an opaque colour to its palette entry.
+    max_error: i32,
+    /// Indices produced so far, row-major.
+    indices: Vec<u8>,
+    /// Opacity flags produced so far, row-major.
+    opaque: Vec<bool>,
+}
+
+impl<'pal> Walk<'pal> {
+    /// A walk over `img` against `palette` that folds `gather`, sized for
+    /// the picture when it stores one.
+    fn new(
+        img: &RgbaImage,
+        palette: &'pal Palette,
+        options: &'pal QuantizeOptions,
+        gather: Gather,
+    ) -> Self {
+        let count = if gather.pictures() {
+            img.pixels.chunks_exact(BYTES_PER_PIXEL).len()
+        } else {
+            0_usize
+        };
+        Self {
+            palette,
+            options,
+            gather,
+            cache: HashMap::new(),
+            unique: HashSet::new(),
+            max_error: 0_i32,
+            indices: Vec::with_capacity(count),
+            opaque: Vec::with_capacity(count),
+        }
+    }
+
+    /// Records one source pixel: its nearest index where the walk stores a
+    /// picture, and its colour's distance where the walk measures, opaque
+    /// pixels only.
+    fn add(&mut self, [red, green, blue, alpha]: [u8; 4]) {
+        let rgb = [red, green, blue];
+        let visible = !is_transparent(rgb, alpha, self.options.transparency);
+        if !visible && !self.gather.pictures() {
+            return;
+        }
+        let index = nearest_cached(&mut self.cache, rgb, self.palette, &self.options.reserved);
+        if self.gather.pictures() {
+            self.indices.push(index);
+            self.opaque.push(visible);
+        }
+        if visible && self.gather.measures() && self.unique.insert(rgb) {
+            let color = self.palette.color(usize::from(index)).unwrap_or([0_u8; 3]);
+            self.max_error = self.max_error.max(squared_distance(rgb, color));
+        }
+    }
+
+    /// The picture's dimensions with everything the walk folded.
+    fn finish(self, img: &RgbaImage) -> Quantized {
+        Quantized {
+            image: IndexedImage {
+                width: img.width,
+                height: img.height,
+                indices: self.indices,
+                opaque: self.opaque,
+            },
+            colors_used: self.unique.len(),
+            max_color_error: self.max_error,
+        }
+    }
+}
+
+/// Walks every pixel of `img` once against `palette`, folding `gather`.
+fn walk(
+    img: &RgbaImage,
+    palette: &Palette,
+    options: &QuantizeOptions,
+    gather: Gather,
+) -> Quantized {
+    let mut walker = Walk::new(img, palette, options, gather);
+    for pixel in img.pixels.chunks_exact(BYTES_PER_PIXEL).map(to_pixel) {
+        walker.add(pixel);
+    }
+    walker.finish(img)
+}
+
 /// Quantizes `img` to `palette`.
 ///
 /// Transparent pixels get an opacity flag of `false` but still receive a
@@ -111,21 +249,7 @@ pub fn nearest_index(rgb: [u8; 3], palette: &Palette, reserved: &[u8]) -> u8 {
 #[must_use]
 #[inline]
 pub fn quantize(img: &RgbaImage, palette: &Palette, options: &QuantizeOptions) -> IndexedImage {
-    let mut cache: HashMap<[u8; 3], u8> = HashMap::new();
-    let count = img.pixels.chunks_exact(BYTES_PER_PIXEL).len();
-    let mut indices = Vec::with_capacity(count);
-    let mut opaque = Vec::with_capacity(count);
-    for [r, g, b, alpha] in img.pixels.chunks_exact(BYTES_PER_PIXEL).map(to_pixel) {
-        let rgb = [r, g, b];
-        opaque.push(!is_transparent(rgb, alpha, options.transparency));
-        indices.push(nearest_cached(&mut cache, rgb, palette, &options.reserved));
-    }
-    IndexedImage {
-        width: img.width,
-        height: img.height,
-        indices,
-        opaque,
-    }
+    walk(img, palette, options, Gather::Picture).image
 }
 
 /// Number of distinct colours among the opaque pixels, and the worst
@@ -138,20 +262,21 @@ pub fn quantize_stats(
     palette: &Palette,
     options: &QuantizeOptions,
 ) -> (usize, i32) {
-    let mut cache: HashMap<[u8; 3], u8> = HashMap::new();
-    let mut unique: HashSet<[u8; 3]> = HashSet::new();
-    let mut max_error = 0_i32;
-    for [r, g, b, alpha] in img.pixels.chunks_exact(BYTES_PER_PIXEL).map(to_pixel) {
-        let rgb = [r, g, b];
-        if is_transparent(rgb, alpha, options.transparency) {
-            continue;
-        }
-        unique.insert(rgb);
-        let index = nearest_cached(&mut cache, rgb, palette, &options.reserved);
-        let color = palette.color(usize::from(index)).unwrap_or([0_u8; 3]);
-        max_error = max_error.max(squared_distance(rgb, color));
-    }
-    (unique.len(), max_error)
+    let measured = walk(img, palette, options, Gather::Measures);
+    (measured.colors_used, measured.max_color_error)
+}
+
+/// [`quantize`] and [`quantize_stats`] in the one walk, so a caller that
+/// stores the picture and reports on it searches the palette once per
+/// distinct colour and reads its measures off the indices it stored.
+#[must_use]
+#[inline]
+pub fn quantize_measured(
+    img: &RgbaImage,
+    palette: &Palette,
+    options: &QuantizeOptions,
+) -> Quantized {
+    walk(img, palette, options, Gather::Both)
 }
 
 /// Memoised [`nearest_index`] lookup against a shared cache.
@@ -170,7 +295,7 @@ fn nearest_cached(
 mod tests {
     use super::{
         DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, nearest_index, quantize,
-        quantize_stats,
+        quantize_measured, quantize_stats,
     };
     use crate::gfx::image::{IndexedImage, RgbaImage};
     use crate::gfx::palette::Palette;
@@ -357,6 +482,72 @@ mod tests {
             quantize_stats(&gone, &pal, &QuantizeOptions::default()),
             (0, 0_i32),
             "a fully transparent image measures zero"
+        );
+    }
+
+    /// A 4x1 picture: near red twice, that same colour dropped by alpha and
+    /// a white pixel.
+    fn mixed() -> RgbaImage {
+        let pixels = vec![
+            250, 5, 5, 255, // near red
+            255, 255, 255, 255, // white
+            250, 5, 5, 0, // the first colour, dropped
+            250, 5, 5, 255, // near red again
+        ];
+        RgbaImage::new(4, 1, pixels).expect("4x1 is valid")
+    }
+
+    #[test]
+    fn quantize_measured_is_the_picture_and_the_stats_of_one_walk() {
+        let pal = test_palette();
+        let options = QuantizeOptions::default();
+        let img = mixed();
+        let measured = quantize_measured(&img, &pal, &options);
+        assert_eq!(
+            measured.image,
+            quantize(&img, &pal, &options),
+            "the stored picture is the one the walk wrote"
+        );
+        assert_eq!(
+            (measured.colors_used, measured.max_color_error),
+            quantize_stats(&img, &pal, &options),
+            "the measures are the same walk's, not a second one's"
+        );
+        assert_eq!(
+            measured.image.opaque,
+            vec![true, true, false, true],
+            "alpha kept"
+        );
+        assert_eq!(
+            measured.image.indices,
+            vec![2, 1, 2, 2],
+            "the dropped pixel still carries its best-effort index"
+        );
+        assert_eq!(measured.colors_used, 2_usize, "two distinct opaque colours");
+        assert_eq!(
+            measured.max_color_error, 75_i32,
+            "the error is read off the stored index"
+        );
+    }
+
+    #[test]
+    fn quantize_measured_measures_the_indices_it_stored() {
+        let pal = test_palette();
+        let exact = two_pixels([255, 0, 0, 255], [0, 255, 255, 255]);
+        let measured = quantize_measured(&exact, &pal, &QuantizeOptions::default());
+        assert_eq!(
+            measured.image.indices,
+            vec![2, 3],
+            "both exact palette colours"
+        );
+        assert_eq!((measured.colors_used, measured.max_color_error), (2, 0_i32));
+        let gone = two_pixels([1, 2, 3, 0], [4, 5, 6, 7]);
+        let empty = quantize_measured(&gone, &pal, &QuantizeOptions::default());
+        assert_eq!(empty.image.indices.len(), 2, "the picture is still stored");
+        assert_eq!(
+            (empty.colors_used, empty.max_color_error),
+            (0_usize, 0_i32),
+            "and nothing opaque is measured"
         );
     }
 }

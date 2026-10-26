@@ -7,13 +7,17 @@
 //! [`finish`]. [`sprite_request`] is the either-or of [`GetSpriteParams`]:
 //! one whole [`SpriteRequest::Lump`] served as stored, or a
 //! [`SpriteRequest::Rotation`] that [`by_rotation`] builds over
-//! [`crate::tools::graphics::list_sprites::parse_sprite`], [`parse_frame`]
-//! and [`parse_rotation`]. [`prepare_sprite`] answers either of them.
+//! [`crate::tools::graphics::list_sprites::parse_sprite`] and this
+//! module's [`parse_frame`] and [`parse_rotation`], thin wrappers that
+//! default the parts and hand the grammar of
+//! [`crate::gfx::sprite_name`] the checking. [`prepare_sprite`] answers
+//! either of them.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::CyberError;
+use crate::gfx::sprite_name::{self, MAX_ROTATION, SpriteName};
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::graphics::list_sprites::parse_sprite;
@@ -21,7 +25,7 @@ use crate::tools::graphics::picture::{
     ImageOptions, ImageParams, ImageReport, Prepared, finish, render_indexed, render_patch,
 };
 use crate::tools::graphics::resolve::{load_flat, load_patch, load_sprite, load_sprite_lump};
-use crate::tools::graphics::{DEFAULT_FRAME, DEFAULT_ROTATION, MAX_ROTATION};
+use crate::tools::graphics::{DEFAULT_FRAME, DEFAULT_ROTATION};
 use crate::wad::name::LumpName;
 
 /// Arguments for [`Cyberdemon::get_flat`].
@@ -173,16 +177,23 @@ fn by_rotation(
     let prefix = parse_sprite(sprite)?;
     let letter = parse_frame(frame)?;
     let number = parse_rotation(rotation)?;
-    Ok(SpriteRequest::Rotation {
-        name: LumpName::parse(&format!("{prefix}{letter}{number}"))?,
+    let parsed = SpriteName {
         sprite: prefix,
         frame: letter,
         rotation: number,
+        mirror: None,
+    };
+    Ok(SpriteRequest::Rotation {
+        name: LumpName::parse(&parsed.format())?,
+        sprite: parsed.sprite,
+        frame: parsed.frame,
+        rotation: parsed.rotation,
     })
 }
 
 /// The frame letter: one character of `A`-`Z` then `[`, `\`, `]`,
-/// uppercased, defaulting to [`DEFAULT_FRAME`].
+/// uppercased by [`crate::gfx::sprite_name::parse_frame_letter`],
+/// defaulting to [`DEFAULT_FRAME`].
 ///
 /// # Errors
 ///
@@ -191,39 +202,30 @@ pub(super) fn parse_frame(text: Option<&str>) -> Result<char, CyberError> {
     let Some(raw) = text else {
         return Ok(DEFAULT_FRAME);
     };
-    let upper = raw.to_ascii_uppercase();
-    let single = upper.chars().count() == 1;
-    if let Some(letter) = upper.chars().next()
-        && single
-        && is_frame_letter(letter)
-    {
-        return Ok(letter);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "frame {text:?} is not one sprite frame letter: pass a single character A-Z, [, \\ or ]"
-    )))
+    sprite_name::parse_frame_letter(raw).map_err(|_error| {
+        CyberError::InvalidArgument(format!(
+            "frame {text:?} is not one sprite frame letter: pass a single character A-Z, [, \\ \
+             or ]"
+        ))
+    })
 }
 
-/// Whether `letter` is a sprite frame letter: `A`-`Z`, then the three
-/// characters after `Z`.
-const fn is_frame_letter(letter: char) -> bool {
-    matches!(letter, 'A'..='Z' | '[' | '\\' | ']')
-}
-
-/// The rotation number: `0`-`8`, defaulting to [`DEFAULT_ROTATION`].
+/// The rotation number: `0`-`8`, checked by
+/// [`crate::gfx::sprite_name::parse_rotation`], defaulting to
+/// [`DEFAULT_ROTATION`].
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected number.
 pub(super) fn parse_rotation(value: Option<u8>) -> Result<u8, CyberError> {
-    match value {
-        None => Ok(DEFAULT_ROTATION),
-        Some(rotation @ (0_u8..=MAX_ROTATION)) => Ok(rotation),
-        Some(rotation) => Err(CyberError::InvalidArgument(format!(
-            "rotation {rotation} is out of range: pass 0 for the all-angles image, or 1 to \
-             {MAX_ROTATION} for the eight views"
-        ))),
-    }
+    value.map_or(Ok(DEFAULT_ROTATION), |rotation| {
+        sprite_name::parse_rotation(rotation).map_err(|_error| {
+            CyberError::InvalidArgument(format!(
+                "rotation {rotation} is out of range: pass 0 for the all-angles image, or 1 to \
+                 {MAX_ROTATION} for the eight views"
+            ))
+        })
+    })
 }
 
 /// `get_sprite`'s work: resolve and render under the session lock, then

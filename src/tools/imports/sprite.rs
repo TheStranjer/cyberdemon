@@ -3,9 +3,11 @@
 //!
 //! [`import_sprite_run`] reuses [`build_patch`] from [`super::image_pipeline`]
 //! and adds what is sprite-specific. The lump name comes from the `Doom`
-//! sprite grammar of [`crate::gfx::sprite_name::parse_sprite_name`], either
+//! sprite grammar of [`crate::gfx::sprite_name::SpriteName::parse`], either
 //! as one whole `name` or as `sprite`/`frame`/`rotation` parts (plus an
-//! optional `mirror_rotation`) that this module assembles and validates. The
+//! optional `mirror_rotation`) that this module validates through the
+//! grammar's own part parsers, assembles with [`SpriteName::format`] and
+//! checks as the name they must satisfy. The
 //! drawing offsets default to standing the picture on its origin
 //! ([`OffsetDefault::CenterBottom`]) unless a `PNG` `grAb` chunk says
 //! otherwise. Before the edit, [`warnings_for`] reads the merged sprites
@@ -22,7 +24,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
-use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
+use crate::gfx::sprite_name::{
+    self, ALL_ANGLES, MAX_ROTATION, SpriteName, parse_frame_letter, parse_sprite_prefix,
+};
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::{
@@ -34,14 +38,8 @@ use crate::tools::reply;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
-/// Characters of the four-character sprite prefix a part-named import takes.
-const SPRITE_LEN: usize = 4;
-/// The all-angles rotation: one image serves every view.
-const ALL_ANGLES: u8 = 0_u8;
 /// The lowest per-view rotation number.
 const FIRST_VIEW: u8 = 1_u8;
-/// The highest rotation digit a sprite name carries.
-const MAX_ROTATION: u8 = 8_u8;
 /// Frame letter a part-named import assumes without one.
 const DEFAULT_FRAME: char = 'A';
 
@@ -181,18 +179,19 @@ fn parse_naming(args: &ImportSpriteParams) -> Result<Naming, CyberError> {
 /// lump name, and [`grammar_error`] for a name outside the sprite grammar.
 pub(super) fn whole_name(text: &str) -> Result<Naming, CyberError> {
     let name = LumpName::parse(text)?;
-    let parsed = parse_sprite_name(&name.to_string()).ok_or_else(|| grammar_error(text))?;
+    let parsed = SpriteName::parse(&name.to_string()).ok_or_else(|| grammar_error(text))?;
     Ok(Naming { name, parsed })
 }
 
 /// The parts form: the four prefix characters, the frame letter and the
-/// rotation, with the optional mirrored rotation appended, assembled into
-/// one name and parsed as the grammar it must satisfy.
+/// rotation, with the optional mirrored rotation appended, assembled and
+/// validated through [`pair_name`].
 ///
 /// # Errors
 ///
 /// [`parse_prefix`], [`parse_frame`], [`parse_rotation`] and
-/// [`parse_mirror`]' [`CyberError::InvalidArgument`] errors.
+/// [`parse_mirror`]' [`CyberError::InvalidArgument`] errors, and
+/// [`pair_name`]' grammar error.
 pub(super) fn part_name(
     sprite: &str,
     frame: Option<&str>,
@@ -202,11 +201,33 @@ pub(super) fn part_name(
     let prefix = parse_prefix(sprite)?;
     let letter = parse_frame(frame)?;
     let number = parse_rotation(rotation)?;
-    let text = parse_mirror(mirror_rotation, number)?.map_or_else(
-        || format!("{prefix}{letter}{number}"),
-        |second| format!("{prefix}{letter}{number}{letter}{second}"),
-    );
-    whole_name(&text)
+    let mirror = parse_mirror(mirror_rotation, number)?;
+    pair_name(&prefix, letter, number, mirror)
+}
+
+/// The [`Naming`] of one validated prefix, frame and rotation, with the
+/// view the mirrored image serves appended as the pair form's second
+/// frame+rotation when given: the name is assembled by
+/// [`SpriteName::format`] and checked by [`whole_name`], so the parts can
+/// only name a lump the grammar reads.
+///
+/// # Errors
+///
+/// [`whole_name`]' [`CyberError::InvalidArgument`] for a name outside the
+/// sprite grammar.
+pub(super) fn pair_name(
+    prefix: &str,
+    frame: char,
+    rotation: u8,
+    mirror: Option<u8>,
+) -> Result<Naming, CyberError> {
+    let parsed = SpriteName {
+        sprite: prefix.to_owned(),
+        frame,
+        rotation,
+        mirror: mirror.map(|second| (frame, second)),
+    };
+    whole_name(&parsed.format())
 }
 
 /// The `invalid_argument` explaining the sprite lump name grammar.
@@ -220,28 +241,23 @@ fn grammar_error(text: &str) -> CyberError {
     ))
 }
 
-/// The four-character sprite prefix: `ASCII` letters or digits, uppercased.
+/// The four-character sprite prefix: `ASCII` letters or digits,
+/// uppercased by the grammar's own [`parse_sprite_prefix`].
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected text.
 pub(super) fn parse_prefix(text: &str) -> Result<String, CyberError> {
-    let upper = text.to_ascii_uppercase();
-    let well_formed = upper.len() == SPRITE_LEN
-        && upper
-            .bytes()
-            .all(|byte| byte.is_ascii_alphabetic() || byte.is_ascii_digit());
-    if well_formed {
-        return Ok(upper);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "sprite {text:?} is not four ASCII letters or digits: pass the four-character sprite \
-         prefix, e.g. \"TROO\""
-    )))
+    parse_sprite_prefix(text).map_err(|_error| {
+        CyberError::InvalidArgument(format!(
+            "sprite {text:?} is not four ASCII letters or digits: pass the four-character sprite \
+             prefix, e.g. \"TROO\""
+        ))
+    })
 }
 
 /// The frame letter: one character of `A`-`Z` then `[`, `\`, `]`,
-/// uppercased, defaulting to [`DEFAULT_FRAME`].
+/// uppercased by [`parse_frame_letter`], defaulting to [`DEFAULT_FRAME`].
 ///
 /// # Errors
 ///
@@ -250,39 +266,30 @@ pub(super) fn parse_frame(text: Option<&str>) -> Result<char, CyberError> {
     let Some(raw) = text else {
         return Ok(DEFAULT_FRAME);
     };
-    let upper = raw.to_ascii_uppercase();
-    let single = upper.chars().count() == 1;
-    if let Some(letter) = upper.chars().next()
-        && single
-        && is_frame_letter(letter)
-    {
-        return Ok(letter);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "frame {text:?} is not one sprite frame letter: pass a single character A-Z, [, \\ or ]"
-    )))
+    parse_frame_letter(raw).map_err(|_error| {
+        CyberError::InvalidArgument(format!(
+            "frame {text:?} is not one sprite frame letter: pass a single character A-Z, [, \\ \
+             or ]"
+        ))
+    })
 }
 
-/// Whether `letter` is a sprite frame letter: `A`-`Z`, then the three
-/// characters after `Z`.
-const fn is_frame_letter(letter: char) -> bool {
-    matches!(letter, 'A'..='Z' | '[' | '\\' | ']')
-}
-
-/// The rotation number: `0`-`8`, defaulting to the all-angles image.
+/// The rotation number: `0`-`8`, checked by
+/// [`crate::gfx::sprite_name::parse_rotation`], defaulting to the
+/// all-angles image.
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected number.
 pub(super) fn parse_rotation(value: Option<u8>) -> Result<u8, CyberError> {
-    match value {
-        None => Ok(ALL_ANGLES),
-        Some(rotation) if rotation <= MAX_ROTATION => Ok(rotation),
-        Some(rotation) => Err(CyberError::InvalidArgument(format!(
-            "rotation {rotation} is out of range: pass 0 for the all-angles image, or 1 to \
-             {MAX_ROTATION} for one of the eight views"
-        ))),
-    }
+    value.map_or(Ok(ALL_ANGLES), |rotation| {
+        sprite_name::parse_rotation(rotation).map_err(|_error| {
+            CyberError::InvalidArgument(format!(
+                "rotation {rotation} is out of range: pass 0 for the all-angles image, or 1 to \
+                 {MAX_ROTATION} for one of the eight views"
+            ))
+        })
+    })
 }
 
 /// The rotation the mirrored image serves: one of the eight views, never
@@ -351,7 +358,7 @@ fn serves(pairs: &[(char, u8)], frame: char, angles: bool) -> bool {
 /// The sprite-region lump's coverage under `sprite`'s prefix, `None` for a
 /// name the grammar does not read.
 fn served_row(text: &str, sprite: &str) -> Option<Served> {
-    let parsed = parse_sprite_name(text)?;
+    let parsed = SpriteName::parse(text)?;
     (parsed.sprite == sprite).then(|| Served {
         lump: text.to_owned(),
         pairs: served_pairs(&parsed),
@@ -542,11 +549,12 @@ pub(super) async fn sprite_imported(
 #[cfg(test)]
 mod tests {
     use super::{
-        ImportSpriteParams, Served, coverage_warnings, covering_lumps, grammar_error, parse_frame,
-        parse_mirror, parse_naming, parse_prefix, parse_rotation, served_frames, served_pairs,
+        ImportSpriteParams, Served, coverage_warnings, covering_lumps, grammar_error, pair_name,
+        parse_frame, parse_mirror, parse_naming, parse_prefix, parse_rotation, served_frames,
+        served_pairs,
     };
     use crate::error::CyberError;
-    use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
+    use crate::gfx::sprite_name::SpriteName;
     use crate::session::Session;
     use crate::tools::imports::image_pipeline::ImageImportParams;
     use crate::wad::archive::Lump;
@@ -564,7 +572,7 @@ mod tests {
 
     /// The grammar of one test sprite name.
     fn parsed(text: &str) -> SpriteName {
-        parse_sprite_name(text).expect("test names are sprite names")
+        SpriteName::parse(text).expect("test names are sprite names")
     }
 
     /// Sprite-import arguments over one source with nothing else set.
@@ -666,6 +674,17 @@ mod tests {
         let named = parse_naming(&pair).expect("the pair form");
         assert_eq!(named.name, name("TROOA2A8"), "the assembled name");
         assert_eq!(named.parsed.mirror, Some(('A', 8)), "the mirrored pair");
+    }
+
+    #[test]
+    fn pair_name_formats_the_validated_parts() {
+        let plain = pair_name("TROO", 'A', 0, None).expect("the plain form");
+        assert_eq!(plain.name, name("TROOA0"), "the all-angles name");
+        assert_eq!(plain.parsed.mirror, None, "nothing mirrored");
+        let pair = pair_name("TROO", '[', 1, Some(5_u8)).expect("the pair form");
+        assert_eq!(pair.name, name("TROO[1[5"), "the past-Z pair");
+        assert_eq!(pair.parsed.frame, '[', "the direct pair");
+        assert_eq!(pair.parsed.mirror, Some(('[', 5)), "the mirrored pair");
     }
 
     #[test]

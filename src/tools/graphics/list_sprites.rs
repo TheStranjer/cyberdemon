@@ -3,12 +3,12 @@
 //! [`list_sprites_run`] walks the merged view's sprites region (again with
 //! [`last_wins`] and [`Page::take`]) and folds every grammar-matching name
 //! into [`Groups`] with [`collect_sprite`], which records a pair name's
-//! second rotation as a mirrored entry through [`push_rotation`]; a name the
-//! grammar rejects is kept by [`shows_invalid`] when the caller's prefix
-//! covers it. [`sprite_rows`] orders the accumulated map into the report's
-//! rows. [`parse_prefix`] validates the caller's four characters as the
-//! listing's half of the check [`parse_sprite`] implements, which
-//! `get_sprite` shares.
+//! second rotation as a mirrored entry through [`push_rotation`]; a name
+//! the grammar rejects is kept by [`shows_invalid`] when the caller's
+//! prefix covers it. [`sprite_rows`] orders the accumulated map into the
+//! report's rows. [`parse_prefix`] validates the caller's four characters
+//! through the grammar's own [`crate::gfx::sprite_name::parse_sprite_prefix`],
+//! which `get_sprite` shares through [`parse_sprite`].
 
 use alloc::collections::BTreeMap;
 
@@ -16,10 +16,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
-use crate::gfx::sprite_name::{SpriteName, parse_sprite_name};
+use crate::gfx::sprite_name::{SpriteName, parse_sprite_prefix};
 use crate::session::Session;
 use crate::tools::Page;
-use crate::tools::graphics::{SPRITE_PREFIX_LEN, in_namespace, last_wins, merged_rows};
+use crate::tools::graphics::{in_namespace, last_wins, merged_rows};
 use crate::wad::classify::Namespace;
 
 /// Arguments for [`Cyberdemon::list_sprites`].
@@ -94,24 +94,19 @@ pub(super) fn parse_prefix(text: Option<&str>) -> Result<Option<String>, CyberEr
 }
 
 /// One validated sprite prefix: four `ASCII` letters or digits,
-/// uppercased.
+/// uppercased, the grammar's own [`parse_sprite_prefix`] check with the
+/// listing's refusal text.
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the rejected text.
 pub(super) fn parse_sprite(text: &str) -> Result<String, CyberError> {
-    let upper = text.to_ascii_uppercase();
-    let well_formed = upper.len() == SPRITE_PREFIX_LEN
-        && upper
-            .bytes()
-            .all(|byte| byte.is_ascii_alphabetic() || byte.is_ascii_digit());
-    if well_formed {
-        return Ok(upper);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "prefix {text:?} is not four ASCII letters or digits: pass the sprite prefix, e.g. \
-         \"POSS\"; leave it out to list every sprite"
-    )))
+    parse_sprite_prefix(text).map_err(|_error| {
+        CyberError::InvalidArgument(format!(
+            "prefix {text:?} is not four ASCII letters or digits: pass the sprite prefix, e.g. \
+             \"POSS\"; leave it out to list every sprite"
+        ))
+    })
 }
 
 /// Records the one or two rotations a parsed sprite name contributes.
@@ -200,7 +195,7 @@ pub(super) fn list_sprites_run(
             .collect(),
     ) {
         let text = row.name.to_string();
-        match parse_sprite_name(&text) {
+        match SpriteName::parse(&text) {
             Some(parsed) => collect_sprite(&mut groups, &parsed, &text, prefix),
             None if shows_invalid(&text, prefix) => invalid.push(text),
             None => {}

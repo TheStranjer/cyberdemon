@@ -6,7 +6,7 @@
 
 use alloc::collections::BTreeSet;
 
-use crate::gfx::sprite_name::parse_sprite_name;
+use crate::gfx::sprite_name::SpriteName;
 use crate::session::{Session, Source};
 use crate::tools::Page;
 use crate::tools::graphics::list::{list_flats_run, list_patches_run, patch_row};
@@ -288,8 +288,8 @@ fn sprite_helpers_group_only_grammar_matching_names() {
     );
     let bad = row_named(&directory, "BADNAME");
     assert_eq!(patch_row(bad, &pnames).format, "unknown", "five bytes");
-    assert!(parse_sprite_name("BADNAME").is_none(), "not a sprite name");
-    let parsed = parse_sprite_name("TROOA2A8").expect("this one is");
+    assert!(SpriteName::parse("BADNAME").is_none(), "not a sprite name");
+    let parsed = SpriteName::parse("TROOA2A8").expect("this one is");
     let mut groups = Groups::new();
     collect_sprite(&mut groups, &parsed, "TROOA2A8", Some("PLAY"));
     assert!(groups.is_empty(), "the prefix filter drops it");

@@ -18,14 +18,15 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::defs::ThingDef;
 use crate::error::CyberError;
+use crate::gfx::sprite_name::MAX_ROTATION;
 use crate::session::Session;
 use crate::state::AppState;
+use crate::tools::graphics::DEFAULT_ROTATION;
 use crate::tools::graphics::get::parse_frame;
 use crate::tools::graphics::picture::{
     ImageOptions, ImageParams, Rendered, publish_image, render_patch,
 };
 use crate::tools::graphics::resolve::load_sprite;
-use crate::tools::graphics::{DEFAULT_ROTATION, MAX_ROTATION};
 use crate::wad::name::LumpName;
 
 /// Arguments for [`Cyberdemon::get_thing_sprite`].

@@ -138,9 +138,16 @@ src/
                   loops) and `gl/tests/records.rs` (the record layout
                   and the refusals).
   music.rs        Music core module root: re-exports the converter and writer.
-  music/          Music building blocks (no MCP concerns): `music/midi_write.rs`
-                  the type-0 SMF writer (`MidiWriter`, big-endian chunks,
-                  variable-length quantities in both directions),
+  music/          Music building blocks (no MCP concerns): `music/consts.rs`
+                  the shared MUS and MIDI vocabulary the two converters mirror
+                  across (the lump magic, header length and score-word
+                  offsets, the packed descriptor's flags, masks and event type
+                  codes, the channel and percussion tables, the MUS<->MIDI
+                  controller lookups in both directions, the 140 Hz tempo and
+                  the SMF chunk ids, status and meta bytes),
+                  `music/midi_write.rs` the type-0 SMF writer (`MidiWriter`,
+                  big-endian chunks through `wad::bytes`, variable-length
+                  quantities in both directions),
                   `music/midi_read.rs` the type-0/type-1 SMF reader
                   (`parse_midi`: running status, track merge to absolute
                   ticks), `music/mus2mid.rs` Doom MUS music lump ("D_*") to
@@ -151,8 +158,11 @@ src/
                   `Dropped` counts), with that module's tests in
                   `music/mid2mus/tests.rs` (the hand-built SMF and MUS
                   helpers) plus `music/mid2mus/tests/convert.rs` (the
-                  whole-conversion checks), and `music/sniff.rs` the
-                  magic-based `sniff_music` container identification.
+                  whole-conversion checks) and
+                  `music/mid2mus/tests/golden.rs` (both directions pinned
+                  byte for byte as a closed MUS<->MIDI round trip), and
+                  `music/sniff.rs` the magic-based `sniff_music` container
+                  identification.
   defs.rs         Definitions core module root: the game definitions registry
                   entry point, the Boom generalized/sector bit decoders, the
                   session-aware overlay entry (`session_definitions`) and
@@ -952,8 +962,10 @@ src/
                   node-data node sets, the superseded `UDMF` run, the
                   texture-def pair and the `UDMF` block members) and the
                   constants' byte test,
-                  `wad/bytes.rs` bounds-checked little-endian `Reader` and
-                  `Writer` plus the checked usize/u32 casts,
+                  `wad/bytes.rs` bounds-checked `Reader` and `Writer` —
+                  little-endian by default, big-endian through the `_be`
+                  reads and writes every PNG chunk, SMF field and grAb offset
+                  shares — plus the checked usize/u32 casts,
                   `wad/archive.rs` the `Wad` archive with parsing,
                   serialization (canonical and payload-deduplicating),
                   lookup, the one `put_global` global-lump write every
@@ -1597,7 +1609,10 @@ tests/
                     usability pass over hints and descriptions in
                     usability.rs; shared_math.rs: the guard that the box
                     window, the tap blend and the `Rec. 601` luminance
-                    weights are each defined once under `src/`; docs.rs:
+                    weights are each defined once under `src/`;
+                    single_owner.rs: the guard that a big-endian byte helper
+                    is defined only in `wad/bytes.rs` and the shared MUS and
+                    MIDI vocabulary only in `music/consts.rs`; docs.rs:
                     skill/ and README.md layout and tool/doc consistency
                     checks, the guide and `README.md`
                     line budgets and the 1000-line budget on every Rust file
@@ -1636,7 +1651,9 @@ The server is the reflex, the calling model is the judgment: tools carry out for
 The repo's deny list goes well beyond `pedantic`. Accepted fixes (tests are exempt from unwrap/expect/panic/indexing/print, but not from arithmetic rules):
 
 - No bare `+ - * / % <<` on integers or custom types → `checked_*` (treat `None` as an error), `saturating_*`, `wrapping_*`. No float arithmetic at all.
-- No `as` casts → `try_from`/`from`. Byte order is explicit: only `to_le_bytes`/`from_le_bytes`.
+- No `as` casts → `try_from`/`from`. Byte order is explicit: only `to_le_bytes`/`from_le_bytes`,
+  and a big-endian field is read or written through `wad::bytes`' `_be` methods, never with a
+  hand-rolled reversal.
 - No `v[i]`/`v[a..b]` in production code → `.get()`, `.split_at_checked()`, `.chunks_exact()`, iterators.
 - No `unwrap`/`expect`/`panic!`/`todo!`/`unreachable!` in production; never print (stdout is the MCP channel).
 - Doc comments on every item, including private fields and functions.

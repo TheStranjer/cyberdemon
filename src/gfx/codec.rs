@@ -11,13 +11,12 @@ use image::{ExtendedColorType, ImageEncoder as _, ImageError, ImageFormat, Image
 
 use crate::error::CyberError;
 use crate::gfx::MAX_DIMENSION;
-use crate::gfx::grab::{self, PNG_SIGNATURE, next_chunk, read_u32_be};
+use crate::gfx::grab::{self, PNG_SIGNATURE, next_chunk};
 use crate::gfx::image::RgbaImage;
+use crate::wad::bytes::Reader;
 
 /// The chunk type of the mandatory `PNG` header chunk.
 const IHDR_TYPE: [u8; 4] = *b"IHDR";
-/// Bytes of one `IHDR` dimension field.
-const IHDR_FIELD_BYTES: usize = 4;
 
 /// Decoder resource limits: [`MAX_DIMENSION`] per edge, no allocation cap
 /// beyond the shape that implies.
@@ -115,8 +114,10 @@ pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     if kind != IHDR_TYPE {
         return None;
     }
-    let (width, height) = data.split_at_checked(IHDR_FIELD_BYTES)?;
-    Some((read_u32_be(width)?, read_u32_be(height)?))
+    let mut fields = Reader::new(data);
+    let width = fields.read_u32_be().ok()?;
+    let height = fields.read_u32_be().ok()?;
+    Some((width, height))
 }
 
 /// The `Doom` lump format `bytes` sniff as, or `None` when they are no

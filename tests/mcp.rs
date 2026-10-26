@@ -47,7 +47,8 @@
 //! `features/stairs`, `features/lift`, `features/teleporter` and
 //! `features/place` topic tests, the linedef/thing flag-name
 //! glossary guard in `flag_names`, the shared box-window, tap-blend and
-//! luminance-weight duplication guard in `shared_math`, the
+//! luminance-weight duplication guard in `shared_math`, the big-endian-helper
+//! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
@@ -213,6 +214,9 @@ mod session;
 #[cfg(test)]
 #[path = "mcp/shared_math.rs"]
 mod shared_math;
+#[cfg(test)]
+#[path = "mcp/single_owner.rs"]
+mod single_owner;
 #[cfg(test)]
 #[path = "mcp/sketch.rs"]
 mod sketch;

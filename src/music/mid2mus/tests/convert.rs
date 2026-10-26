@@ -4,9 +4,20 @@
 //! reports for what `MUS` cannot carry.
 
 use super::{Ev, chunk, convert, decode, encode, header, lump, smf};
+use crate::music::consts::{SMF_HEADER_ID, SMF_TRACK_ID};
 use crate::music::mid2mus::{Score, midi_to_mus};
-use crate::music::midi_write::put_be_u16;
 use crate::music::mus2mid::mus_to_midi;
+use crate::wad::bytes::Writer;
+
+/// A header body declaring `format` and `tracks` tracks at 70 ticks per
+/// quarter, big-endian as `SMF` stores the three fields.
+fn header_body(format: u16, tracks: u16) -> Vec<u8> {
+    let mut body = Writer::new();
+    body.put_u16_be(format);
+    body.put_u16_be(tracks);
+    body.put_u16_be(70_u16);
+    body.into_inner()
+}
 
 #[test]
 fn mus_to_midi_to_mus_reproduces_the_score() {
@@ -314,11 +325,7 @@ fn a_score_past_the_header_limit_exceeds_it() {
 
 #[test]
 fn parse_errors_pass_through() {
-    let mut header = Vec::new();
-    put_be_u16(&mut header, 2_u16); // format 2
-    put_be_u16(&mut header, 0_u16);
-    put_be_u16(&mut header, 70_u16);
-    let unsupported = midi_to_mus(&chunk(*b"MThd", &header)).expect_err("format 2");
+    let unsupported = midi_to_mus(&chunk(SMF_HEADER_ID, &header_body(2, 0))).expect_err("format 2");
     assert_eq!(unsupported.code(), "unsupported", "format 2 code");
     let truncated =
         midi_to_mus(&chunk(*b"MThd", &[0, 0, 0, 1, 0, 46])).expect_err("a header alone");
@@ -327,18 +334,14 @@ fn parse_errors_pass_through() {
 
 #[test]
 fn merged_tracks_keep_time_order_in_the_score() {
-    let mut header = Vec::new();
-    put_be_u16(&mut header, 1_u16); // format 1
-    put_be_u16(&mut header, 2_u16);
-    put_be_u16(&mut header, 70_u16);
-    let mut out = chunk(*b"MThd", &header);
+    let mut out = chunk(SMF_HEADER_ID, &header_body(1, 2));
     for track in [
         &[0x46_u8, 0x90, 0x3C, 0x7F][..], // plays at tick 70
         &[0x00_u8, 0x91, 0x40, 0x7F][..], // plays at tick 0
     ] {
         let mut body = track.to_vec();
         body.extend_from_slice(&[0x00, 0xFF, 0x2F, 0x00]);
-        out.extend_from_slice(&chunk(*b"MTrk", &body));
+        out.extend_from_slice(&chunk(SMF_TRACK_ID, &body));
     }
     let conversion = midi_to_mus(&out).expect("a format-1 file converts");
     assert_eq!(

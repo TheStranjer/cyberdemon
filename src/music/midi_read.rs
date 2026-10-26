@@ -4,19 +4,21 @@
 //! into one list of [`TimedEvent`]s at absolute ticks, honouring running
 //! status. `SysEx` and any meta event other than tempo and end of track are
 //! consumed and dropped; [`crate::music::midi_write::read_vlq`] reads the
-//! variable-length quantities. A non-zero `MidiFile::division` is required,
-//! so the tick to time conversion downstream never divides by zero.
+//! variable-length quantities and the shared `consts` module names every
+//! chunk id, status byte and meta type this walks over. `SMF` fields are
+//! big-endian, so they come off [`crate::wad::bytes::Reader`]'s `_be`
+//! methods. A non-zero `MidiFile::division` is required, so the tick to time
+//! conversion downstream never divides by zero.
 
 use crate::error::CyberError;
+use crate::music::consts::{
+    CHANNEL_MASK, MIDI_CHANNEL_PRESSURE, MIDI_CONTROL_CHANGE, MIDI_KEY_PRESSURE,
+    MIDI_META_END_OF_TRACK, MIDI_META_STATUS, MIDI_META_TEMPO, MIDI_NOTE_OFF, MIDI_NOTE_ON,
+    MIDI_PROGRAM_CHANGE, SMF_HEADER_BODY_LEN, SMF_HEADER_ID, SMF_TRACK_ID, TEMPO_SHIFTS,
+};
 use crate::music::midi_write::read_vlq;
 use crate::wad::bytes::{Reader, u32_to_usize};
 
-/// Chunk id of the `SMF` header chunk.
-const HEADER_ID: [u8; 4] = *b"MThd";
-/// Chunk id of a track chunk.
-const TRACK_ID: [u8; 4] = *b"MTrk";
-/// Body length of the `SMF` header chunk: format, track count, division.
-const HEADER_BODY_LEN: u32 = 6_u32;
 /// Format code of a type-1 file: one conductor track and one per part.
 const FORMAT_TYPE1: u16 = 1_u16;
 /// Set on a division whose high bit picks the `SMPTE` frame encoding.
@@ -27,34 +29,13 @@ const STATUS_BIT: u8 = 0x80_u8;
 const SYSTEM_STATUS: u8 = 0xF0_u8;
 /// The message kind bits of a channel status byte.
 const KIND_MASK: u8 = 0xF0_u8;
-/// The channel number bits of a channel status byte.
-const CHANNEL_MASK: u8 = 0x0F_u8;
-/// Status byte of a note off event.
-const MIDI_NOTE_OFF: u8 = 0x80_u8;
-/// Status byte of a note on event.
-const MIDI_NOTE_ON: u8 = 0x90_u8;
-/// Status byte of a polyphonic key pressure event.
-const MIDI_KEY_PRESSURE: u8 = 0xA0_u8;
-/// Status byte of a control change event.
-const MIDI_CONTROL_CHANGE: u8 = 0xB0_u8;
-/// Status byte of a program change event: one data byte.
-const MIDI_PROGRAM_CHANGE: u8 = 0xC0_u8;
-/// Status byte of a channel pressure event: one data byte.
-const MIDI_CHANNEL_PRESSURE: u8 = 0xD0_u8;
-/// Status byte that introduces a meta event.
-const META_STATUS: u8 = 0xFF_u8;
-/// Meta type of a tempo setting.
-const META_TEMPO: u8 = 0x51_u8;
-/// Meta type of the end of track.
-const META_END_OF_TRACK: u8 = 0x2F_u8;
-/// Payload length of a tempo meta event: 24 bits of microseconds.
-const TEMPO_DATA_LEN: usize = 3_usize;
 /// The low seven bits of a data byte.
 const SEVEN_BITS: u8 = 0x7F_u8;
 /// Shift of the high digit of a 14-bit pitch bend value.
 const BEND_HIGH_SHIFT: u32 = 7_u32;
-/// Shifts that pick the three bytes of a 24-bit big-endian tempo, top first.
-const TEMPO_SHIFTS: [u32; 3] = [16_u32, 8_u32, 0_u32];
+/// Bytes a tempo payload holds, counted from the shared shifts that pick
+/// them out.
+const TEMPO_DATA_LEN: usize = TEMPO_SHIFTS.len();
 
 /// One `SMF` event with its absolute position in the merged file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,25 +144,25 @@ pub fn parse_midi(bytes: &[u8]) -> Result<MidiFile, CyberError> {
 /// Checks the `MThd` chunk and returns the declared track count and division.
 fn read_header(reader: &mut Reader<'_>) -> Result<(u16, u16), CyberError> {
     let id = reader.read_array::<4>()?;
-    if id != HEADER_ID {
+    if id != SMF_HEADER_ID {
         return Err(CyberError::Format(
             "not a Standard MIDI File: the data does not start with 'MThd'; export the score as a .mid file".to_owned(),
         ));
     }
-    let body_len = read_be_u32(reader)?;
-    if body_len < HEADER_BODY_LEN {
+    let body_len = reader.read_u32_be()?;
+    if body_len < SMF_HEADER_BODY_LEN {
         return Err(CyberError::Format(format!(
-            "MIDI header body is {body_len} bytes, shorter than the {HEADER_BODY_LEN} bytes it needs"
+            "MIDI header body is {body_len} bytes, shorter than the {SMF_HEADER_BODY_LEN} bytes it needs"
         )));
     }
-    let format = read_be_u16(reader)?;
+    let format = reader.read_u16_be()?;
     if format > FORMAT_TYPE1 {
         return Err(CyberError::Unsupported(format!(
             "MIDI format {format} is not supported; convert the file to format 0 or 1 first"
         )));
     }
-    let track_count = read_be_u16(reader)?;
-    let division = read_be_u16(reader)?;
+    let track_count = reader.read_u16_be()?;
+    let division = reader.read_u16_be()?;
     if division & SMPTE_FLAG != 0 {
         return Err(CyberError::Unsupported(
             "SMPTE time division is not supported; re-export the file with ticks per quarter note"
@@ -193,7 +174,7 @@ fn read_header(reader: &mut Reader<'_>) -> Result<(u16, u16), CyberError> {
             "MIDI division is 0 ticks per quarter note; no time can be measured with it".to_owned(),
         ));
     }
-    let extra = usize::try_from(body_len.saturating_sub(HEADER_BODY_LEN)).unwrap_or(usize::MAX);
+    let extra = usize::try_from(body_len.saturating_sub(SMF_HEADER_BODY_LEN)).unwrap_or(usize::MAX);
     reader.read_bytes(extra)?;
     Ok((track_count, division))
 }
@@ -214,13 +195,13 @@ fn read_tracks(
 /// Consumes one `MTrk` header and returns its declared body.
 fn read_track_chunk<'reader>(reader: &mut Reader<'reader>) -> Result<&'reader [u8], CyberError> {
     let id = reader.read_array::<4>()?;
-    if id != TRACK_ID {
+    if id != SMF_TRACK_ID {
         return Err(CyberError::Format(
             "expected an 'MTrk' chunk; the file is truncated or not a Standard MIDI File"
                 .to_owned(),
         ));
     }
-    let body_len = read_be_u32(reader)?;
+    let body_len = reader.read_u32_be()?;
     let count = u32_to_usize(body_len)?;
     reader.read_bytes(count)
 }
@@ -348,7 +329,7 @@ fn system_event(
 ) -> Result<Option<MidiEvent>, CyberError> {
     *running = None;
     match status {
-        META_STATUS => meta_event(reader),
+        MIDI_META_STATUS => meta_event(reader),
         0xF0_u8 | 0xF7_u8 => {
             let length = usize::try_from(read_vlq(reader)?).unwrap_or(usize::MAX);
             reader.read_bytes(length)?;
@@ -367,7 +348,7 @@ fn meta_event(reader: &mut Reader<'_>) -> Result<Option<MidiEvent>, CyberError> 
     let length = usize::try_from(read_vlq(reader)?).unwrap_or(usize::MAX);
     let data = reader.read_bytes(length)?;
     match kind {
-        META_TEMPO => {
+        MIDI_META_TEMPO => {
             let bytes: [u8; TEMPO_DATA_LEN] = data.try_into().map_err(|error| {
                 CyberError::Format(format!(
                     "tempo meta event carries {length} bytes, not the {TEMPO_DATA_LEN} it needs: {error}"
@@ -377,7 +358,7 @@ fn meta_event(reader: &mut Reader<'_>) -> Result<Option<MidiEvent>, CyberError> 
                 microseconds: tempo_microseconds(bytes),
             }))
         }
-        META_END_OF_TRACK => Ok(Some(MidiEvent::EndOfTrack)),
+        MIDI_META_END_OF_TRACK => Ok(Some(MidiEvent::EndOfTrack)),
         _ => Ok(None),
     }
 }
@@ -393,47 +374,27 @@ fn tempo_microseconds(bytes: [u8; TEMPO_DATA_LEN]) -> u32 {
         })
 }
 
-/// Reads a big-endian `u16` by reversing its bytes for `from_le_bytes`.
-fn read_be_u16(reader: &mut Reader<'_>) -> Result<u16, CyberError> {
-    let mut bytes = reader.read_array::<2>()?;
-    bytes.reverse();
-    Ok(u16::from_le_bytes(bytes))
-}
-
-/// Reads a big-endian `u32` by reversing its bytes for `from_le_bytes`.
-fn read_be_u32(reader: &mut Reader<'_>) -> Result<u32, CyberError> {
-    let mut bytes = reader.read_array::<4>()?;
-    bytes.reverse();
-    Ok(u32::from_le_bytes(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{MidiEvent, parse_midi};
-    use crate::music::midi_write::{put_be_u16, put_be_u32};
+    use crate::wad::bytes::Writer;
 
     /// A chunk: its id, big-endian body length, then the body.
     fn chunk(id: [u8; 4], body: &[u8]) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&id);
-        put_be_u32(
-            &mut out,
-            u32::try_from(body.len()).expect("hand-built chunks are short"),
-        );
-        out.extend_from_slice(body);
-        out
+        let mut out = Writer::new();
+        out.put_bytes(&id);
+        out.put_u32_be(u32::try_from(body.len()).expect("hand-built chunks are short"));
+        out.put_bytes(body);
+        out.into_inner()
     }
 
     /// A complete file: a header for `format` and these track bodies.
     fn smf(format: u16, division: u16, tracks: &[&[u8]]) -> Vec<u8> {
-        let mut body = Vec::new();
-        put_be_u16(&mut body, format);
-        put_be_u16(
-            &mut body,
-            u16::try_from(tracks.len()).expect("a few tracks"),
-        );
-        put_be_u16(&mut body, division);
-        let mut out = chunk(*b"MThd", &body);
+        let mut header = Writer::new();
+        header.put_u16_be(format);
+        header.put_u16_be(u16::try_from(tracks.len()).expect("a few tracks"));
+        header.put_u16_be(division);
+        let mut out = chunk(*b"MThd", &header.into_inner());
         for track in tracks {
             out.extend_from_slice(&chunk(*b"MTrk", track));
         }

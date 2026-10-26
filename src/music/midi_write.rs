@@ -9,18 +9,19 @@
 //! `MUS` delays use the same encoding, so [`crate::music::mus2mid`] reads
 //! with the latter.
 //!
-//! `SMF` is big-endian and the crate denies `to_be_bytes`, so multi-byte
-//! values are written by reversing their little-endian byte arrays.
+//! The chunk ids, meta status bytes and tempo field the writer lays down are
+//! the shared `SMF` vocabulary of [`crate::music`]'s `consts` module, which
+//! [`crate::music::midi_read`] parses against, and the big-endian widths go
+//! through [`Writer`]'s `_be` methods: the one place the crate spells that
+//! byte order.
 
 use crate::error::CyberError;
-use crate::wad::bytes::{Reader, usize_to_u32};
+use crate::music::consts::{
+    MIDI_META_END_OF_TRACK, MIDI_META_STATUS, MIDI_META_TEMPO, MIDI_TEMPO_DATA_LEN,
+    SMF_HEADER_BODY_LEN, SMF_HEADER_ID, SMF_TRACK_ID, TEMPO_SHIFTS,
+};
+use crate::wad::bytes::{Reader, Writer, usize_to_u32};
 
-/// Chunk id of the `SMF` header chunk.
-const HEADER_ID: [u8; 4] = *b"MThd";
-/// Chunk id of a track chunk.
-const TRACK_ID: [u8; 4] = *b"MTrk";
-/// Body length of the `SMF` header chunk: format, track count, division.
-const HEADER_BODY_LEN: u32 = 6_u32;
 /// Bytes before a chunk payload: the id and its 32-bit length.
 const CHUNK_PREFIX_LEN: usize = 8;
 /// Bytes of the whole header chunk: id, length and body.
@@ -29,14 +30,6 @@ const HEADER_CHUNK_LEN: usize = 14;
 const FORMAT_TYPE0: u16 = 0_u16;
 /// A type-0 file holds exactly one track.
 const TYPE0_TRACKS: u16 = 1_u16;
-/// Status byte that introduces a meta event.
-const META_STATUS: u8 = 0xFF_u8;
-/// Meta type of a tempo setting.
-const META_TEMPO: u8 = 0x51_u8;
-/// Meta type of the end of track.
-const META_END_OF_TRACK: u8 = 0x2F_u8;
-/// Payload length of a tempo meta event: 24 bits of microseconds.
-const TEMPO_DATA_LEN: u8 = 3_u8;
 /// Payload length of an end-of-track meta event: none.
 const END_OF_TRACK_DATA_LEN: u8 = 0_u8;
 /// Bits per `VLQ` digit.
@@ -51,8 +44,6 @@ const VLQ_MAX_BYTES: usize = 4;
 pub const MAX_VLQ_VALUE: u32 = 0x0FFF_FFFF_u32;
 /// The low eight bits of a wider value.
 const LOW_BYTE: u32 = 0xFF_u32;
-/// Shifts that pick the three bytes of a 24-bit big-endian value, top first.
-const U24_SHIFTS: [u32; 3] = [16_u32, 8_u32, 0_u32];
 
 /// The byte of `value` starting at bit `shift`.
 fn byte_at(value: u32, shift: u32) -> u8 {
@@ -64,21 +55,6 @@ fn byte_at(value: u32, shift: u32) -> u8 {
 fn digit_at(value: u32, shift: u32) -> u8 {
     let bits = value.checked_shr(shift).unwrap_or(0) & u32::from(VLQ_DIGIT);
     u8::try_from(bits).unwrap_or(0_u8)
-}
-
-/// Appends `value` as a big-endian `u16` by reversing its little-endian
-/// bytes.
-pub(crate) fn put_be_u16(out: &mut Vec<u8>, value: u16) {
-    let mut word = value.to_le_bytes();
-    word.reverse();
-    out.extend_from_slice(&word);
-}
-
-/// Appends `value` as a big-endian `u32`.
-pub(crate) fn put_be_u32(out: &mut Vec<u8>, value: u32) {
-    let mut word = value.to_le_bytes();
-    word.reverse();
-    out.extend_from_slice(&word);
 }
 
 /// How many bytes `value` needs as a `VLQ`, at most [`VLQ_MAX_BYTES`].
@@ -187,7 +163,7 @@ impl MidiWriter {
     pub fn put_meta(&mut self, delta: u32, kind: u8, data: &[u8]) -> Result<(), CyberError> {
         let length = usize_to_u32(data.len(), "MIDI meta event")?;
         write_vlq(&mut self.body, delta);
-        self.body.push(META_STATUS);
+        self.body.push(MIDI_META_STATUS);
         self.body.push(kind);
         write_vlq(&mut self.body, length);
         self.body.extend_from_slice(data);
@@ -199,17 +175,17 @@ impl MidiWriter {
     #[inline]
     pub fn put_tempo(&mut self, delta: u32, microseconds: u32) {
         write_vlq(&mut self.body, delta);
-        self.body.push(META_STATUS);
-        self.body.push(META_TEMPO);
-        self.body.push(TEMPO_DATA_LEN);
+        self.body.push(MIDI_META_STATUS);
+        self.body.push(MIDI_META_TEMPO);
+        self.body.push(MIDI_TEMPO_DATA_LEN);
         self.body.extend_from_slice(&tempo_bytes(microseconds));
     }
 
     /// Appends the end-of-track meta event at `delta`.
     fn put_end_of_track(&mut self, delta: u32) {
         write_vlq(&mut self.body, delta);
-        self.body.push(META_STATUS);
-        self.body.push(META_END_OF_TRACK);
+        self.body.push(MIDI_META_STATUS);
+        self.body.push(MIDI_META_END_OF_TRACK);
         self.body.push(END_OF_TRACK_DATA_LEN);
     }
 
@@ -230,30 +206,28 @@ impl MidiWriter {
             .checked_add(CHUNK_PREFIX_LEN)
             .and_then(|head| head.checked_add(body.len()))
             .unwrap_or(0_usize);
-        let mut out = Vec::with_capacity(capacity);
-        out.extend_from_slice(&HEADER_ID);
-        put_be_u32(&mut out, HEADER_BODY_LEN);
-        put_be_u16(&mut out, FORMAT_TYPE0);
-        put_be_u16(&mut out, TYPE0_TRACKS);
-        put_be_u16(&mut out, division);
-        out.extend_from_slice(&TRACK_ID);
-        put_be_u32(&mut out, length);
-        out.extend_from_slice(&body);
-        Ok(out)
+        let mut out = Writer::with_capacity(capacity);
+        out.put_bytes(&SMF_HEADER_ID);
+        out.put_u32_be(SMF_HEADER_BODY_LEN);
+        out.put_u16_be(FORMAT_TYPE0);
+        out.put_u16_be(TYPE0_TRACKS);
+        out.put_u16_be(division);
+        out.put_bytes(&SMF_TRACK_ID);
+        out.put_u32_be(length);
+        out.put_bytes(&body);
+        Ok(out.into_inner())
     }
 }
 
 /// `microseconds` as the three big-endian bytes a tempo meta event stores.
 fn tempo_bytes(microseconds: u32) -> [u8; 3] {
-    U24_SHIFTS.map(|shift| byte_at(microseconds, shift))
+    TEMPO_SHIFTS.map(|shift| byte_at(microseconds, shift))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MidiWriter, U24_SHIFTS, digit_at, overlong_vlq, put_be_u16, put_be_u32, read_vlq,
-        tempo_bytes, vlq_len, write_vlq,
-    };
+    use super::{MidiWriter, digit_at, overlong_vlq, read_vlq, tempo_bytes, vlq_len, write_vlq};
+    use crate::music::midi_read::parse_midi;
     use crate::wad::bytes::Reader;
 
     #[test]
@@ -329,18 +303,6 @@ mod tests {
     }
 
     #[test]
-    fn big_endian_writers_reverse_the_little_endian_bytes() {
-        let mut words = Vec::new();
-        put_be_u16(&mut words, 0x0046_u16);
-        put_be_u32(&mut words, 0x0000_0006_u32);
-        assert_eq!(
-            words,
-            vec![0x00, 0x46, 0x00, 0x00, 0x00, 0x06],
-            "SMF chunk fields"
-        );
-    }
-
-    #[test]
     fn tempo_bytes_are_the_documented_three_bytes_big_endian() {
         assert_eq!(
             tempo_bytes(500_000),
@@ -377,15 +339,28 @@ mod tests {
         expected.extend_from_slice(b"MTrk");
         expected.extend_from_slice(&[0x00, 0x00, 0x00, 0x18]);
         expected.extend_from_slice(&body);
+        let rendered = midi.into_type0(70, 128).expect("a short track");
         assert_eq!(
-            midi.into_type0(70, 128).expect("a short track"),
-            expected,
+            rendered, expected,
             "the whole type-0 file, with the end of track queued 128 ticks out"
         );
     }
 
     #[test]
-    fn u24_shifts_read_a_big_endian_field_top_first() {
-        assert_eq!(U24_SHIFTS, [16_u32, 8_u32, 0_u32], "byte order");
+    fn a_rendered_file_parses_back_with_the_shared_reader() {
+        let mut midi = MidiWriter::new();
+        midi.put_tempo(0, 500_000);
+        midi.put_event(10, 0x91, &[0x3C, 0x40]);
+        let file = parse_midi(
+            &midi
+                .into_type0(70, 5)
+                .expect("a short track renders a whole file"),
+        )
+        .expect("what the writer renders, the reader reads");
+        assert_eq!(
+            file.division, 70,
+            "the big-endian division field round trips"
+        );
+        assert_eq!(file.events.len(), 3, "tempo, note and end of track");
     }
 }

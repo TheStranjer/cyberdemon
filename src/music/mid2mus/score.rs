@@ -14,16 +14,16 @@
 //! [`midi_to_mus`]: super::midi_to_mus
 
 use super::{
-    Body, KIND_CONTROL, KIND_NOTE, KIND_SCORE_END, LAST_EVENT_FLAG, MAX_VALUE, MELODIC_CHANNELS,
-    PERCUSSION_INSTRUMENT_BASE, PROGRAM_CONTROLLER, Placed, VALUE_COUNT, VOLUME_FLAG, bend_byte,
-    control_body, descriptor,
+    Body, PERCUSSION_INSTRUMENT_BASE, Placed, VALUE_COUNT, bend_byte, control_body, descriptor,
 };
 use crate::error::CyberError;
+use crate::music::consts::{
+    CHANNEL_COUNT, DEFAULT_VOLUME, EVENT_CONTROL, EVENT_NOTE, EVENT_SCORE_END, LAST_EVENT_FLAG,
+    MAX_VALUE, MELODIC_CHANNELS, MIDI_PERCUSSION_CHANNEL, MUS_PERCUSSION_CHANNEL,
+    PROGRAM_CONTROLLER, VOLUME_FLAG, ZERO_VALUE,
+};
 use crate::music::midi_read::MidiEvent;
 use crate::music::midi_write::{MAX_VLQ_VALUE, write_vlq};
-use crate::music::mus2mid::{
-    CHANNEL_COUNT, DEFAULT_VOLUME, MIDI_PERCUSSION_CHANNEL, MUS_PERCUSSION_CHANNEL, ZERO_VALUE,
-};
 
 /// Builds the `MUS` event stream: channel mapping, volumes and delays.
 pub(super) struct Score {
@@ -136,7 +136,7 @@ impl Score {
         if let Some(tick) = end_tick {
             self.close(tick)?;
         }
-        self.bytes.push(descriptor(KIND_SCORE_END, ZERO_VALUE));
+        self.bytes.push(descriptor(EVENT_SCORE_END, ZERO_VALUE));
         Ok(())
     }
 
@@ -180,10 +180,10 @@ impl Score {
     /// Maps the channel, resolves a note's volume and appends the event.
     fn write(&mut self, placed: &Placed, midi: u8, mut body: Body) -> Result<(), CyberError> {
         let mus = self.channel(midi)?;
-        if body.kind == KIND_NOTE {
+        if body.kind == EVENT_NOTE {
             self.apply_volume(mus, &mut body);
         }
-        if body.kind == KIND_CONTROL
+        if body.kind == EVENT_CONTROL
             && body.data1 == PROGRAM_CONTROLLER
             && mus != MUS_PERCUSSION_CHANNEL
         {

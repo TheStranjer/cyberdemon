@@ -109,9 +109,17 @@ pub(super) fn request_for_height(height: Option<u32>) -> SpriteRequest {
     request(&call)
 }
 
-/// An `InvalidArgument` carrying one of the step failures.
+/// The refusal one automatic cleanup step reports when the picture is left
+/// with no content: the typed [`CyberError::Emptied`] marker
+/// [`trim`](crate::gfx::ops::alpha::trim) raises, carrying `text`.
 pub(super) fn trim_error(text: &str) -> CyberError {
-    CyberError::InvalidArgument(text.to_owned())
+    CyberError::Emptied(Box::new(CyberError::invalid(text)))
+}
+
+/// Any other step failure: a plain `invalid_argument` the automatic rule
+/// has nothing to reword.
+pub(super) fn step_error(text: &str) -> CyberError {
+    CyberError::invalid(text)
 }
 
 /// The `white_with_red` raster's pixel at `(x, y)`: red inside the

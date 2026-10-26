@@ -415,7 +415,9 @@ that fill the opening, too-short
 boundaries…) already name the offending id; the tool prefixes them
 with the wire index — `rooms[0]: room 'a' has a 0x64 rectangle; both
 edges must be positive`. Feature rows name `features[i]`
-(`features[0]: exit feature names unknown room 'ghost'`), and thing
+(`features[0]: exit feature names unknown room 'ghost'`, and a switch
+whose `opens` names no wired remote door:
+`features[i]: switch opens d1 which is not a remote door`), and thing
 rows fail the same way, naming `things[i]`, `things[i].room`,
 `things[i].skills` or `player_start`.
 

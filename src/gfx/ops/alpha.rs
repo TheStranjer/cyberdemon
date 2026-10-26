@@ -77,16 +77,23 @@ fn max_channel_delta(pixel: [u8; 4], key: [u8; 4]) -> u32 {
 
 /// Crops to the bounding box of pixels reaching the alpha threshold and
 /// re-pads it with transparency.
+///
+/// A picture with no pixel reaching `alpha_threshold` has nothing to crop:
+/// the refusal comes back wrapped in [`CyberError::Emptied`], the typed
+/// outcome a caller branches on with [`CyberError::is_emptied`] when it
+/// needs to say *why* the picture was empty in its own words.
 pub(crate) fn trim(
     img: &RgbaImage,
     index: usize,
     spec: &TrimSpec,
 ) -> Result<(RgbaImage, Value), CyberError> {
     let Some((x0, y0, x1, y1)) = content_bounds(img, spec.alpha_threshold) else {
-        return Err(CyberError::InvalidArgument(format!(
-            "ops[{index}] nothing left after trim: no pixel reaches alpha {}",
-            spec.alpha_threshold
-        )));
+        return Err(CyberError::Emptied(Box::new(CyberError::invalid(
+            &format!(
+                "ops[{index}] nothing left after trim: no pixel reaches alpha {}",
+                spec.alpha_threshold
+            ),
+        ))));
     };
     let content_w = x1.saturating_sub(x0).saturating_add(1);
     let content_h = y1.saturating_sub(y0).saturating_add(1);
@@ -343,7 +350,15 @@ mod tests {
             padding: 0,
         };
         let empty = RgbaImage::new(2, 2, vec![0; 16]).expect("2x2 valid");
-        let empty_text = rejection(trim(&empty, 1, &spec));
+        let error = trim(&empty, 1, &spec).expect_err("nothing survives");
+        assert!(error.is_emptied(), "the typed emptied outcome: {error:?}");
+        assert_eq!(error.code(), "invalid_argument", "the code stands");
+        assert_eq!(
+            error.hint(),
+            crate::error::default_hint("invalid_argument"),
+            "the marker adds no hint of its own"
+        );
+        let empty_text = error.message();
         assert!(
             empty_text.contains("ops[1]") && empty_text.contains("nothing left after trim"),
             "clear empty-trim error: {empty_text}"

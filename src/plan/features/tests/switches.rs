@@ -13,6 +13,7 @@ use super::{
     BAND, TAG_ONE, door, dress, opening, rect_room, refuse_features, two_rooms, wired,
     wired_dressed,
 };
+use crate::error::PlanRef;
 use crate::geom::Pt;
 use crate::plan::model::{
     Connection, ConnectionKind, DoorStyle, ExitStyle, Feature, Plan, Room, Shape, Side,
@@ -158,6 +159,11 @@ fn a_switch_on_a_plain_door_is_refused() {
     let mut plan = two_rooms(vec![door("d1", DoorStyle::Normal, (128_i64, 32_i64))]);
     plan.features = vec![switch_feature("a", "d1", Some(Side::West), false)];
     let error = refuse_features(&plan);
+    assert_eq!(
+        error.plan_ref(),
+        Some(PlanRef::feature("d1")),
+        "the switch row carries the reference it cannot fire"
+    );
     assert!(
         error
             .to_string()
@@ -191,7 +197,13 @@ fn a_feature_in_a_painted_over_room_names_it() {
         wall_thickness: 16_i64,
     };
     plan.validate().expect("the plan validates");
-    let message = refuse_features(&plan).to_string();
+    let error = refuse_features(&plan);
+    assert_eq!(
+        error.plan_ref(),
+        Some(PlanRef::room("a")),
+        "the vanished room is the element to move"
+    );
+    let message = error.to_string();
     assert!(
         message.contains("room 'a'") && message.contains("painted over"),
         "the refusal names the vanished room: {message}"

@@ -10,7 +10,7 @@
 //!
 //! [`build_lift`]: crate::wad::map::features::build_lift
 
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{Connection, ConnectionKind, Feature, Plan};
 use crate::wad::map::features::{LiftPlatform, LiftSpec, build_lift};
@@ -78,7 +78,8 @@ fn single_platform_sector(sectors: &[usize], room: &str) -> Result<usize, CyberE
              one platform; give the room a single sector, or lift one of them directly \
              with add_lift",
             many.len()
-        ))),
+        ))
+        .at_plan(PlanRef::room(room))),
     }
 }
 
@@ -134,6 +135,7 @@ fn lift_join_refusal(room: &str, neighbour: &str, connection: &Connection) -> Cy
         connection_name(connection),
         connection_kind_name(connection.kind),
     ))
+    .at_plan(PlanRef::room(room))
 }
 
 /// The label `connection` answers to in messages: its `id`, or

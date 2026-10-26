@@ -83,7 +83,7 @@ use alloc::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{DoorStyle, KeyColor, Plan};
 use crate::wad::map::Map;
@@ -368,13 +368,15 @@ struct FeatureRun {
 }
 
 /// The sectors `room` owns in the compiled map, refusing a room the
-/// emission kept none of (fully painted over by a later one).
+/// emission kept none of (fully painted over by a later one). The refusal
+/// is attributed to that room row.
 fn room_sectors_of(compiled: &CompiledPlan, room: &str) -> Result<Vec<usize>, CyberError> {
     compiled.room_sectors.get(room).cloned().ok_or_else(|| {
         invalid(&format!(
             "feature names room '{room}', which the compiled map holds no sector for: it \
              was painted over by a later room; move the rooms apart or drop the feature"
         ))
+        .at_plan(PlanRef::room(room))
     })
 }
 

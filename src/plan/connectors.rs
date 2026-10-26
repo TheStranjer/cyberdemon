@@ -30,7 +30,7 @@ mod pass;
 
 use alloc::collections::BTreeSet;
 
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::fixed::{isqrt, narrow_i32, narrow_i64};
 use crate::geom::label::Label;
 use crate::geom::{Layer, Piece, Pt};
@@ -155,6 +155,10 @@ const fn region_id(label: Label) -> Option<u32> {
 ///
 /// [`CyberError::LimitExceeded`] when a stair run would need more than
 /// `4096` steps.
+///
+/// Every refusal is attributed to the [`PlanRef::connection`] being placed,
+/// named by the id (or `from->to` label) the tool edge resolves to its
+/// wire row.
 #[inline]
 pub fn plan_connectors(plan: &Plan, walls: &Walls) -> Result<Vec<ConnectorGeometry>, CyberError> {
     let mut pass = Pass {
@@ -164,7 +168,9 @@ pub fn plan_connectors(plan: &Plan, walls: &Walls) -> Result<Vec<ConnectorGeomet
     };
     let mut placed = Vec::with_capacity(plan.connections.len());
     for (index, connection) in plan.connections.iter().enumerate() {
-        placed.push(pass.place(connection, index)?);
+        placed.push(pass.place(connection, index).map_err(|problem| {
+            problem.at_plan(PlanRef::connection(&connection_label(connection)))
+        })?);
     }
     Ok(placed)
 }

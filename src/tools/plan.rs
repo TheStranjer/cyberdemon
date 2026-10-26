@@ -54,10 +54,11 @@
 //! `grid` snap, so a sketch measured in pixels lands grid-aligned at
 //! map size.
 //!
-//! Compiler refusals already name the offending id;
-//! [`build::with_plan_path`] prefixes them with the plan path (`rooms[0]`,
-//! `connections[1]`, `features[2]`) so the caller can point at the wire
-//! element that broke.
+//! Compiler refusals already name the offending id, and the ones that point
+//! at a plan element carry it as a [`crate::error::PlanRef`];
+//! [`build::with_plan_path`] turns that reference into the plan path
+//! (`rooms[0]`, `connections[1]`, `features[2]`) so the caller can point at
+//! the wire element that broke.
 //!
 //! The work is split: this root keeps what the group shares - the
 //! constants, the theme resolution ([`plan_theme`] and the dressings it
@@ -231,11 +232,6 @@ const fn kind_name(kind: ConnectionKind) -> &'static str {
         ConnectionKind::Window { .. } => "window",
         ConnectionKind::Stairs { .. } => "stairs",
     }
-}
-
-/// The first `'…'`-quoted name of `message`, if it carries one.
-fn quoted_first(message: &str) -> Option<&str> {
-    message.split('\'').nth(1).filter(|name| !name.is_empty())
 }
 
 /// The label the compiler gives an unnamed connection: `from->to`.

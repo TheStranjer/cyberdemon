@@ -5,7 +5,9 @@
 
 use serde_json::json;
 
-use crate::gfx::ops::ImageOp;
+use crate::error::CyberError;
+use crate::gfx::image::RgbaImage;
+use crate::gfx::ops::{ImageOp, apply_ops};
 use crate::tools::imports::create_sprite::build::{
     apply_extra, background_ops, choose_height, emptied, fit_step, scaled_width,
 };
@@ -16,7 +18,8 @@ use crate::tools::imports::create_sprite::{
 use crate::tools::imports::image_pipeline::OffsetMode;
 
 use super::{
-    args, by_name, by_sprite, code, names_of, processed, request, request_for_height, trim_error,
+    args, by_name, by_sprite, code, names_of, processed, request, request_for_height, step_error,
+    trim_error,
 };
 
 #[test]
@@ -223,6 +226,38 @@ fn apply_extra_without_ops_is_the_identity() {
     assert_eq!((same.rgba.width, same.rgba.height), (4_u32, 4_u32));
 }
 
+/// The wire arguments of a `TROOA1` call that trims without removing a
+/// background, so the trim step alone owns an emptied picture.
+fn trim_only() -> CreateSpriteParams {
+    let mut call = by_name("TROOA1");
+    call.remove_background = Some(false);
+    call
+}
+
+/// The marker [`emptied`] branches on is the one the real pipeline raises:
+/// a blank picture through the automatic trim step, end to end.
+#[test]
+fn the_real_trim_step_reports_its_emptied_picture() {
+    let blank = RgbaImage::new(2, 2, vec![0; 16]).expect("2x2 valid");
+    let error = apply_ops(
+        blank,
+        &[ImageOp::Trim {
+            alpha_threshold: 128,
+            padding: 0,
+        }],
+    )
+    .expect_err("a fully transparent picture trims to nothing");
+    assert!(error.is_emptied(), "the step's typed outcome: {error:?}");
+    let trimmed_only = emptied(&request(&trim_only()).cleanup, error);
+    assert_eq!(code(&trimmed_only), "invalid_argument", "the code stands");
+    assert!(
+        trimmed_only
+            .to_string()
+            .contains("nothing was left to trim"),
+        "the trim owns the message when no background was removed: {trimmed_only}"
+    );
+}
+
 #[test]
 fn an_emptied_picture_names_the_way_out() {
     let with_removal = request(&by_name("TROOA1"));
@@ -253,11 +288,29 @@ fn an_emptied_picture_names_the_way_out() {
     );
     let passed = emptied(
         &with_removal.cleanup,
-        trim_error("ops[0].color is out of range"),
+        step_error("ops[0].color is out of range"),
     );
     assert!(
         passed.to_string().contains("out of range"),
         "another error stands as it is: {passed}"
+    );
+    let other_words = emptied(
+        &with_removal.cleanup,
+        CyberError::Emptied(Box::new(CyberError::invalid("every pixel was keyed out"))),
+    );
+    assert!(
+        other_words
+            .to_string()
+            .contains("the whole image was removed as background"),
+        "the marker, not the wording, drives the rewrite: {other_words}"
+    );
+    let untyped = emptied(
+        &with_removal.cleanup,
+        step_error("ops[1] nothing left after trim: no pixel reaches alpha 128"),
+    );
+    assert!(
+        untyped.to_string().contains("nothing left after trim"),
+        "without the marker the step's own message stands: {untyped}"
     );
 }
 

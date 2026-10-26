@@ -10,6 +10,7 @@ use super::{
     TestRoles, back_sector, dress, front_sector, line_at, map_name, rect_room, refuse_features,
     wired, wired_dressed,
 };
+use crate::error::PlanRef;
 use crate::plan::compile::compile;
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Feature, Plan};
 use crate::wad::classify::MapFormat;
@@ -182,7 +183,13 @@ fn a_lift_refuses_a_lower_room_joined_by_a_door() {
     let plan = lift_fixture(ConnectionKind::Door {
         style: DoorStyle::Normal,
     });
-    let message = refuse_features(&plan).to_string();
+    let error = refuse_features(&plan);
+    assert_eq!(
+        error.plan_ref(),
+        Some(PlanRef::room("b")),
+        "the refusal cites the lift's own room row"
+    );
+    let message = error.to_string();
     assert!(
         message.contains("a lift needs openings to the lower rooms"),
         "the refusal words: {message}"
@@ -236,6 +243,11 @@ fn a_room_owning_several_sectors_refuses_the_plan_lift() {
         let error = apply_features(&plan, &mut compiled, &dress())
             .expect_err("the platform must be one sector");
         assert_eq!(error.code(), "invalid_argument", "the guard refusal");
+        assert_eq!(
+            error.plan_ref(),
+            Some(PlanRef::room("b")),
+            "the lift row's room is the element named"
+        );
         let message = error.to_string();
         assert!(
             message.contains("'b'") && message.contains(&format!("owns {count} sectors")),

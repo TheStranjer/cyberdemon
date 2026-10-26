@@ -210,7 +210,7 @@ impl<'defs> SpriteWiring<'defs> {
         match load_sprite_cached(session, def, rotation, &mut self.cache) {
             Ok(sprite) => Some(sprite.patch),
             Err(error) => {
-                let missing = error.code() == "not_found";
+                let missing = error.is_not_found();
                 self.report(&def.sprite, missing);
                 None
             }

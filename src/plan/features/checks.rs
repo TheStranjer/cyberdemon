@@ -15,7 +15,7 @@
 use alloc::collections::BTreeSet;
 
 use crate::defs::Definitions;
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Feature, KeyColor, Plan};
 use crate::wad::map::Map;
 use crate::wad::map::model::Thing;
@@ -209,10 +209,12 @@ pub(super) fn remote_door(
     wired.ok_or_else(|| not_remote(opens))
 }
 
-/// The refusal for a switch whose `opens` names no wired remote door.
+/// The refusal for a switch whose `opens` names no wired remote door,
+/// attributed to the feature row that carried the reference.
 fn not_remote(opens: &str) -> CyberError {
     invalid(&format!(
         "switch opens {opens} which is not a remote door: point it at a door connection \
          of style remote, or leave the door for its own trigger"
     ))
+    .at_plan(PlanRef::feature(opens))
 }

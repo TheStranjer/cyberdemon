@@ -310,8 +310,8 @@ async fn a_switch_on_a_plain_door_is_refused_as_not_remote() {
     let (code, message, _) = call_err(&client, "build_map_from_plan", request).await;
     assert_eq!(code, "invalid_argument", "a plain door is no target");
     assert!(
-        message.contains("switch opens d1 which is not a remote door"),
-        "the refusal words: {message}"
+        message.starts_with("features[0]: switch opens d1 which is not a remote door"),
+        "the plan path leads to the row and the refusal words follow: {message}"
     );
     let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
     assert_eq!(maps["maps"], json!([]), "the refusal wrote nothing");

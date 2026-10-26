@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::defs::Definitions;
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanKind, PlanRef};
 use crate::plan::CompiledPlan;
 use crate::plan::compile;
 use crate::plan::features::{FeatureRow, apply_features, playable_checks};
@@ -30,7 +30,6 @@ use crate::tools::nodes::{AllPlan, apply_all};
 use crate::tools::plan::params::{BuildPlanParams, KindSource, ThingRequest};
 use crate::tools::plan::{
     NEXT_STEPS, VALIDATION_ERROR_CAP, connection_label, feature_names, kind_name, plan_theme,
-    quoted_first,
 };
 use crate::tools::validate::{Counts, resource_index, session_tables};
 use crate::wad::classify::MapFormat;
@@ -40,45 +39,52 @@ use crate::wad::map::validate::{Issue, Outcome as ValidateOutcome, Severity, run
 use crate::wad::map::write_map;
 use crate::wad::name::LumpName;
 
-/// The plan path naming the offender of a compiler message: the first
-/// quoted room id wins, then the first quoted connection label, then
-/// the first quoted id a feature row names.
-pub(super) fn plan_path(args: &BuildPlanParams, message: &str) -> Option<String> {
-    let name = quoted_first(message)?;
-    if let Some(index) = args.rooms.iter().position(|room| room.id == name) {
-        return Some(format!("rooms[{index}]"));
+/// The plan path naming `at`'s wire row: the row of the cited kind whose
+/// id (or derived `from->to` connection label) matches, spelled `rooms[i]`,
+/// `connections[i]` or `features[i]`. A reference naming an id the request
+/// does not hold answers `None`, and its error keeps its own words.
+pub(super) fn plan_path(args: &BuildPlanParams, at: &PlanRef) -> Option<String> {
+    let name = at.id();
+    match at.kind() {
+        PlanKind::Room => args
+            .rooms
+            .iter()
+            .position(|room| room.id == name)
+            .map(|index| format!("rooms[{index}]")),
+        PlanKind::Connection => args
+            .connections
+            .iter()
+            .position(|connection| connection_label(connection) == name)
+            .map(|index| format!("connections[{index}]")),
+        PlanKind::Feature => args
+            .features
+            .iter()
+            .position(|feature| {
+                feature_names(feature)
+                    .into_iter()
+                    .flatten()
+                    .any(|id| id == name)
+            })
+            .map(|index| format!("features[{index}]")),
     }
-    if let Some(index) = args
-        .connections
-        .iter()
-        .position(|connection| connection_label(connection) == name)
-    {
-        return Some(format!("connections[{index}]"));
-    }
-    args.features
-        .iter()
-        .position(|feature| {
-            feature_names(feature)
-                .into_iter()
-                .flatten()
-                .any(|id| id == name)
-        })
-        .map(|index| format!("features[{index}]"))
 }
 
-/// The compiler error with its plan path prefixed, keeping the code;
-/// messages that name no known id and errors that are neither an
-/// argument nor a limit refusal pass through unchanged. An attached
-/// [`CyberError::with_hint`] hint rides along with the prefixed rebuild.
+/// The compiler or feature error with its plan path prefixed, keeping the
+/// code: only a refusal carrying a [`PlanRef`] is touched, and only an
+/// argument or limit refusal — a contract break names its own offender.
+/// An attached [`CyberError::with_hint`] hint rides along with the prefixed
+/// rebuild.
 pub(super) fn with_plan_path(error: CyberError, args: &BuildPlanParams) -> CyberError {
-    let message = error.message();
-    let Some(path) = plan_path(args, &message) else {
+    let Some(at) = error.plan_ref() else {
         return error;
     };
-    match error.code() {
-        "invalid_argument" | "limit_exceeded" => error.map_message(|old| format!("{path}: {old}")),
-        _ => error,
+    let Some(path) = plan_path(args, &at) else {
+        return error;
+    };
+    if !error.is_invalid_argument() && !error.is_limit_exceeded() {
+        return error;
     }
+    error.map_message(|old| format!("{path}: {old}"))
 }
 
 /// The vertex bounds of the compiled map as one result object.

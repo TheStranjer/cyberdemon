@@ -205,7 +205,7 @@ fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
 fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
     match common::load_map(session, name, Scope::Working) {
         Ok(map) => Ok(map),
-        Err(error) if error.code() == "not_found" => common::load_map(session, name, Scope::Merged),
+        Err(error) if error.is_not_found() => common::load_map(session, name, Scope::Merged),
         Err(error) => Err(error),
     }
 }

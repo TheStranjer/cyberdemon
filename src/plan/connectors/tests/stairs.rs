@@ -6,6 +6,7 @@ use super::{
     assert_band, compile, error_of, find_piece, first, notch_plan, opening, raise_b, stairs,
     two_rooms,
 };
+use crate::error::{PlanKind, PlanRef};
 use crate::fixed::{narrow_i32, narrow_i64};
 use crate::geom::Piece;
 use crate::geom::arrange;
@@ -127,6 +128,11 @@ fn an_absurd_step_count_is_refused() {
     plan.connections = vec![endless];
     let error = error_of(&plan);
     assert_eq!(error.code(), "limit_exceeded", "code");
+    assert_eq!(
+        error.plan_ref().as_ref().map(PlanRef::kind),
+        Some(PlanKind::Connection),
+        "a stair run's limit names its connection row"
+    );
     assert!(
         error.to_string().contains("at most 4096"),
         "names the budget: {error}"

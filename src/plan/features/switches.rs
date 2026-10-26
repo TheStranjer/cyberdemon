@@ -16,7 +16,7 @@
 
 use core::cmp::Ordering;
 
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::geom::Pt;
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{ExitStyle, Feature, Plan, Side};
@@ -148,13 +148,14 @@ fn place_switch(
 }
 
 /// The plan-side reading of a panel the core refused to fit: the message
-/// names `room` (the core speaks only of the linedef and its length) and
-/// the hint names the knob — the row cannot retune the fixed 32-unit
-/// width, so its own `at` is what moves the panel onto a stretch of wall
-/// that holds it. A refusal that is not an argument problem (a contract
-/// break) keeps its own code, message and hint.
+/// names `room` (the core speaks only of the linedef and its length), the
+/// refusal is attributed to that room row, and the hint names the knob —
+/// the row cannot retune the fixed 32-unit width, so its own `at` is what
+/// moves the panel onto a stretch of wall that holds it. A refusal that is
+/// not an argument problem (a contract break) keeps its own code, message
+/// and hint.
 pub(super) fn panel_hint(error: CyberError, room: &str) -> CyberError {
-    if error.code() != "invalid_argument" {
+    if !error.is_invalid_argument() {
         return error;
     }
     error
@@ -163,6 +164,7 @@ pub(super) fn panel_hint(error: CyberError, room: &str) -> CyberError {
             "move the row's at nearer the middle of the wall, or leave at out to centre \
              the panel on the wall",
         )
+        .at_plan(PlanRef::room(room))
 }
 
 /// The panel texture: the theme's answer for the mount's role, or the
@@ -464,7 +466,7 @@ fn compare(first: Fraction, second: Fraction) -> Ordering {
 }
 
 /// The refusal for a room with no wall to mount on, naming the asked
-/// side when there is one.
+/// side when there is one, attributed to that room row.
 fn no_switch_wall(room: &str, wall: Option<Side>) -> CyberError {
     let facing = wall.map_or_else(
         || "no one-sided wall".to_owned(),
@@ -475,6 +477,7 @@ fn no_switch_wall(room: &str, wall: Option<Side>) -> CyberError {
          with another sector; pick another room, leave `wall` unset, or give the plan a \
          wall thickness"
     ))
+    .at_plan(PlanRef::room(room))
 }
 
 /// The wire name of a compass `side`.

@@ -1,9 +1,8 @@
 //! The `textures` tool group as seen by a real MCP client.
 //!
 //! The helpers every test drives the server through live here: a connected
-//! client with the fixture `IWAD` as its base, the `{"path": ...}` argument
-//! object, the undo-label list, the `name` fields of a report list and the
-//! hex form of lump bytes for `add_lump`. The tests themselves are split by
+//! client with the fixture `IWAD` as its base, the undo-label list and the
+//! `name` fields of a report list. The tests themselves are split by
 //! topic into the `list`, `pnames` and `build` modules, which read
 //! copy-on-write into the working archive and one-edit undo bookkeeping
 //! through them.
@@ -12,18 +11,13 @@ use std::path::Path;
 
 use rmcp::RoleClient;
 use rmcp::service::RunningService;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::fixtures::iwad;
-use crate::support::{call, connect};
+use crate::support::{call, connect, hex_of, path_arg};
 
 /// A connected MCP client.
 type Client = RunningService<RoleClient, ()>;
-
-/// The `{"path": ...}` argument object for `file`.
-fn path_arg(file: &Path) -> Value {
-    json!({ "path": file.display().to_string() })
-}
 
 /// Load the fixture `IWAD` (patches, `PNAMES`, `TEXTURE1`) as the base.
 async fn iwad_client(dir: &Path) -> Client {
@@ -52,14 +46,6 @@ fn listed(report: &Value, key: &str) -> Vec<String> {
         .iter()
         .map(|row| row["name"].as_str().expect("names are strings").to_owned())
         .collect()
-}
-
-/// The space-separated uppercase hex of `data`, for `add_lump` inputs.
-fn hex_of(data: &[u8]) -> String {
-    data.iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[cfg(test)]

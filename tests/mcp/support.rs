@@ -2,11 +2,14 @@
 //!
 //! Plus a probe server that speaks the structured-result contract
 //! (`ok`/`fail`) so those helpers are exercised end to end, not just
-//! compiled, small hand-written byte builders for the media files
+//! compiled, the wire shapes every tool group shares: the `{"path": ...}`
+//! and `{"source": ...}` argument builders, the space-separated hex the
+//! `add_lump` inputs carry, and the asset-`URL` splitter, fetcher and
+//! report readers, small hand-written byte builders for the media files
 //! (`PNG`, `MIDI`, `WAV`) the guide recipes import, and the picture
 //! helpers (blank sheets, rectangle fills, the ruled photo sheet, `PNG`
-//! files and asset fetches) the image-chain tests draw their fixtures
-//! with.
+//! files, exact-colour pixel counts and asset fetches) the image-chain
+//! tests draw their fixtures with.
 
 use core::time::Duration;
 use std::io::Write as _;
@@ -277,6 +280,107 @@ fn split_reply(raw: &[u8]) -> (u16, Vec<u8>) {
         .parse()
         .expect("a numeric status code");
     (status, raw[body_start..].to_vec())
+}
+
+/// The `{"path": ...}` argument object for `file`.
+#[must_use]
+#[inline]
+pub fn path_arg(file: &Path) -> Value {
+    json!({ "path": file.display().to_string() })
+}
+
+/// The `{"source": ...}` argument object for the absolute `file`.
+#[must_use]
+#[inline]
+pub fn source_arg(file: &Path) -> Value {
+    json!({ "source": file.display().to_string() })
+}
+
+/// A `{"source": ...}` argument object merged with an object of extras.
+///
+/// # Panics
+///
+/// Panics if the built object cannot be mutated (it always can).
+#[must_use]
+#[inline]
+pub fn source_args(file: &Path, extra: Value) -> Value {
+    let mut args = source_arg(file);
+    if let Value::Object(additions) = extra {
+        args.as_object_mut()
+            .expect("a JSON object")
+            .extend(additions);
+    }
+    args
+}
+
+/// The space-separated uppercase hex of `bytes`, as `add_lump` takes it
+/// and `get_lump format=hex` spells it.
+#[must_use]
+#[inline]
+pub fn hex_of(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Split an asset `URL` into the `http://localhost:<port>` origin and
+/// the request path for [`http_get`].
+///
+/// # Panics
+///
+/// Panics if `url` carries no `/assets/` part.
+#[must_use]
+#[inline]
+pub fn split_asset_url(url: &str) -> (String, String) {
+    let (base, rest) = url.split_once("/assets/").expect("an asset url");
+    (base.to_owned(), format!("/assets/{rest}"))
+}
+
+/// Fetch a published asset with a raw `HTTP` `GET` and require success.
+///
+/// # Panics
+///
+/// Panics if `url` carries no `/assets/` part or the asset does not
+/// serve with status 200.
+#[inline]
+pub async fn fetch_asset(url: &str) -> Vec<u8> {
+    let (base, path) = split_asset_url(url);
+    let (status, body) = http_get(&base, &path).await;
+    assert_eq!(status, 200, "the asset serves: {url}");
+    body
+}
+
+/// The `url` of the asset a report carries under `field`.
+///
+/// # Panics
+///
+/// Panics if the report carries no string `url` under `field`.
+#[must_use]
+#[inline]
+pub fn asset_url_of(report: &Value, field: &str) -> String {
+    report[field]["url"]
+        .as_str()
+        .expect("the report carries an asset url")
+        .to_owned()
+}
+
+/// The asset `URL` under a report's `asset` row.
+#[must_use]
+#[inline]
+pub fn asset_url(report: &Value) -> String {
+    asset_url_of(report, "asset")
+}
+
+/// The number of pixels of `image` that are exactly `colour`.
+#[must_use]
+#[inline]
+pub fn count_pixels(image: &RgbaImage, colour: [u8; 4]) -> usize {
+    (0..image.height)
+        .flat_map(|row| (0..image.width).map(move |col| (col, row)))
+        .filter(|&(col, row)| image.get(col, row) == Some(colour))
+        .count()
 }
 
 /// Appends one `PNG` chunk: length, kind, payload, `CRC32`.
@@ -657,8 +761,6 @@ pub fn write_png(dir: &Path, name: &str, sheet: &RgbaImage) -> String {
 /// with status 200, or the bytes are no readable `PNG`.
 #[inline]
 pub async fn asset_png(url: &str) -> RgbaImage {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
+    let body = fetch_asset(url).await;
     decode_image(&body).expect("the asset is a readable PNG")
 }

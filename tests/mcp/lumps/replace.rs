@@ -5,8 +5,8 @@
 //! untouched, the copied block winning the merged view, the winning copy of
 //! two layer flats and the missing-lump, payload-field, malformed-argument and
 //! missing-source refusals. The merged-hex reader, the duplicated-flat
-//! session, the fixture flat's bytes on disk, the `replace_lump` hex
-//! arguments and the hex builder live here with them.
+//! session, the fixture flat's bytes on disk and the `replace_lump` hex
+//! arguments live here with them.
 
 use std::fs;
 use std::path::Path;
@@ -19,7 +19,7 @@ use crate::lumps::{
     Client, FLAT_BYTES, add, add_twins, assert_untouched, iwad_only, names, path_arg, replace_hex,
     row_named, undo_labels, working_names,
 };
-use crate::support::{call, call_err, connect};
+use crate::support::{call, call_err, connect, hex_of};
 
 /// A session with the duplicated-flat `IWAD`: two `FLOOR1` copies in the
 /// flats region, for the selection tests.
@@ -115,14 +115,6 @@ async fn replace_lump_takes_its_payload_from_hex_or_a_fetched_source() {
         hex_of(b"from"),
         "the fetched bytes landed"
     );
-}
-
-/// The space-separated uppercase hex of `data`.
-fn hex_of(data: &[u8]) -> String {
-    data.iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[tokio::test]

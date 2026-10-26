@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::patches::{
     Client, FIXTURE_PNAMES, IWAD_SIDE, Refusal, add, doom_patch, iwad_bytes, iwad_client,
-    palette_png, patch_args, patch_row, replace, stored_bytes, working_index, working_names,
+    palette_png, patch_row, replace, source_args, stored_bytes, working_index, working_names,
     write_file,
 };
 use crate::support::{call, call_err};
@@ -157,7 +157,7 @@ async fn replacing_an_unknown_name_refuses_naming_add_patch() {
     let (code, message, _) = call_err(
         &client,
         "replace_patch",
-        patch_args(&file, json!({ "name": "NOPE" })),
+        source_args(&file, json!({ "name": "NOPE" })),
     )
     .await;
     assert_eq!(code, "not_found", "the missing target");
@@ -220,13 +220,13 @@ async fn bad_replace_arguments_are_refused_without_edits() {
     let cases: [Refusal; 3] = [
         (
             "nine characters",
-            patch_args(&patch_file, json!({ "name": "TOOLONGNM" })),
+            source_args(&patch_file, json!({ "name": "TOOLONGNM" })),
             "invalid_argument",
             "name",
         ),
         (
             "preset",
-            patch_args(
+            source_args(
                 &patch_file,
                 json!({ "name": "WALLP1", "offsets": "middle" }),
             ),
@@ -235,7 +235,7 @@ async fn bad_replace_arguments_are_refused_without_edits() {
         ),
         (
             "offset past i16",
-            patch_args(
+            source_args(
                 &patch_file,
                 json!({ "name": "WALLP1", "offsets": { "x": 40000_i64, "y": 0_i64 } }),
             ),

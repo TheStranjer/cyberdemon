@@ -34,7 +34,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::iwad_features;
-use crate::support::{call, connect, fill_rect, paper_sheet, write_png};
+use crate::support::{call, connect, fill_rect, paper_sheet, path_arg, write_png};
 
 /// A connected MCP client.
 type Client = RunningService<RoleClient, ()>;
@@ -185,12 +185,7 @@ fn trace_request(source: &str) -> Value {
 async fn session(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad_features(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     call(&client, "new_wad", json!({})).await;
     client
 }
@@ -376,11 +371,6 @@ async fn player_start(client: &Client) -> Value {
     .await;
     assert_eq!(found["count"], json!(1_u64), "exactly one player start");
     found["rows"].get(0).expect("the start row").clone()
-}
-
-/// The `{"path": ...}` argument object for `file`.
-fn path_arg(file: &Path) -> Value {
-    json!({ "path": file.display().to_string() })
 }
 
 /// `MAP`'s five element counts, as `get_map_summary` reports them.

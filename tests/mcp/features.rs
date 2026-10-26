@@ -10,21 +10,20 @@
 //! `working_sector(s)`, `reported_lines`, `index_list`, `note_mentions`,
 //! `flag_names`), the `expect_rooms` sector check, the shared `refuse_with`,
 //! the `validate_map` gate `validate_clean`, the asset-server
-//! `rendered_image` and `count_pixels` pair and the placement measures
-//! `dist_sq`, `positions_of` and `angle_diff`. The tests themselves are
+//! `rendered_image` and the placement measures `dist_sq`, `positions_of`
+//! and `angle_diff`. The tests themselves are
 //! split by topic into the `door`, `window`, `switch`, `exit`, `secret`,
 //! `light`, `stairs`, `lift`, `teleporter` and `place` modules.
 
 use std::path::Path;
 
-use cyberdemon::gfx::codec::decode_image;
 use cyberdemon::gfx::image::RgbaImage;
 use rmcp::RoleClient;
 use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::{iwad_features, iwad_l_room, pwad_map_formats};
-use crate::support::{call, call_err, connect, http_get};
+use crate::support::{asset_png, call, call_err, connect, count_pixels, path_arg};
 
 /// A connected client for one test.
 type Client = RunningService<RoleClient, ()>;
@@ -34,12 +33,7 @@ type Client = RunningService<RoleClient, ()>;
 async fn features_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad_features(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({"path": base.display().to_string()}),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 
@@ -48,12 +42,7 @@ async fn features_loaded(dir: &Path) -> Client {
 async fn formats_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let extra = pwad_map_formats(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({"path": extra.display().to_string()}),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&extra)).await;
     client
 }
 
@@ -61,12 +50,7 @@ async fn formats_loaded(dir: &Path) -> Client {
 async fn l_room_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad_l_room(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({"path": base.display().to_string()}),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 
@@ -239,18 +223,7 @@ fn flag_names(row: &Value) -> Vec<&str> {
 /// Fetch and decode a render report's PNG asset.
 async fn rendered_image(report: &Value) -> RgbaImage {
     let url = report["asset"]["url"].as_str().expect("an asset url");
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    decode_image(&body).expect("the view is a readable PNG")
-}
-
-/// The number of pixels of `image` that are exactly `color`.
-fn count_pixels(image: &RgbaImage, color: [u8; 4]) -> usize {
-    (0..image.height)
-        .flat_map(|row| (0..image.width).map(move |col| (col, row)))
-        .filter(|&(col, row)| image.get(col, row) == Some(color))
-        .count()
+    asset_png(url).await
 }
 
 /// The squared distance between two `[x, y]` positions.

@@ -4,10 +4,10 @@
 //! preparation the 3D view runs on.
 //!
 //! The helpers every topic drives the server through live here: a connected
-//! client on the fixture `IWAD` (the two-room `MAP01`), the `{"path": ...}`
-//! argument object, the fitted `transform` of a top-down report with its
-//! documented pixel mapping, the asset fetch and PNG decode behind every
-//! pixel assertion and the two whole-image pixel counts. The tests
+//! client on the fixture `IWAD` (the two-room `MAP01`), the fitted
+//! `transform` of a top-down report with its documented pixel mapping, the
+//! asset fetch and `PNG` decode behind every pixel assertion and the
+//! non-background pixel count. The tests
 //! themselves are split by topic into the `settings`, `topdown`, `overlays`,
 //! `decorations`, `minimap`, `view`, `view_sprites` and `scene` modules: the
 //! settings and their validation, the plain top-down pictures, the `underlay`
@@ -20,18 +20,13 @@ use cyberdemon::gfx::codec::decode_image;
 use cyberdemon::gfx::image::RgbaImage;
 use rmcp::RoleClient;
 use rmcp::service::RunningService;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::fixtures::iwad;
-use crate::support::{call, connect, http_get};
+use crate::support::{call, connect, count_pixels, fetch_asset, path_arg};
 
 /// A connected MCP client.
 type Client = RunningService<RoleClient, ()>;
-
-/// The `{"path": ...}` argument object for `file`.
-fn path_arg(file: &Path) -> Value {
-    json!({ "path": file.display().to_string() })
-}
 
 /// Load the fixture `IWAD` (the two-room `MAP01`) as the base.
 async fn iwad_client(dir: &Path) -> Client {
@@ -87,14 +82,6 @@ impl Transform {
     }
 }
 
-/// Fetch a published asset's bytes over `HTTP`.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
-}
-
 /// Fetch and decode the overview asset of a report.
 async fn rendered_image(report: &Value) -> RgbaImage {
     let url = report["asset"]["url"].as_str().expect("an asset url");
@@ -107,14 +94,6 @@ fn non_background(image: &RgbaImage) -> usize {
     (0..image.height)
         .flat_map(|row| (0..image.width).map(move |col| (col, row)))
         .filter(|&(col, row)| image.get(col, row) != Some([0, 0, 0, 255]))
-        .count()
-}
-
-/// The number of pixels of `image` that are exactly `color`.
-fn count_pixels(image: &RgbaImage, color: [u8; 4]) -> usize {
-    (0..image.height)
-        .flat_map(|row| (0..image.width).map(move |col| (col, row)))
-        .filter(|&(col, row)| image.get(col, row) == Some(color))
         .count()
 }
 

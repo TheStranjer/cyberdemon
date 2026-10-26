@@ -8,8 +8,8 @@
 //!
 //! The helpers every test drives the server through live here: a connected
 //! client on the `IWAD` fixture alone, on the map-format fixture and on the
-//! `IWAD` with the `PWAD` fixture merged in, the asset-`URL` splitter and
-//! fetcher, the `list_maps` and `get_map_lumps` row readers, the lump
+//! `IWAD` with the `PWAD` fixture merged in, the `list_maps` and
+//! `get_map_lumps` row readers, the lump
 //! `URL` payload reader and the ten vanilla member lump names. The tests
 //! themselves are split by topic into the `list`, `summary`, `assemble`,
 //! `create` and `copy_rename` modules: the `list_maps` scopes and the
@@ -25,7 +25,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::{iwad, pwad, pwad_map_formats};
-use crate::support::{call, connect, http_get};
+use crate::support::{call, connect, fetch_asset, path_arg};
 
 /// A connected client for one test.
 type Client = RunningService<RoleClient, ()>;
@@ -42,18 +42,8 @@ async fn iwad_plus_pwad(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad(dir);
     let extra = pwad(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
-    call(
-        &client,
-        "merge_wad",
-        json!({ "path": extra.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
+    call(&client, "merge_wad", path_arg(&extra)).await;
     client
 }
 
@@ -62,28 +52,8 @@ async fn iwad_plus_pwad(dir: &Path) -> Client {
 async fn formats_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let extra = pwad_map_formats(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": extra.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&extra)).await;
     client
-}
-
-/// Split an asset `URL` into the `http://localhost:<port>` origin and
-/// the request path for [`http_get`].
-fn split_asset_url(url: &str) -> (String, String) {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    (base.to_owned(), format!("/assets/{rest}"))
-}
-
-/// Fetch a published asset with a raw `HTTP` `GET` and require success.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, path) = split_asset_url(url);
-    let (status, body) = http_get(&base, &path).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
 }
 
 /// The map row named `wanted` from a `list_maps` report.
@@ -120,12 +90,7 @@ fn lump_names(report: &Value) -> Vec<String> {
 async fn iwad_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 

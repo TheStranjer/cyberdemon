@@ -24,7 +24,7 @@
 //! The helpers every topic draws its sheets with live here: the paper and
 //! pen colours, the [`bar`] and [`cross`] painting primitives behind the
 //! [`sketch`] and [`two_pens`] fixtures, the `PNG` writer and the standard
-//! trace arguments, the asset and debug-overlay fetchers and the region,
+//! trace arguments, the debug-overlay fetcher and the region,
 //! point, colour and scaling readers the asserts run through. The tests
 //! themselves are split by topic into [`noise`] (the bounded lists, the
 //! floor and `verbose`), [`trace`] (the three-room measurements), [`params`]
@@ -37,7 +37,7 @@ use cyberdemon::gfx::codec::{decode_image, encode_png};
 use cyberdemon::gfx::image::RgbaImage;
 use serde_json::{Value, json};
 
-use crate::support::http_get;
+use crate::support::fetch_asset;
 
 /// The opaque paper white of the fixtures.
 const PAPER: [u8; 4] = [255, 255, 255, 255];
@@ -139,14 +139,6 @@ fn write_png(dir: &Path, name: &str, img: &RgbaImage) -> String {
 /// The standard trace arguments over `source` (close the 30-px door).
 fn trace_args(source: &str) -> Value {
     json!({"source": source, "close_gaps": 16_i64})
-}
-
-/// Fetches a published asset's bytes over `HTTP`.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
 }
 
 /// The debug asset of a trace report, decoded.

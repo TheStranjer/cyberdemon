@@ -18,15 +18,10 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::iwad;
-    use crate::support::{call, call_err, connect, http_get};
+    use crate::support::{call, call_err, connect, fetch_asset, path_arg};
 
     /// A connected MCP client.
     type Client = RunningService<RoleClient, ()>;
-
-    /// The `{"path": ...}` argument object for `file`.
-    fn path_arg(file: &Path) -> Value {
-        json!({ "path": file.display().to_string() })
-    }
 
     /// Load the fixture `IWAD` (14 palettes, `COLORMAP`) as the base.
     async fn iwad_client(dir: &Path) -> Client {
@@ -34,21 +29,6 @@ mod tests {
         let base = iwad(dir);
         call(&client, "open_iwad", path_arg(&base)).await;
         client
-    }
-
-    /// Split an asset `URL` into the `http://localhost:<port>` origin and
-    /// the request path for [`http_get`].
-    fn split_asset_url(url: &str) -> (String, String) {
-        let (base, rest) = url.split_once("/assets/").expect("an asset url");
-        (base.to_owned(), format!("/assets/{rest}"))
-    }
-
-    /// Fetch a published asset with a raw `HTTP` `GET` and require success.
-    async fn fetch_asset(url: &str) -> Vec<u8> {
-        let (base, path) = split_asset_url(url);
-        let (status, body) = http_get(&base, &path).await;
-        assert_eq!(status, 200, "the asset serves: {url}");
-        body
     }
 
     /// The `URL` of the swatch (or other asset) a report published.

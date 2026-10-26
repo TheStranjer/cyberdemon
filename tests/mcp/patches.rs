@@ -20,7 +20,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::iwad;
-use crate::support::{call, call_err, connect};
+use crate::support::{call, call_err, connect, path_arg, source_args};
 
 /// A connected MCP client.
 type Client = RunningService<RoleClient, ()>;
@@ -42,12 +42,7 @@ const IWAD_SIDE: u64 = 16_u64;
 async fn iwad_client(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 
@@ -85,23 +80,12 @@ fn write_file(dir: &Path, file: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
-/// `add_patch` arguments over a `source` path merged with extras.
-fn patch_args(file: &Path, extra: Value) -> Value {
-    let mut args = json!({ "source": file.display().to_string() });
-    if let Value::Object(additions) = extra {
-        args.as_object_mut()
-            .expect("a JSON object")
-            .extend(additions);
-    }
-    args
-}
-
 /// One successful `add_patch` under `name` of `file`.
 async fn add(client: &Client, file: &Path, name: &str) -> Value {
     call(
         client,
         "add_patch",
-        patch_args(file, json!({ "name": name })),
+        source_args(file, json!({ "name": name })),
     )
     .await
 }
@@ -111,7 +95,7 @@ async fn replace(client: &Client, file: &Path, name: &str) -> Value {
     call(
         client,
         "replace_patch",
-        patch_args(file, json!({ "name": name })),
+        source_args(file, json!({ "name": name })),
     )
     .await
 }

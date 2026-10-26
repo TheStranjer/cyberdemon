@@ -3,8 +3,8 @@
 //! the published asset's served bytes and the missing-lump, bad-name and
 //! bad-format refusals, then `extract_lump` writing a lump to an absolute
 //! path, its overwrite rule and the relative-path, missing-parent and
-//! missing-lump refusals. The asset-`URL` splitter and fetcher, the fixture
-//! `PLAYPAL` reader and the `DEHACKED` extract arguments live here with them.
+//! missing-lump refusals. The fixture `PLAYPAL` reader and the `DEHACKED`
+//! extract arguments live here with them.
 
 use std::fs;
 use std::path::Path;
@@ -14,22 +14,7 @@ use serde_json::{Value, json};
 
 use crate::fixtures::{iwad, iwad_duplicated};
 use crate::lumps::{PLAYPAL_BYTES, hex_head, iwad_plus_pwad, path_arg};
-use crate::support::{call, call_err, connect, http_get};
-
-/// Split an asset `URL` into the `http://localhost:<port>` origin and
-/// the request path for [`http_get`].
-fn split_asset_url(url: &str) -> (String, String) {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    (base.to_owned(), format!("/assets/{rest}"))
-}
-
-/// Fetch a published asset with a raw `HTTP` `GET` and require success.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, path) = split_asset_url(url);
-    let (status, body) = http_get(&base, &path).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
-}
+use crate::support::{call, call_err, connect, fetch_asset};
 
 /// The `PLAYPAL` payload of the `IWAD` fixture, read from disk.
 fn playpal_bytes(dir: &Path) -> Vec<u8> {

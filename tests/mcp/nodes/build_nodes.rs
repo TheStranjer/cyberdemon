@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::fixtures::pwad_empty_map;
 use crate::nodes::read::assert_extended_read;
-use crate::nodes::{fetch_json, l_room_loaded, nodes_loaded, plain_iwad};
+use crate::nodes::{directory_names, fetch_json, l_room_loaded, nodes_loaded, plain_iwad};
 use crate::support::{call, call_err, connect};
 
 #[tokio::test]
@@ -290,7 +290,7 @@ async fn extended_compression_only_changes_the_lump_not_the_records() {
 }
 
 #[tokio::test]
-async fn extended_build_on_udmf_writes_znodes_and_classic_refuses_there() {
+async fn extended_build_on_udmf_writes_znodes_and_binary_variants_refuse_there() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = nodes_loaded(dir.path()).await;
     let built = call(
@@ -326,22 +326,16 @@ async fn extended_build_on_udmf_writes_znodes_and_classic_refuses_there() {
         json!("znod"),
         "the merged view shows the build"
     );
-    let (code, message, _) = call_err(&client, "build_nodes", json!({ "map": "MAP07" })).await;
+    let (code, message, _) = call_err(
+        &client,
+        "build_nodes",
+        json!({ "map": "MAP07", "variant": "classic" }),
+    )
+    .await;
     assert_eq!(code, "invalid_argument", "classic has no place in UDMF");
     assert!(
         message.contains("UDMF maps use extended nodes"),
         "the message names the rule: {message}"
-    );
-    let (gl_code, gl_message, _) = call_err(
-        &client,
-        "build_nodes",
-        json!({ "map": "MAP07", "variant": "gl" }),
-    )
-    .await;
-    assert_eq!(gl_code, "invalid_argument", "gl writes the classic run too");
-    assert!(
-        gl_message.contains("UDMF maps use extended nodes"),
-        "the same rule: {gl_message}"
     );
     let after = call(
         &client,
@@ -350,4 +344,53 @@ async fn extended_build_on_udmf_writes_znodes_and_classic_refuses_there() {
     )
     .await;
     assert_eq!(after["format"], json!("znod"), "the refusal wrote nothing");
+}
+
+#[tokio::test]
+async fn gl_build_on_udmf_refuses_like_classic() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = nodes_loaded(dir.path()).await;
+    let (code, message, _) = call_err(
+        &client,
+        "build_nodes",
+        json!({ "map": "MAP07", "variant": "gl" }),
+    )
+    .await;
+    assert_eq!(code, "invalid_argument", "gl writes the classic run too");
+    assert!(
+        message.contains("UDMF maps use extended nodes"),
+        "the same rule: {message}"
+    );
+    let info = call(&client, "get_session_info", json!({})).await;
+    assert_eq!(info["undo"], json!([]), "the refusal entered no step");
+    let names = directory_names(&client, "working").await;
+    assert!(names.is_empty(), "and wrote nothing: {names:?}");
+}
+
+#[tokio::test]
+async fn build_nodes_on_udmf_without_a_variant_builds_extended() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = nodes_loaded(dir.path()).await;
+    let built = call(&client, "build_nodes", json!({ "map": "MAP07" })).await;
+    assert_eq!(built["variant"], json!("extended"), "the UDMF default");
+    assert_eq!(built["format"], json!("ZNOD"), "compressed by default");
+    assert_eq!(built["segs"], json!(8_u64), "the two-room map splits once");
+    assert_eq!(built["subsectors"], json!(2_u64), "one leaf per room");
+    assert_eq!(
+        built["copied_to_working"],
+        json!(true),
+        "the map came in to edit"
+    );
+    let working = call(
+        &client,
+        "get_nodes",
+        json!({ "map": "MAP07", "scope": "working" }),
+    )
+    .await;
+    assert_eq!(
+        working["format"],
+        json!("znod"),
+        "ZNODES holds the fresh run"
+    );
+    assert_eq!(working["segs"], built["segs"], "the reader agrees");
 }

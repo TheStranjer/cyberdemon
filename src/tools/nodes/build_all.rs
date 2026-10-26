@@ -47,7 +47,8 @@ pub(super) struct BuildAllNodesParams {
     pub(super) variant: Option<String>,
     /// The reject matrix mode, as in [`BuildRejectParams::mode`]: `"zero"`
     /// (the default) or `"components"`. A binary map always gets a fresh
-    /// `REJECT`; a `UDMF` one writes it only when this parameter is given.
+    /// `REJECT`; a `UDMF` map carries none (`ZDoom` builds the matrix
+    /// itself), so naming a mode on one is refused.
     #[serde(default)]
     pub(super) reject_mode: Option<String>,
     /// Compress what can be compressed: an extended lump behind the `ZNOD`
@@ -82,11 +83,7 @@ impl AllPlan {
         let udmf = model.format == MapFormat::Udmf;
         Self {
             nodes: NodeBuildPlan {
-                variant: if udmf {
-                    Variant::Extended
-                } else {
-                    Variant::Classic
-                },
+                variant: Variant::for_format(model.format),
                 split_cost: DEFAULT_SPLIT_COST,
                 compress: true,
             },
@@ -122,22 +119,35 @@ impl AllBuilt {
 /// Resolve one `build_all_nodes` call's arguments against the map's
 /// format: the node layout (`classic` for a binary map, `extended` for a
 /// `UDMF` one when the caller does not choose), the reject mode (binary
-/// maps always write one, `UDMF` maps only when asked) and the blockmap
-/// (binary maps only, which `ZDoom` builds itself for `UDMF`).
+/// maps always write one, a `UDMF` map carrying none refuses any named
+/// mode) and the blockmap (binary maps only, which `ZDoom` builds itself
+/// for `UDMF`).
 ///
 /// # Errors
 ///
-/// [`Variant::parse`]'s and [`RejectMode::parse`]'s refusals.
+/// [`Variant::resolve`]'s and [`RejectMode::parse`]'s refusals, and the
+/// `UDMF` reject refusal below.
 pub(super) fn plan_all(model: &Map, args: &BuildAllNodesParams) -> Result<AllPlan, CyberError> {
     let mut plan = AllPlan::for_model(model);
-    if let Some(text) = args.variant.as_deref() {
-        plan.nodes.variant = Variant::parse(Some(text))?;
-    }
+    plan.nodes.variant = Variant::resolve(args.variant.as_deref(), model.format)?;
     if let Some(text) = args.reject_mode.as_deref() {
+        if model.format == MapFormat::Udmf {
+            return Err(udmf_reject_refusal());
+        }
         plan.reject = Some(RejectMode::parse(text)?);
     }
     plan.nodes.compress = args.compress.unwrap_or(true);
     Ok(plan)
+}
+
+/// The refusal of a `reject_mode` named on a `UDMF` map, whose block has
+/// no place for a `REJECT` lump and whose engine builds the matrix itself.
+fn udmf_reject_refusal() -> CyberError {
+    CyberError::InvalidArgument(
+        "UDMF maps carry no REJECT: ZDoom builds the visibility matrix \
+         itself; leave reject_mode out for a UDMF map"
+            .to_owned(),
+    )
 }
 
 /// The combined edit closure of [`Cyberdemon::build_all_nodes`]: the

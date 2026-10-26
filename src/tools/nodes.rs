@@ -27,8 +27,9 @@
 //! a `GL_*` block attached right after the map block, written as one
 //! undoable [`Session::edit`]. [`Cyberdemon::build_all_nodes`] runs the
 //! whole set at once — the tree, the `REJECT` and the `BLOCKMAP` (a
-//! `UDMF` block gets `ZNODES` alone unless a reject mode is asked for) —
-//! as a single [`Session::edit`], sharing the `apply_build_nodes`,
+//! `UDMF` block gets `ZNODES` alone, and naming a reject mode on one is
+//! refused) — as a single [`Session::edit`], sharing the
+//! `apply_build_nodes`,
 //! [`build_tables::apply_build_reject`] and
 //! [`build_tables::apply_build_blockmap`] steps with the three
 //! single-lump builders. The [`build_all::apply_all`] step and the
@@ -319,7 +320,7 @@ impl Cyberdemon {
 
     /// Rebuilds a map's BSP node tree (vanilla or ZDoom extended lumps).
     #[tool(
-        description = "Rebuilds a map's BSP node tree from its current geometry as a single undoable edit: variant classic (the vanilla SEGS/SSECTORS/NODES every port plays), extended (ZDoom's fraction-precise single lump) or gl (classic plus a glBSP v2 GL_* run); split_cost tunes how dearly the builder buys cutting segs. Prefer build_all_nodes after finishing geometry - it rebuilds the REJECT and BLOCKMAP in the same undo step."
+        description = "Rebuilds a map's BSP node tree from its current geometry as a single undoable edit: variant classic (the vanilla SEGS/SSECTORS/NODES every port plays), extended (ZDoom's fraction-precise single lump) or gl (classic plus a glBSP v2 GL_* run); left out, a binary map takes classic and a UDMF one extended. split_cost tunes how dearly the builder buys cutting segs. Prefer build_all_nodes after finishing geometry - it rebuilds the REJECT and BLOCKMAP in the same undo step."
     )]
     fn build_nodes(
         &self,
@@ -333,7 +334,7 @@ impl Cyberdemon {
 
     /// Rebuilds a map's whole node data (tree, reject and blockmap) in one step.
     #[tool(
-        description = "Rebuilds a map's complete node data - the BSP tree, the REJECT matrix and the BLOCKMAP grid - in ONE undoable edit: the step to run after geometry changes instead of separate build_nodes, build_reject and build_blockmap calls. variant picks the node layout as build_nodes does and reject_mode zero or components clears or computes visibility. Returns each build's summary."
+        description = "Rebuilds a map's complete node data - the BSP tree, the REJECT matrix and the BLOCKMAP grid - in ONE undoable edit: the step to run after geometry changes instead of separate build_nodes, build_reject and build_blockmap calls. variant picks the node layout as build_nodes does, with the same format defaults; reject_mode zero or components clears or computes visibility on binary maps, and is refused on a UDMF one, which carries no REJECT and whose engine builds the matrix itself. Returns each build's summary."
     )]
     fn build_all_nodes(
         &self,

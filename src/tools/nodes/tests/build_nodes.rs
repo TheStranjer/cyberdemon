@@ -1,14 +1,15 @@
-//! The tree builder's own two layouts: the `variant` names, the classic
-//! run's counts and its split vertices (and the geometry edit that strips
-//! them again), the cost knob, and the extended lump in `NODES` of a
-//! binary block and in `ZNODES` of a `UDMF` one - with the refusals that
-//! write nothing.
+//! The tree builder's own two layouts: the `variant` names and the map
+//! format's default they resolve to, the classic run's counts and its
+//! split vertices (and the geometry edit that strips them again), the
+//! cost knob, and the extended lump in `NODES` of a binary block and in
+//! `ZNODES` of a `UDMF` one - with the refusals that write nothing.
 
 use crate::error::CyberError;
 use crate::session::Session;
-use crate::tools::nodes::build_nodes::{Implemented, Variant, nodes_build_run};
+use crate::tools::nodes::build_nodes::{Variant, nodes_build_run};
 use crate::tools::nodes::get_nodes::{NodeData, read_node_data};
 use crate::tools::nodes::{BuildNodesParams, find_lump};
+use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::nodes;
 use serde_json::json;
@@ -28,29 +29,41 @@ fn extended_params(compress: Option<bool>) -> BuildNodesParams {
 }
 
 #[test]
-fn variant_names_parse_default_and_refuse() {
-    assert_eq!(Variant::parse(None).expect("absent"), Variant::Classic);
+fn variant_names_parse_and_follow_the_map_format() {
+    assert_eq!(Variant::parse("").expect("empty"), Variant::Classic);
     assert_eq!(
-        Variant::parse(Some("Classic")).expect("classic"),
+        Variant::parse("Classic").expect("classic"),
         Variant::Classic
     );
     assert_eq!(
-        Variant::parse(Some("extended")).expect("extended"),
+        Variant::parse("extended").expect("extended"),
         Variant::Extended
     );
-    assert_eq!(Variant::parse(Some("GL")).expect("gl"), Variant::Gl);
+    assert_eq!(Variant::parse("GL").expect("gl"), Variant::Gl);
     assert_eq!(
-        Variant::Classic.check(),
-        Implemented::Classic,
-        "classic builds"
+        Variant::for_format(MapFormat::Doom),
+        Variant::Classic,
+        "a Doom map defaults to the vanilla run"
     );
     assert_eq!(
-        Variant::Extended.check(),
-        Implemented::Extended,
-        "extended builds"
+        Variant::for_format(MapFormat::Hexen),
+        Variant::Classic,
+        "a Hexen map too"
     );
-    assert_eq!(Variant::Gl.check(), Implemented::Gl, "gl builds");
-    let bad = Variant::parse(Some("znodes")).expect_err("not a variant");
+    assert_eq!(
+        Variant::for_format(MapFormat::Udmf),
+        Variant::Extended,
+        "a UDMF map defaults to the only layout it reads"
+    );
+    assert_eq!(
+        Variant::resolve(None, MapFormat::Udmf).expect("absent takes the format default"),
+        Variant::Extended
+    );
+    assert_eq!(
+        Variant::resolve(Some("extended"), MapFormat::Doom).expect("explicit wins"),
+        Variant::Extended
+    );
+    let bad = Variant::parse("znodes").expect_err("not a variant");
     assert_eq!(bad.code(), "invalid_argument", "bad variant code");
     let message = bad.to_string();
     assert!(
@@ -332,9 +345,29 @@ fn extended_build_on_udmf_writes_znodes_between_the_markers() {
 }
 
 #[test]
+fn build_nodes_on_udmf_without_a_variant_defaults_to_extended() {
+    let mut session = udmf_room_session();
+    let report = nodes_build_run(&mut session, &build_params(None, None, None))
+        .expect("a parameterless UDMF build takes the extended layout");
+    assert_eq!(report.body.variant, "extended", "the format default");
+    assert_eq!(report.body.format, Some("ZNOD"), "compressed by default");
+    assert_eq!(report.body.subsectors, 2, "the same tree");
+    let map = working_map(&session);
+    assert!(
+        find_lump(&map.other, lumps::ZNODES).is_some(),
+        "the run landed in ZNODES"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec!["build nodes".to_owned()],
+        "one step"
+    );
+}
+
+#[test]
 fn classic_build_refuses_a_udmf_map_without_writing() {
     let mut session = udmf_room_session();
-    let error = nodes_build_run(&mut session, &build_params(None, None, None))
+    let error = nodes_build_run(&mut session, &build_params(None, Some("classic"), None))
         .expect_err("UDMF has no place for the classic run");
     assert_eq!(error.code(), "invalid_argument", "classic on UDMF code");
     assert!(

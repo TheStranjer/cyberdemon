@@ -3,15 +3,16 @@
 //! [`Variant`] is the caller's choice, [`NodeBuildPlan`] that choice with
 //! the builder's two knobs. [`apply_build_nodes`] is the edit closure every
 //! node build shares and the step [`super::build_all`] reuses: it rebuilds
-//! the tree through [`build_tree`] and installs the planned layout, the
+//! the tree through [`build_with_cost`] and installs the planned layout, the
 //! classic run with [`write_classic_run`] (the vanilla records from
 //! [`to_vanilla`], the split vertices appended to `VERTEXES`), the
 //! `ZDoom` extended lump with [`install_extended_nodes`] (one
 //! [`to_extended`] lump in `NODES` of a binary block or in `ZNODES` of a
 //! `UDMF` one) or the `gl` run through [`super::build_gl`]'s
 //! [`install_gl_nodes`]. [`NodesBuilt`] carries whichever of the three was
-//! written into [`NodesBuildBody`]; [`nodes_build_run`] resolves the
-//! parameters and runs one undoable edit.
+//! written into [`NodesBuildBody`]; [`nodes_build_run`] opens the map,
+//! resolves the variant it asked for — or the format's default — and runs
+//! one undoable edit.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,8 +20,7 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::bsp::{BspTree, BuildOptions, build_tree, to_extended, to_vanilla};
 use crate::error::CyberError;
-use crate::session::Session;
-use crate::tools::maps::common;
+use crate::session::{Scope, Session};
 use crate::tools::maps::params::edit_result_fragment;
 use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
@@ -28,6 +28,7 @@ use crate::wad::map::Map;
 
 use super::build_gl::{GlBuild, gl_edit_step, install_gl_nodes};
 use super::build_tables::{NODES_AFTER, SEGS_AFTER, SSECTORS_AFTER, ZNODES_AFTER, install_lump};
+use super::{Detail, Request, open_map};
 
 /// Arguments for [`Cyberdemon::build_nodes`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -35,12 +36,13 @@ pub(super) struct BuildNodesParams {
     /// The map to edit; defaults like [`GetNodesParams::map`].
     #[serde(default)]
     pub(super) map: Option<String>,
-    /// The node layout to write: `"classic"` (the default: the vanilla
+    /// The node layout to write: `"classic"` (the vanilla
     /// `SEGS`/`SSECTORS`/`NODES` lumps, binary maps only), `"extended"`
     /// (`ZDoom`'s single `XNOD`/`ZNOD` lump, stored in `NODES` of a
     /// binary map or in `ZNODES` of a `UDMF` one) or `"gl"` (the classic
     /// lumps plus the `glBSP` v2 `GL_*` run for `OpenGL` ports, binary
-    /// maps only).
+    /// maps only). Left out, a binary map takes `"classic"` and a
+    /// `UDMF` one `"extended"`.
     #[serde(default)]
     pub(super) variant: Option<String>,
     /// Cost added per seg a candidate partition splits (default `8`);
@@ -81,28 +83,35 @@ pub(super) struct NodeBuildPlan {
     pub(super) compress: bool,
 }
 
-/// A node layout this build can write.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Implemented {
-    /// The vanilla `SEGS`/`SSECTORS`/`NODES` record lumps.
-    Classic,
-    /// The `ZDoom` extended lump.
-    Extended,
-    /// The classic lumps plus the `glBSP` `GL_*` run.
-    Gl,
-}
-
 impl Variant {
-    /// The accepted `variant` text, `classic` being the default.
+    /// The layout a map of `format` gets when the caller names none:
+    /// `"classic"` for a binary map, `"extended"` for a `UDMF` one, the
+    /// only layout its block can carry.
+    pub(super) const fn for_format(format: MapFormat) -> Self {
+        match format {
+            MapFormat::Doom | MapFormat::Hexen => Self::Classic,
+            MapFormat::Udmf => Self::Extended,
+        }
+    }
+
+    /// The caller's choice: the parsed `variant` text when one is given,
+    /// the map format's default otherwise.
+    ///
+    /// # Errors
+    ///
+    /// [`Self::parse`]'s [`CyberError::InvalidArgument`] for any other name.
+    pub(super) fn resolve(text: Option<&str>, format: MapFormat) -> Result<Self, CyberError> {
+        text.map_or_else(|| Ok(Self::for_format(format)), Self::parse)
+    }
+
+    /// One explicit `variant` text, case-insensitively; `""` means the
+    /// classic run.
     ///
     /// # Errors
     ///
     /// [`CyberError::InvalidArgument`] naming the three accepted values.
-    pub(super) fn parse(text: Option<&str>) -> Result<Self, CyberError> {
-        let lowered = match text {
-            None => return Ok(Self::Classic),
-            Some(given) => given.to_ascii_lowercase(),
-        };
+    pub(super) fn parse(text: &str) -> Result<Self, CyberError> {
+        let lowered = text.to_ascii_lowercase();
         match lowered.as_str() {
             "" | "classic" => Ok(Self::Classic),
             "extended" => Ok(Self::Extended),
@@ -111,15 +120,6 @@ impl Variant {
                 "variant {other:?} is neither \"classic\", \"extended\" nor \"gl\"; \
                  pass one of those three or leave the parameter out"
             ))),
-        }
-    }
-
-    /// The layout this build writes.
-    pub(super) const fn check(self) -> Implemented {
-        match self {
-            Self::Classic => Implemented::Classic,
-            Self::Extended => Implemented::Extended,
-            Self::Gl => Implemented::Gl,
         }
     }
 }
@@ -155,6 +155,18 @@ pub(super) fn require_binary(map: &Map) -> Result<(), CyberError> {
     Ok(())
 }
 
+/// Rebuild the tree from `map`'s current geometry with the caller's
+/// per-split cost: the one [`build_tree`] call every layout shares.
+pub(super) fn build_with_cost(map: &Map, split_cost: i64) -> Result<BspTree, CyberError> {
+    build_tree(
+        map,
+        BuildOptions {
+            split_cost,
+            ..BuildOptions::default()
+        },
+    )
+}
+
 /// Install a finished tree as the vanilla run: the three record lumps and
 /// the split vertices its seg endpoints need, appended after the map's.
 pub(super) fn write_classic_run(map: &mut Map, tree: &BspTree) -> Result<ClassicBuild, CyberError> {
@@ -178,13 +190,7 @@ pub(super) fn write_classic_run(map: &mut Map, tree: &BspTree) -> Result<Classic
 /// split vertices the seg endpoints need after the map's own.
 fn install_classic_nodes(map: &mut Map, split_cost: i64) -> Result<ClassicBuild, CyberError> {
     require_binary(map)?;
-    let tree = build_tree(
-        map,
-        BuildOptions {
-            split_cost,
-            ..BuildOptions::default()
-        },
-    )?;
+    let tree = build_with_cost(map, split_cost)?;
     write_classic_run(map, &tree)
 }
 
@@ -226,14 +232,12 @@ pub(super) fn apply_build_nodes(
     map: &mut Map,
     plan: NodeBuildPlan,
 ) -> Result<NodesBuilt, CyberError> {
-    match plan.variant.check() {
-        Implemented::Classic => {
-            install_classic_nodes(map, plan.split_cost).map(NodesBuilt::Classic)
-        }
-        Implemented::Extended => {
+    match plan.variant {
+        Variant::Classic => install_classic_nodes(map, plan.split_cost).map(NodesBuilt::Classic),
+        Variant::Extended => {
             install_extended_nodes(map, plan.split_cost, plan.compress).map(NodesBuilt::Extended)
         }
-        Implemented::Gl => {
+        Variant::Gl => {
             install_gl_nodes(map, plan.split_cost).map(|built| NodesBuilt::Gl(Box::new(built)))
         }
     }
@@ -270,13 +274,7 @@ pub(super) fn install_extended_nodes(
     split_cost: i64,
     compress: bool,
 ) -> Result<ExtendedBuild, CyberError> {
-    let tree = build_tree(
-        map,
-        BuildOptions {
-            split_cost,
-            ..BuildOptions::default()
-        },
-    )?;
+    let tree = build_with_cost(map, split_cost)?;
     let run = to_extended(map, &tree, compress)?;
     let built = ExtendedBuild {
         format: run.format,
@@ -405,19 +403,25 @@ pub(super) struct NodesBuildReport {
     pub(super) edit: JsonMap<String, Value>,
 }
 
-/// `build_nodes`' work: resolve the variant, the map and the cost, run
-/// the one edit step in the layout the caller chose.
+/// `build_nodes`' work: open the map, resolve the variant it asked for
+/// (or its format's default) and the cost, and run the one edit step in
+/// the chosen layout.
 pub(super) fn nodes_build_run(
     session: &mut Session,
     args: &BuildNodesParams,
 ) -> Result<NodesBuildReport, CyberError> {
-    let variant = Variant::parse(args.variant.as_deref())?;
+    let request = Request {
+        map: args.map.clone(),
+        scope: Scope::Merged,
+        detail: Detail::Summary,
+    };
+    let (name, _dir, _block, model) = open_map(session, &request)?;
+    let variant = Variant::resolve(args.variant.as_deref(), model.format)?;
     let plan = NodeBuildPlan {
         variant,
         split_cost: args.split_cost.unwrap_or(DEFAULT_SPLIT_COST),
         compress: args.compress.unwrap_or(true),
     };
-    let name = common::resolve_map_name(session, args.map.as_deref())?;
     let (built, report) = if variant == Variant::Gl {
         let merged = session.merged();
         session.edit("build nodes", |wad| gl_edit_step(wad, &merged, name, plan))?

@@ -148,9 +148,10 @@ compress? (true)}` → `{variant, segs, subsectors, nodes, warnings, map,
 nodes_invalidated, copied_to_working}` plus the per-variant keys below —
 one undoable edit that rebuilds the map's BSP tree from its current
 geometry with the in-house builder and writes the result. `variant`
-selects the layout:
+selects the layout; left out, a binary `Doom`/`Hexen` map takes
+`"classic"` and a `UDMF` one `"extended"`:
 
-- `"classic"` (the default) writes the vanilla three-lump run —
+- `"classic"` (the binary-map default) writes the vanilla three-lump run —
   12-byte `SEGS`, 4-byte `SSECTORS`, 28-byte `NODES` with the root last
   — which vanilla `Doom` needs to play the map and every port can use.
   Binary maps only: on a `UDMF` map it fails `invalid_argument` (`UDMF
@@ -236,9 +237,10 @@ does; left out, a binary `Doom`/`Hexen` map takes `"classic"` and a
   and a fresh `BLOCKMAP` (blocklists shared while `compress`, the
   default, as in `build_blockmap`).
 - `UDMF` maps get `ZNODES` alone: `ZDoom` builds the blockmap and the
-  reject itself. Pass `reject_mode` explicitly and a `REJECT` lump is
-  written into the block as well (which `ZDoom` reads); `BLOCKMAP` is
-  never added to a `UDMF` block.
+  reject itself, so a `UDMF` block carries no `REJECT` lump. Naming
+  `reject_mode` on a `UDMF` map is `invalid_argument` (`UDMF maps carry
+  no REJECT`: leave it out); `BLOCKMAP` is never added to a `UDMF`
+  block either.
 - `compress` also picks `ZNOD` vs raw `XNOD` for an extended build, as
   in `build_nodes`.
 
@@ -249,10 +251,10 @@ or `null`; `blockmap` the `build_blockmap` keys (`bytes`, `columns`,
 `rows`, `origin`, `vanilla_safe`) or `null`. Everything happens in one
 `Session::edit`: one undo entry covers the tree, the `GL_*` block, the
 matrix and the grid together, and any refusal — a bad `variant` or
-`reject_mode`, `classic`/`gl` on a `UDMF` map, a map with no vertices or
-no linedef sides (`invalid_argument`), a record limit
-(`limit_exceeded`) — rolls the whole step back with nothing partial
-written. Like the single builders, a build is a product, not geometry:
+`reject_mode`, `classic`/`gl` or a named `reject_mode` on a `UDMF` map,
+a map with no vertices or no linedef sides (`invalid_argument`), a
+record limit (`limit_exceeded`) — rolls the whole step back with nothing
+partial written. Like the single builders, a build is a product, not geometry:
 `nodes_invalidated` reports `false`. Inspect with `get_nodes`,
 `get_reject` and `get_blockmap`.
 
@@ -271,7 +273,10 @@ is `invalid_argument`; `build_blockmap` on a map with no vertices is
 `invalid_argument` and an oversized grid, linedef index or lump is
 `limit_exceeded`; `build_nodes` and `build_all_nodes` on a map with no
 linedef sides is `invalid_argument`, `classic` or `gl` on a `UDMF` map
-is `invalid_argument` (build `"extended"`), a past-record limit (for
+is `invalid_argument` (build `"extended"`, which `build_nodes` defaults
+to there anyway), a named `reject_mode` on a `UDMF` map is
+`invalid_argument` (`UDMF maps carry no REJECT`: leave it out), a
+past-record limit (for
 `gl` too: `GL_VERT` past `32767`, a `GL_SEGS` count past `65535`) is
 `limit_exceeded` and a collapsed GL region or unplaceable seg is
 `internal`; an unknown `variant` or `reject_mode` is

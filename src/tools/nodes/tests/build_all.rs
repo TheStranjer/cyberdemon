@@ -63,13 +63,10 @@ fn plan_all_defaults_follow_the_map_format() {
     );
     assert_eq!(leaves.reject, None, "ZDoom builds the reject itself");
     assert!(!leaves.blockmap, "and the blockmap");
-    let asked = plan_all(
-        &udmf,
-        &all_params(None, Some("extended"), Some("COMPONENTS")),
-    )
-    .expect("an explicit mode plans a reject");
+    let stated = plan_all(&binary, &all_params(None, None, Some("components")))
+        .expect("a binary map may ask for a mode");
     assert_eq!(
-        asked.reject,
+        stated.reject,
         Some(RejectMode::Components),
         "the explicit mode"
     );
@@ -87,6 +84,31 @@ fn plan_all_defaults_follow_the_map_format() {
     let bad_mode =
         plan_all(&binary, &all_params(None, None, Some("opaque"))).expect_err("not a mode");
     assert_eq!(bad_mode.code(), "invalid_argument", "bad mode code");
+}
+
+#[test]
+fn plan_all_refuses_a_reject_mode_on_a_udmf_map() {
+    let udmf = Map {
+        format: MapFormat::Udmf,
+        ..Map::default()
+    };
+    let asked = plan_all(
+        &udmf,
+        &all_params(None, Some("extended"), Some("COMPONENTS")),
+    )
+    .expect_err("a UDMF map carries no reject to ask for");
+    assert_eq!(
+        asked.code(),
+        "invalid_argument",
+        "explicit mode on UDMF code"
+    );
+    assert!(
+        asked.to_string().contains("UDMF maps carry no REJECT"),
+        "the message names the rule: {asked}"
+    );
+    let zeroed = plan_all(&udmf, &all_params(None, None, Some("zero")))
+        .expect_err("the default mode is refused on UDMF too");
+    assert_eq!(zeroed.code(), "invalid_argument", "zero mode on UDMF code");
 }
 
 #[test]
@@ -231,7 +253,7 @@ fn all_nodes_gl_run_attaches_the_gl_block_in_the_same_step() {
 }
 
 #[test]
-fn all_nodes_udmf_run_writes_znodes_only_unless_asked_for_a_reject() {
+fn all_nodes_udmf_run_writes_znodes_only_and_refuses_a_reject_mode() {
     let mut session = udmf_room_session();
     let report = all_nodes_run(&mut session, &all_params(None, None, None))
         .expect("the UDMF room fully builds");
@@ -247,22 +269,32 @@ fn all_nodes_udmf_run_writes_znodes_only_unless_asked_for_a_reject() {
             .any(|lump| lump == "BLOCKMAP" || lump == "REJECT"),
         "neither side lump was added: {names:?}",
     );
-    let asked = all_nodes_run(
-        &mut session,
-        &all_params(None, Some("EXTENDED"), Some("components")),
-    )
-    .expect("an explicit mode adds the matrix");
-    assert_eq!(
-        asked.reject.expect("the reject reports").mode,
-        "components",
-        "the echo"
-    );
+    for mode in ["zero", "COMPONENTS"] {
+        let asked = all_nodes_run(
+            &mut session,
+            &all_params(None, Some("EXTENDED"), Some(mode)),
+        )
+        .expect_err("a UDMF map carries no reject to ask for");
+        assert_eq!(
+            asked.code(),
+            "invalid_argument",
+            "explicit mode on UDMF code"
+        );
+        assert!(
+            asked.to_string().contains("UDMF maps carry no REJECT"),
+            "the message names the rule: {asked}"
+        );
+    }
     let map = working_map(&session);
     assert!(
-        find_lump(&map.other, lumps::REJECT).is_some_and(|lump| lump.size() == 1),
-        "one sector's matrix landed in the block",
+        find_lump(&map.other, lumps::REJECT).is_none(),
+        "no matrix was written into the block",
     );
-    assert_eq!(session.undo_labels().len(), 2, "two builds, two steps");
+    assert_eq!(
+        session.undo_labels().len(),
+        1,
+        "the refusals entered no step"
+    );
 }
 
 #[test]

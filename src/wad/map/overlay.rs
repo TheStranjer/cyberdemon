@@ -195,6 +195,8 @@ impl Source {
                 name: map.name,
                 format: map.format,
                 udmf_namespace: map.udmf_namespace.clone(),
+                extra_globals: Vec::new(),
+                extra_blocks: Vec::new(),
                 things: Vec::new(),
                 vertices: map.vertices.clone(),
                 linedefs: map.linedefs.clone(),

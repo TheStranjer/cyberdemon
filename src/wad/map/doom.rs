@@ -61,6 +61,8 @@ pub fn read_doom_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
         name,
         format: MapFormat::Doom,
         udmf_namespace: None,
+        extra_globals: Vec::new(),
+        extra_blocks: Vec::new(),
         things: read_things(member_data(members, lumps::THINGS, "Doom")?)?,
         vertices: read_vertices(member_data(members, lumps::VERTEXES, "Doom")?)?,
         linedefs: read_linedefs(member_data(members, lumps::LINEDEFS, "Doom")?)?,

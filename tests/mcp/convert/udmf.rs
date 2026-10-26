@@ -3,7 +3,8 @@
 //! A binary `Doom` block becoming `UDMF` and coming back with its ten vanilla
 //! members and its counts, the `Hexen` fixture map going to `UDMF` `zdoom`
 //! and home with its `BEHAVIOR` intact, a `UDMF` block losing its `ZNODES`
-//! and `GL` run, what a lossy `UDMF` map reports when it becomes binary, and
+//! and `GL` run, what a lossy `UDMF` map reports when it becomes binary,
+//! how an edit keeps its carried global and unknown block, and
 //! `Line_SetIdentification` travelling through the `UDMF` line id.
 
 use serde_json::{Value, json};
@@ -13,6 +14,7 @@ use crate::convert::{
     convert, counts, first_linedef, loaded, lump_names, map_row, row_of, warns,
 };
 use crate::fixtures::{iwad, pwad_conversions, pwad_map_formats};
+use crate::support::call;
 
 #[tokio::test]
 async fn converting_map01_to_udmf_rewrites_the_block() {
@@ -187,6 +189,14 @@ async fn a_lossy_udmf_map_reports_what_a_binary_record_cannot_store() {
         warns(&out, "BEHAVIOR"),
         "a BEHAVIOR lump cannot stay in a binary Doom block: {out}"
     );
+    assert!(
+        warns(&out, "ednum"),
+        "the carried global cannot stay either: {out}"
+    );
+    assert!(
+        warns(&out, "vertex_slope"),
+        "and neither can the unknown block: {out}"
+    );
     assert_eq!(
         counts(&client, "MAP05", "working").await,
         row_of(LOSSY_COUNTS),
@@ -194,6 +204,40 @@ async fn a_lossy_udmf_map_reports_what_a_binary_record_cannot_store() {
     );
     let row = map_row(&client, "MAP05", "working").await;
     assert_eq!(row["format"], "doom", "and the block reads as binary Doom");
+}
+
+#[tokio::test]
+async fn editing_a_lossy_udmf_map_keeps_globals_and_unknown_blocks() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = loaded(&pwad_conversions(dir.path())).await;
+    call(
+        &client,
+        "edit_thing",
+        json!({"map": "MAP05", "index": 0_i32, "x": 40_i32, "z": 0_i32}),
+    )
+    .await;
+    let lump = call(
+        &client,
+        "get_lump",
+        json!({"name": "TEXTMAP", "scope": "working", "format": "text"}),
+    )
+    .await;
+    let text = lump["text"].as_str().expect("the TEXTMAP reads as text");
+    assert!(
+        text.contains("ednum = 5;"),
+        "the edit's rewrite kept the global: {text}"
+    );
+    assert!(
+        text.contains("vertex_slope {") && text.contains("angle = 45;"),
+        "the edit's rewrite kept the unknown block and its fields: {text}"
+    );
+    assert!(text.contains("x = 40.000;"), "and the thing moved: {text}");
+    let out = convert(&client, json!({"map": "MAP05", "to": "doom"})).await;
+    assert!(
+        warns(&out, "ednum"),
+        "the conversion names the dropped global: {out}"
+    );
+    assert!(warns(&out, "vertex_slope"), "and the dropped block: {out}");
 }
 
 #[tokio::test]

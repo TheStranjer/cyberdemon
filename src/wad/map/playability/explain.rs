@@ -321,6 +321,8 @@ mod tests {
             name: name("MAP01"),
             format: MapFormat::Doom,
             udmf_namespace: None,
+            extra_globals: Vec::new(),
+            extra_blocks: Vec::new(),
             things: vec![spawn(1, 128, 128, 0)],
             vertices,
             linedefs,

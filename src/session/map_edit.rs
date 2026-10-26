@@ -333,6 +333,8 @@ mod tests {
             name: name(text),
             format,
             udmf_namespace: (format == MapFormat::Udmf).then(|| "zdoom".to_owned()),
+            extra_globals: Vec::new(),
+            extra_blocks: Vec::new(),
             things: vec![spawn(64, 128)],
             vertices: vec![
                 vertex(0, 0),

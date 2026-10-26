@@ -167,11 +167,13 @@ pub fn pwad_nodes(dir: &Path) -> PathBuf {
 }
 
 /// The `MAP05` of the conversion fixture: a `Doom` family `UDMF` block whose
-/// `TEXTMAP` carries fractional coordinates, unmodelled fields and a
-/// `BEHAVIOR` lump — everything a binary `Doom` record cannot store.
+/// `TEXTMAP` carries fractional coordinates, unmodelled fields, a global
+/// assignment, an unknown block kind and a `BEHAVIOR` lump — everything a
+/// binary `Doom` record cannot store.
 fn lossy_udmf_map05() -> Vec<Lump> {
     let text = concat!(
         "namespace = \"doom\";",
+        "ednum = 5;",
         "vertex { x = 0.4; y = 0; }",
         "vertex { x = 128.5; y = 0; }",
         "vertex { x = 128; y = 128.25; }",
@@ -184,6 +186,7 @@ fn lossy_udmf_map05() -> Vec<Lump> {
         "linedef { v1 = 2; v2 = 3; sidefront = 0; }",
         "linedef { v1 = 3; v2 = 0; sidefront = 0; }",
         "thing { x = 64.5; y = 64; type = 1; height = 8.5; comment = \"start\"; }",
+        "vertex_slope { vertex = 0; angle = 45; }",
     );
     vec![
         marker("MAP05"),
@@ -209,6 +212,8 @@ fn hexen_identification_map06() -> Vec<Lump> {
         name: parsed("MAP06"),
         format: MapFormat::Hexen,
         udmf_namespace: None,
+        extra_globals: Vec::new(),
+        extra_blocks: Vec::new(),
         things: vec![spawn(1, 0, 0, 0)],
         vertices: vec![vertex(0, 0), vertex(128, 0), vertex(128, 128)],
         linedefs: vec![

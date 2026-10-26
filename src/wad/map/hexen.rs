@@ -62,6 +62,8 @@ pub fn read_hexen_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberErro
         name,
         format: MapFormat::Hexen,
         udmf_namespace: None,
+        extra_globals: Vec::new(),
+        extra_blocks: Vec::new(),
         things: read_things(member_data(members, lumps::THINGS, "Hexen")?)?,
         vertices: read_vertices(member_data(members, lumps::VERTEXES, "Hexen")?)?,
         linedefs: read_linedefs(member_data(members, lumps::LINEDEFS, "Hexen")?)?,

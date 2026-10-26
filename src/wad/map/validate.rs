@@ -505,6 +505,8 @@ mod tests {
             name: name("MAP01"),
             format: MapFormat::Doom,
             udmf_namespace: None,
+            extra_globals: Vec::new(),
+            extra_blocks: Vec::new(),
             things: vec![thing_at(1, 64, 128), thing_at(3001, 384, 128)],
             vertices: vec![
                 vertex(0, 0),
@@ -557,6 +559,8 @@ mod tests {
             name: name("MAP01"),
             format: MapFormat::Doom,
             udmf_namespace: None,
+            extra_globals: Vec::new(),
+            extra_blocks: Vec::new(),
             things: vec![thing_at(30_010, 10, 20)],
             vertices: vec![vertex(0, 0), vertex(0, 0)],
             linedefs: vec![odd, broken_end],

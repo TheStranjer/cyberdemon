@@ -5,11 +5,12 @@
 //! fields last — after [`as_line_id`] has folded each binary `Hexen`
 //! `Line_SetIdentification` into the model's line id and [`store_line_ids`]
 //! has carried the ids the other way — and [`strip_node_lumps`],
-//! [`strip_behavior`] and [`drop_extras`] remove what the target cannot
-//! carry, counting the dropped `UDMF` fields and the elements that held a
-//! rounded original through [`ExtraBag`]. [`parse_format`] and
-//! [`namespace_name`] validate the two words of a request before any of it
-//! runs.
+//! [`strip_behavior`], [`drop_extras`] and [`drop_udmf_extras`] remove what
+//! the target cannot carry, counting the dropped `UDMF` fields and the
+//! elements that held a rounded original through [`ExtraBag`] and naming
+//! every dropped `UDMF` global and unknown block in a warning.
+//! [`parse_format`] and [`namespace_name`] validate the two words of a
+//! request before any of it runs.
 
 use alloc::collections::BTreeMap;
 
@@ -62,17 +63,39 @@ pub(super) fn into_udmf(map: &mut Map, plan: &Plan) {
 
 /// Rewrites `map` as a binary block in the plan's format: the line ids of a
 /// `Hexen` family source move into `Line_SetIdentification`, every `extra`
-/// bag goes, and a `BEHAVIOR` lump cannot stay in a `Doom` block.
+/// bag, carried global and unknown block goes, and a `BEHAVIOR` lump
+/// cannot stay in a `Doom` block.
 pub(super) fn into_binary(map: &mut Map, plan: &Plan, conversion: &mut Conversion) {
     if plan.format == MapFormat::Hexen && map.format == MapFormat::Udmf {
         store_line_ids(map, &mut conversion.warnings);
     }
     drop_extras(map, conversion);
+    drop_udmf_extras(map, conversion);
     if plan.format == MapFormat::Doom {
         strip_behavior(map, conversion);
     }
     map.format = plan.format;
     map.udmf_namespace = None;
+}
+
+/// Drops the `UDMF` globals and unknown blocks a binary layout cannot carry,
+/// each named in a warning so the caller sees what the rewrite lost.
+fn drop_udmf_extras(map: &mut Map, conversion: &mut Conversion) {
+    let globals = core::mem::take(&mut map.extra_globals);
+    let blocks = core::mem::take(&mut map.extra_blocks);
+    for (name, _value) in globals {
+        conversion.warnings.push(format!(
+            "the UDMF global {name} was dropped: a binary map block carries no globals, only \
+             the five element lumps; convert to UDMF to keep it"
+        ));
+    }
+    for block in blocks {
+        conversion.warnings.push(format!(
+            "the UDMF {} block was dropped: a binary map block carries no blocks beyond the \
+             five element lumps; convert to UDMF to keep it",
+            block.kind
+        ));
+    }
 }
 
 /// Removes every generated node lump from `map`'s block lumps.

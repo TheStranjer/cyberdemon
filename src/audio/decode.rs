@@ -75,10 +75,11 @@ fn is_mpeg_sync(bytes: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// [`CyberError::Format`] for unrecognizable or corrupt data and for files
-/// that carry no decodable audio; [`CyberError::Unsupported`] for a
-/// recognized stream whose codec this build cannot decode;
-/// [`CyberError::LimitExceeded`] for audio longer than ten minutes.
+/// [`CyberError::Format`] for unrecognizable or corrupt data, for files
+/// that carry no decodable audio, and for a decoded stream with a 0 Hz
+/// sample rate; [`CyberError::Unsupported`] for a recognized stream whose
+/// codec this build cannot decode; [`CyberError::LimitExceeded`] for audio
+/// longer than ten minutes.
 #[inline]
 pub fn decode_any(bytes: &[u8], hint_ext: Option<&str>) -> Result<Pcm, CyberError> {
     let pcm = if is_wave(bytes) {
@@ -284,8 +285,16 @@ fn assemble(drained: Drained) -> Result<Pcm, CyberError> {
     })
 }
 
-/// Refuses audio longer than ten minutes.
+/// Refuses a zero sample rate — `Pcm::duration_ms` reports `0` for it, so
+/// it would slip past the cap — and audio longer than ten minutes.
 fn check_decoded_length(pcm: &Pcm) -> Result<(), CyberError> {
+    if pcm.sample_rate == 0 {
+        return Err(CyberError::Format(
+            "the decoded sound reports a sample rate of 0 Hz, so its length cannot be checked \
+             against the decode limit; re-export the file with a positive rate"
+                .to_owned(),
+        ));
+    }
     let longest = pcm.duration_ms();
     if longest > MAX_DECODED_MS {
         return Err(CyberError::LimitExceeded(format!(
@@ -514,5 +523,60 @@ mod tests {
             error.to_string().contains("10 minutes"),
             "the message names the cap: {error}"
         );
+    }
+
+    #[test]
+    fn a_zero_rate_pcm_cannot_dodge_the_length_check() {
+        // duration_ms is 0 for a zero rate, so without the check this
+        // would sail past the ten-minute cap.
+        let pcm = Pcm {
+            sample_rate: 0,
+            channels: 1,
+            samples: vec![0_i16; 700_000],
+        };
+        let error = super::check_decoded_length(&pcm).expect_err("0 Hz is not measurable");
+        assert_eq!(error.code(), "format_error", "zero rate code");
+        assert!(
+            error.to_string().contains("0 Hz"),
+            "the message names the rate: {error}"
+        );
+    }
+
+    #[test]
+    fn a_zero_rate_wav_never_decodes() {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1_u16.to_le_bytes()); // integer PCM
+        fmt.extend_from_slice(&1_u16.to_le_bytes()); // mono
+        fmt.extend_from_slice(&0_u32.to_le_bytes()); // rate 0
+        fmt.extend_from_slice(&0_u32.to_le_bytes()); // byte rate
+        fmt.extend_from_slice(&2_u16.to_le_bytes()); // block align
+        fmt.extend_from_slice(&16_u16.to_le_bytes()); // bits
+        let data = [0_u8; 8];
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        let riff_size = fmt
+            .len()
+            .checked_add(data.len())
+            .and_then(|n| n.checked_add(20))
+            .expect("test size fits");
+        let size = u32::try_from(riff_size).expect("test size fits u32");
+        out.extend_from_slice(&size.to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(
+            &u32::try_from(fmt.len())
+                .expect("test size fits")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(&fmt);
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(
+            &u32::try_from(data.len())
+                .expect("test size fits")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(&data);
+        let error = decode_any(&out, Some("wav")).expect_err("a 0 Hz header cannot decode");
+        assert_eq!(error.code(), "format_error", "zero rate wav code");
     }
 }

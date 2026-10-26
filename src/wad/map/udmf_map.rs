@@ -23,8 +23,10 @@
 //! name in table order wins; a monster name true together with its
 //! player counterpart also sets `monsteractivate`), and every other
 //! flag is a plain boolean bit. Blocks of kinds other than the five
-//! elements and global assignments other than `namespace` have no
-//! modelled home and are dropped.
+//! elements and global assignments other than the first `namespace` ride
+//! along verbatim in [`Map::extra_blocks`] and [`Map::extra_globals`]:
+//! the writer emits the globals after the `namespace` declaration and
+//! the blocks after the element blocks, in the orders they were read.
 //!
 //! The two directions are implementation details of these entry points:
 //! the field reader and the five element readers live in the private
@@ -111,9 +113,10 @@ const DOOM_THING_INVERSES: [(u32, &str); 3] = [
 /// block's lumps after its header, `TEXTMAP` through `ENDMAP`).
 ///
 /// The `TEXTMAP` parses through [`crate::wad::udmf`], the `namespace`
-/// global is required, and every other member but `ENDMAP` is carried
-/// into [`Map::other`]; blocks of kinds other than the five model
-/// elements are ignored.
+/// global is required, every other global assignment rides into
+/// [`Map::extra_globals`] and every other member but `ENDMAP` into
+/// [`Map::other`]; blocks of kinds other than the five model elements
+/// ride into [`Map::extra_blocks`] in document order.
 ///
 /// # Errors
 ///
@@ -128,6 +131,7 @@ pub fn read_udmf_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
     let doc = parse_udmf(&source)?;
     let mut map = Map::new_empty(name, MapFormat::Udmf);
     map.udmf_namespace = Some(namespace_of(&doc)?);
+    map.extra_globals = carried_globals(&doc);
     let family = map.flag_family();
     collect_blocks(&doc, family, &mut map)?;
     map.other = carried_members(members);
@@ -142,7 +146,10 @@ pub fn read_udmf_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
 /// differ from the `UDMF` default, booleans only when true and `extra`
 /// texts verbatim; a modelled field whose `extra` text still rounds to
 /// the model value is written as that text, and coordinate fields
-/// written as plain numbers use the `"<int>.000"` float form.
+/// written as plain numbers use the `"<int>.000"` float form. The
+/// `namespace` global leads the globals, [`Map::extra_globals`] follow
+/// in their order, and [`Map::extra_blocks`] follow the element blocks in
+/// theirs.
 ///
 /// # Errors
 ///
@@ -191,6 +198,23 @@ fn carried_members(members: &[Lump]) -> Vec<Lump> {
         .collect()
 }
 
+/// The globals other than the `namespace` declaration the reader consumes
+/// (its own first occurrence), in written order.
+fn carried_globals(doc: &UdmfDoc) -> Vec<(String, UdmfValue)> {
+    let mut consumed_namespace = false;
+    doc.globals
+        .iter()
+        .filter(|entry| {
+            if entry.0 == NAMESPACE && !consumed_namespace {
+                consumed_namespace = true;
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 /// The declared namespace, or a `Format` error when the document holds
 /// no `namespace` global or one of a non-string shape.
 fn namespace_of(doc: &UdmfDoc) -> Result<String, CyberError> {
@@ -216,7 +240,8 @@ fn namespace_of(doc: &UdmfDoc) -> Result<String, CyberError> {
 }
 
 /// Appends every element block of `doc` to its kind in `map`, in
-/// document order; blocks of other kinds are ignored.
+/// document order; blocks of other kinds ride into
+/// [`Map::extra_blocks`] in theirs.
 fn collect_blocks(doc: &UdmfDoc, family: FlagFamily, map: &mut Map) -> Result<(), CyberError> {
     for block in &doc.blocks {
         let mut fields = Fields::new(&block.fields);
@@ -241,7 +266,7 @@ fn collect_blocks(doc: &UdmfDoc, family: FlagFamily, map: &mut Map) -> Result<()
                 let at = element("sector", map.sectors.len());
                 map.sectors.push(read_sector(&mut fields, &at)?);
             }
-            _ => {}
+            _ => map.extra_blocks.push(block.clone()),
         }
     }
     Ok(())
@@ -253,7 +278,8 @@ fn element(kind: &str, index: usize) -> String {
 }
 
 /// The element blocks of `map`, `sector` first, under its namespace
-/// global.
+/// global; [`Map::extra_globals`] follow the namespace and
+/// [`Map::extra_blocks`] the element blocks, both in carried order.
 fn document(map: &Map) -> Result<UdmfDoc, CyberError> {
     let family = map.flag_family();
     let namespace = map
@@ -278,7 +304,9 @@ fn document(map: &Map) -> Result<UdmfDoc, CyberError> {
     for spawn in &map.things {
         blocks.push(write_thing(spawn, family));
     }
-    let globals = vec![(NAMESPACE.to_owned(), UdmfValue::Str(namespace))];
+    blocks.extend(map.extra_blocks.iter().cloned());
+    let mut globals = vec![(NAMESPACE.to_owned(), UdmfValue::Str(namespace))];
+    globals.extend(map.extra_globals.iter().cloned());
     Ok(UdmfDoc { globals, blocks })
 }
 

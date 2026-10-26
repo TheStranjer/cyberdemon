@@ -103,6 +103,8 @@ pub(super) fn two_rooms() -> Map {
         name: LumpName::parse("MAP01").expect("test names are valid"),
         format: MapFormat::Doom,
         udmf_namespace: None,
+        extra_globals: Vec::new(),
+        extra_blocks: Vec::new(),
         things: vec![spawn(1, 64, 128, 0), spawn(3001, 384, 128, 180)],
         vertices: vec![
             vertex(0, 0),

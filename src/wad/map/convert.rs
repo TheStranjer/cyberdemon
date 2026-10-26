@@ -27,9 +27,11 @@
 //!   for what the model does not name, so every `extra` entry goes, counted
 //!   per element kind in [`Conversion::dropped_fields`]; the elements whose
 //!   `extra` held the written text of a number the loader had already
-//!   rounded are counted in [`Conversion::fractional_coordinates`]. Values
-//!   outside the stored field types are [`super::doom`]'s refusal, i.e.
-//!   [`CyberError::LimitExceeded`] naming element and field.
+//!   rounded are counted in [`Conversion::fractional_coordinates`]. A
+//!   carried `UDMF` global or unknown block goes the same way, each named
+//!   in one warning. Values outside the stored field types are
+//!   [`super::doom`]'s refusal, i.e. [`CyberError::LimitExceeded`] naming
+//!   element and field.
 //! - binary `Hexen` → `UDMF` (a `Hexen` family namespace): `UDMF` has no
 //!   `Line_SetIdentification`, so each line's `args[0]` becomes its line id
 //!   (the model's [`Linedef::tag`]) and that special goes. `BEHAVIOR` and

@@ -63,11 +63,17 @@ layer owns is copied into the working archive by that same step
   kind in `dropped_fields`. `fractional_coordinates` counts, per kind, how
   many elements had a fractional number that was **already** rounded when
   the `UDMF` was read — the conversion loses nothing more, but it is worth
-  knowing. `UDMF` thing `height` (`z`), `id` (`tid`) and line args beyond the
-  target's fields have nowhere to go in binary `Doom`, and are simply not
-  written.
+  knowing. A map-wide field other than `namespace` and a block whose kind
+  is not one of the five elements have no binary home either: each drops
+  and is named in a `warning`. `UDMF` thing `height` (`z`), `id` (`tid`)
+  and line args beyond the target's fields have nowhere to go in binary
+  `Doom`, and are simply not written.
 - **`UDMF` → `UDMF`** inside one family rewrites the `namespace` declaration
-  only; every element and every field stays.
+  only; every element and every field stays, including map-wide fields
+  other than `namespace` and blocks of kinds the reader does not model —
+  they ride along verbatim and an edit rewrite of the block re-emits them
+  (the globals after the `namespace` line, the unknown blocks after the
+  element blocks).
 - Values outside the target's ranges (a `Doom` `i16`/`u16` field, a `Hexen`
   byte `special` or `arg`) fail `limit_exceeded` naming the element and
   field, and **nothing changes**.

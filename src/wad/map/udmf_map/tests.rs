@@ -6,8 +6,9 @@
 //! The topics below round trip the two-room map in both families, decode
 //! every linedef and thing boolean of each spelling and the activation
 //! field, keep fractions and unmodelled fields verbatim until the element
-//! moves, and refuse a missing namespace, a missing required field, an
-//! absent `TEXTMAP` lump and non-`UTF-8` text.
+//! moves, carry global assignments and unknown block kinds verbatim, and
+//! refuse a missing namespace, a missing required field, an absent
+//! `TEXTMAP` lump and non-`UTF-8` text.
 use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
@@ -15,6 +16,7 @@ use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::{lump, marker, name, two_room_map};
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::udmf_map::{read_udmf_map, write_udmf_map};
+use crate::wad::udmf::UdmfValue;
 
 /// The model built from one `TEXTMAP` text plus a closing `ENDMAP`.
 fn read_ok(text: &str) -> Map {
@@ -316,6 +318,96 @@ fn unmodelled_fields_and_shapes_survive_verbatim() {
         assert!(text.contains(wanted), "the text keeps `{wanted}`: {text}");
     }
     assert_eq!(read_ok(&text), map, "and reads back identically");
+}
+
+#[test]
+fn globals_and_unknown_blocks_ride_along_verbatim() {
+    let map = read_ok(concat!(
+        "namespace = \"zdoom\";",
+        "ednum = 5;",
+        "author = \"A. Demo\";",
+        "sector { texturefloor = \"FLOOR1\"; textureceiling = \"CEIL1\"; }",
+        "vertex_slope { vertex = 0; angle = 45; }",
+        "skybox_plane { height = 1.5; }",
+        "thing { x = 0; y = 0; type = 1; }",
+    ));
+    assert_eq!(
+        map.extra_globals,
+        vec![
+            ("ednum".to_owned(), UdmfValue::Int(5_i64)),
+            ("author".to_owned(), UdmfValue::Str("A. Demo".to_owned())),
+        ],
+        "every global but the namespace is carried, in written order"
+    );
+    let kinds: Vec<&str> = map
+        .extra_blocks
+        .iter()
+        .map(|block| block.kind.as_str())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["vertex_slope", "skybox_plane"],
+        "unknown blocks are carried in document order"
+    );
+    assert!(map.vertices.is_empty(), "a vertex_slope is no vertex");
+    assert_eq!(map.sectors.len(), 1, "the element blocks still decode");
+    assert_eq!(map.things.len(), 1, "and their indices ignore the extras");
+    let text = textmap_of(&write_udmf_map(&map).expect("the map writes"));
+    let namespace_at = text.find("namespace =").expect("the namespace leads");
+    let ednum_at = text.find("ednum = 5;").expect("the first global");
+    let author_at = text
+        .find("author = \"A. Demo\";")
+        .expect("the second global, quoted as written");
+    let thing_at = text.find("thing {").expect("the element blocks");
+    let slope_at = text
+        .find("vertex_slope {")
+        .expect("the first unknown block");
+    let slope_angle_at = text.find("angle = 45;").expect("its field");
+    let sky_at = text
+        .find("skybox_plane {")
+        .expect("the second unknown block");
+    let sky_height_at = text.find("height = 1.5;").expect("its fraction");
+    assert!(
+        namespace_at < ednum_at && ednum_at < author_at,
+        "the globals follow the namespace declaration, in order: {text}"
+    );
+    assert!(author_at < thing_at, "the globals lead the blocks: {text}");
+    assert!(
+        thing_at < slope_at && slope_at < slope_angle_at,
+        "unknown blocks come after every element block: {text}"
+    );
+    assert!(
+        sky_height_at > sky_at && slope_angle_at < sky_at,
+        "and the unknown blocks keep their order and fields: {text}"
+    );
+    assert_eq!(read_ok(&text), map, "the whole document round trips");
+}
+
+#[test]
+fn a_repeated_namespace_global_rides_after_the_first() {
+    let map = read_ok(concat!(
+        "namespace = \"zdoom\";",
+        "vertex { x = 0; y = 0; }",
+        "namespace = \"doom\";",
+    ));
+    assert_eq!(
+        map.udmf_namespace.as_deref(),
+        Some("zdoom"),
+        "the first declaration wins as it used to"
+    );
+    assert_eq!(
+        map.extra_globals,
+        vec![("namespace".to_owned(), UdmfValue::Str("doom".to_owned()))],
+        "the second is carried like any other global"
+    );
+    let text = textmap_of(&write_udmf_map(&map).expect("the map writes"));
+    assert_eq!(
+        text,
+        "namespace = \"zdoom\";\nnamespace = \"doom\";\nvertex { // 0\n\tx = 0.000;\n\ty = \
+         0.000;\n}\n",
+        "both declarations come back in order: {text}"
+    );
+    assert_eq!(read_ok(&text), map, "and read back identically");
 }
 
 #[test]

@@ -7,8 +7,11 @@
 //! differences stay
 //! expressible: `flags` keep the raw bit semantics of the map's own format,
 //! `args`, `tid` and `special` on things carry only `Hexen`/`UDMF` data
-//! (zero for `Doom`), and each element's `extra` map holds `UDMF` fields
-//! this model does not name (always empty for the binary formats).
+//! (zero for `Doom`), each element's `extra` map holds `UDMF` fields
+//! this model does not name, and [`Map::extra_globals`] and
+//! [`Map::extra_blocks`] carry a `UDMF` document's global assignments and
+//! unmodelled block kinds (all of these always empty for the binary
+//! formats).
 //!
 //! Indices between elements (`Linedef::v1`, `Sidedef::sector`, ...) are
 //! positions in the matching `Vec`, so editing never depends on how a format
@@ -25,6 +28,7 @@ use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
 use crate::wad::name::{LumpName, NAME_LEN};
+use crate::wad::udmf::{UdmfBlock, UdmfValue};
 
 use super::flags::FlagFamily;
 
@@ -153,6 +157,16 @@ pub struct Map {
     /// The namespace a `UDMF` header declares (`zdoom`, `glbdoom`, ...);
     /// `None` for binary maps and `UDMF` maps without one.
     pub udmf_namespace: Option<String>,
+    /// The `UDMF` global assignments other than the `namespace`
+    /// declaration, in written order and carried verbatim so a rewrite
+    /// emits them again; empty for the binary formats and for `UDMF`
+    /// documents that name none.
+    pub extra_globals: Vec<(String, UdmfValue)>,
+    /// The `UDMF` blocks whose kind is none of the five element kinds, in
+    /// document order and carried verbatim; a rewrite appends them after
+    /// the element blocks. Empty for the binary formats and for documents
+    /// that hold none.
+    pub extra_blocks: Vec<UdmfBlock>,
     /// The things, in lump order.
     pub things: Vec<Thing>,
     /// The vertices, in lump order.
@@ -181,6 +195,8 @@ impl Map {
             name,
             format,
             udmf_namespace: None,
+            extra_globals: Vec::new(),
+            extra_blocks: Vec::new(),
             things: Vec::new(),
             vertices: Vec::new(),
             linedefs: Vec::new(),
@@ -336,6 +352,8 @@ mod tests {
         assert_eq!(map.name, name("MAP01"), "the name is kept");
         assert_eq!(map.format, MapFormat::Hexen, "the format is kept");
         assert_eq!(map.udmf_namespace, None, "no namespace yet");
+        assert!(map.extra_globals.is_empty(), "no carried globals");
+        assert!(map.extra_blocks.is_empty(), "no carried blocks");
         assert!(map.things.is_empty(), "no things");
         assert!(map.vertices.is_empty(), "no vertices");
         assert!(map.linedefs.is_empty(), "no linedefs");

@@ -2,7 +2,9 @@
 //! that keeps its flag family. A `Doom` map round trips through `UDMF`
 //! without loss, an unnamed `UDMF` target takes its family's default
 //! namespace, a `UDMF` map dropping to binary loses every `extra` field and
-//! counts what was a rounded original, a binary `Hexen`
+//! counts what was a rounded original and loses its carried `UDMF` globals
+//! and unknown blocks with a warning naming each (a namespace rewrite keeps
+//! them), a binary `Hexen`
 //! `Line_SetIdentification` becomes a `UDMF` line id and back, an id binary
 //! `Hexen` cannot keep drops with a warning naming the line, and a value no
 //! binary record stores is the writer's `limit_exceeded`.
@@ -127,6 +129,63 @@ fn a_udmf_doom_map_drops_its_extra_fields_and_counts_them() {
         MapFormat::Doom,
         "and the block reads as Doom"
     );
+}
+
+#[test]
+fn carried_globals_and_unknown_blocks_drop_into_binary_with_warnings() {
+    let body = concat!(
+        "ednum = 5;",
+        "vertex { x = 0; y = 0; }",
+        "sidedef { sector = 0; }",
+        "sector { texturefloor = \"FLOOR1\"; textureceiling = \"CEIL1\"; }",
+        "linedef { v1 = 0; v2 = 0; sidefront = 0; }",
+        "vertex_slope { vertex = 0; }",
+    );
+    let mut map = doom_udmf(body);
+    let out = convert_map(&mut map, &binary("doom")).expect("the Doom family converts back");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|text| text.contains("ednum") && text.contains("dropped")),
+        "the dropped global is named: {:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|text| text.contains("vertex_slope") && text.contains("dropped")),
+        "the dropped block is named: {:?}",
+        out.warnings
+    );
+    assert!(map.extra_globals.is_empty(), "the globals bag is emptied");
+    assert!(map.extra_blocks.is_empty(), "the blocks bag is emptied");
+    assert_eq!(
+        cycle(&map).format,
+        MapFormat::Doom,
+        "the block reads as Doom"
+    );
+}
+
+#[test]
+fn a_udmf_namespace_rewrite_keeps_globals_and_unknown_blocks() {
+    let body = concat!(
+        "ednum = 5;",
+        "vertex { x = 0; y = 0; }",
+        "sidedef { sector = 0; }",
+        "sector { texturefloor = \"FLOOR1\"; textureceiling = \"CEIL1\"; }",
+        "linedef { v1 = 0; v2 = 0; sidefront = 0; }",
+        "vertex_slope { vertex = 0; }",
+    );
+    let mut map = zdoom_udmf(body);
+    let out = convert_map(&mut map, &udmf("eternity")).expect("the same family rewrites");
+    assert_eq!(
+        out,
+        Conversion::default(),
+        "a namespace rewrite notes nothing"
+    );
+    assert_eq!(map.extra_globals.len(), 1, "the global stayed");
+    assert_eq!(map.extra_blocks.len(), 1, "and so did the unknown block");
+    assert_eq!(cycle(&map), map, "the rewritten block round trips");
 }
 
 #[test]

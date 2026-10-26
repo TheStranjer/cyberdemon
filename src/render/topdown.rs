@@ -410,6 +410,8 @@ mod tests {
             name: LumpName::parse("MAP01").expect("test names are valid"),
             format: MapFormat::Doom,
             udmf_namespace: None,
+            extra_globals: Vec::new(),
+            extra_blocks: Vec::new(),
             things: vec![spawn(1, 64, 64)],
             vertices: vec![
                 vertex(0, 0),

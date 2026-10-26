@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use crate::defs::definitions_for;
+use crate::defs::{Category, definitions_for};
 use crate::render::{
     Canvas, RenderSettings, Rgba, Switch, TopdownStyle, category_color, scale_down, thing_visual,
 };
@@ -178,14 +178,35 @@ fn highlight_indices_must_exist_and_the_refusal_names_them() {
 
 #[test]
 fn categories_pick_the_documented_marker_colours() {
-    assert_eq!(category_color("Monsters"), rgb(224, 64, 64));
-    assert_eq!(category_color("Player Starts"), rgb(64, 224, 64));
-    assert_eq!(category_color("Weapons"), rgb(224, 160, 64));
-    assert_eq!(category_color("Ammunition"), rgb(224, 160, 64));
-    assert_eq!(category_color("Health And Armour"), rgb(64, 160, 224));
-    assert_eq!(category_color("Powerups"), rgb(64, 160, 224));
-    assert_eq!(category_color("Keys"), rgb(224, 224, 64));
-    assert_eq!(category_color("Decorations/Tech"), rgb(176, 176, 176));
+    assert_eq!(
+        category_color(Category::parse("Monsters")),
+        rgb(224, 64, 64)
+    );
+    assert_eq!(
+        category_color(Category::parse("Player Starts")),
+        rgb(64, 224, 64)
+    );
+    assert_eq!(
+        category_color(Category::parse("Weapons")),
+        rgb(224, 160, 64)
+    );
+    assert_eq!(
+        category_color(Category::parse("Ammunition")),
+        rgb(224, 160, 64)
+    );
+    assert_eq!(
+        category_color(Category::parse("Health And Armour")),
+        rgb(64, 160, 224)
+    );
+    assert_eq!(
+        category_color(Category::parse("Powerups")),
+        rgb(64, 160, 224)
+    );
+    assert_eq!(category_color(Category::parse("Keys")), rgb(224, 224, 64));
+    assert_eq!(
+        category_color(Category::parse("Decorations/Tech")),
+        rgb(176, 176, 176)
+    );
 }
 
 #[test]

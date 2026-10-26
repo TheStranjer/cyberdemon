@@ -1,14 +1,17 @@
 //! Parsing of the tab-separated definition tables embedded in the binary.
 //!
-//! Every `data/defs/*.tsv` file has one shape: a header line naming the
-//! columns, then one line per entry with exactly that many tab-separated
-//! fields. [`parse_thing_table`], [`parse_special_table`] and
-//! [`parse_sector_table`] turn the thing, linedef-special and sector-type
-//! tables into [`ThingDef`], [`SpecialDef`] and [`SectorTypeDef`] rows and
-//! report the first malformed line as an error string. The registry
+//! [`parse_thing_table`], [`parse_special_table`] and [`parse_sector_table`]
+//! read the thing, linedef-special and sector-type files through the shared
+//! [`crate::defs::tsv`] reader, turning them into [`ThingDef`],
+//! [`SpecialDef`] and [`SectorTypeDef`] rows and reporting the first
+//! malformed line as an error string. Each row's editor category is
+//! classified into a [`Category`] once here, so the server's category
+//! decisions read the enum instead of matching the path text. The registry
 //! ([`crate::defs::registry`]) parses the embedded tables once and surfaces
 //! any failure as [`crate::error::CyberError::Internal`]: broken embedded
 //! data is a build bug, never a panic.
+
+use crate::defs::tsv::{Row, Table};
 
 /// The header every thing table must carry, column by column.
 const THING_HEADER: [&str; 8] = [
@@ -58,6 +61,61 @@ const ARG_ASSIGN: char = '=';
 /// The length of a Doom sprite name.
 const SPRITE_LEN: usize = 4;
 
+/// The known editor category prefixes and the [`Category`] each names,
+/// as the tables write them.
+const CATEGORY_PREFIXES: [(&str, Category); 8] = [
+    ("Monsters", Category::Monsters),
+    ("Player Starts", Category::PlayerStarts),
+    ("Weapons", Category::Weapons),
+    ("Ammunition", Category::Ammunition),
+    ("Health", Category::HealthAndArmour),
+    ("Powerups", Category::Powerups),
+    ("Keys", Category::Keys),
+    ("Doors", Category::Doors),
+];
+
+/// The semantic group an editor category path stands under.
+///
+/// The tables' category column is a display path (`"Doors/Local"`,
+/// `"Gore/Blood & Stuff"`); every decision the server takes on a category
+/// reads this enum instead of the text, and [`Category::parse`] — where the
+/// hardcoded category words live — runs once per row in the table readers
+/// and in the definition overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Category {
+    /// `"Monsters"`: the things that fight.
+    Monsters,
+    /// `"Player Starts"`.
+    PlayerStarts,
+    /// `"Weapons"`.
+    Weapons,
+    /// `"Ammunition"`.
+    Ammunition,
+    /// `"Health And Armour"` and any other `"Health"` path.
+    HealthAndArmour,
+    /// `"Powerups"`.
+    Powerups,
+    /// `"Keys"`: cards, skulls and every other keyed item.
+    Keys,
+    /// `"Doors"`, sub-paths (`"Doors/Local"`, `"Doors/Remote"`) included.
+    Doors,
+    /// Every other path: decorations, gore, lighting, customs, ...
+    Other,
+}
+
+impl Category {
+    /// The group the editor category path `text` stands under: the first
+    /// known prefix it starts with, else [`Category::Other`].
+    #[must_use]
+    #[inline]
+    pub fn parse(text: &str) -> Self {
+        CATEGORY_PREFIXES
+            .iter()
+            .find(|entry| text.starts_with(entry.0))
+            .map_or(Self::Other, |entry| entry.1)
+    }
+}
+
 /// One thing type from a thing table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThingDef {
@@ -73,6 +131,9 @@ pub struct ThingDef {
     pub radius: u32,
     /// The editor category path, e.g. `"Gore/Blood & Stuff"`.
     pub category: String,
+    /// The semantic group [`Category::parse`] classified `category` into,
+    /// read by every category decision instead of the path text.
+    pub group: Category,
     /// Whether the thing hangs from the ceiling.
     pub hanging: bool,
     /// The first game that has this thing (`"doom"`, `"doom2"`, ...).
@@ -92,6 +153,9 @@ pub struct SpecialDef {
     pub name: String,
     /// The editor category path, e.g. `"Doors/Local"`.
     pub category: String,
+    /// The semantic group [`Category::parse`] classified `category` into,
+    /// read by every category decision instead of the path text.
+    pub group: Category,
     /// What the special acts on: a free-form table hint such as `"sector"`
     /// (tagged sectors), `"sector_or_back"`, `"sector_back"`, `"thing"`,
     /// `"line"`, `"ex_5thing"`, `"no"` or `"-"` (nothing), passed through
@@ -124,12 +188,8 @@ pub struct SectorTypeDef {
 /// first malformed row.
 #[inline]
 pub fn parse_thing_table(text: &str) -> Result<Vec<ThingDef>, String> {
-    let lines = rows_of("thing table", &THING_HEADER, text)?;
-    let mut rows: Vec<ThingDef> = Vec::new();
-    for (number, line) in lines {
-        rows.push(parse_thing_row(line, number)?);
-    }
-    Ok(rows)
+    let table = Table::parse("thing table", &THING_HEADER, text)?;
+    table.rows().iter().map(parse_thing_row).collect()
 }
 
 /// Parse a whole linedef-special table, one [`SpecialDef`] per non-blank
@@ -141,12 +201,8 @@ pub fn parse_thing_table(text: &str) -> Result<Vec<ThingDef>, String> {
 /// first malformed row.
 #[inline]
 pub fn parse_special_table(text: &str) -> Result<Vec<SpecialDef>, String> {
-    let lines = rows_of("special table", &SPECIAL_HEADER, text)?;
-    let mut rows: Vec<SpecialDef> = Vec::new();
-    for (number, line) in lines {
-        rows.push(parse_special_row(line, number)?);
-    }
-    Ok(rows)
+    let table = Table::parse("special table", &SPECIAL_HEADER, text)?;
+    table.rows().iter().map(parse_special_row).collect()
 }
 
 /// Parse a whole sector-type table, one [`SectorTypeDef`] per non-blank
@@ -158,138 +214,61 @@ pub fn parse_special_table(text: &str) -> Result<Vec<SpecialDef>, String> {
 /// first malformed row.
 #[inline]
 pub fn parse_sector_table(text: &str) -> Result<Vec<SectorTypeDef>, String> {
-    let lines = rows_of("sector table", &SECTOR_HEADER, text)?;
-    let mut rows: Vec<SectorTypeDef> = Vec::new();
-    for (number, line) in lines {
-        rows.push(parse_sector_row(line, number)?);
-    }
-    Ok(rows)
+    let table = Table::parse("sector table", &SECTOR_HEADER, text)?;
+    table.rows().iter().map(parse_sector_row).collect()
 }
 
-/// The row iterator of one table: `label` names the table in errors,
-/// `header` the expected columns, `text` the file contents. The iterator
-/// yields each non-blank row's 1-based file line number and text; the
-/// header itself is checked here.
-///
-/// # Errors
-///
-/// A `String` naming the missing or wrong header line.
-fn rows_of<'text>(
-    label: &str,
-    header: &[&str],
-    text: &'text str,
-) -> Result<impl Iterator<Item = (usize, &'text str)>, String> {
-    let mut lines = text.lines();
-    let Some(first) = lines.next() else {
-        return Err(format!("{label} is empty: no header line"));
-    };
-    check_header(first, header, label)?;
-    // The header is line 1, so the `enumerate` index plus two is the file's
-    // one-based line number of the row being parsed.
-    Ok(lines
-        .enumerate()
-        .filter(|&(_, line)| !line.is_empty())
-        .map(|(offset, line)| (offset.saturating_add(2), line)))
-}
-
-/// Check the header names exactly `expected`, tab-separated.
-///
-/// # Errors
-///
-/// A `String` showing both the found and the expected header.
-fn check_header(line: &str, expected: &[&str], label: &str) -> Result<(), String> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    if fields.as_slice() != expected {
-        let wanted = expected.join("\t");
-        return Err(format!("bad {label} header {line:?}: expected {wanted:?}"));
-    }
-    Ok(())
-}
-
-/// Parse one tab-separated [`ThingDef`] row, `number` its 1-based file line
-/// for error text.
+/// Parse one [`ThingDef`] row of a thing table.
 ///
 /// # Errors
 ///
 /// A `String` naming the line and the first field that failed to parse.
-fn parse_thing_row(line: &str, number: usize) -> Result<ThingDef, String> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    let Ok([kind, name, sprite, frame, radius, category, flags, game]) =
-        <[&str; THING_FIELDS]>::try_from(fields)
-    else {
-        return Err(format!(
-            "thing table line {number}: expected {THING_FIELDS} tab-separated fields, found \
-             {line:?}"
-        ));
-    };
+fn parse_thing_row(row: &Row<'_>) -> Result<ThingDef, String> {
+    let [kind, name, sprite, frame, radius, category, flags, game] =
+        row.columns::<THING_FIELDS>()?;
     Ok(ThingDef {
-        kind: parse_number("thing table", "type", kind, number)?,
+        kind: row.u32("type", kind)?,
         name: name.to_owned(),
-        sprite: parse_sprite(sprite, number)?,
-        frame: parse_frame(frame, number)?,
-        radius: parse_number("thing table", "radius", radius, number)?,
+        sprite: parse_sprite(row, sprite)?,
+        frame: parse_frame(row, frame)?,
+        radius: row.u32("radius", radius)?,
         category: category.to_owned(),
-        hanging: parse_flags(flags, number)?,
+        group: Category::parse(category),
+        hanging: parse_flags(row, flags)?,
         game: game.to_owned(),
         source: SOURCE_BUILTIN.to_owned(),
     })
 }
 
-/// Parse one tab-separated [`SpecialDef`] row, `number` its 1-based file
-/// line for error text.
+/// Parse one [`SpecialDef`] row of a special table.
 ///
 /// # Errors
 ///
 /// A `String` naming the line and the first field that failed to parse.
-fn parse_special_row(line: &str, number: usize) -> Result<SpecialDef, String> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    let Ok([special, name, category, target, args, game]) =
-        <[&str; SPECIAL_FIELDS]>::try_from(fields)
-    else {
-        return Err(format!(
-            "special table line {number}: expected {SPECIAL_FIELDS} tab-separated fields, found \
-             {line:?}"
-        ));
-    };
+fn parse_special_row(row: &Row<'_>) -> Result<SpecialDef, String> {
+    let [special, name, category, target, args, game] = row.columns::<SPECIAL_FIELDS>()?;
     Ok(SpecialDef {
-        number: parse_number("special table", "special", special, number)?,
+        number: row.u32("special", special)?,
         name: name.to_owned(),
         category: category.to_owned(),
-        target: parse_target(target, number)?,
-        args: parse_args(args, number)?,
+        group: Category::parse(category),
+        target: parse_target(row, target)?,
+        args: parse_args(row, args)?,
         game: game.to_owned(),
     })
 }
 
-/// Parse one tab-separated [`SectorTypeDef`] row, `number` its 1-based file
-/// line for error text.
+/// Parse one [`SectorTypeDef`] row of a sector table.
 ///
 /// # Errors
 ///
 /// A `String` naming the line and the first field that failed to parse.
-fn parse_sector_row(line: &str, number: usize) -> Result<SectorTypeDef, String> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    let Ok([kind, name]) = <[&str; SECTOR_FIELDS]>::try_from(fields) else {
-        return Err(format!(
-            "sector table line {number}: expected {SECTOR_FIELDS} tab-separated fields, found \
-             {line:?}"
-        ));
-    };
+fn parse_sector_row(row: &Row<'_>) -> Result<SectorTypeDef, String> {
+    let [kind, name] = row.columns::<SECTOR_FIELDS>()?;
     Ok(SectorTypeDef {
-        number: parse_number("sector table", "type", kind, number)?,
+        number: row.u32("type", kind)?,
         name: name.to_owned(),
     })
-}
-
-/// Parse a decimal column into its number; `table` names the table and
-/// `column` the field in error text.
-///
-/// # Errors
-///
-/// A `String` naming the line and column.
-fn parse_number(table: &str, column: &str, text: &str, number: usize) -> Result<u32, String> {
-    text.parse::<u32>()
-        .map_err(|error| format!("{table} line {number}: column {column:?} is {text:?}: {error}"))
 }
 
 /// Parse the sprite-name column: empty, or exactly four characters.
@@ -297,13 +276,13 @@ fn parse_number(table: &str, column: &str, text: &str, number: usize) -> Result<
 /// # Errors
 ///
 /// A `String` naming the line when the name has any other length.
-fn parse_sprite(text: &str, number: usize) -> Result<String, String> {
+fn parse_sprite(row: &Row<'_>, text: &str) -> Result<String, String> {
     if text.is_empty() || text.chars().count() == SPRITE_LEN {
         return Ok(text.to_owned());
     }
-    Err(format!(
-        "thing table line {number}: sprite name {text:?} is neither empty nor four characters"
-    ))
+    Err(row.fail(&format!(
+        "sprite name {text:?} is neither empty nor four characters"
+    )))
 }
 
 /// Parse the frame column: exactly one character.
@@ -311,12 +290,10 @@ fn parse_sprite(text: &str, number: usize) -> Result<String, String> {
 /// # Errors
 ///
 /// A `String` naming the line when the text is not one character.
-fn parse_frame(text: &str, number: usize) -> Result<char, String> {
+fn parse_frame(row: &Row<'_>, text: &str) -> Result<char, String> {
     let mut chars = text.chars();
     let (Some(first), None) = (chars.next(), chars.next()) else {
-        return Err(format!(
-            "thing table line {number}: frame {text:?} is not exactly one character"
-        ));
+        return Err(row.fail(&format!("frame {text:?} is not exactly one character")));
     };
     Ok(first)
 }
@@ -326,17 +303,17 @@ fn parse_frame(text: &str, number: usize) -> Result<char, String> {
 /// # Errors
 ///
 /// A `String` naming the line and the accepted flag texts.
-fn parse_flags(text: &str, number: usize) -> Result<bool, String> {
+fn parse_flags(row: &Row<'_>, text: &str) -> Result<bool, String> {
     if text == FLAG_NONE {
         return Ok(false);
     }
     if text == FLAG_HANGING {
         return Ok(true);
     }
-    Err(format!(
-        "thing table line {number}: unknown flags {text:?}: use {FLAG_NONE:?} for none or \
-         {FLAG_HANGING:?} for a hanging thing"
-    ))
+    Err(row.fail(&format!(
+        "unknown flags {text:?}: use {FLAG_NONE:?} for none or {FLAG_HANGING:?} for a hanging \
+         thing"
+    )))
 }
 
 /// Parse the target column: a free-form hint naming what the special acts
@@ -347,12 +324,12 @@ fn parse_flags(text: &str, number: usize) -> Result<bool, String> {
 /// # Errors
 ///
 /// A `String` naming the line when the column is empty.
-fn parse_target(text: &str, number: usize) -> Result<String, String> {
+fn parse_target(row: &Row<'_>, text: &str) -> Result<String, String> {
     if text.is_empty() {
-        return Err(format!(
-            "special table line {number}: empty target column: use {COLUMN_NONE:?} for nothing \
-             acted on or one of the hints like {TARGET_HINTS}"
-        ));
+        return Err(row.fail(&format!(
+            "empty target column: use {COLUMN_NONE:?} for nothing acted on or one of the hints \
+             like {TARGET_HINTS}"
+        )));
     }
     Ok(text.to_owned())
 }
@@ -365,13 +342,13 @@ fn parse_target(text: &str, number: usize) -> Result<String, String> {
 ///
 /// A `String` naming the line and the first entry that does not carry its
 /// position number, or an empty name.
-fn parse_args(text: &str, number: usize) -> Result<Vec<String>, String> {
+fn parse_args(row: &Row<'_>, text: &str) -> Result<Vec<String>, String> {
     if text == COLUMN_NONE {
         return Ok(Vec::new());
     }
     text.split(ARG_SEP)
         .enumerate()
-        .map(|(offset, part)| parse_arg_entry(part, offset, number))
+        .map(|(offset, part)| parse_arg_entry(row, part, offset))
         .collect()
 }
 
@@ -382,452 +359,24 @@ fn parse_args(text: &str, number: usize) -> Result<Vec<String>, String> {
 ///
 /// A `String` naming the line and the entry when the position prefix is
 /// missing or wrong, or the name is empty.
-fn parse_arg_entry(part: &str, offset: usize, number: usize) -> Result<String, String> {
+fn parse_arg_entry(row: &Row<'_>, part: &str, offset: usize) -> Result<String, String> {
     let wanted = u32::try_from(offset)
         .ok()
         .and_then(|index| index.checked_add(1))
-        .ok_or_else(|| format!("special table line {number}: too many arguments near {part:?}"))?;
+        .ok_or_else(|| row.fail(&format!("too many arguments near {part:?}")))?;
     let prefix = format!("{ARG_PREFIX}{wanted}{ARG_ASSIGN}");
     let Some(name) = part.strip_prefix(prefix.as_str()) else {
-        return Err(format!(
-            "special table line {number}: args entry {part:?} does not start with {prefix:?}"
-        ));
+        return Err(row.fail(&format!(
+            "args entry {part:?} does not start with {prefix:?}"
+        )));
     };
     if name.is_empty() {
-        return Err(format!(
-            "special table line {number}: args entry {part:?} gives argument {wanted} no name"
-        ));
+        return Err(row.fail(&format!(
+            "args entry {part:?} gives argument {wanted} no name"
+        )));
     }
     Ok(name.to_owned())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{ThingDef, parse_sector_table, parse_special_table, parse_thing_table};
-
-    /// A complete two-row table for the parser tests.
-    const MINI_TABLE: &str = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                              3001\tImp\tTROO\tA\t20\tMonsters\t-\tdoom\n\
-                              63\tHanging Swaying Body\tGOR1\tA\t16\tGore/Hanging & Impaled \
-                              Bodies\thanging\tdoom\n";
-
-    /// The header line of a valid special table.
-    const SPECIAL_MINI: &str = "special\tname\tcategory\ttarget\targs\tgame\n";
-
-    /// The expected rows of [`MINI_TABLE`].
-    fn mini_rows() -> Vec<ThingDef> {
-        parse_thing_table(MINI_TABLE).expect("the mini table is valid")
-    }
-
-    #[test]
-    fn parses_rows_with_numbers_flags_and_frame() {
-        let rows = mini_rows();
-        assert_eq!(rows.len(), 2, "both rows parsed");
-        let imp = rows.first().expect("the mini table has a first row");
-        assert_eq!(imp.kind, 3001, "type number");
-        assert_eq!(imp.name, "Imp", "name");
-        assert_eq!(imp.sprite, "TROO", "sprite");
-        assert_eq!(imp.frame, 'A', "frame character");
-        assert_eq!(imp.radius, 20, "radius");
-        assert_eq!(imp.category, "Monsters", "category");
-        assert!(!imp.hanging, "the - flag means not hanging");
-        assert_eq!(imp.game, "doom", "game column");
-        assert_eq!(imp.source, "builtin", "table rows are builtin");
-        let hanging = rows.get(1).expect("the mini table has a second row");
-        assert!(hanging.hanging, "the hanging flag parses to true");
-        assert_eq!(hanging.kind, 63, "second row type number");
-    }
-
-    #[test]
-    fn keeps_row_order_and_skips_blank_lines() {
-        let text = MINI_TABLE.replace("63\t", "\n63\t");
-        let rows = parse_thing_table(&text).expect("a blank line is skipped");
-        assert_eq!(rows.len(), 2, "the blank line adds no row");
-        assert_eq!(rows.first().map(|row| row.kind), Some(3001), "order kept");
-    }
-
-    #[test]
-    fn a_missing_header_is_rejected() {
-        let error = parse_thing_table("").expect_err("an empty table is invalid");
-        assert!(
-            error.contains("empty"),
-            "the message says the table is empty: {error}"
-        );
-    }
-
-    #[test]
-    fn a_wrong_header_line_is_rejected() {
-        let text = "type\tname\tsprite\tframe\tradius\tgame\n3001\tImp\tTROO\tA\t20\tdoom\n";
-        let error = parse_thing_table(text).expect_err("a six-column header is invalid");
-        assert!(
-            error.contains("header"),
-            "the message names the header: {error}"
-        );
-    }
-
-    #[test]
-    fn a_row_with_the_wrong_field_count_names_the_line() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    3001\tImp\tTROO\tA\t20\tMonsters\t-\n";
-        let error = parse_thing_table(text).expect_err("a seven-field row is invalid");
-        assert!(
-            error.contains("line 2"),
-            "the message names the line: {error}"
-        );
-    }
-
-    #[test]
-    fn a_non_numeric_type_names_the_line_and_column() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    x\tImp\tTROO\tA\t20\tMonsters\t-\tdoom\n";
-        let error = parse_thing_table(text).expect_err("a non-numeric type is invalid");
-        assert!(error.contains("line 2"), "line named: {error}");
-        assert!(error.contains("\"type\""), "column named: {error}");
-    }
-
-    #[test]
-    fn a_non_numeric_radius_is_rejected() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    3001\tImp\tTROO\tA\twide\tMonsters\t-\tdoom\n";
-        let error = parse_thing_table(text).expect_err("a non-numeric radius is invalid");
-        assert!(error.contains("\"radius\""), "column named: {error}");
-    }
-
-    #[test]
-    fn an_empty_sprite_is_accepted() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    14\tTeleport Destination\t\tB\t20\tTeleports\t-\tdoom\n";
-        let rows = parse_thing_table(text).expect("an empty sprite is valid");
-        assert_eq!(
-            rows.first().map(|row| row.sprite.as_str()),
-            Some(""),
-            "the sprite stays empty"
-        );
-    }
-
-    #[test]
-    fn a_sprite_of_the_wrong_length_is_rejected() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    3001\tImp\tTROOO\tA\t20\tMonsters\t-\tdoom\n";
-        let error = parse_thing_table(text).expect_err("a five-character sprite is invalid");
-        assert!(
-            error.contains("sprite name"),
-            "the message names the field: {error}"
-        );
-    }
-
-    #[test]
-    fn a_multi_character_frame_is_rejected() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    3001\tImp\tTROO\tAB\t20\tMonsters\t-\tdoom\n";
-        let error = parse_thing_table(text).expect_err("a two-character frame is invalid");
-        assert!(
-            error.contains("frame"),
-            "the message names the field: {error}"
-        );
-    }
-
-    #[test]
-    fn an_unknown_flag_lists_the_accepted_texts() {
-        let text = "type\tname\tsprite\tframe\tradius\tcategory\tflags\tgame\n\
-                    3001\tImp\tTROO\tA\t20\tMonsters\tdormant\tdoom\n";
-        let error = parse_thing_table(text).expect_err("an unknown flag is invalid");
-        assert!(error.contains("\"-\""), "the none flag is named: {error}");
-        assert!(
-            error.contains("\"hanging\""),
-            "the hanging flag is named: {error}"
-        );
-    }
-
-    #[test]
-    fn the_shipped_doom_table_parses() {
-        let rows = parse_thing_table(crate::defs::registry::DOOM_THINGS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 123, "the shipped table's row count");
-        let doom: usize = rows.iter().filter(|row| row.game == "doom").count();
-        assert_eq!(doom, 97, "rows of the first game");
-        assert_eq!(
-            rows.len().saturating_sub(doom),
-            26,
-            "the rest are Doom II additions"
-        );
-    }
-
-    #[test]
-    fn special_rows_parse_target_and_args() {
-        let text = format!("{SPECIAL_MINI}1\tDR Door\tDoors/Local\tsector_back\t-\tdoom\n");
-        let rows = parse_special_table(&text).expect("a valid special row");
-        let door = rows.first().expect("one row");
-        assert_eq!(door.number, 1, "special number");
-        assert_eq!(door.name, "DR Door", "name");
-        assert_eq!(door.category, "Doors/Local", "category");
-        assert_eq!(door.target, "sector_back", "target column");
-        assert!(door.args.is_empty(), "- means no arguments");
-        assert_eq!(door.game, "doom", "game column");
-    }
-
-    #[test]
-    fn special_args_name_positions_in_order() {
-        let text = format!(
-            "{SPECIAL_MINI}13\tDoor_LockedRaise\tDoors\tsector_or_back\targ1=Sector Tag;arg2=Speed;\
-             arg3=Delay;arg4=Lock\thexen\n"
-        );
-        let rows = parse_special_table(&text).expect("numbered argument names are valid");
-        let door = rows.first().expect("one row");
-        assert_eq!(
-            door.target, "sector_or_back",
-            "free-form target passes through"
-        );
-        let args: Vec<&str> = door.args.iter().map(String::as_str).collect();
-        assert_eq!(
-            args,
-            vec!["Sector Tag", "Speed", "Delay", "Lock"],
-            "index 0 is arg1 and names keep their spaces"
-        );
-    }
-
-    #[test]
-    fn a_misnumbered_argument_entry_names_the_line_and_entry() {
-        let text = format!("{SPECIAL_MINI}13\tDoor\tDoors\tsector\targ1=Tag;arg3=Speed\thexen\n");
-        let error = parse_special_table(&text).expect_err("arg2 is missing");
-        assert!(error.contains("line 2"), "the line is named: {error}");
-        assert!(
-            error.contains("\"arg2=\""),
-            "the wanted prefix is named: {error}"
-        );
-    }
-
-    #[test]
-    fn an_argument_without_a_name_is_rejected() {
-        let text = format!("{SPECIAL_MINI}13\tDoor\tDoors\tsector\targ1=\thexen\n");
-        let error = parse_special_table(&text).expect_err("an empty name is invalid");
-        assert!(error.contains("no name"), "the problem is named: {error}");
-    }
-
-    #[test]
-    fn special_targets_pass_through_free_form() {
-        let text = format!(
-            "{SPECIAL_MINI}120\tRadius_Quake\tScripting\tex_5thing\targ1=Intensity\thexen\n\
-             100\tScroll_Texture_Left\tScrollers\tno\targ1=Speed\thexen\n\
-             121\tLine_SetIdentification\tLines\tline\targ1=Line ID\thexen\n"
-        );
-        let rows = parse_special_table(&text).expect("any non-empty target is a hint");
-        let targets: Vec<&str> = rows.iter().map(|row| row.target.as_str()).collect();
-        assert_eq!(
-            targets,
-            vec!["ex_5thing", "no", "line"],
-            "the texts arrive unchanged"
-        );
-    }
-
-    #[test]
-    fn an_empty_special_target_is_rejected() {
-        let text = format!("{SPECIAL_MINI}1\tDoor\tDoors\t\t-\tdoom\n");
-        let error = parse_special_table(&text).expect_err("an empty target is invalid");
-        assert!(error.contains("target"), "the column is named: {error}");
-        assert!(
-            error.contains("\"sector_or_back\""),
-            "accepted hints are named: {error}"
-        );
-    }
-
-    #[test]
-    fn a_blank_special_args_column_is_rejected() {
-        let text = format!("{SPECIAL_MINI}1\tDoor\tDoors\tsector\t \tdoom\n");
-        let error = parse_special_table(&text).expect_err("an empty args column is invalid");
-        assert!(error.contains("args"), "the column is named: {error}");
-    }
-
-    #[test]
-    fn a_bad_special_number_names_the_column() {
-        let text = format!("{SPECIAL_MINI}door\tDoor\tDoors\tsector\t-\tdoom\n");
-        let error = parse_special_table(&text).expect_err("a non-numeric special is invalid");
-        assert!(
-            error.contains("\"special\"") && error.contains("special table line 2"),
-            "table, line and column are named: {error}"
-        );
-    }
-
-    #[test]
-    fn the_special_table_header_is_checked() {
-        let error = parse_special_table("special\tname\ttarget\n")
-            .expect_err("a three-column header is invalid");
-        assert!(error.contains("header"), "the header is named: {error}");
-    }
-
-    #[test]
-    fn sector_rows_parse_number_and_name() {
-        let text = "type\tname\n0\tNormal\n16\t20% Damage\n";
-        let rows = parse_sector_table(text).expect("a valid sector table");
-        assert_eq!(rows.len(), 2, "both rows parsed");
-        assert_eq!(rows.first().map(|row| row.number), Some(0), "type 0");
-        let damage = rows.get(1).expect("second row");
-        assert_eq!(damage.number, 16, "type 16");
-        assert_eq!(damage.name, "20% Damage", "name");
-    }
-
-    #[test]
-    fn a_bad_sector_type_names_the_line_and_column() {
-        let text = "type\tname\nfast\tLight Flicker\n";
-        let error = parse_sector_table(text).expect_err("a non-numeric type is invalid");
-        assert!(
-            error.contains("sector table line 2") && error.contains("\"type\""),
-            "table, line and column are named: {error}"
-        );
-    }
-
-    #[test]
-    fn a_sector_row_with_one_field_is_rejected() {
-        let error = parse_sector_table("type\tname\n12\n").expect_err("a one-field row is invalid");
-        assert!(error.contains("line 2"), "the line is named: {error}");
-    }
-
-    #[test]
-    fn the_shipped_doom_specials_table_parses() {
-        let rows = parse_special_table(crate::defs::registry::DOOM_SPECIALS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 139, "the shipped table's row count");
-        let doom: usize = rows.iter().filter(|row| row.game == "doom").count();
-        assert_eq!(doom, 100, "rows of the first game");
-        assert_eq!(
-            rows.len().saturating_sub(doom),
-            39,
-            "the rest are Doom II additions"
-        );
-    }
-
-    #[test]
-    fn the_shipped_doom_sectors_table_parses() {
-        let rows = parse_sector_table(crate::defs::registry::DOOM_SECTORS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 16, "the shipped table's row count");
-        assert_eq!(
-            rows.first().map(|row| row.name.as_str()),
-            Some("Normal"),
-            "type 0"
-        );
-    }
-
-    #[test]
-    fn the_shipped_heretic_things_table_parses() {
-        let rows = parse_thing_table(crate::defs::registry::HERETIC_THINGS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 84, "the shipped table's row count");
-        assert!(
-            rows.iter().all(|row| row.game == "heretic"),
-            "every row says heretic"
-        );
-        assert_eq!(
-            rows.iter().filter(|row| row.hanging).count(),
-            10,
-            "the hanging rows"
-        );
-    }
-
-    #[test]
-    fn the_shipped_heretic_specials_table_parses() {
-        let rows = parse_special_table(crate::defs::registry::HERETIC_SPECIALS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 105, "the shipped table's row count");
-        assert!(
-            rows.iter().all(|row| row.game == "heretic"),
-            "every row says heretic"
-        );
-        assert_eq!(
-            rows.iter().filter(|row| row.target == "-").count(),
-            6,
-            "the four exits and two scrolling walls act on no sector"
-        );
-    }
-
-    #[test]
-    fn the_shipped_heretic_sectors_table_parses() {
-        let rows = parse_sector_table(crate::defs::registry::HERETIC_SECTORS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 47, "the shipped table's row count");
-        assert_eq!(
-            rows.first().map(|row| row.name.as_str()),
-            Some("Normal"),
-            "type 0"
-        );
-        assert_eq!(
-            rows.last().map(|row| row.name.as_str()),
-            Some("Wind West (25)"),
-            "the last row"
-        );
-    }
-
-    #[test]
-    fn the_shipped_hexen_things_table_parses() {
-        let rows = parse_thing_table(crate::defs::registry::HEXEN_THINGS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 233, "the shipped table's row count");
-        assert!(
-            rows.iter().all(|row| row.game == "hexen"),
-            "every row says hexen"
-        );
-        assert_eq!(
-            rows.iter().filter(|row| row.hanging).count(),
-            22,
-            "the hanging rows"
-        );
-        assert_eq!(
-            rows.iter().filter(|row| row.category == "Monsters").count(),
-            18,
-            "the monster rows"
-        );
-    }
-
-    #[test]
-    fn the_shipped_hexen_specials_table_parses() {
-        let rows = parse_special_table(crate::defs::registry::HEXEN_SPECIALS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 86, "the shipped table's row count");
-        assert!(
-            rows.iter().all(|row| row.game == "hexen"),
-            "every row says hexen"
-        );
-        let locked = rows
-            .iter()
-            .find(|row| row.number == 13)
-            .expect("Door_LockedRaise exists");
-        let args: Vec<&str> = locked.args.iter().map(String::as_str).collect();
-        assert_eq!(
-            args,
-            vec!["Sector Tag", "Speed", "Delay", "Lock"],
-            "special 13 lists four argument names, arg1 first"
-        );
-        let endgame = rows
-            .iter()
-            .find(|row| row.number == 75)
-            .expect("Teleport_EndGame exists");
-        assert!(endgame.args.is_empty(), "special 75 takes no arguments");
-        assert_eq!(
-            rows.iter().filter(|row| row.args.len() == 5).count(),
-            11,
-            "the five-argument rows"
-        );
-        assert_eq!(
-            rows.iter().filter(|row| row.args.is_empty()).count(),
-            2,
-            "the two rows with no arguments"
-        );
-    }
-
-    #[test]
-    fn the_shipped_hexen_sectors_table_parses() {
-        let rows = parse_sector_table(crate::defs::registry::HEXEN_SECTORS_TSV)
-            .expect("the embedded table must parse");
-        assert_eq!(rows.len(), 46, "the shipped table's row count");
-        assert_eq!(
-            rows.first().map(|row| row.name.as_str()),
-            Some("Normal"),
-            "type 0"
-        );
-        assert_eq!(
-            rows.last().map(|row| row.name.as_str()),
-            Some("Scroll SouthWest (25)"),
-            "the last row"
-        );
-    }
-}
+mod tests;

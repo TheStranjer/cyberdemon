@@ -2,7 +2,8 @@
 //!
 //! Each file carries one game family's themes as tab-separated rows of
 //! `theme`, `role`, `candidates` (`|`-separated) and `fallback_role`
-//! (`-` for none). [`theme_table`] selects a theme for a [`Game`]; a name
+//! (`-` for none), read through the shared [`crate::defs::tsv`] reader.
+//! [`theme_table`] selects a theme for a [`Game`]; a name
 //! the file does not carry is refused, and a theme that omits a role
 //! inherits the game's default theme row for it (reported as
 //! [`crate::themes::Matched::Fallback`] by [`super::resolve`]). A broken
@@ -13,6 +14,7 @@ use std::sync::LazyLock;
 
 use alloc::collections::BTreeMap;
 
+use crate::defs::tsv::{self, Row};
 use crate::error::CyberError;
 use crate::themes::{Role, ThemeRow, ThemeTable};
 use crate::wad::game::Game;
@@ -37,7 +39,10 @@ const HEXEN_TSV: &str = include_str!("../../data/themes/hexen.tsv");
 const STRIFE_TSV: &str = include_str!("../../data/themes/strife.tsv");
 
 /// The header every theme file starts with.
-const HEADER: [&str; 4] = ["theme", "role", "candidates", "fallback_role"];
+const HEADER: [&str; THEME_FIELDS] = ["theme", "role", "candidates", "fallback_role"];
+
+/// The number of tab-separated fields one theme row must carry.
+const THEME_FIELDS: usize = 4;
 
 /// One game's themes: name to rows, rows to their content.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,7 +52,7 @@ pub struct GameThemes {
 }
 
 /// The parsed [`DOOM_TSV`], with the broken-data policy of
-/// [`crate::defs::registry`]: kept as an error string, reported later.
+/// [`crate::defs::tsv::embedded`]: kept as an error string, reported later.
 static DOOM: LazyLock<Result<GameThemes, String>> =
     LazyLock::new(|| parse_themes(DOOM_TSV).map_err(|error| error.to_string()));
 
@@ -97,14 +102,12 @@ pub const fn default_theme_name(game: Game) -> &'static str {
 #[inline]
 pub fn game_themes(game: Game) -> Result<&'static GameThemes, CyberError> {
     let parsed = match theme_file_game(game) {
-        Game::Heretic => &*HERETIC,
-        Game::Hexen => &*HEXEN,
-        Game::Strife => &*STRIFE,
-        Game::Doom | Game::Doom2 | Game::Unknown => &*DOOM,
+        Game::Heretic => &HERETIC,
+        Game::Hexen => &HEXEN,
+        Game::Strife => &STRIFE,
+        Game::Doom | Game::Doom2 | Game::Unknown => &DOOM,
     };
-    parsed
-        .as_ref()
-        .map_err(|reason| CyberError::Internal(format!("embedded theme table is broken: {reason}")))
+    tsv::embedded(parsed, "theme table")
 }
 
 /// The theme names `game` offers, in table order.
@@ -164,7 +167,7 @@ fn unknown_theme(name: &str, themes: &BTreeMap<String, BTreeMap<Role, ThemeRow>>
     .with_hint("get_texture_theme lists the themes this game offers")
 }
 
-/// Parse one theme file.
+/// Parse one theme file through the shared TSV reader.
 ///
 /// # Errors
 ///
@@ -173,26 +176,10 @@ fn unknown_theme(name: &str, themes: &BTreeMap<String, BTreeMap<Role, ThemeRow>>
 /// that falls back to itself or a file without themes.
 #[inline]
 pub fn parse_themes(text: &str) -> Result<GameThemes, CyberError> {
+    let table = tsv::Table::parse("theme table", &HEADER, text).map_err(CyberError::Format)?;
     let mut themes: BTreeMap<String, BTreeMap<Role, ThemeRow>> = BTreeMap::new();
-    let mut seen_header = false;
-    for (number, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if !seen_header {
-            check_header(line)?;
-            seen_header = true;
-            continue;
-        }
-        let columns: Vec<&str> = line.split('\t').map(str::trim).collect();
-        if columns.len() != HEADER.len() {
-            return Err(CyberError::Format(format!(
-                "theme row {number} has {} columns, expected {}: {line}",
-                columns.len(),
-                HEADER.len()
-            )));
-        }
-        insert_row(&mut themes, number, &columns)?;
+    for row in table.rows() {
+        insert_row(&mut themes, row.number(), trim_columns(row)?)?;
     }
     if themes.is_empty() {
         return Err(CyberError::Format(
@@ -202,16 +189,17 @@ pub fn parse_themes(text: &str) -> Result<GameThemes, CyberError> {
     Ok(GameThemes { themes })
 }
 
-/// Rejects a header that is not the documented four columns.
-fn check_header(line: &str) -> Result<(), CyberError> {
-    let columns: Vec<&str> = line.split('\t').map(str::trim).collect();
-    if columns == HEADER {
-        return Ok(());
-    }
-    Err(CyberError::Format(format!(
-        "theme table header is {line:?}, expected {:?}",
-        HEADER.join("\t")
-    )))
+/// The row's four columns with their outer space trimmed.
+///
+/// # Errors
+///
+/// [`CyberError::Format`] when the row carries a number of columns other
+/// than the header's four.
+fn trim_columns<'text>(row: &Row<'text>) -> Result<[&'text str; THEME_FIELDS], CyberError> {
+    Ok(row
+        .columns::<THEME_FIELDS>()
+        .map_err(CyberError::Format)?
+        .map(str::trim))
 }
 
 /// Adds one validated row to the theme map. `columns` holds the four
@@ -219,13 +207,9 @@ fn check_header(line: &str) -> Result<(), CyberError> {
 fn insert_row(
     themes: &mut BTreeMap<String, BTreeMap<Role, ThemeRow>>,
     number: usize,
-    columns: &[&str],
+    columns: [&str; THEME_FIELDS],
 ) -> Result<(), CyberError> {
-    let &[theme, role, candidates, fallback] = columns else {
-        return Err(CyberError::Format(format!(
-            "theme row {number} is not four columns"
-        )));
-    };
+    let [theme, role, candidates, fallback] = columns;
     if theme.is_empty() {
         return Err(CyberError::Format(format!(
             "theme row {number} has an empty theme"

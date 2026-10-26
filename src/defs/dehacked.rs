@@ -16,7 +16,8 @@ use std::sync::LazyLock;
 
 use crate::defs::dehacked_edit::{self, Block};
 use crate::defs::registry::{Definitions, game_label};
-use crate::defs::table::ThingDef;
+use crate::defs::table::{Category, ThingDef};
+use crate::defs::tsv::{Table, embedded};
 use crate::error::CyberError;
 use crate::fixed::FRACUNIT;
 use crate::wad::game::Game;
@@ -47,10 +48,10 @@ const KEY_ID: &str = "id #";
 /// The key that replaces a thing's blocking radius (16.16 fixed point).
 const KEY_WIDTH: &str = "width";
 
-/// The tab-separated header [`DEH_MOBJ_TSV`] must carry.
-const MOBJ_HEADER: &str = "index\tdoomednum";
+/// The tab-separated header columns [`DEH_MOBJ_TSV`] must carry.
+const MOBJ_HEADER: [&str; MOBJ_FIELDS] = ["index", "doomednum"];
 
-/// The number of fields one mobj row must carry.
+/// The number of tab-separated fields one mobj row must carry.
 const MOBJ_FIELDS: usize = 2;
 
 /// The parsed [`DEH_MOBJ_TSV`], produced on first use. A parse failure is
@@ -80,11 +81,7 @@ struct Edit {
 ///
 /// [`CyberError::Internal`] when the embedded mobj table is malformed.
 pub(crate) fn apply(text: &str, game: Game, defs: &mut Definitions) -> Result<(), CyberError> {
-    let mobjs = DEH_MOBJS.as_deref().map_err(|reason| {
-        CyberError::Internal(format!(
-            "embedded dehacked mobj table is malformed (this is a server bug): {reason}"
-        ))
-    })?;
+    let mobjs = embedded_mobjs()?;
     let patch = dehacked_edit::parse(text);
     defs.warnings.extend(
         patch
@@ -100,6 +97,17 @@ pub(crate) fn apply(text: &str, game: Game, defs: &mut Definitions) -> Result<()
     Ok(())
 }
 
+/// The embedded mobj table's doomednums: `doomednums.get(index - 1)` is
+/// the doomednum DeHackEd thing `index` patches, parsed once on first use.
+///
+/// # Errors
+///
+/// [`CyberError::Internal`] when the embedded table is malformed, which is
+/// a build bug rather than a client problem.
+pub(crate) fn embedded_mobjs() -> Result<&'static [i64], CyberError> {
+    embedded(&DEH_MOBJS, "dehacked mobj").map(Vec::as_slice)
+}
+
 /// The tab-separated mobj rows in order: `doomednums.get(index - 1)` is the
 /// doomednum DeHackEd thing `index` patches.
 ///
@@ -108,45 +116,19 @@ pub(crate) fn apply(text: &str, game: Game, defs: &mut Definitions) -> Result<()
 /// A `String` naming the header problem or the first malformed or
 /// out-of-order row.
 fn parse_mobj_table(text: &str) -> Result<Vec<i64>, String> {
-    let mut lines = text.lines();
-    let Some(header) = lines.next() else {
-        return Err("mobj table is empty: no header line".to_owned());
-    };
-    if header != MOBJ_HEADER {
-        return Err(format!(
-            "bad mobj table header {header:?}: expected {MOBJ_HEADER:?}"
-        ));
-    }
+    let table = Table::parse("mobj table", &MOBJ_HEADER, text)?;
     let mut doomednums: Vec<i64> = Vec::new();
-    for (offset, line) in lines.filter(|line| !line.is_empty()).enumerate() {
-        let number = offset.saturating_add(2);
-        let fields: Vec<&str> = line.split('\t').collect();
-        let Ok([index_text, doomednum_text]) = <[&str; MOBJ_FIELDS]>::try_from(fields) else {
-            return Err(format!(
-                "mobj table line {number}: expected {MOBJ_FIELDS} tab-separated fields, found \
-                 {line:?}"
-            ));
-        };
+    for row in table.rows() {
+        let [index_text, doomednum_text] = row.columns::<MOBJ_FIELDS>()?;
         let expected = i64::try_from(doomednums.len())
             .ok()
             .and_then(|seen| seen.checked_add(1))
-            .ok_or_else(|| format!("mobj table line {number}: too many rows"))?;
-        let Ok(index) = index_text.parse::<i64>() else {
-            return Err(format!(
-                "mobj table line {number}: index {index_text:?} is not a number"
-            ));
-        };
+            .ok_or_else(|| row.fail("too many rows"))?;
+        let index = row.i64("index", index_text)?;
         if index != expected {
-            return Err(format!(
-                "mobj table line {number}: index {index} is not the expected {expected}"
-            ));
+            return Err(row.fail(&format!("index {index} is not the expected {expected}")));
         }
-        let Ok(doomednum) = doomednum_text.parse::<i64>() else {
-            return Err(format!(
-                "mobj table line {number}: doomednum {doomednum_text:?} is not a number"
-            ));
-        };
-        doomednums.push(doomednum);
+        doomednums.push(row.i64("doomednum", doomednum_text)?);
     }
     Ok(doomednums)
 }
@@ -229,7 +211,7 @@ fn apply_edit(edit: &Edit, game: Game, defs: &mut Definitions) {
     };
     if number < 0_i64 {
         if let Ok(original) = u32::try_from(edit.original) {
-            remove_kind(defs, original);
+            defs.remove_thing(original);
         }
         return;
     }
@@ -263,9 +245,9 @@ fn place(edit: &Edit, kind: u32, game: Game, defs: &mut Definitions) {
     }
     SOURCE_DEHACKED.clone_into(&mut def.source);
     if let Some(original) = source_kind.filter(|found| *found != kind) {
-        remove_kind(defs, original);
+        defs.remove_thing(original);
     }
-    replace_kind(defs, def);
+    defs.put_thing(def);
 }
 
 /// A row for a mobj whose doomednum has no built-in definition: possible
@@ -279,20 +261,18 @@ fn synthesize(edit: &Edit, kind: u32, game: Game, defs: &mut Definitions) {
         ));
         return;
     };
-    replace_kind(
-        defs,
-        ThingDef {
-            kind,
-            name: name.to_owned(),
-            sprite: String::new(),
-            frame: 'A',
-            radius: edit.radius.unwrap_or(DEFAULT_RADIUS),
-            category: CATEGORY_DEHACKED.to_owned(),
-            hanging: false,
-            game: game_label(game).to_owned(),
-            source: SOURCE_DEHACKED.to_owned(),
-        },
-    );
+    defs.put_thing(ThingDef {
+        kind,
+        name: name.to_owned(),
+        sprite: String::new(),
+        frame: 'A',
+        radius: edit.radius.unwrap_or(DEFAULT_RADIUS),
+        category: CATEGORY_DEHACKED.to_owned(),
+        group: Category::parse(CATEGORY_DEHACKED),
+        hanging: false,
+        game: game_label(game).to_owned(),
+        source: SOURCE_DEHACKED.to_owned(),
+    });
 }
 
 /// A parsed `Width` without `ID #` edits the definition the mobj currently
@@ -304,22 +284,11 @@ fn apply_radius(edit: &Edit, defs: &mut Definitions) {
     let Some(kind) = u32::try_from(edit.original).ok() else {
         return;
     };
-    let Some(def) = defs.things.iter_mut().find(|row| row.kind == kind) else {
+    let Some(def) = defs.thing_mut(kind) else {
         return;
     };
     def.radius = radius;
     SOURCE_DEHACKED.clone_into(&mut def.source);
-}
-
-/// Drops the row of thing type `kind`, if this table has one.
-fn remove_kind(defs: &mut Definitions, kind: u32) {
-    defs.things.retain(|row| row.kind != kind);
-}
-
-/// Inserts `def`, dropping any row that already uses its type number.
-fn replace_kind(defs: &mut Definitions, def: ThingDef) {
-    defs.things.retain(|row| row.kind != def.kind);
-    defs.things.push(def);
 }
 
 #[cfg(test)]

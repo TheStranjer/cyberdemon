@@ -1,1 +1,9 @@
 /target
+
+# Scratch output at the repo root: diff dumps and test listings left behind by
+# hand (a.txt/b.txt were the CD-191 ones) and the patches they come with.
+/a.txt
+/b.txt
+*.diff
+*.orig
+*.rej

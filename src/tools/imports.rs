@@ -18,7 +18,7 @@
 //! [`Cyberdemon::import_image_as_sprite`] (and its alias
 //! [`Cyberdemon::import_png_as_sprite`]) runs the same pipeline on the
 //! sprite side: [`sprite`] names the lump through the sprite
-//! grammar of [`crate::gfx::sprite_name::parse_sprite_name`], anchors the
+//! grammar of [`crate::gfx::sprite_name::SpriteName::parse`], anchors the
 //! picture on its feet and reports the rotations the session's sprites
 //! region already serves. The patch lifecycle tools of
 //! [`crate::tools::patches`] stage and place their lumps on these same

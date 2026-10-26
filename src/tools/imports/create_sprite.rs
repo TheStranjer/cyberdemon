@@ -43,7 +43,8 @@ use crate::tools::imports::create_sprite::build::create_sprite_build;
 use crate::tools::imports::image_pipeline::{OffsetMode, OffsetsParam, parse_offset_mode};
 use crate::tools::imports::processed::ProcessParams;
 use crate::tools::imports::sprite::{
-    Naming, parse_frame, parse_mirror, parse_prefix, parse_rotation, part_name, whole_name,
+    Naming, pair_name, parse_frame, parse_mirror, parse_prefix, parse_rotation, part_name,
+    whole_name,
 };
 use crate::tools::reply;
 use crate::wad::name::LumpName;
@@ -263,30 +264,12 @@ fn frames_names(
     let rotation = parse_rotation(args.rotation)?;
     let names = list
         .iter()
-        .map(|letter| pair_name(&upper, parse_frame(Some(letter))?, rotation, args))
+        .map(|letter| {
+            let mirror = parse_mirror(args.mirror_rotation, rotation)?;
+            pair_name(&upper, parse_frame(Some(letter))?, rotation, mirror)
+        })
         .collect::<Result<Vec<Naming>, CyberError>>()?;
     Ok(dedupe(names))
-}
-
-/// The one lump name `prefix` and `letter` answer with at the validated
-/// rotation, in the plain or mirrored pair form.
-///
-/// # Errors
-///
-/// [`parse_mirror`]' [`CyberError::InvalidArgument`] and [`whole_name`]'
-/// grammar error.
-fn pair_name(
-    prefix: &str,
-    letter: char,
-    rotation: u8,
-    args: &CreateSpriteParams,
-) -> Result<Naming, CyberError> {
-    let mirror = parse_mirror(args.mirror_rotation, rotation)?;
-    let text = mirror.map_or_else(
-        || format!("{prefix}{letter}{rotation}"),
-        |second| format!("{prefix}{letter}{rotation}{letter}{second}"),
-    );
-    whole_name(&text)
 }
 
 /// The names with later duplicates dropped, keeping the first order.

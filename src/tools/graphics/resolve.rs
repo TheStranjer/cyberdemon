@@ -35,6 +35,7 @@ use crate::gfx::image::IndexedImage;
 use crate::gfx::palette::Palette;
 use crate::gfx::patch::{Patch, decode_patch};
 use crate::gfx::quantize::{QuantizeOptions, quantize};
+use crate::gfx::sprite_name::{ALL_ANGLES, SpriteName};
 use crate::session::{Scope, Session};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
 use crate::tools::palette::load_palette;
@@ -47,8 +48,6 @@ use crate::wad::name::LumpName;
 const PNG_PALETTE: usize = 0_usize;
 /// The drawing offsets of a `PNG` picture without a `grAb` chunk.
 const NO_OFFSETS: GrabOffsets = (0_i32, 0_i32);
-/// The sprite rotation every frame's single all-angles image serves.
-const ALL_ANGLES: u8 = 0_u8;
 /// Where [`load_patch`] looks: the patches region first, then any loose
 /// lump outside the flats and sprites regions.
 const PATCH_PLACES: [Place; 2] = [Place::In(Namespace::Patches), Place::Loose];
@@ -109,7 +108,8 @@ struct Request {
 
 impl Request {
     /// Builds the request for one sprite rotation, uppercasing the prefix
-    /// and frame.
+    /// and frame and naming the two lumps through the grammar's
+    /// [`SpriteName::format`].
     ///
     /// # Errors
     ///
@@ -118,12 +118,24 @@ impl Request {
     fn new(sprite: &str, frame: char, rotation: u8) -> Result<Self, CyberError> {
         let prefix = sprite.to_ascii_uppercase();
         let letter = frame.to_ascii_uppercase();
-        Ok(Self {
-            exact: LumpName::parse(&format!("{prefix}{letter}{rotation}"))?,
-            angles: LumpName::parse(&format!("{prefix}{letter}{ALL_ANGLES}"))?,
-            sprite: prefix,
+        let wanted = SpriteName {
+            sprite: prefix.clone(),
             frame: letter,
             rotation,
+            mirror: None,
+        };
+        let angles = SpriteName {
+            sprite: prefix,
+            frame: letter,
+            rotation: ALL_ANGLES,
+            mirror: None,
+        };
+        Ok(Self {
+            exact: LumpName::parse(&wanted.format())?,
+            angles: LumpName::parse(&angles.format())?,
+            sprite: wanted.sprite,
+            frame: wanted.frame,
+            rotation: wanted.rotation,
         })
     }
 

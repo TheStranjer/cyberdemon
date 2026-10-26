@@ -8,7 +8,7 @@
 //! of the `P_START` region (plus any lump `PNAMES` names from outside the
 //! flats and sprites regions), and `list_sprites` groups the `S_START`
 //! region by the sprite name grammar of
-//! [`crate::gfx::sprite_name::parse_sprite_name`]. The listings decode no
+//! [`crate::gfx::sprite_name::SpriteName::parse`]. The listings decode no
 //! pixels: sizes, dimensions, offsets and names only.
 //!
 //! `get_flat`, `get_patch`, `get_sprite`, `get_thing_sprite` and
@@ -71,8 +71,6 @@ use crate::wad::name::{LumpName, glob_match};
 const DEFAULT_LIMIT: usize = 200;
 /// Largest page any listing tool will return.
 const MAX_LIMIT: usize = 2000;
-/// Characters of the four-character sprite prefix `list_sprites` filters by.
-const SPRITE_PREFIX_LEN: usize = 4;
 /// Default `PLAYPAL` entry the image tools colour a picture with.
 const DEFAULT_PALETTE: usize = 0_usize;
 /// Default published-image scale: the stored size.
@@ -83,8 +81,6 @@ const MAX_SCALE: u32 = 8_u32;
 const DEFAULT_FRAME: char = 'A';
 /// Rotation `get_sprite` assumes without one: the first of the eight views.
 const DEFAULT_ROTATION: u8 = 1_u8;
-/// Largest rotation number a sprite frame serves.
-const MAX_ROTATION: u8 = 8_u8;
 /// Name `decode_patch` publishes under when a `source` names no file.
 const FALLBACK_NAME: &str = "PATCH";
 /// Media type of the raw `RGBA8` assets.

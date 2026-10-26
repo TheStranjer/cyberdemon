@@ -10,15 +10,13 @@ use crate::defs::ThingDef;
 use crate::error::CyberError;
 use crate::gfx::image::flip_horizontal;
 use crate::gfx::patch::Patch;
-use crate::gfx::sprite_name::parse_sprite_name;
+use crate::gfx::sprite_name::{ALL_ANGLES, SpriteName};
 use crate::session::Session;
 use crate::tools::lumps::rows::LumpRow;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
-use super::{
-    ALL_ANGLES, Request, SPRITE_PLACES, Serving, decode_patch_bytes, locate, merged_rows, not_found,
-};
+use super::{Request, SPRITE_PLACES, Serving, decode_patch_bytes, locate, merged_rows, not_found};
 
 /// The sprite image for one rotation: `sprite` is the four-character
 /// prefix, `frame` its letter and `rotation` a number `0`-`8`. The exact
@@ -166,7 +164,7 @@ fn pair_row<'rows>(rows: &'rows [LumpRow], wanted: &Request) -> Option<(&'rows L
 /// Whether `row`'s name carries the request's frame and rotation as its
 /// first, directly served, pair.
 fn serves_pair(row: &LumpRow, wanted: &Request) -> bool {
-    parse_sprite_name(&row.name.to_string()).is_some_and(|parsed| {
+    SpriteName::parse(&row.name.to_string()).is_some_and(|parsed| {
         parsed.sprite == wanted.sprite
             && parsed.frame == wanted.frame
             && parsed.rotation == wanted.rotation
@@ -201,7 +199,7 @@ fn angles_row<'rows>(
 /// Whether `row`'s name carries the request's frame and rotation as its
 /// second, mirrored, pair.
 fn serves_mirror(row: &LumpRow, wanted: &Request) -> bool {
-    parse_sprite_name(&row.name.to_string()).is_some_and(|parsed| {
+    SpriteName::parse(&row.name.to_string()).is_some_and(|parsed| {
         parsed.sprite == wanted.sprite && parsed.mirror == Some((wanted.frame, wanted.rotation))
     })
 }

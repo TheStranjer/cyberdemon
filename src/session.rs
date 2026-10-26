@@ -225,7 +225,7 @@ impl Session {
     /// [`Session::replace_working`] nor [`Session::undo`] touches the history
     /// of edits.
     #[inline]
-    pub fn set_render_settings(&mut self, settings: RenderSettings) {
+    pub const fn set_render_settings(&mut self, settings: RenderSettings) {
         self.render = settings;
     }
 

@@ -37,7 +37,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::CyberError;
-use crate::gfx::ops::parse_hex_color;
+use crate::gfx::ops::parse_hex_colour;
 use crate::state::AppState;
 use crate::tools::imports::create_sprite::build::create_sprite_build;
 use crate::tools::imports::image_pipeline::{OffsetMode, OffsetsParam, parse_offset_mode};
@@ -323,7 +323,7 @@ fn check_height(value: u32) -> Result<u32, CyberError> {
 ///
 /// [`CyberError::InvalidArgument`] for anything that is no hex colour.
 fn check_background_color(text: &str) -> Result<String, CyberError> {
-    parse_hex_color(text)
+    parse_hex_colour(text, true)
         .map(|_| text.to_owned())
         .map_err(|_error| {
             CyberError::InvalidArgument(format!(

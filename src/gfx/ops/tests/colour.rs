@@ -1,34 +1,87 @@
-//! The colour and integer helpers: the two hex forms with their optional
-//! `#` and their refusals, the integer luminance formula and the rounding
-//! and clamping of the shared division helpers.
+//! The colour and integer helpers: the one strict hex parser with its two
+//! shapes, its `#`-optional exact lengths and its refusals, the shared digit
+//! decoder, the integer luminance formula and the rounding and clamping of
+//! the shared division helpers.
 
-use crate::gfx::ops::{clamp_u8, div_ceil, luminance, parse_hex_color, rounded_div};
+use crate::gfx::ops::{clamp_u8, div_ceil, hex_digit, luminance, parse_hex_colour, rounded_div};
 
 #[test]
-fn hex_color_parses_both_forms_and_optional_hash() {
+fn hex_colour_parses_both_forms_and_optional_hash() {
     assert_eq!(
-        parse_hex_color("#ff0000").expect("#RRGGBB parses"),
+        parse_hex_colour("#ff0000", true).expect("#RRGGBB parses"),
         [255, 0, 0, 255],
         "six digits get alpha 255"
     );
     assert_eq!(
-        parse_hex_color("00ff0080").expect("RRGGBBAA parses"),
+        parse_hex_colour("00ff0080", true).expect("RRGGBBAA parses"),
         [0, 255, 0, 128],
         "eight digits carry alpha"
     );
     assert_eq!(
-        parse_hex_color("#FF0000").expect("uppercase parses"),
+        parse_hex_colour("#FF0000", true).expect("uppercase parses"),
         [255, 0, 0, 255],
         "digits are case-insensitive"
+    );
+    assert_eq!(
+        parse_hex_colour("aBcDeF01", true).expect("mixed case parses"),
+        [171, 205, 239, 1],
+        "mixed case carries every channel"
     );
 }
 
 #[test]
-fn hex_color_rejects_bad_input() {
-    for bad in ["", "xyz", "12345", "#ff00", "gg0000", "#ff0000ff00"] {
-        let error = parse_hex_color(bad).expect_err("must not parse");
-        assert_eq!(error.code(), "invalid_argument", "code for {bad}");
+fn hex_colour_without_alpha_keeps_six_digits_only() {
+    assert_eq!(
+        parse_hex_colour("#0a1b2c", false).expect("#RRGGBB parses"),
+        [10, 27, 44, 255],
+        "the alpha byte is opaque"
+    );
+    let error = parse_hex_colour("0a1b2c3d", false).expect_err("eight digits are refused");
+    assert_eq!(
+        error.code(),
+        "invalid_argument",
+        "no alpha without the flag"
+    );
+}
+
+#[test]
+fn hex_colour_rejects_bad_input() {
+    for bad in [
+        "",
+        "xyz",
+        "fff",
+        "12345",
+        "#1234567",
+        "#ff00",
+        "gg0000",
+        "#ff0000ff00",
+        "+f+f+f",
+        "#+f+f+f",
+        "1f_2e_30",
+        " 0a0b0c",
+        "#ff0000 ",
+    ] {
+        let error = parse_hex_colour(bad, true).expect_err("must not parse");
+        assert_eq!(error.code(), "invalid_argument", "code for {bad:?}");
+        assert!(
+            error.to_string().contains("#RRGGBB"),
+            "the refusal for {bad:?} shows the shape: {error}"
+        );
     }
+}
+
+#[test]
+fn hex_digit_decodes_only_ascii_hex_digits() {
+    assert_eq!(hex_digit(b'0'), Some(0), "bottom of the digits");
+    assert_eq!(hex_digit(b'9'), Some(9), "top of the digits");
+    assert_eq!(hex_digit(b'a'), Some(10), "lowercase a");
+    assert_eq!(hex_digit(b'f'), Some(15), "lowercase f");
+    assert_eq!(hex_digit(b'A'), Some(10), "uppercase A");
+    assert_eq!(hex_digit(b'F'), Some(15), "uppercase F");
+    assert_eq!(hex_digit(b'+'), None, "a sign is not a digit");
+    assert_eq!(hex_digit(b'_'), None, "an underscore is not a digit");
+    assert_eq!(hex_digit(b'g'), None, "past the letters");
+    assert_eq!(hex_digit(b' '), None, "a space is not a digit");
 }
 
 #[test]

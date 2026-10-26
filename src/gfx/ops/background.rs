@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::{arg_error, parse_hex_color, rounded_div};
+use crate::gfx::ops::{arg_error, parse_hex_colour, rounded_div};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 
 /// Bucket edge width in channel units (`256 / 16`).
@@ -55,7 +55,7 @@ pub(crate) fn remove_background(
 
 /// Parses an explicit colour and keeps only its `RGB`.
 fn explicit_color(text: &str, index: usize) -> Result<[u8; 3], CyberError> {
-    let Ok([red, green, blue, _]) = parse_hex_color(text) else {
+    let Ok([red, green, blue, _]) = parse_hex_colour(text, true) else {
         return Err(arg_error(
             index,
             "color",

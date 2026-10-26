@@ -19,7 +19,7 @@ tools set and read the defaults every render starts from;
 | `fov`           | `90`       | horizontal field of view, `10..=170` degrees                                   |
 | `gamma`         | `0`        | `0..=4` (Doom gamma levels); applied once to every output channel at encode    |
 | `topdown_style` | `"editor"` | `"editor"` or `"automap"`                                                      |
-| `background`    | `"#000000"` | `#RRGGBB` hex colour (either case)                                            |
+| `background`    | `"#000000"` | `#RRGGBB` hex colour (either case, `#` optional); reported lower-cased       |
 
 `get_render_settings`, `set_render_resolution` and `set_render_options` all
 return the whole object above, so the result of any change is the complete
@@ -43,7 +43,7 @@ current state:
 Settings belong to the connection, not to the WAD: `open_iwad`, `open_wad`,
 `new_wad`, `merge_wad` and an undo never change them, and nothing writes
 them into an archive. Enum and colour names are matched case-insensitively;
-a stored colour keeps the spelling you sent. `gamma` is a float-free
+a stored colour reports back as lowercase `#rrggbb`. `gamma` is a float-free
 approximation of Doom's gamma curves: level `0` changes nothing, higher
 levels lift mid-tones while black and white stay pinned
 (`out = in + (255 - in) * in * level / (255 * 8)`).

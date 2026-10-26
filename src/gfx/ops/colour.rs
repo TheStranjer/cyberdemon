@@ -1,47 +1,85 @@
 //! The colour side of the operation framework.
 //!
-//! The `#RRGGBBAA` hex form every colour-taking parameter parses through,
-//! the integer [`luminance`] the binarizing and tonal ops measure with, and
-//! the channel clamp they write back through.
+//! The crate's one strict hex parser, [`parse_hex_colour`], over the one
+//! digit decoder [`hex_digit`] every hex reader shares, the integer
+//! [`luminance`] the binarizing and tonal ops measure with, and the channel
+//! clamp they write back through.
 
 use crate::error::CyberError;
+use crate::gfx::Rgba;
 
-/// Parses a `#RRGGBBAA` or `#RRGGBB` colour string (the leading `#` is
-/// optional) into `RGBA` bytes; a six-digit colour is opaque.
+/// Hex digits of an `RRGGBB` colour.
+const RGB_DIGITS: usize = 6;
+/// Hex digits of an `RRGGBBAA` colour.
+const RGBA_DIGITS: usize = 8;
+/// Radix of one hex digit's place value in a pair.
+const DIGIT_SHIFT: u8 = 16;
+
+/// The value of one `ASCII` hex digit, `None` for any other byte.
 ///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] when `value` is not one of the two hex
-/// forms.
+/// The one digit decoder every hex reader in the crate shares: percent
+/// escapes, byte-string needles and [`parse_hex_colour`]' channels alike.
+#[must_use]
 #[inline]
-pub fn parse_hex_color(value: &str) -> Result<[u8; 4], CyberError> {
-    let malformed = || {
-        CyberError::InvalidArgument(format!(
-            "colour {value} is not a #RRGGBBAA or #RRGGBB hex value"
-        ))
-    };
-    let digits = value.strip_prefix('#').unwrap_or(value);
-    let alpha_explicit = match digits.len() {
-        6 => false,
-        8 => true,
-        _ => return Err(malformed()),
-    };
-    let mut channels = [0_u8; 4];
-    for (slot, pair) in channels.iter_mut().zip(digits.as_bytes().chunks_exact(2)) {
-        *slot = hex_pair(pair).ok_or_else(malformed)?;
-    }
-    let [red, green, blue, alpha] = channels;
-    if alpha_explicit {
-        Ok([red, green, blue, alpha])
+pub fn hex_digit(byte: u8) -> Option<u8> {
+    if byte.is_ascii_digit() {
+        byte.checked_sub(b'0')
+    } else if (b'a'..=b'f').contains(&byte) {
+        byte.checked_sub(b'a')?.checked_add(10_u8)
+    } else if (b'A'..=b'F').contains(&byte) {
+        byte.checked_sub(b'A')?.checked_add(10_u8)
     } else {
-        Ok([red, green, blue, 255_u8])
+        None
     }
 }
 
-/// Parses exactly two `ASCII` hex bytes into one channel value.
+/// Parses a strict hex colour: digits only, an optional leading `#`, and
+/// exactly six hex digits, or eight when `allow_alpha`.
+///
+/// A six-digit colour is opaque; anything else - signs, underscores, odd
+/// lengths - is refused.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when `text` is not one of the accepted
+/// hex forms.
+#[inline]
+pub fn parse_hex_colour(text: &str, allow_alpha: bool) -> Result<Rgba, CyberError> {
+    let shapes = if allow_alpha {
+        "#RRGGBBAA or #RRGGBB"
+    } else {
+        "#RRGGBB"
+    };
+    let malformed = || {
+        CyberError::InvalidArgument(format!(
+            "colour {text:?} is not a {shapes} hex value: digits only, optional leading #"
+        ))
+    };
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    let channels = match digits.len() {
+        RGB_DIGITS => 3_usize,
+        RGBA_DIGITS if allow_alpha => 4_usize,
+        _ => return Err(malformed()),
+    };
+    let mut pixel = [0_u8, 0, 0, 255_u8];
+    for (slot, pair) in pixel
+        .iter_mut()
+        .take(channels)
+        .zip(digits.as_bytes().chunks_exact(2))
+    {
+        *slot = hex_pair(pair).ok_or_else(malformed)?;
+    }
+    Ok(pixel)
+}
+
+/// The channel two `ASCII` hex bytes spell, `None` unless both are digits.
 fn hex_pair(pair: &[u8]) -> Option<u8> {
-    let text = core::str::from_utf8(pair).ok()?;
-    u8::from_str_radix(text, 16).ok()
+    let &[high, low] = pair else {
+        return None;
+    };
+    hex_digit(high)?
+        .checked_mul(DIGIT_SHIFT)?
+        .checked_add(hex_digit(low)?)
 }
 
 /// Integer luminance helper: `(299 * R + 587 * G + 114 * B) / 1000`.

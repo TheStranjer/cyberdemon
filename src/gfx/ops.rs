@@ -49,7 +49,7 @@ pub(crate) use checks::{
     arg_error, check_i32_range, check_op_dimension, div_ceil, pixel_at, rounded_div,
 };
 pub(crate) use colour::clamp_u8;
-pub use colour::{luminance, parse_hex_color};
+pub use colour::{hex_digit, luminance, parse_hex_colour};
 
 /// Largest edge (pixels) an operation parameter may request and an
 /// [`apply_ops`] result may have.

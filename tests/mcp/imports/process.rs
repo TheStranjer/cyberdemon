@@ -174,6 +174,66 @@ async fn process_image_grayscale_and_blur_keep_a_flat_picture_flat() {
     );
 }
 
+/// A `width` x `1` opaque PNG of one colour.
+fn strip_png(width: u32, color: [u8; 4]) -> Vec<u8> {
+    let count = usize::try_from(width).expect("test width");
+    let pixels: Vec<u8> = (0..count).flat_map(|_| color).collect();
+    let img = RgbaImage::new(width, 1, pixels).expect("test shape is valid");
+    encode_png(&img, None).expect("test PNG encodes")
+}
+
+/// `process_image`'s `fit contain` on a 4000x1 strip: the short edge's
+/// `64/4000` scale floors to `0` px, so the kept row must stay one pixel
+/// tall at the canvas centre instead of the strip vanishing.
+#[tokio::test]
+async fn process_image_fit_contain_keeps_a_rounded_away_edge() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(
+        dir.path(),
+        "STRIP.png",
+        &strip_png(4_000, [200, 100, 50, 255]),
+    );
+    let report = call(
+        &client,
+        "process_image",
+        source_args(
+            &file,
+            json!({
+                "ops": [
+                    { "op": "fit", "width": 64_u64, "height": 64_u64, "mode": "contain" },
+                ],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(report["width"], json!(64_u64), "the canvas width");
+    assert_eq!(report["height"], json!(64_u64), "the canvas height");
+    let step = &report["steps"][0];
+    assert_eq!(step["op"], json!("fit"), "the fit step");
+    assert_eq!(step["mode"], json!("contain"), "as asked");
+    assert_eq!(
+        step["offset_y"],
+        json!(31_u64),
+        "the kept row centres at 31"
+    );
+    let url = report["processed"]["url"]
+        .as_str()
+        .expect("a processed URL");
+    let bytes = fetch_asset(url).await;
+    let image = cyberdemon::gfx::codec::decode_image(&bytes).expect("the asset is a PNG");
+    assert_eq!(
+        image.get(32, 31),
+        Some([200, 100, 50, 255]),
+        "the strip survived one pixel tall"
+    );
+    assert_eq!(
+        image.get(32, 0),
+        Some([0, 0, 0, 0]),
+        "the default canvas padding is transparent black"
+    );
+}
+
 /// A `blur` radius outside `1..=256` refuses through `process_image`,
 /// naming `ops[0].radius`.
 #[tokio::test]

@@ -6,7 +6,7 @@
 use crate::error::CyberError;
 use crate::gfx::codec::decode_image;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::parse_hex_color;
+use crate::gfx::ops::parse_hex_colour;
 use crate::plan::Units;
 use crate::render::{RenderSettings, Rgba, Switch};
 use crate::state::AppState;
@@ -15,7 +15,6 @@ use crate::tools::plan::params::UnitsParam;
 use crate::wad::map::Map;
 
 use super::MAX_OPACITY;
-use super::paint::background_pixel;
 use super::params::{
     Annotation, AnnotationParams, Bounds, BoundsParams, HighlightParams, Highlights, Labels,
     LabelsParams, Projection, Rect, RenderTopdownParams, Request, Underlay, UnderlayParams,
@@ -224,7 +223,7 @@ pub(super) fn resolve_label_scale(requested: Option<u32>, width: u32) -> Result<
 ///
 /// [`CyberError::InvalidArgument`] for more than [`MAX_ANNOTATIONS`] rows,
 /// a row longer than [`MAX_ANNOTATION_CHARS`] characters, or a colour
-/// [`parse_hex_color`] refuses.
+/// [`parse_hex_colour`] refuses.
 pub(super) fn resolve_annotations(
     requested: Option<&[AnnotationParams]>,
 ) -> Result<Vec<Annotation>, CyberError> {
@@ -253,7 +252,7 @@ fn row_note(index: usize, row: &AnnotationParams) -> Result<Annotation, CyberErr
         )));
     }
     let colour = match row.color.as_deref() {
-        Some(text) => parse_hex_color(text)?,
+        Some(text) => parse_hex_colour(text, true)?,
         None => ANNOTATION_COLOUR,
     };
     Ok(Annotation {
@@ -438,7 +437,7 @@ pub(super) fn resolve_request(
         height: probe.height,
         style,
         bounds: resolve_bounds(args.bounds.as_ref(), map, underlay.as_ref().map(|u| u.rect))?,
-        background: background_pixel(&settings.background),
+        background: settings.background,
         show_things: args.show_things.map_or(settings.show_things, Switch::from),
         show_vertices: args.show_vertices.unwrap_or(false).into(),
         fill_sectors: args.fill_sectors.unwrap_or(false).into(),

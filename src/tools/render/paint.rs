@@ -29,27 +29,6 @@ pub(super) const GRID_MINOR: Rgba = [42, 42, 42, 255];
 /// The grid's every-[`GRID_MAJOR_EVERY`]th lines.
 pub(super) const GRID_MAJOR: Rgba = [60, 60, 60, 255];
 
-/// Number of colour channels in a pixel (`background_pixel` parses those).
-const COLOUR_CHANNELS: usize = 3;
-
-/// The `#RRGGBB` settings colour as an opaque pixel; text the settings
-/// validator already accepted, so a bad byte just reads as `0`.
-pub(super) fn background_pixel(text: &str) -> Rgba {
-    let digits = text.strip_prefix('#').unwrap_or(text);
-    let mut pixel = [0_u8, 0_u8, 0_u8, 255_u8];
-    for (slot, pair) in pixel
-        .iter_mut()
-        .take(COLOUR_CHANNELS)
-        .zip(digits.as_bytes().chunks_exact(2))
-    {
-        let Ok(pair_text) = core::str::from_utf8(pair) else {
-            continue;
-        };
-        *slot = u8::from_str_radix(pair_text, 16).unwrap_or(0);
-    }
-    pixel
-}
-
 /// The editor-style colour of `line`: specials read blue, two-sided lines
 /// mid grey, everything else light grey.
 pub(super) const fn editor_line_color(line: &Linedef) -> Rgba {

@@ -43,7 +43,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::error::CyberError;
-use crate::render::canvas::{Canvas, Rgba};
+use crate::render::canvas::Canvas;
 use crate::render::light::WallDir;
 use crate::render::scene::Scene;
 use crate::render::sprites;
@@ -62,8 +62,6 @@ const HALF_16: i128 = 0x8000;
 /// a raw intersection numerator must take that shift before it is a ray
 /// parameter whose perpendicular depth is `t * focal2` map units.
 const DIRECTION_SCALE: i128 = ONE_16.saturating_mul(ONE_16);
-/// The opaque black fallback for an unparsable background colour.
-const BLACK: Rgba = [0, 0, 0, 255];
 
 /// Refuses a pitch outside `MIN_PITCH..=MAX_PITCH`.
 ///

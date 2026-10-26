@@ -1,5 +1,5 @@
 //! Unit tests of one editing session: the scope names, the layer stack and
-//! the merged view in `layers`, the labelled history and the batch marks in
+//! the merged view in `layers`, the labelled history and the batch scope in
 //! `history`, and the rest of the session's own state — active map, render
 //! settings, theme, the layer-only view, game detection and the
 //! copy-on-write step — in `state`.
@@ -64,30 +64,34 @@ pub(super) fn tagged(list: &[MergedLump]) -> Vec<String> {
 /// overrides a flat and adds a map.
 pub(super) fn loaded() -> Session {
     let mut session = Session::default();
-    session.set_iwad(layer(
-        LayerRole::Iwad,
-        "doom",
-        vec![
-            lump("PLAYPAL"),
-            lump("GAMEINFO"),
-            marker("F_START"),
-            lump("FLOOR_1"),
-            lump("FLOOR_2"),
-            marker("F_END"),
-            marker("MAP01"),
-            lump("THINGS"),
-        ],
-    ));
-    session.add_resource(layer(
-        LayerRole::Resource,
-        "extras",
-        vec![
-            lump("GAMEINFO"),
-            marker("F_START"),
-            lump("F_SKY1"),
-            marker("F_END"),
-        ],
-    ));
+    session
+        .set_iwad(layer(
+            LayerRole::Iwad,
+            "doom",
+            vec![
+                lump("PLAYPAL"),
+                lump("GAMEINFO"),
+                marker("F_START"),
+                lump("FLOOR_1"),
+                lump("FLOOR_2"),
+                marker("F_END"),
+                marker("MAP01"),
+                lump("THINGS"),
+            ],
+        ))
+        .expect("no batch is open");
+    session
+        .add_resource(layer(
+            LayerRole::Resource,
+            "extras",
+            vec![
+                lump("GAMEINFO"),
+                marker("F_START"),
+                lump("F_SKY1"),
+                marker("F_END"),
+            ],
+        ))
+        .expect("no batch is open");
     session
 }
 

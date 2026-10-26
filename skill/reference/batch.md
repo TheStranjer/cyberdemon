@@ -18,6 +18,10 @@ does not make the server think.
 
 - `steps`: 1 to 50 calls, run in order. `arguments` is the object that tool
   would take from a client directly (omit it for a tool that takes none).
+- The whole run happens inside one **batch scope** the session holds: every
+  step's edit folds into a single undo entry as it lands, and the scope
+  closes by committing that entry or rolling the batch back to its exact
+  pre-batch archive and revision.
 - `atomic` (default `true`): a failing step stops the batch and **undoes
   every edit the batch recorded** — the map is exactly as it was before the
   batch and the failed step is not redoable. With `atomic: false` every
@@ -33,12 +37,20 @@ does not make the server think.
   failed when the tool returned a domain error, so its `error` is the usual
   `{"error", "message", "hint"}` object and `result` is `null`.
 - `run_batch` itself answers with an error result (nothing has run then)
-  only for batch-level refusals: a step count outside `1..=50`, a
-  **forbidden tool** in any step (`run_batch`, `undo`, `redo`, `open_iwad`,
-  `open_wad`, `new_wad`, `merge_wad`, `save_wad`), an **unknown tool name**,
-  arguments that are not an object, or a batch whose steps would push the
-  undo stack past its 100-entry limit. Each refusal is `invalid_argument`
-  and names the step.
+  only for batch-level refusals: a step count outside `1..=50`, a step
+  calling a tool of a group that cannot nest (`run_batch` itself, `undo`
+  and `redo` — refused by group membership, not a name list), an **unknown
+  tool name**, arguments that are not an object, or a batch whose steps
+  would not fit the undo stack's 100-entry limit. Each refusal is
+  `invalid_argument` and names the step.
+- Tools that change session state a fold cannot carry are refused **while
+  the batch is open** by the session itself with a `conflict` step error:
+  `open_iwad` (base-layer swap), `open_wad` and `new_wad` (working-archive
+  swap), `merge_wad` in `layer` mode (stacking a layer) and `save_wad` in
+  `pwad` mode (the save mark; the file is not written). Run them between
+  batches. `merge_wad` in `working` mode is one undoable edit and folds
+  like any other; `save_wad` in `full` mode exports without touching the
+  session and runs fine.
 
 ## Chaining results: `$ref`
 
@@ -75,11 +87,15 @@ under `atomic: true` it stops and rolls back like any other step failure.
 ## What is not rolled back
 
 A rollback restores the **working archive** only. Session state outside its
-undo history stays as the batch left it: the texture palette (`set_palette`),
-the render settings (`set_render_resolution`, `set_render_options`), the
-asset capacity (`set_asset_capacity`) and the active map (`set_active_map`).
-Steps that only read (`get_*`, `list_*`, `render_*`, `assemble_map`,
-`preview_*`, `diff_wads`) are allowed and leave nothing behind.
+undo history stays as the batch left it: the render settings
+(`set_render_resolution`, `set_render_options`), the texture theme
+(`set_texture_theme`), the asset capacity (`set_asset_capacity`) and the
+active map (`set_active_map`). Published asset files and `save_wad` `full`
+exports live on disk and no rollback touches them. `set_palette` writes the
+working archive as an ordinary undoable edit, so it folds and rolls back
+like any other step. Steps that only read (`get_*`, `list_*`, `render_*`,
+`assemble_map`, `preview_*`, `diff_wads`) are allowed and leave nothing
+behind.
 
 ## Verifying
 

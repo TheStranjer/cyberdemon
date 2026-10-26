@@ -72,24 +72,26 @@ pub(super) fn selector_for(text: &str) -> EditSelector {
 /// block with its `GL` run, over an empty working archive.
 pub(super) fn loaded() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                carrying("PLAYPAL", "base-palette"),
-                marker("F_START"),
-                carrying("FLATA", "base-flat"),
-                marker("F_END"),
-                marker("MAP01"),
-                carrying("THINGS", "base-things"),
-                carrying("SECTORS", "base-sectors"),
-                marker("GL_MAP01"),
-                carrying("GL_VERT", "base-gl"),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    carrying("PLAYPAL", "base-palette"),
+                    marker("F_START"),
+                    carrying("FLATA", "base-flat"),
+                    marker("F_END"),
+                    marker("MAP01"),
+                    carrying("THINGS", "base-things"),
+                    carrying("SECTORS", "base-sectors"),
+                    marker("GL_MAP01"),
+                    carrying("GL_VERT", "base-gl"),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

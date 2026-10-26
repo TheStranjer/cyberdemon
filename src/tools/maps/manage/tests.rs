@@ -42,14 +42,16 @@ pub(super) fn code(error: &CyberError) -> &str {
 /// A session whose only layer is a base archive of `lumps`.
 pub(super) fn base_session(lumps: Vec<Lump>) -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps,
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

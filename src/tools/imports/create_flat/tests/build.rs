@@ -94,18 +94,20 @@ fn working_session() -> Session {
 /// A session on an `IWAD` layer holding a flats region with `FLOOR1`.
 fn layer_session() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        "base.wad".into(),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                Lump::marker(name("F_START")),
-                Lump::new(name("FLOOR1"), vec![1_u8; 4096]),
-                Lump::marker(name("F_END")),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            "base.wad".into(),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::marker(name("F_START")),
+                    Lump::new(name("FLOOR1"), vec![1_u8; 4096]),
+                    Lump::marker(name("F_END")),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 
@@ -386,19 +388,21 @@ fn undo_labels(state: &AppState) -> Vec<String> {
 /// A session on a `PLAYPAL`-carrying `IWAD` layer with a `FLOOR1` flat.
 fn layer_session_with_palette() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        "base.wad".into(),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                Lump::new(name("PLAYPAL"), playpal()),
-                Lump::marker(name("F_START")),
-                Lump::new(name("FLOOR1"), vec![1_u8; 4096]),
-                Lump::marker(name("F_END")),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            "base.wad".into(),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::new(name("PLAYPAL"), playpal()),
+                    Lump::marker(name("F_START")),
+                    Lump::new(name("FLOOR1"), vec![1_u8; 4096]),
+                    Lump::marker(name("F_END")),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

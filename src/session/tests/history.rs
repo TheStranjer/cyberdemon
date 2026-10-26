@@ -1,14 +1,29 @@
 //! The working archive's history: the label and dirty state one edit
 //! leaves behind, what a failed edit does not leave, walking back and forth
 //! over undo and redo, the branch an edit after an undo drops, the cap on
-//! the stack, and the depth marks a batch rolls back or squashes.
+//! the stack, and the batch scope that folds nested edits into one entry,
+//! rolls back whole, and refuses the session changes a fold cannot carry.
 
 use std::path::PathBuf;
 
-use super::{add_marker, append_marker, loaded, lump, name, pwad};
+use super::{add_marker, append_marker, layer, loaded, lump, marker, name, pwad};
 use crate::error::CyberError;
-use crate::session::history::HISTORY_LIMIT;
+use crate::session::history::{BatchOutcome, BatchToken, HISTORY_LIMIT};
+use crate::session::{LayerRole, Session};
 use crate::wad::archive::Wad;
+
+/// Opens a scope labelled `batch` on `session`, panicking if one is open.
+fn begin(session: &mut Session) -> BatchToken {
+    session.begin_batch("batch").expect("no batch is open yet")
+}
+
+/// Closes `token` on `session` with `outcome`, reporting whether the batch
+/// left an undo entry; panics on a refusal.
+fn end(session: &mut Session, token: BatchToken, outcome: BatchOutcome) -> bool {
+    session
+        .end_batch(token, outcome)
+        .expect("the token names the open batch")
+}
 
 #[test]
 fn edit_records_its_label_and_marks_the_session_dirty() {
@@ -70,12 +85,16 @@ fn undo_and_redo_walk_the_working_archive() {
 #[test]
 fn undoing_back_to_the_saved_state_makes_the_session_clean() {
     let mut session = loaded();
-    session.replace_working(pwad(vec![lump("PLAYPAL")]), Some(PathBuf::from("out.wad")));
+    session
+        .replace_working(pwad(vec![lump("PLAYPAL")]), Some(PathBuf::from("out.wad")))
+        .expect("no batch is open");
     assert!(!session.is_dirty(), "a replaced archive starts clean");
     assert!(session.undo_labels().is_empty(), "and cannot be undone");
     add_marker(&mut session, "MARK").expect("an edit");
     assert!(session.is_dirty(), "now there is unsaved work");
-    session.mark_saved(PathBuf::from("out.wad"));
+    session
+        .mark_saved(PathBuf::from("out.wad"))
+        .expect("no batch is open");
     assert!(!session.is_dirty(), "saving cleared it");
     assert_eq!(
         session
@@ -113,7 +132,9 @@ fn editing_after_an_undo_drops_the_redo_branch() {
 fn replace_working_forgets_history_and_remember_the_new_path() {
     let mut session = loaded();
     add_marker(&mut session, "ONE").expect("an edit");
-    session.replace_working(pwad(vec![lump("S_START")]), Some(PathBuf::from("new.wad")));
+    session
+        .replace_working(pwad(vec![lump("S_START")]), Some(PathBuf::from("new.wad")))
+        .expect("no batch is open");
     assert!(
         session.undo_labels().is_empty(),
         "no history across archives"
@@ -128,7 +149,9 @@ fn replace_working_forgets_history_and_remember_the_new_path() {
         "new.wad",
         "the path came with it"
     );
-    session.replace_working(Wad::default(), None);
+    session
+        .replace_working(Wad::default(), None)
+        .expect("still no batch");
     assert!(
         session.working_path().is_none(),
         "an unsaved archive has no path"
@@ -186,61 +209,253 @@ fn undo_only_touches_the_working_archive() {
 }
 
 #[test]
-fn undo_depth_marks_a_batch_and_rollback_restores_the_pre_batch_archive() {
+fn a_batch_folds_every_nested_edit_into_one_entry() {
     let mut session = loaded();
     add_marker(&mut session, "KEEP").expect("an edit before the batch");
-    let depth = session.undo_depth();
-    assert_eq!(depth, 1, "one entry stands before the batch");
+    let token = begin(&mut session);
+    assert!(session.batch_open(), "the scope owns the session");
     add_marker(&mut session, "B1").expect("batch step 1");
     add_marker(&mut session, "B2").expect("batch step 2");
-    assert_eq!(session.undo_depth(), 3, "the batch recorded two more");
-    assert_eq!(
-        session.rollback_to(depth),
-        2,
-        "both batch entries roll back at once"
+    add_marker(&mut session, "B3").expect("batch step 3");
+    assert!(
+        end(&mut session, token, BatchOutcome::Commit),
+        "the batch recorded edits"
     );
-    assert_eq!(session.undo_depth(), depth, "the mark holds");
+    assert_eq!(
+        session.undo_labels(),
+        vec!["batch", "add KEEP"],
+        "three inner labels folded into the batch's one"
+    );
+    assert_eq!(
+        session.working().len(),
+        4,
+        "KEEP plus the three batch lumps"
+    );
+    assert_eq!(
+        session.undo().expect("one undo steps back over the batch"),
+        "batch",
+        "the batch label is what undo reports"
+    );
+    assert_eq!(
+        session.undo_labels(),
+        vec!["add KEEP"],
+        "and the pre-batch entry stands below"
+    );
+    assert_eq!(session.working().len(), 1, "all three batch edits at once");
+    session.redo().expect("redo the batch");
+    assert_eq!(
+        session.working().len(),
+        4,
+        "the whole fold replays as one step"
+    );
+}
+
+#[test]
+fn a_batch_rollback_restores_the_exact_pre_batch_archive_and_revision() {
+    let mut session = loaded();
+    add_marker(&mut session, "KEEP").expect("an edit before the batch");
+    session
+        .mark_saved(PathBuf::from("out.wad"))
+        .expect("no batch is open");
+    assert!(!session.is_dirty(), "the session is clean at the mark");
+    let token = begin(&mut session);
+    add_marker(&mut session, "B1").expect("batch step 1");
+    add_marker(&mut session, "B2").expect("batch step 2");
+    assert!(session.is_dirty(), "mid-batch the folded edits are unsaved");
+    assert!(
+        !end(&mut session, token, BatchOutcome::Rollback),
+        "a rollback leaves no entry"
+    );
+    assert!(!session.batch_open(), "the scope closed");
+    assert_eq!(
+        session.undo_labels(),
+        vec!["add KEEP"],
+        "only the KEEP entry"
+    );
     assert_eq!(
         session.working().len(),
         1,
         "only the pre-batch lump is left"
     );
+    assert_eq!(
+        session.working().lumps.first().expect("the kept lump").name,
+        name("KEEP"),
+        "the exact pre-batch archive is back"
+    );
+    assert!(
+        !session.is_dirty(),
+        "the exact pre-batch revision is back, and it was the saved one"
+    );
     assert!(
         session.redo_labels().is_empty(),
         "the rolled-back steps cannot be redone"
     );
+    session.undo().expect("the pre-batch undo is untouched");
+    assert_eq!(session.undo_labels(), Vec::<&str>::new(), "and walked back");
 }
 
 #[test]
-fn squash_since_makes_a_batch_one_undo_step_and_noops_on_an_empty_suffix() {
+fn a_batch_whose_edits_all_fail_records_no_entry() {
     let mut session = loaded();
     add_marker(&mut session, "KEEP").expect("an edit before the batch");
-    let depth = session.undo_depth();
-    add_marker(&mut session, "B1").expect("batch step 1");
-    add_marker(&mut session, "B2").expect("batch step 2");
+    let token = begin(&mut session);
+    let error = session
+        .edit("broken", |_| {
+            Err::<(), CyberError>(CyberError::InvalidArgument("nope".to_owned()))
+        })
+        .expect_err("the inner edit fails");
+    assert_eq!(error.code(), "invalid_argument", "the error passes through");
     assert!(
-        session.squash_since(depth, "batch: two steps"),
-        "two entries stand above the mark"
-    );
-    assert_eq!(session.undo_depth(), 2, "the two batch entries became one");
-    assert_eq!(
-        session.undo().expect("one undo steps back over the batch"),
-        "batch: two steps",
-        "the squashed label is what undo reports"
-    );
-    assert_eq!(
-        session.working().len(),
-        1,
-        "both batch edits are gone at once"
-    );
-    let top = session.undo_depth();
-    assert!(
-        !session.squash_since(top, "nothing above"),
-        "a squash above the newest entry records nothing"
+        !end(&mut session, token, BatchOutcome::Commit),
+        "nothing recorded, no entry"
     );
     assert_eq!(
         session.undo_labels(),
         vec!["add KEEP"],
-        "a squash above the newest entry records nothing and changes nothing"
+        "the history shows only the pre-batch edit"
+    );
+    assert_eq!(
+        session.working().len(),
+        1,
+        "and the archive changed nothing"
+    );
+    assert!(session.is_dirty(), "the KEEP edit is still unsaved work");
+}
+
+#[test]
+fn undo_and_redo_refuse_while_a_batch_is_open() {
+    let mut session = loaded();
+    add_marker(&mut session, "KEEP").expect("an edit before the batch");
+    let token = begin(&mut session);
+    let undo = session.undo().expect_err("the batch owns the stack");
+    assert_eq!(undo.code(), "conflict", "undo inside a batch code");
+    assert!(
+        undo.to_string().contains("undo"),
+        "the message names the operation: {undo}"
+    );
+    let redo = session.redo().expect_err("and the same for redo");
+    assert!(
+        redo.to_string().contains("redo"),
+        "the message names the operation: {redo}"
+    );
+    assert_eq!(session.undo_depth(), 1, "the stack stands");
+    assert!(
+        !end(&mut session, token, BatchOutcome::Rollback),
+        "close it"
+    );
+    assert_eq!(
+        session.undo().expect("now undo walks"),
+        "add KEEP",
+        "the refusal did not consume the entry"
+    );
+}
+
+#[test]
+fn replace_working_is_refused_while_a_batch_is_open() {
+    let mut session = loaded();
+    add_marker(&mut session, "KEEP").expect("an edit before the batch");
+    let token = begin(&mut session);
+    let error = session
+        .replace_working(pwad(vec![lump("OTHER")]), None)
+        .expect_err("a fold cannot carry an archive swap");
+    assert_eq!(
+        error.code(),
+        "conflict",
+        "replace_working inside a batch code"
+    );
+    assert!(
+        error.to_string().contains("working archive"),
+        "the message names the operation: {error}"
+    );
+    assert_eq!(session.working().len(), 1, "the archive did not move");
+    assert_eq!(
+        session.undo_labels(),
+        vec!["add KEEP"],
+        "nor did the history"
+    );
+    end(&mut session, token, BatchOutcome::Rollback);
+    session
+        .replace_working(pwad(vec![lump("OTHER")]), None)
+        .expect("after the batch the swap runs");
+    assert_eq!(session.working().len(), 1, "the fresh archive stands");
+    assert!(session.undo_labels().is_empty(), "with its history cleared");
+}
+
+#[test]
+fn the_layer_and_saved_state_swaps_refuse_while_a_batch_is_open() {
+    let mut session = loaded();
+    let token = begin(&mut session);
+    let iwad = session
+        .set_iwad(layer(LayerRole::Iwad, "other", vec![marker("PLAYPAL")]))
+        .expect_err("a fold cannot carry a base swap");
+    assert_eq!(iwad.code(), "conflict", "set_iwad inside a batch code");
+    let resource = session
+        .add_resource(layer(LayerRole::Resource, "extra", vec![marker("S_START")]))
+        .expect_err("nor a layer stack");
+    assert_eq!(
+        resource.code(),
+        "conflict",
+        "add_resource inside a batch code"
+    );
+    let saved = session
+        .mark_saved(PathBuf::from("out.wad"))
+        .expect_err("nor a save mark");
+    assert_eq!(saved.code(), "conflict", "mark_saved inside a batch code");
+    assert_eq!(session.layers().len(), 2, "the stack stands as it was");
+    assert!(
+        session.working_path().is_none(),
+        "no path was recorded while refused"
+    );
+    end(&mut session, token, BatchOutcome::Commit);
+    session
+        .add_resource(layer(LayerRole::Resource, "extra", vec![marker("S_START")]))
+        .expect("after the batch the stack runs");
+    assert_eq!(session.layers().len(), 3, "and it stacked");
+}
+
+#[test]
+fn a_second_batch_is_refused_and_a_stale_token_cannot_close_the_open_one() {
+    let mut session = loaded();
+    let token = begin(&mut session);
+    let nested = session
+        .begin_batch("second")
+        .expect_err("a session runs one batch at a time");
+    assert_eq!(nested.code(), "conflict", "nested begin code");
+    assert!(
+        nested.to_string().contains("batch is open"),
+        "the message says why: {nested}"
+    );
+    assert!(session.batch_open(), "the refusal keeps the scope open");
+    end(&mut session, token, BatchOutcome::Commit);
+    let later = session
+        .begin_batch("second run")
+        .expect("a closed scope frees the session");
+    let stale = session
+        .end_batch(token, BatchOutcome::Commit)
+        .expect_err("a used token does not name the open batch");
+    assert_eq!(stale.code(), "conflict", "stale token code");
+    assert!(
+        stale.to_string().contains("does not name"),
+        "the message says why: {stale}"
+    );
+    assert!(session.batch_open(), "the refusal keeps the new scope open");
+    assert!(
+        !end(&mut session, later, BatchOutcome::Commit),
+        "nothing ran"
+    );
+}
+
+#[test]
+fn ending_without_an_open_batch_is_refused() {
+    let mut session = loaded();
+    let token = begin(&mut session);
+    end(&mut session, token, BatchOutcome::Commit);
+    let error = session
+        .end_batch(token, BatchOutcome::Rollback)
+        .expect_err("the scope is already closed");
+    assert_eq!(error.code(), "conflict", "no-batch end code");
+    assert!(
+        error.to_string().contains("no batch is open"),
+        "the message says why: {error}"
     );
 }

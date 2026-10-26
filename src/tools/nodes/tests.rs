@@ -194,7 +194,7 @@ pub(super) fn base(lumps: Vec<Lump>) -> Layer {
 /// A session over a base layer of `lumps`.
 pub(super) fn session_over(lumps: Vec<Lump>) -> Session {
     let mut session = Session::default();
-    session.set_iwad(base(lumps));
+    session.set_iwad(base(lumps)).expect("no batch is open");
     session
 }
 

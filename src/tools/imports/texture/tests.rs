@@ -139,19 +139,21 @@ pub(super) fn texture1_lump() -> Lump {
 /// A session on one `IWAD` layer holding the fixture texture set.
 pub(super) fn session() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                Lump::new(name("PLAYPAL"), playpal()),
-                pnames_lump(),
-                texture1_lump(),
-                Lump::new(name("WALLP1"), vec![b'P']),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::new(name("PLAYPAL"), playpal()),
+                    pnames_lump(),
+                    texture1_lump(),
+                    Lump::new(name("WALLP1"), vec![b'P']),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 
@@ -182,14 +184,16 @@ pub(super) fn theme_state(session: &Session, role: Role) -> (Option<String>, usi
 pub(super) fn seed_palette_layer(state: &AppState) {
     state
         .with_session(|session| {
-            session.set_iwad(Layer::new(
-                PathBuf::from("base.wad"),
-                LayerRole::Iwad,
-                Wad {
-                    kind: WadKind::Iwad,
-                    lumps: vec![Lump::new(name("PLAYPAL"), playpal())],
-                },
-            ));
+            session
+                .set_iwad(Layer::new(
+                    PathBuf::from("base.wad"),
+                    LayerRole::Iwad,
+                    Wad {
+                        kind: WadKind::Iwad,
+                        lumps: vec![Lump::new(name("PLAYPAL"), playpal())],
+                    },
+                ))
+                .expect("no batch is open");
             Ok(())
         })
         .expect("the seed lands");

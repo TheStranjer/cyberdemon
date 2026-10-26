@@ -29,7 +29,9 @@ mod tests {
     fn session_over(path: &Path) -> Session {
         let wad = Wad::read_file(path).expect("the fixture archive parses");
         let mut session = Session::default();
-        session.set_iwad(Layer::new(path.to_path_buf(), LayerRole::Iwad, wad));
+        session
+            .set_iwad(Layer::new(path.to_path_buf(), LayerRole::Iwad, wad))
+            .expect("no batch is open");
         session
     }
 

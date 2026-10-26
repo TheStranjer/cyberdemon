@@ -74,18 +74,20 @@ pub(super) fn texture1_lump() -> Lump {
 /// A session on one `IWAD` layer holding the fixture texture set.
 pub(super) fn session() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                pnames_lump(&["WALLP1", "STEPP1"]),
-                texture1_lump(),
-                Lump::new(name("WALLP1"), vec![b'P']),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    pnames_lump(&["WALLP1", "STEPP1"]),
+                    texture1_lump(),
+                    Lump::new(name("WALLP1"), vec![b'P']),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 
@@ -114,18 +116,20 @@ pub(super) fn run(operation: Operation<'_>, force: bool) -> Result<EditReport, C
 /// texture refers to.
 pub(super) fn session_with_spare() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                pnames_lump(&["WALLP1", "STEPP1", "EXTRAP"]),
-                texture1_lump(),
-                Lump::new(name("EXTRAP"), vec![b'E']),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    pnames_lump(&["WALLP1", "STEPP1", "EXTRAP"]),
+                    texture1_lump(),
+                    Lump::new(name("EXTRAP"), vec![b'E']),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

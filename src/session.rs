@@ -25,6 +25,15 @@
 //! forth; [`Session::is_dirty`] compares the working archive's revision with
 //! the one it was last saved at.
 //!
+//! [`Session::begin_batch`] opens the one batch scope [`history`] allows:
+//! while it is open every [`Session::edit`] folds into the single entry
+//! [`Session::end_batch`] commits or rolls back, and the operations a fold
+//! cannot carry — the whole-archive and saved-state swaps
+//! ([`Session::replace_working`], [`Session::set_iwad`],
+//! [`Session::add_resource`], [`Session::mark_saved`]) and the history
+//! walkers — refuse with a typed conflict. That is structural enforcement
+//! of the "one batch, one history entry" invariant, not a name list.
+//!
 //! Alongside the archives a session carries the client's [`RenderSettings`]
 //! and [`TextureTheme`], the defaults the render and texture tools start
 //! from. They are session state rather than archive state: no edit, undo or
@@ -58,7 +67,10 @@ use serde::{Deserialize, Serialize};
 use crate::defs::{CustomSources, Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::render::RenderSettings;
-use crate::session::{history::History, map_edit::MapEditReport};
+use crate::session::{
+    history::{BatchOutcome, BatchToken, History, batch_open_conflict},
+    map_edit::MapEditReport,
+};
 use crate::themes::TextureTheme;
 use crate::wad::{archive::Wad, classify::Namespace, game::Game, map::Map, name::LumpName};
 
@@ -147,19 +159,33 @@ impl Session {
     ///
     /// Its role is normalised to [`LayerRole::Iwad`], so layer 0 is the base
     /// whatever the caller put in [`Layer::role`].
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] while a batch is open (see
+    /// [`Session::begin_batch`]): the swap moves the merged view out from
+    /// under the batch's steps and no fold can undo it.
     #[inline]
-    pub fn set_iwad(&mut self, mut layer: Layer) {
+    pub fn set_iwad(&mut self, mut layer: Layer) -> Result<(), CyberError> {
+        self.refuse_in_batch("replacing the base game layer")?;
         layer.role = LayerRole::Iwad;
         self.iwad = Some(layer);
+        Ok(())
     }
 
     /// Appends a read-only archive above the existing layers, in load order.
     ///
     /// Its role is normalised to [`LayerRole::Resource`].
+    ///
+    /// # Errors
+    ///
+    /// [`Session::set_iwad`]'s batch refusal.
     #[inline]
-    pub fn add_resource(&mut self, mut layer: Layer) {
+    pub fn add_resource(&mut self, mut layer: Layer) -> Result<(), CyberError> {
+        self.refuse_in_batch("stacking a resource layer")?;
         layer.role = LayerRole::Resource;
         self.resources.push(layer);
+        Ok(())
     }
 
     /// The read-only layers, numbered from 0: the `IWAD` while it is loaded,
@@ -251,18 +277,47 @@ impl Session {
     ///
     /// This is what opening or reloading a file does: undo cannot reach back
     /// past it, and the fresh archive starts out clean.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] while a batch is open (see
+    /// [`Session::begin_batch`]): a fold cannot carry an archive swap, so
+    /// the batch could not roll back over it.
     #[inline]
-    pub fn replace_working(&mut self, wad: Wad, path: Option<PathBuf>) {
+    pub fn replace_working(&mut self, wad: Wad, path: Option<PathBuf>) -> Result<(), CyberError> {
+        self.refuse_in_batch("replacing the working archive")?;
         self.working = wad;
         self.working_path = path;
         self.history.reset();
+        Ok(())
     }
 
     /// Records that the working archive is saved at `path` and is now clean.
+    ///
+    /// # Errors
+    ///
+    /// [`Session::replace_working`]'s batch refusal: a batch rolled back
+    /// after a save would leave the file holding edits the session dropped,
+    /// so a `save_wad` waits for the batch to end.
     #[inline]
-    pub fn mark_saved(&mut self, path: PathBuf) {
+    pub fn mark_saved(&mut self, path: PathBuf) -> Result<(), CyberError> {
+        self.refuse_in_batch("marking the working archive saved")?;
         self.working_path = Some(path);
         self.history.mark_saved();
+        Ok(())
+    }
+
+    /// Refuses an operation that replaces session state the open batch
+    /// cannot fold: `what` names it in the message.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] naming `what` while [`Session::batch_open`].
+    fn refuse_in_batch(&self, what: &str) -> Result<(), CyberError> {
+        if self.batch_open() {
+            return Err(batch_open_conflict(what));
+        }
+        Ok(())
     }
 
     /// Whether the working archive changed since it was last saved.
@@ -280,6 +335,11 @@ impl Session {
     /// archive it had and no history entry appears. An `Ok` commits the clone
     /// and records `label` as the step to undo.
     ///
+    /// While a [`Session::begin_batch`] scope is open the commit folds into
+    /// the batch's single entry instead: nothing stands on the stack per
+    /// inner edit, and the batch's own label is what one [`Session::undo`]
+    /// will report for the whole run.
+    ///
     /// # Errors
     ///
     /// Whatever `f` reports, unchanged.
@@ -294,6 +354,50 @@ impl Session {
         Ok(value)
     }
 
+    /// Opens the session's one batch scope: every [`Session::edit`] from
+    /// here until [`Session::end_batch`] folds into a single history entry
+    /// labelled `label`, whose snapshot is the working archive as it stands
+    /// now. This is the structural form of the batch's "one entry per run"
+    /// rule: inner edits cannot stand on the stack beside it, and the
+    /// operations a fold cannot carry refuse with [`CyberError::Conflict`]
+    /// while the scope is open.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] when a batch is already open: a session runs
+    /// one batch at a time.
+    #[inline]
+    pub fn begin_batch(&mut self, label: &str) -> Result<BatchToken, CyberError> {
+        self.history.begin_batch(label, &self.working)
+    }
+
+    /// Closes the batch scope `token` opened, applying `outcome`: a
+    /// [`BatchOutcome::Commit`] leaves the batch's fold as one undo entry
+    /// and a [`BatchOutcome::Rollback`] restores the exact pre-batch
+    /// working archive and revision and leaves nothing. Returns whether the
+    /// batch left an undo entry, so a scope whose edits all failed stays
+    /// invisible in the history.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] when `token` does not name the open batch;
+    /// the scope stays open for its holder to close.
+    #[inline]
+    pub fn end_batch(
+        &mut self,
+        token: BatchToken,
+        outcome: BatchOutcome,
+    ) -> Result<bool, CyberError> {
+        self.history.end_batch(&mut self.working, token, outcome)
+    }
+
+    /// Whether a [`Session::begin_batch`] scope currently owns the history.
+    #[must_use]
+    #[inline]
+    pub const fn batch_open(&self) -> bool {
+        self.history.batch_open()
+    }
+
     /// Steps back over the most recent edit and returns its label.
     ///
     /// Only the working archive changes: layers and the active map are not
@@ -302,38 +406,20 @@ impl Session {
     /// # Errors
     ///
     /// [`CyberError::NotFound`] with `"nothing to undo"` when the undo stack
-    /// is empty.
+    /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn undo(&mut self) -> Result<String, CyberError> {
         self.history.undo(&mut self.working)
     }
 
     /// How many undo entries the history currently holds. The batch tool
-    /// marks the depth before its first step with this and hands it to
-    /// [`Session::rollback_to`] or [`Session::squash_since`] afterwards.
+    /// reads this before [`Session::begin_batch`] to refuse a plan whose
+    /// steps could not fit the undo stack at all; the open batch itself
+    /// only ever adds one entry when it commits.
     #[must_use]
     #[inline]
     pub fn undo_depth(&self) -> usize {
         self.history.undo_depth()
-    }
-
-    /// Undoes every edit recorded above [`Session::undo_depth`] mark
-    /// `depth`, restoring the working archive, and discards those entries
-    /// (see [`History::rollback_to`]): the rolled-back steps are not
-    /// redoable. Returns the number of entries undone.
-    #[inline]
-    pub fn rollback_to(&mut self, depth: usize) -> usize {
-        self.history.rollback_to(&mut self.working, depth)
-    }
-
-    /// Collapses every edit recorded above [`Session::undo_depth`] mark
-    /// `depth` into a single undo entry labelled `label` (see
-    /// [`History::squash_since`]), so one [`Session::undo`] steps back over
-    /// a whole batch. A no-op when nothing was recorded above `depth`.
-    /// Returns whether an entry was replaced.
-    #[inline]
-    pub fn squash_since(&mut self, depth: usize, label: &str) -> bool {
-        self.history.squash_since(depth, label)
     }
 
     /// Re-applies the most recently undone edit and returns its label.
@@ -341,7 +427,7 @@ impl Session {
     /// # Errors
     ///
     /// [`CyberError::NotFound`] with `"nothing to redo"` when the redo stack
-    /// is empty.
+    /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn redo(&mut self) -> Result<String, CyberError> {
         self.history.redo(&mut self.working)

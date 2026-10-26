@@ -52,6 +52,7 @@ impl Cyberdemon {
         router.merge(Self::edit_vertices_router());
         router.merge(Self::features_router());
         router.merge(Self::graphics_router());
+        router.merge(Self::history_router());
         router.merge(Self::imports_router());
         router.merge(Self::inspect_router());
         router.merge(Self::lumps_router());
@@ -90,6 +91,21 @@ impl Cyberdemon {
     #[inline]
     pub(crate) const fn tool_router(&self) -> &ToolRouter<Self> {
         &self.tool_router
+    }
+
+    /// The tool groups a `run_batch` step may never dispatch, composed as
+    /// one router: the batch group (a batch cannot nest inside itself) and
+    /// the history group (`undo` and `redo`, which would fight the open
+    /// batch's single entry). Membership is the refusal — a property of the
+    /// groups, so a tool added to either is refused in batches without any
+    /// hand-kept name list. Every other state a batch cannot survive
+    /// (whole-archive and saved-state swaps) is refused at runtime by the
+    /// session itself while a batch is open.
+    #[must_use]
+    pub(crate) fn non_nestable_router() -> ToolRouter<Self> {
+        let mut router = Self::batch_router();
+        router.merge(Self::history_router());
+        router
     }
 }
 

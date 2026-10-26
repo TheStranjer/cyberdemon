@@ -194,14 +194,16 @@ pub(super) fn bulk_session() -> Session {
         Lump::marker(parsed("TX_END")),
     ]);
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("bulk.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps,
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("bulk.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

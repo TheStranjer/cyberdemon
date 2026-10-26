@@ -47,27 +47,31 @@ pub(super) fn args() -> EditDehackedParams {
 /// A session: a base layer holding a `DEHACKED` global.
 pub(super) fn loaded() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![carrying("DEHACKED", "Thing 1 (Troop)\n")],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![carrying("DEHACKED", "Thing 1 (Troop)\n")],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 
 /// An `IWAD`-layer session holding one `DECORATE` lump.
 pub(super) fn with_decorate(body: &str) -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![carrying("DECORATE", body)],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![carrying("DECORATE", body)],
+            },
+        ))
+        .expect("no batch is open");
     session
 }

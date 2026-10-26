@@ -71,41 +71,43 @@ pub(super) fn png(width: u32, height: u32, offsets: Option<(i32, i32)>) -> Vec<u
 /// grammar plus one malformed name.
 pub(super) fn fixture() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("gfx.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                Lump::marker(name("F_START")),
-                Lump::new(name("FLOOR1"), vec![1_u8; 4_096]),
-                Lump::new(name("FLOOR1"), vec![3_u8; 8_192]),
-                Lump::new(name("PNGFLAT"), png(64, 64, None)),
-                Lump::new(name("ODDFLET"), vec![7_u8; 100]),
-                Lump::marker(name("F_END")),
-                Lump::marker(name("P_START")),
-                Lump::new(name("WALLP1"), header(16, 16, -2, -14)),
-                Lump::new(name("JUNKP1"), vec![b'x'; 40]),
-                Lump::marker(name("P_END")),
-                Lump::marker(name("S_START")),
-                Lump::new(name("TROOA1"), header(8, 8, 4, 4)),
-                Lump::new(name("TROOA2A8"), header(8, 8, 4, 4)),
-                Lump::new(name("PLAYA0"), header(16, 16, 0, 0)),
-                Lump::new(name("BADNAME"), vec![b'?'; 5]),
-                Lump::marker(name("S_END")),
-                Lump::new(name("PNGPAT"), png(4, 2, Some((3_i32, -4_i32)))),
-                Lump::new(
-                    name("PNAMES"),
-                    write_pnames(&[
-                        "WALLP1".to_owned(),
-                        "PNGPAT".to_owned(),
-                        "TROOA1".to_owned(),
-                    ])
-                    .expect("test names are valid"),
-                ),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("gfx.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::marker(name("F_START")),
+                    Lump::new(name("FLOOR1"), vec![1_u8; 4_096]),
+                    Lump::new(name("FLOOR1"), vec![3_u8; 8_192]),
+                    Lump::new(name("PNGFLAT"), png(64, 64, None)),
+                    Lump::new(name("ODDFLET"), vec![7_u8; 100]),
+                    Lump::marker(name("F_END")),
+                    Lump::marker(name("P_START")),
+                    Lump::new(name("WALLP1"), header(16, 16, -2, -14)),
+                    Lump::new(name("JUNKP1"), vec![b'x'; 40]),
+                    Lump::marker(name("P_END")),
+                    Lump::marker(name("S_START")),
+                    Lump::new(name("TROOA1"), header(8, 8, 4, 4)),
+                    Lump::new(name("TROOA2A8"), header(8, 8, 4, 4)),
+                    Lump::new(name("PLAYA0"), header(16, 16, 0, 0)),
+                    Lump::new(name("BADNAME"), vec![b'?'; 5]),
+                    Lump::marker(name("S_END")),
+                    Lump::new(name("PNGPAT"), png(4, 2, Some((3_i32, -4_i32)))),
+                    Lump::new(
+                        name("PNAMES"),
+                        write_pnames(&[
+                            "WALLP1".to_owned(),
+                            "PNGPAT".to_owned(),
+                            "TROOA1".to_owned(),
+                        ])
+                        .expect("test names are valid"),
+                    ),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

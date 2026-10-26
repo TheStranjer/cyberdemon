@@ -135,31 +135,33 @@ pub(super) fn with_extra(extra: Vec<Lump>) -> Session {
 /// that is no picture at all.
 pub(super) fn session() -> Session {
     let mut built = Session::default();
-    built.set_iwad(Layer::new(
-        PathBuf::from("gfx.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                lump("PLAYPAL", playpal()),
-                lump("LOOSE1", vec![9_u8; 4_096]),
-                lump("FLOOR1", vec![1_u8; 4_096]),
-                lump("PNGFLAT", png(2, 2, [64, 191, 64], None)),
-                lump("FLOOR1", vec![2_u8; 4_096]),
-                lump("WALLP1", doom_patch(4, 4, (-2, -14), 0x11)),
-                lump(
-                    "PNGPAT",
-                    png(3, 2, [0x11, 0x22, 0x33], Some((3_i32, -4_i32))),
-                ),
-                Lump::marker(name("S_START")),
-                lump("TROOA1", doom_patch(8, 8, (4, 0), 0x33)),
-                lump("TROOA2A8", stripe(4, 0, (1, 2))),
-                lump("PLAYA0", doom_patch(16, 16, (0, 0), 0x44)),
-                Lump::marker(name("S_END")),
-                lump("JUNK", vec![b'x'; 40]),
-            ],
-        },
-    ));
+    built
+        .set_iwad(Layer::new(
+            PathBuf::from("gfx.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    lump("PLAYPAL", playpal()),
+                    lump("LOOSE1", vec![9_u8; 4_096]),
+                    lump("FLOOR1", vec![1_u8; 4_096]),
+                    lump("PNGFLAT", png(2, 2, [64, 191, 64], None)),
+                    lump("FLOOR1", vec![2_u8; 4_096]),
+                    lump("WALLP1", doom_patch(4, 4, (-2, -14), 0x11)),
+                    lump(
+                        "PNGPAT",
+                        png(3, 2, [0x11, 0x22, 0x33], Some((3_i32, -4_i32))),
+                    ),
+                    Lump::marker(name("S_START")),
+                    lump("TROOA1", doom_patch(8, 8, (4, 0), 0x33)),
+                    lump("TROOA2A8", stripe(4, 0, (1, 2))),
+                    lump("PLAYA0", doom_patch(16, 16, (0, 0), 0x44)),
+                    Lump::marker(name("S_END")),
+                    lump("JUNK", vec![b'x'; 40]),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     built
 }
 

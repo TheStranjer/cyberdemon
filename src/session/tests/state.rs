@@ -43,7 +43,9 @@ fn render_settings_survive_an_undo_and_a_replaced_archive() {
         .edit("add MARK", append_marker)
         .expect("an edit to undo");
     session.undo().expect("undo it");
-    session.replace_working(pwad(vec![lump("PLAYPAL")]), None);
+    session
+        .replace_working(pwad(vec![lump("PLAYPAL")]), None)
+        .expect("no batch is open");
     assert_eq!(
         session.render_settings(),
         &settings,
@@ -83,7 +85,9 @@ fn the_texture_theme_is_session_state_outside_the_history() {
         .edit("add MARK", append_marker)
         .expect("an edit to undo");
     session.undo().expect("undo it");
-    session.replace_working(pwad(vec![lump("PLAYPAL")]), None);
+    session
+        .replace_working(pwad(vec![lump("PLAYPAL")]), None)
+        .expect("no batch is open");
     assert_eq!(
         session.texture_theme().name.as_deref(),
         Some("hell"),
@@ -98,7 +102,9 @@ fn the_texture_theme_is_session_state_outside_the_history() {
 #[test]
 fn base_lumps_are_the_merged_view_without_the_working_archive() {
     let mut session = loaded();
-    session.replace_working(pwad(vec![payload("PLAYPAL", "working copy")]), None);
+    session
+        .replace_working(pwad(vec![payload("PLAYPAL", "working copy")]), None)
+        .expect("no batch is open");
     assert_eq!(
         tagged(&session.base_lumps()),
         vec![
@@ -191,11 +197,13 @@ fn game_reads_the_iwad_layer_first() {
         Game::Doom2,
         "the base layer's MAP01 identifies DOOM II"
     );
-    session.set_iwad(layer(
-        LayerRole::Iwad,
-        "doom1",
-        vec![marker("E1M1"), lump("THINGS")],
-    ));
+    session
+        .set_iwad(layer(
+            LayerRole::Iwad,
+            "doom1",
+            vec![marker("E1M1"), lump("THINGS")],
+        ))
+        .expect("no batch is open");
     assert_eq!(
         session.game(),
         Game::Doom,
@@ -227,17 +235,21 @@ fn effective_game_falls_back_to_doom_ii_only_when_unidentified() {
         "no archives: DOOM II rows"
     );
     let mut session = Session::default();
-    session.set_iwad(layer(LayerRole::Iwad, "plain", vec![marker("PLAYPAL")]));
+    session
+        .set_iwad(layer(LayerRole::Iwad, "plain", vec![marker("PLAYPAL")]))
+        .expect("no batch is open");
     assert_eq!(
         session.effective_game(),
         Game::Doom2,
         "an unidentifiable IWAD also stands for DOOM II"
     );
-    session.set_iwad(layer(
-        LayerRole::Iwad,
-        "hexen",
-        vec![marker("TITLE"), marker("WINNOWR")],
-    ));
+    session
+        .set_iwad(layer(
+            LayerRole::Iwad,
+            "hexen",
+            vec![marker("TITLE"), marker("WINNOWR")],
+        ))
+        .expect("no batch is open");
     assert_eq!(
         session.effective_game(),
         Game::Hexen,
@@ -248,17 +260,19 @@ fn effective_game_falls_back_to_doom_ii_only_when_unidentified() {
 #[test]
 fn custom_sources_returns_the_merged_texts_and_the_include_notes() {
     let mut session = Session::default();
-    session.set_iwad(layer(
-        LayerRole::Iwad,
-        "base",
-        vec![
-            marker("PLAYPAL"),
-            crate::wad::archive::Lump::new(
-                name("DECORATE"),
-                b"#include \"MISSING\"\nactor SessionTest 9101 { }".to_vec(),
-            ),
-        ],
-    ));
+    session
+        .set_iwad(layer(
+            LayerRole::Iwad,
+            "base",
+            vec![
+                marker("PLAYPAL"),
+                crate::wad::archive::Lump::new(
+                    name("DECORATE"),
+                    b"#include \"MISSING\"\nactor SessionTest 9101 { }".to_vec(),
+                ),
+            ],
+        ))
+        .expect("no batch is open");
     let (texts, notes) = session.custom_sources().expect("the merged scope lists");
     assert_eq!(texts.decorate.len(), 1, "the DECORATE text");
     assert_eq!(notes.len(), 1, "the missing include is noted: {notes:?}");
@@ -275,17 +289,19 @@ fn custom_sources_returns_the_merged_texts_and_the_include_notes() {
 #[test]
 fn definitions_overlay_the_merged_custom_sources_on_the_effective_game() {
     let mut session = Session::default();
-    session.set_iwad(layer(
-        LayerRole::Iwad,
-        "doom2.wad",
-        vec![
-            marker("MAP01"),
-            crate::wad::archive::Lump::new(
-                name("DECORATE"),
-                b"actor SessionTest 9101 { }".to_vec(),
-            ),
-        ],
-    ));
+    session
+        .set_iwad(layer(
+            LayerRole::Iwad,
+            "doom2.wad",
+            vec![
+                marker("MAP01"),
+                crate::wad::archive::Lump::new(
+                    name("DECORATE"),
+                    b"actor SessionTest 9101 { }".to_vec(),
+                ),
+            ],
+        ))
+        .expect("no batch is open");
     let defs = session.definitions().expect("the overlay parses");
     let row = defs
         .things

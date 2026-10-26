@@ -522,7 +522,9 @@ mod tests {
     /// A session whose only layer holds `lumps`.
     fn session_over(lumps: Vec<Lump>) -> Session {
         let mut session = Session::default();
-        session.set_iwad(layer_with(lumps));
+        session
+            .set_iwad(layer_with(lumps))
+            .expect("no batch is open");
         session
     }
 

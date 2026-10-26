@@ -331,8 +331,12 @@ mod tests {
     /// A session: the base layer holds `base`, the resource `extra`.
     fn session(base: Vec<Lump>, extra: Vec<Lump>) -> Session {
         let mut session = Session::default();
-        session.set_iwad(layer("base.wad", LayerRole::Iwad, base));
-        session.add_resource(layer("extra.wad", LayerRole::Resource, extra));
+        session
+            .set_iwad(layer("base.wad", LayerRole::Iwad, base))
+            .expect("no batch is open");
+        session
+            .add_resource(layer("extra.wad", LayerRole::Resource, extra))
+            .expect("no batch is open");
         session
     }
 

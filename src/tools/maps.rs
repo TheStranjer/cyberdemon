@@ -712,14 +712,16 @@ mod tests {
     /// A base layer whose directory is a `MAP01` block.
     fn session_with_map() -> Session {
         let mut session = Session::default();
-        session.set_iwad(Layer::new(
-            PathBuf::from("base.wad"),
-            LayerRole::Iwad,
-            Wad {
-                kind: WadKind::Iwad,
-                lumps: vec![marker("MAP01"), marker("THINGS")],
-            },
-        ));
+        session
+            .set_iwad(Layer::new(
+                PathBuf::from("base.wad"),
+                LayerRole::Iwad,
+                Wad {
+                    kind: WadKind::Iwad,
+                    lumps: vec![marker("MAP01"), marker("THINGS")],
+                },
+            ))
+            .expect("no batch is open");
         session
     }
 

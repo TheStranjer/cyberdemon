@@ -197,7 +197,7 @@ mod tests {
     /// region.
     fn session() -> Session {
         let mut session = Session::default();
-        session.set_iwad(base());
+        session.set_iwad(base()).expect("no batch is open");
         session
             .edit("add sprites", |wad| {
                 wad.lumps.push(marker("S_START"));

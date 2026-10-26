@@ -141,23 +141,25 @@ mod tests {
     /// region; the working archive is empty.
     fn session() -> Session {
         let mut session = Session::default();
-        session.set_iwad(Layer::new(
-            PathBuf::from("base.wad"),
-            LayerRole::Iwad,
-            Wad {
-                kind: WadKind::Iwad,
-                lumps: vec![
-                    copy("FLOOR1", 1),
-                    copy("MID", 9),
-                    marker("F_START"),
-                    copy("FLOOR1", 2),
-                    marker("F_END"),
-                    marker("S_START"),
-                    copy("SPRITE1", 3),
-                    marker("S_END"),
-                ],
-            },
-        ));
+        session
+            .set_iwad(Layer::new(
+                PathBuf::from("base.wad"),
+                LayerRole::Iwad,
+                Wad {
+                    kind: WadKind::Iwad,
+                    lumps: vec![
+                        copy("FLOOR1", 1),
+                        copy("MID", 9),
+                        marker("F_START"),
+                        copy("FLOOR1", 2),
+                        marker("F_END"),
+                        marker("S_START"),
+                        copy("SPRITE1", 3),
+                        marker("S_END"),
+                    ],
+                },
+            ))
+            .expect("no batch is open");
         session
     }
 

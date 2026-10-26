@@ -134,13 +134,15 @@ pub(super) fn fixture(format: MapFormat) -> Map {
 /// A session whose only layer is an empty archive (no map blocks).
 pub(super) fn empty_session() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: Vec::new(),
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: Vec::new(),
+            },
+        ))
+        .expect("no batch is open");
     session
 }

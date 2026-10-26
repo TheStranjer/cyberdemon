@@ -10,7 +10,9 @@ clippy.toml       Clippy thresholds and knobs.
 src/
   main.rs         Stdio entry point only. stdout is the MCP protocol channel; never print to it.
   lib.rs          Library root; module declarations, re-exports, crate aliases.
-  server.rs       MCP server: identity, per-connection state and the composed tool router.
+  server.rs       MCP server: identity, per-connection state, the composed tool
+                  router and the non-nestable router (`run_batch` refuses the
+                  batch and history groups by membership there).
   error.rs        CyberError: the domain error enum every tool reports through.
   fixed.rs        Float-free math core: 16.16 `Fixed`, `FRACBITS`/`FRACUNIT`,
                   `isqrt`, `mul_div_round`. Use this instead of f32/f64.
@@ -328,7 +330,8 @@ src/
                   the merged view, the layer-only `base_lumps` view, `Scope`
                   reads, the `find`/`find_global` engine lookups, the
                   `effective_game`/`custom_sources`/`definitions` reads every
-                  definition-asking tool shares and `Session::edit`:
+                  definition-asking tool shares, `Session::edit` and the one
+                  batch scope (`Session::begin_batch`/`Session::end_batch`):
                   `LayerRole` (with its `as_str`/`label` words), `Layer` and
                   the one `impl Session` every tool reaches through, its
                   read-view methods delegating to `session/views.rs`.
@@ -347,8 +350,13 @@ src/
                   `session/merge/tests/rules.rs` (the override rules) and
                   `session/merge/tests/entry_points.rs` (the whole-archive
                   forms and helpers),
-                  `session/history.rs` is the labelled undo/redo stack and the
-                  revision bookkeeping behind dirty state, and
+                  `session/history.rs` is the labelled undo/redo stack, the
+                  revision bookkeeping behind dirty state and the one open
+                  batch scope (`begin_batch`/`end_batch`, the `BatchToken`
+                  handle and `BatchOutcome`; every edit taken while the
+                  scope is open folds into its single entry, and the
+                  whole-session changes a fold cannot carry refuse with a
+                  typed conflict), and
                   `session/cow.rs` the copy-on-write step that brings one map
                   block from the merged view into the working archive
                   (`copy_map_block`, `Session::copy_map_to_working`),
@@ -370,7 +378,8 @@ src/
                   plus `session/tests/layers.rs` (the scope names and wire
                   forms, the layer stack, the merged view, `find` and the
                   `Scope` reads), `session/tests/history.rs` (labels, undo,
-                  redo, dirty state, the cap and the batch marks) and
+                  redo, dirty state, the cap and the batch scope with its
+                  folds, rollbacks and refusals) and
                   `session/tests/state.rs` (the active map, the render
                   settings and theme, the layer-only view, game detection, the
                   effective-game/definitions reads and the copy-on-write step).
@@ -474,8 +483,10 @@ src/
                   (`merge_wad` and `save_wad` with their modes, the target
                   resolution and the layer-overwrite refusal),
                   `session/info.rs` (the session and merged-view reports'
-                  shapes and builders), `session/undo.rs` (`undo` and `redo`;
-                  named apart from `session/history.rs`, the stack itself)
+                  shapes and builders), `session/undo.rs` (`undo` and `redo`
+                  serving their own `history_router`, the group `run_batch`
+                  refuses by membership; named apart from
+                  `session/history.rs`, the stack itself)
                   and `session/tests.rs` (that group's unit tests),
                   `tools/scripts.rs` (the shared lump-name, scope and
                   directory helpers, the byte-preserving `Latin-1` patch

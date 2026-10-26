@@ -15,7 +15,9 @@
 //! `lumps/search`, `lumps/get`, `lumps/add`, `lumps/import`, `lumps/replace`,
 //! `lumps/remove`, `lumps/rename` and `lumps/reorder` topic tests, the
 //! map-edit infrastructure
-//! checks in `map_edit`, the maps-group shared helpers in `maps` with its
+//! checks in `map_edit`, the shared binary-map block passes, per-format
+//! record codecs and `WAD` archive writer single-owner guard in
+//! `map_writers`, the maps-group shared helpers in `maps` with its
 //! `maps/list`, `maps/summary`, `maps/assemble`, `maps/create` and
 //! `maps/copy_rename` topic tests, the capstone low-level
 //! element-tool workflow and the spawned-binary asset-server proof in
@@ -178,6 +180,9 @@ mod lumps;
 #[cfg(test)]
 #[path = "mcp/map_edit.rs"]
 mod map_edit;
+#[cfg(test)]
+#[path = "mcp/map_writers.rs"]
+mod map_writers;
 #[cfg(test)]
 #[path = "mcp/maps.rs"]
 mod maps;

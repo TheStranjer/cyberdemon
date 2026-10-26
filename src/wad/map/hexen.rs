@@ -9,7 +9,10 @@
 //! (`v1`, `v2`, `flags` as `u16`, `special` and five `args` as `u8`, then
 //! the right and left sidedef numbers with the `0xFFFF` "no side"
 //! sentinel). `SIDEDEFS`, `VERTEXES` and `SECTORS` are byte-identical to
-//! `Doom` and decode through the private `common` module.
+//! `Doom` and decode through the private `common` module, as do the whole
+//! block run and its marker handling; what `Hexen` owns is its own `THINGS`
+//! and `LINEDEFS` codecs below, the `LAYOUT` that hands them to those passes
+//! and the `ACS` pair that stands between `BLOCKMAP` and the extras.
 //!
 //! `Hexen` linedefs carry no tag: [`read_hexen_map`] leaves
 //! [`Linedef::tag`] at zero, and [`write_hexen_map`] rejects a non-zero
@@ -25,8 +28,7 @@ use crate::wad::bytes::{Reader, Writer};
 use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::common::{
-    Element, carried, member_data, other_lumps, read_sectors, read_side, read_sidedefs,
-    read_vertices, records, write_sectors, write_sidedefs, write_vertexes,
+    BinaryLayout, Element, read_binary_map, read_side, records, write_binary_map,
 };
 use crate::wad::map::model::{Linedef, Map, Thing};
 use crate::wad::name::LumpName;
@@ -40,6 +42,26 @@ const ARG_COUNT: usize = 5;
 /// Byte offset of the script table in the minimal empty ACS object.
 const EMPTY_ACS_SCRIPT_OFFSET: u32 = 8_u32;
 
+/// The `Hexen` block's rules: its own [`THINGS`] and [`LINEDEFS`] widths and
+/// codecs, the twelve-lump run the writer emits itself (so a carried copy of
+/// one of those is not appended twice) and the `ACS` pair [`tail`] stands
+/// between `BLOCKMAP` and the remaining `other` lumps.
+///
+/// [`tail`]: tail
+///
+/// [`THINGS`]: read_things
+/// [`LINEDEFS`]: read_linedefs
+const LAYOUT: BinaryLayout = BinaryLayout {
+    label: "Hexen",
+    format: MapFormat::Hexen,
+    standard: &lumps::STANDARD_HEXEN_MAP_LUMPS,
+    read_things,
+    read_linedefs,
+    write_things,
+    write_linedefs,
+    tail,
+};
+
 /// Reads a whole binary `Hexen` map.
 ///
 /// `name` is the block header's name; `members` are the block's lumps
@@ -47,7 +69,9 @@ const EMPTY_ACS_SCRIPT_OFFSET: u32 = 8_u32;
 /// into the model with their `Hexen` fields (`tid`, `z`, thing and line
 /// `special`/`args`) filled and [`Linedef::tag`] left at zero; every other
 /// member, `BEHAVIOR` and `SCRIPTS` included, is carried into
-/// [`Map::other`] verbatim.
+/// [`Map::other`] verbatim. The block run and the `SIDEDEFS`, `VERTEXES` and
+/// `SECTORS` records come from the private `common` module, shared with
+/// the `Doom` format.
 ///
 /// # Errors
 ///
@@ -58,19 +82,7 @@ const EMPTY_ACS_SCRIPT_OFFSET: u32 = 8_u32;
 /// [`Map::other`]: crate::wad::map::Map::other
 #[inline]
 pub fn read_hexen_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError> {
-    Ok(Map {
-        name,
-        format: MapFormat::Hexen,
-        udmf_namespace: None,
-        extra_globals: Vec::new(),
-        extra_blocks: Vec::new(),
-        things: read_things(member_data(members, lumps::THINGS, "Hexen")?)?,
-        vertices: read_vertices(member_data(members, lumps::VERTEXES, "Hexen")?)?,
-        linedefs: read_linedefs(member_data(members, lumps::LINEDEFS, "Hexen")?)?,
-        sidedefs: read_sidedefs(member_data(members, lumps::SIDEDEFS, "Hexen")?)?,
-        sectors: read_sectors(member_data(members, lumps::SECTORS, "Hexen")?)?,
-        other: other_lumps(members),
-    })
+    read_binary_map(&LAYOUT, name, members)
 }
 
 /// Writes a whole binary `Hexen` map.
@@ -83,7 +95,9 @@ pub fn read_hexen_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberErro
 /// empty lumps otherwise. A `Hexen` map must carry a `BEHAVIOR`: when
 /// `other` holds none the write emits a minimal empty `ACS` object
 /// instead, the 16 bytes `ACS\0`, a `u32` script offset of 8, a `u32`
-/// script count of 0 and a `u32` string count of 0.
+/// script count of 0 and a `u32` string count of 0. The lump run up to
+/// `BLOCKMAP` is shared with the `Doom` writer through the private
+/// `common` module.
 ///
 /// # Errors
 ///
@@ -96,35 +110,17 @@ pub fn read_hexen_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberErro
 /// [`other`]: Map::other
 #[inline]
 pub fn write_hexen_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
-    let mut lumps = Vec::with_capacity(12_usize.saturating_add(map.other.len()));
-    lumps.push(Lump::marker(map.name));
-    lumps.push(Lump::new(lumps::THINGS, write_things(&map.things)?));
-    lumps.push(Lump::new(lumps::LINEDEFS, write_linedefs(&map.linedefs)?));
-    lumps.push(Lump::new(lumps::SIDEDEFS, write_sidedefs(&map.sidedefs)?));
-    lumps.push(Lump::new(lumps::VERTEXES, write_vertexes(&map.vertices)?));
-    for node in lumps::CLASSIC_NODE_RUN_LUMPS {
-        lumps.push(carried(&map.other, node));
-    }
-    lumps.push(Lump::new(lumps::SECTORS, write_sectors(&map.sectors)?));
-    for trailing in [lumps::REJECT, lumps::BLOCKMAP] {
-        lumps.push(carried(&map.other, trailing));
-    }
-    lumps.push(behavior(&map.other));
-    lumps.extend(scripts(&map.other));
-    lumps.extend(
-        map.other
-            .iter()
-            .filter(|lump| !is_standard(lump.name))
-            .cloned(),
-    );
-    Ok(lumps)
+    write_binary_map(&LAYOUT, map)
 }
 
-/// Whether `name` is one of the twelve lumps [`write_hexen_map`] emits
-/// itself, [`lumps::STANDARD_HEXEN_MAP_LUMPS`], `BEHAVIOR` and `SCRIPTS`
-/// included.
-fn is_standard(name: LumpName) -> bool {
-    lumps::STANDARD_HEXEN_MAP_LUMPS.contains(&name)
+/// The `Hexen` block's tail: its `BEHAVIOR` and the `SCRIPTS` lump when
+/// [`Map::other`] carries one.
+///
+/// [`Map::other`]: crate::wad::map::Map::other
+fn tail(other: &[Lump]) -> Vec<Lump> {
+    let mut lumps = vec![behavior(other)];
+    lumps.extend(scripts(other));
+    lumps
 }
 
 /// The `BEHAVIOR` lump to write: the one `other` carries, or a minimal
@@ -279,13 +275,124 @@ mod tests {
     use crate::error::CyberError;
     use crate::wad::archive::Lump;
     use crate::wad::classify::{MapFormat, analyze};
-    use crate::wad::map::common::fixtures::{lump, marker, name, two_room_map};
+    use crate::wad::map::common::fixtures::{
+        GOLDEN_SECTORS, GOLDEN_SIDEDEFS, GOLDEN_VERTEXES, lump, marker, name, one_of_each_map,
+        payload, two_room_map,
+    };
     use crate::wad::map::hexen::{
         read_hexen_map, read_linedefs, read_things, write_hexen_map, write_linedefs, write_things,
     };
     use crate::wad::map::model::{Linedef, Map, Thing};
     use crate::wad::map::{read_map, write_map};
     use crate::wad::name::LumpName;
+
+    /// The `THINGS` record [`one_of_each_map`]'s thing writes: `tid`, `x`,
+    /// `y`, `z` and `angle` as `i16`, the `u16` type and flags, then the `u8`
+    /// special and its five `u8` args.
+    const GOLDEN_THINGS: [u8; 20] = [
+        0x05_u8, 0x00_u8, 0xe8_u8, 0xff_u8, 0x2c_u8, 0x01_u8, 0x80_u8, 0x00_u8, 0x5a_u8, 0x00_u8,
+        0xb9_u8, 0x0b_u8, 0x07_u8, 0x00_u8, 0x03_u8, 0x01_u8, 0x02_u8, 0x03_u8, 0x04_u8, 0x05_u8,
+    ];
+    /// The `LINEDEFS` record: the two vertex indices and flags as `u16`, the
+    /// `u8` special and five args, then the front side as the right sidedef
+    /// and the `0xFFFF` no-side sentinel for the left.
+    const GOLDEN_LINEDEFS: [u8; 16] = [
+        0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x01_u8, 0x00_u8, 0x0c_u8, 0x09_u8, 0x08_u8, 0x07_u8,
+        0x06_u8, 0x05_u8, 0x00_u8, 0x00_u8, 0xff_u8, 0xff_u8,
+    ];
+
+    /// The block [`write_hexen_map`] emits for [`one_of_each_map`] as
+    /// `Hexen`: the carried `SEGS` bytes, the empty generated members, the
+    /// `ACS` pair and one extra lump after the block.
+    fn golden_map() -> Map {
+        let mut map = one_of_each_map();
+        map.format = MapFormat::Hexen;
+        map.other = vec![
+            lump("SEGS", b"segs"),
+            marker("SSECTORS"),
+            marker("NODES"),
+            marker("REJECT"),
+            marker("BLOCKMAP"),
+            lump("BEHAVIOR", b"ACS\0compiled"),
+            lump("SCRIPTS", b"scripts"),
+            lump("ZNODES", &[9_u8; 4]),
+        ];
+        map
+    }
+
+    #[test]
+    fn the_hexen_block_writes_its_golden_lump_run() {
+        let map = golden_map();
+        let lumps = write_hexen_map(&map).expect("the golden map is writable");
+        let layout: Vec<(String, usize)> = lumps
+            .iter()
+            .map(|lump| (lump.name.to_string(), lump.size()))
+            .collect();
+        assert_eq!(
+            layout,
+            vec![
+                ("MAP01".to_owned(), 0),
+                ("THINGS".to_owned(), 20),
+                ("LINEDEFS".to_owned(), 16),
+                ("SIDEDEFS".to_owned(), 30),
+                ("VERTEXES".to_owned(), 4),
+                ("SEGS".to_owned(), 4),
+                ("SSECTORS".to_owned(), 0),
+                ("NODES".to_owned(), 0),
+                ("SECTORS".to_owned(), 26),
+                ("REJECT".to_owned(), 0),
+                ("BLOCKMAP".to_owned(), 0),
+                ("BEHAVIOR".to_owned(), 12),
+                ("SCRIPTS".to_owned(), 7),
+                ("ZNODES".to_owned(), 4),
+            ],
+            "the zero-size header, the ten vanilla members, the `ACS` pair \
+             and then the extras"
+        );
+        let read = read_hexen_map(map.name, lumps.get(1..).expect("members"))
+            .expect("the golden block reads back");
+        assert_eq!(read, map, "the golden block is the map it came from");
+    }
+
+    #[test]
+    fn the_hexen_records_hold_their_golden_bytes() {
+        let lumps = write_hexen_map(&golden_map()).expect("the golden map is writable");
+        assert_eq!(
+            payload(&lumps, "THINGS"),
+            GOLDEN_THINGS,
+            "the twenty-byte Hexen thing record"
+        );
+        assert_eq!(
+            payload(&lumps, "LINEDEFS"),
+            GOLDEN_LINEDEFS,
+            "the sixteen-byte Hexen linedef record"
+        );
+        assert_eq!(
+            payload(&lumps, "SIDEDEFS"),
+            GOLDEN_SIDEDEFS,
+            "the record the two binary formats share"
+        );
+        assert_eq!(
+            payload(&lumps, "VERTEXES"),
+            GOLDEN_VERTEXES,
+            "the record the two binary formats share"
+        );
+        assert_eq!(
+            payload(&lumps, "SECTORS"),
+            GOLDEN_SECTORS,
+            "the record the two binary formats share"
+        );
+        assert_eq!(
+            payload(&lumps, "BEHAVIOR"),
+            b"ACS\0compiled",
+            "the carried BEHAVIOR is copied whole"
+        );
+        assert_eq!(
+            payload(&lumps, "SCRIPTS"),
+            b"scripts",
+            "the carried SCRIPTS is copied whole"
+        );
+    }
 
     /// The `ACS\0` script offset stored by [`empty_behavior`], in bytes.
     const EMPTY_ACS: [u8; 16] = [b'A', b'C', b'S', 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];

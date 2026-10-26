@@ -131,16 +131,6 @@ pub struct Wad {
     pub lumps: Vec<Lump>,
 }
 
-/// The layout one [`Wad::to_bytes_dedup`] write plans.
-struct DedupPlan<'wad> {
-    /// The `filepos` of every lump, duplicate payloads sharing an offset.
-    offsets: Vec<u32>,
-    /// The byte the directory starts at.
-    directory_at: u32,
-    /// The unique non-empty payloads, in the order they are written.
-    payloads: Vec<&'wad [u8]>,
-}
-
 impl Default for Wad {
     /// An empty `PWAD`: the starting point for building a new archive.
     #[inline]
@@ -148,6 +138,65 @@ impl Default for Wad {
         Self {
             kind: WadKind::Pwad,
             lumps: Vec::new(),
+        }
+    }
+}
+
+/// The layout one [`Wad`] write plans: the `filepos` of every lump, the
+/// payload bytes in write order, the byte the directory starts at and the
+/// payload bytes the placement's sharing saved.
+struct Plan<'wad> {
+    /// The `filepos` of every lump, in directory order.
+    offsets: Vec<u32>,
+    /// The payloads to write, in the order they are written.
+    payloads: Vec<&'wad [u8]>,
+    /// The byte the directory starts at.
+    directory_at: u32,
+    /// Payload bytes this layout does not write a second time.
+    saved: usize,
+}
+
+/// How one [`Wad`] write places its lump payloads, the only thing that
+/// differs between [`Wad::to_bytes`] and [`Wad::to_bytes_dedup`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// Every payload right after the previous lump's, in directory order.
+    Canonical,
+    /// Each distinct non-empty payload once, every later entry holding equal
+    /// bytes sharing the first copy's offset.
+    Dedup,
+}
+
+impl Placement {
+    /// The `filepos` of an earlier copy of `data` this entry can share,
+    /// `None` when it needs a place of its own: the canonical layout never
+    /// shares, the deduplicating one shares every non-empty payload whose
+    /// bytes are already in `seen`.
+    fn shared_at<'data>(self, data: &'data [u8], seen: &HashMap<&'data [u8], u32>) -> Option<u32> {
+        match self {
+            Self::Canonical => None,
+            Self::Dedup if data.is_empty() => None,
+            Self::Dedup => seen.get(data).copied(),
+        }
+    }
+
+    /// Whether the walk writes `data` as a payload of its own at `at`: the
+    /// canonical layout writes every payload where it stands, the
+    /// deduplicating one only the distinct non-empty ones, which it records
+    /// in `seen` so a later twin can share them.
+    fn keeps<'data>(
+        self,
+        data: &'data [u8],
+        at: u32,
+        seen: &mut HashMap<&'data [u8], u32>,
+    ) -> bool {
+        match self {
+            Self::Canonical => true,
+            Self::Dedup if data.is_empty() => false,
+            Self::Dedup => {
+                seen.insert(data, at);
+                true
+            }
         }
     }
 }
@@ -161,35 +210,36 @@ fn advance(position: usize, index: usize, width: usize) -> Result<usize, CyberEr
     })
 }
 
-/// Walks the deduplicating layout [`Wad::to_bytes_dedup`] writes: the
-/// shared `filepos` table, the directory position and the unique
-/// non-empty payloads in write order, every position checked against the
-/// format's `i32` field limits.
-fn dedup_plan(lumps: &[Lump]) -> Result<DedupPlan<'_>, CyberError> {
+/// Walks the layout `placement` writes: the shared `filepos` table, the
+/// payload bytes in write order, the directory position and the bytes the
+/// sharing saved, every position checked against the format's `i32` field
+/// limits.
+fn plan(lumps: &[Lump], placement: Placement) -> Result<Plan<'_>, CyberError> {
     let mut offsets = Vec::with_capacity(lumps.len());
     let mut payloads: Vec<&[u8]> = Vec::new();
     let mut seen: HashMap<&[u8], u32> = HashMap::new();
     let mut position = HEADER_LEN;
     for (index, lump) in lumps.iter().enumerate() {
         let data: &[u8] = &lump.data;
-        let at = if data.is_empty() {
-            offset_field(position, &format!("lump {index} data"))?
-        } else if let Some(shared) = seen.get(data) {
-            *shared
-        } else {
-            let at = offset_field(position, &format!("lump {index} data"))?;
-            seen.insert(data, at);
+        if let Some(shared) = placement.shared_at(data, &seen) {
+            offsets.push(shared);
+            continue;
+        }
+        let at = offset_field(position, &format!("lump {index} data"))?;
+        offsets.push(at);
+        if placement.keeps(data, at, &mut seen) {
             payloads.push(data);
             position = advance(position, index, data.len())?;
-            at
-        };
-        offsets.push(at);
+        }
     }
     let directory_at = offset_field(position, "directory")?;
-    Ok(DedupPlan {
+    let written: usize = payloads.iter().map(|payload| payload.len()).sum();
+    let total: usize = lumps.iter().map(Lump::size).sum();
+    Ok(Plan {
         offsets,
-        directory_at,
         payloads,
+        directory_at,
+        saved: total.saturating_sub(written),
     })
 }
 
@@ -240,21 +290,7 @@ impl Wad {
     /// any written position does not fit the format's `i32` fields.
     #[inline]
     pub fn to_bytes(&self) -> Result<Vec<u8>, CyberError> {
-        let count = usize_to_u32(self.lumps.len(), "lump")?;
-        let (offsets, directory_at) = self.plan()?;
-        let mut out = Writer::new();
-        out.put_bytes(self.kind.magic());
-        out.put_u32(count);
-        out.put_u32(directory_at);
-        for lump in &self.lumps {
-            out.put_bytes(&lump.data);
-        }
-        for (lump, position) in self.lumps.iter().zip(&offsets) {
-            out.put_u32(*position);
-            out.put_u32(usize_to_u32(lump.size(), "lump")?);
-            out.put_bytes(&lump.name.raw());
-        }
-        Ok(out.into_inner())
+        self.serialize(&plan(&self.lumps, Placement::Canonical)?)
     }
 
     /// The `filepos` [`to_bytes`](Self::to_bytes) would give each lump, in
@@ -267,7 +303,7 @@ impl Wad {
     /// [`to_bytes`](Self::to_bytes).
     #[inline]
     pub fn data_offsets(&self) -> Result<Vec<u32>, CyberError> {
-        self.plan().map(|(offsets, _directory_at)| offsets)
+        Ok(plan(&self.lumps, Placement::Canonical)?.offsets)
     }
 
     /// Serializes like [`to_bytes`](Self::to_bytes) but writes every
@@ -285,8 +321,21 @@ impl Wad {
     /// [`to_bytes`](Self::to_bytes).
     #[inline]
     pub fn to_bytes_dedup(&self) -> Result<(Vec<u8>, usize), CyberError> {
+        let planned = plan(&self.lumps, Placement::Dedup)?;
+        let saved = planned.saved;
+        Ok((self.serialize(&planned)?, saved))
+    }
+
+    /// Writes the whole file from one planned layout: the header, the
+    /// planned payloads in order, then the directory entries the plan's
+    /// `filepos` table and the archive's names and sizes fill in.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::LimitExceeded`] when the lump count or a lump size does
+    /// not fit the format's `i32` fields.
+    fn serialize(&self, planned: &Plan<'_>) -> Result<Vec<u8>, CyberError> {
         let count = usize_to_u32(self.lumps.len(), "lump")?;
-        let planned = dedup_plan(&self.lumps)?;
         let mut out = Writer::new();
         out.put_bytes(self.kind.magic());
         out.put_u32(count);
@@ -299,23 +348,7 @@ impl Wad {
             out.put_u32(usize_to_u32(lump.size(), "lump")?);
             out.put_bytes(&lump.name.raw());
         }
-        let written: usize = planned.payloads.iter().map(|payload| payload.len()).sum();
-        let total: usize = self.lumps.iter().map(Lump::size).sum();
-        Ok((out.into_inner(), total.saturating_sub(written)))
-    }
-
-    /// Walks the layout [`to_bytes`](Self::to_bytes) writes: the `u32`
-    /// data position of every lump plus the directory position, each
-    /// checked against the format's `i32` field limits.
-    fn plan(&self) -> Result<(Vec<u32>, u32), CyberError> {
-        let mut offsets = Vec::with_capacity(self.lumps.len());
-        let mut position = HEADER_LEN;
-        for (index, lump) in self.lumps.iter().enumerate() {
-            offsets.push(offset_field(position, &format!("lump {index} data"))?);
-            position = advance(position, index, lump.data.len())?;
-        }
-        let directory_at = offset_field(position, "directory")?;
-        Ok((offsets, directory_at))
+        Ok(out.into_inner())
     }
 
     /// The index of the last lump named `name`, the lookup `Doom` itself

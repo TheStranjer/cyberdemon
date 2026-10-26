@@ -7,10 +7,12 @@
 //! module copies verbatim.
 //! Every field is little-endian: `THINGS` records are 10 bytes,
 //! `LINEDEFS` 14, `SIDEDEFS` 30, `VERTEXES` 4 and `SECTORS` 26, with the
-//! `0xFFFF` sidedef field meaning "no side". The `SIDEDEFS`, `VERTEXES` and
-//! `SECTORS` codecs and the range-check helpers are shared with the `Hexen`
-//! format through the private `common` module. [`read_doom_map`] refuses a
-//! block
+//! `0xFFFF` sidedef field meaning "no side". What `Doom` does not share is
+//! its own `THINGS` and `LINEDEFS` codec pair below and the `LAYOUT` that
+//! hands them to the block passes; the `SIDEDEFS`, `VERTEXES` and `SECTORS`
+//! codecs, the whole-block lump run and the range-check helpers are shared
+//! with the `Hexen` format through the private `common` module.
+//! [`read_doom_map`] refuses a block
 //! whose editable lump is missing or whose size is not a whole number of
 //! records; [`write_doom_map`] refuses values outside the stored type and
 //! names the offending element and field. Texture and flat fields hold
@@ -28,8 +30,7 @@ use crate::wad::bytes::{Reader, Writer};
 use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::common::{
-    Element, carried, member_data, other_lumps, read_sectors, read_side, read_sidedefs,
-    read_vertices, records, write_sectors, write_sidedefs, write_vertexes,
+    BinaryLayout, Element, no_tail, read_binary_map, read_side, records, write_binary_map,
 };
 use crate::wad::map::model::{Linedef, Map, Thing};
 use crate::wad::name::LumpName;
@@ -39,6 +40,24 @@ const THING_LEN: usize = 10;
 /// Bytes in one `LINEDEFS` record.
 const LINEDEF_LEN: usize = 14;
 
+/// The `Doom` block's rules: its own [`THINGS`] and [`LINEDEFS`] widths and
+/// codecs, the vanilla ten-lump run the writer emits itself (so a copy of one
+/// of those in [`Map::other`] is not appended twice) and no tail lump beyond
+/// that run.
+///
+/// [`THINGS`]: read_things
+/// [`LINEDEFS`]: read_linedefs
+const LAYOUT: BinaryLayout = BinaryLayout {
+    label: "Doom",
+    format: MapFormat::Doom,
+    standard: &lumps::STANDARD_DOOM_MAP_LUMPS,
+    read_things,
+    read_linedefs,
+    write_things,
+    write_linedefs,
+    tail: no_tail,
+};
+
 /// Reads a whole binary `Doom` map.
 ///
 /// `name` is the block header's name; `members` are the block's lumps after
@@ -46,6 +65,8 @@ const LINEDEF_LEN: usize = 14;
 /// model, every other member is carried into [`Map::other`] verbatim, and
 /// `Doom` leaves the `Hexen`/`UDMF`-only fields (`tid`, `z`, thing
 /// `special`/`args`, [`Sidedef::extra`] and friends) at their zero values.
+/// The block run and the `SIDEDEFS`, `VERTEXES` and `SECTORS` records come
+/// from the private `common` module, shared with the `Hexen` format.
 ///
 /// # Errors
 ///
@@ -57,19 +78,7 @@ const LINEDEF_LEN: usize = 14;
 /// [`Sidedef::extra`]: crate::wad::map::Sidedef::extra
 #[inline]
 pub fn read_doom_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError> {
-    Ok(Map {
-        name,
-        format: MapFormat::Doom,
-        udmf_namespace: None,
-        extra_globals: Vec::new(),
-        extra_blocks: Vec::new(),
-        things: read_things(member_data(members, lumps::THINGS, "Doom")?)?,
-        vertices: read_vertices(member_data(members, lumps::VERTEXES, "Doom")?)?,
-        linedefs: read_linedefs(member_data(members, lumps::LINEDEFS, "Doom")?)?,
-        sidedefs: read_sidedefs(member_data(members, lumps::SIDEDEFS, "Doom")?)?,
-        sectors: read_sectors(member_data(members, lumps::SECTORS, "Doom")?)?,
-        other: other_lumps(members),
-    })
+    read_binary_map(&LAYOUT, name, members)
 }
 
 /// Writes a whole binary `Doom` map.
@@ -80,7 +89,8 @@ pub fn read_doom_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
 /// `BLOCKMAP` from [`Map::other`] when present and emitting an empty lump
 /// otherwise; any remaining [`other`] lumps follow in order. The `Doom`
 /// format stores no `tid`, `z`, thing `special`/`args`, so those model
-/// fields are not written.
+/// fields are not written. The lump run itself is shared with the `Hexen`
+/// writer through the private `common` module.
 ///
 /// # Errors
 ///
@@ -94,32 +104,7 @@ pub fn read_doom_map(name: LumpName, members: &[Lump]) -> Result<Map, CyberError
 /// [`other`]: Map::other
 #[inline]
 pub fn write_doom_map(map: &Map) -> Result<Vec<Lump>, CyberError> {
-    let mut lumps = Vec::with_capacity(11_usize.saturating_add(map.other.len()));
-    lumps.push(Lump::marker(map.name));
-    lumps.push(Lump::new(lumps::THINGS, write_things(&map.things)?));
-    lumps.push(Lump::new(lumps::LINEDEFS, write_linedefs(&map.linedefs)?));
-    lumps.push(Lump::new(lumps::SIDEDEFS, write_sidedefs(&map.sidedefs)?));
-    lumps.push(Lump::new(lumps::VERTEXES, write_vertexes(&map.vertices)?));
-    for node in lumps::CLASSIC_NODE_RUN_LUMPS {
-        lumps.push(carried(&map.other, node));
-    }
-    lumps.push(Lump::new(lumps::SECTORS, write_sectors(&map.sectors)?));
-    for trailing in [lumps::REJECT, lumps::BLOCKMAP] {
-        lumps.push(carried(&map.other, trailing));
-    }
-    lumps.extend(
-        map.other
-            .iter()
-            .filter(|lump| !is_standard(lump.name))
-            .cloned(),
-    );
-    Ok(lumps)
-}
-
-/// Whether `name` is one of the ten lumps [`write_doom_map`] emits
-/// itself, [`lumps::STANDARD_DOOM_MAP_LUMPS`].
-fn is_standard(name: LumpName) -> bool {
-    lumps::STANDARD_DOOM_MAP_LUMPS.contains(&name)
+    write_binary_map(&LAYOUT, map)
 }
 
 /// Reads the `THINGS` records: x, y, angle and the u16 type/flags.
@@ -208,15 +193,124 @@ mod tests {
     use crate::error::CyberError;
     use crate::wad::archive::Lump;
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::common::fixtures::{lump, marker, name, room, side, two_room_map};
+    use crate::wad::map::common::fixtures::{
+        GOLDEN_SECTORS, GOLDEN_SIDEDEFS, GOLDEN_VERTEXES, lump, marker, name, one_of_each_map,
+        payload, room, side, two_room_map,
+    };
     use crate::wad::map::common::{
         NO_SIDEDEF, read_sectors, read_sidedefs, write_sectors, write_sidedefs,
     };
     use crate::wad::map::doom::{
         read_doom_map, read_linedefs, read_things, write_doom_map, write_linedefs, write_things,
     };
-    use crate::wad::map::model::{Linedef, Sector, Sidedef, Thing};
+    use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Thing};
     use crate::wad::name::{LumpName, NAME_LEN};
+
+    /// The `THINGS` record [`one_of_each_map`]'s thing writes: `x`, `y` and
+    /// `angle` as `i16` then the `u16` type and flags. `tid`, `z`, `special`
+    /// and `args` have no field in this format.
+    const GOLDEN_THINGS: [u8; 10] = [
+        0xe8_u8, 0xff_u8, 0x2c_u8, 0x01_u8, 0x5a_u8, 0x00_u8, 0xb9_u8, 0x0b_u8, 0x07_u8, 0x00_u8,
+    ];
+    /// The `LINEDEFS` record: the two vertex indices, flags, special and tag
+    /// as `u16`, then the front side as the right sidedef and the `0xFFFF`
+    /// no-side sentinel for the left.
+    const GOLDEN_LINEDEFS: [u8; 14] = [
+        0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x01_u8, 0x00_u8, 0x0c_u8, 0x00_u8, 0x00_u8, 0x00_u8,
+        0x00_u8, 0x00_u8, 0xff_u8, 0xff_u8,
+    ];
+
+    /// The block [`write_doom_map`] emits for [`one_of_each_map`]: the
+    /// carried `SEGS` bytes, the empty generated members and one extra lump
+    /// after the block.
+    fn golden_map() -> Map {
+        let mut map = one_of_each_map();
+        map.other = vec![
+            lump("SEGS", b"segs"),
+            marker("SSECTORS"),
+            marker("NODES"),
+            marker("REJECT"),
+            marker("BLOCKMAP"),
+            lump("ZNODES", &[9_u8; 4]),
+        ];
+        map
+    }
+
+    #[test]
+    fn the_doom_block_writes_its_golden_lump_run() {
+        let map = golden_map();
+        let lumps = write_doom_map(&map).expect("the golden map is writable");
+        let layout: Vec<(String, usize)> = lumps
+            .iter()
+            .map(|lump| (lump.name.to_string(), lump.size()))
+            .collect();
+        assert_eq!(
+            layout,
+            vec![
+                ("MAP01".to_owned(), 0),
+                ("THINGS".to_owned(), 10),
+                ("LINEDEFS".to_owned(), 14),
+                ("SIDEDEFS".to_owned(), 30),
+                ("VERTEXES".to_owned(), 4),
+                ("SEGS".to_owned(), 4),
+                ("SSECTORS".to_owned(), 0),
+                ("NODES".to_owned(), 0),
+                ("SECTORS".to_owned(), 26),
+                ("REJECT".to_owned(), 0),
+                ("BLOCKMAP".to_owned(), 0),
+                ("ZNODES".to_owned(), 4),
+            ],
+            "the zero-size header, the ten vanilla members with the node bytes \
+             `other` carries, then the extras"
+        );
+        let read = read_doom_map(map.name, lumps.get(1..).expect("members"))
+            .expect("the golden block reads back");
+        let mut stored = map;
+        if let Some(spawn) = stored.things.first_mut() {
+            spawn.tid = 0_i32;
+            spawn.z = 0_i32;
+            spawn.special = 0_i32;
+            spawn.args = [0_i32; 5];
+        }
+        if let Some(line) = stored.linedefs.first_mut() {
+            line.args = [0_i32; 5];
+        }
+        assert_eq!(
+            read, stored,
+            "the golden block is the map it came from, minus the fields Doom \
+             has no place for"
+        );
+    }
+
+    #[test]
+    fn the_doom_records_hold_their_golden_bytes() {
+        let lumps = write_doom_map(&golden_map()).expect("the golden map is writable");
+        assert_eq!(
+            payload(&lumps, "THINGS"),
+            GOLDEN_THINGS,
+            "the ten-byte Doom thing record"
+        );
+        assert_eq!(
+            payload(&lumps, "LINEDEFS"),
+            GOLDEN_LINEDEFS,
+            "the fourteen-byte Doom linedef record"
+        );
+        assert_eq!(
+            payload(&lumps, "SIDEDEFS"),
+            GOLDEN_SIDEDEFS,
+            "the record the two binary formats share"
+        );
+        assert_eq!(
+            payload(&lumps, "VERTEXES"),
+            GOLDEN_VERTEXES,
+            "the record the two binary formats share"
+        );
+        assert_eq!(
+            payload(&lumps, "SECTORS"),
+            GOLDEN_SECTORS,
+            "the record the two binary formats share"
+        );
+    }
 
     /// The `LimitExceeded` message one linedef row produces at write time.
     fn linedef_error(linedef: Linedef) -> String {

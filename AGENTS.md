@@ -237,10 +237,14 @@ src/
                   `Side`, `Plane`, `Hit`, `Visit`, `Window`, `Walk`,
                   `Slot`, `FlatRun`, `FacePlan` and `Part` rows a column
                   moves through), `view/caster.rs` (the `Caster` and its
-                  sorted portal column walk: textured upper/middle/lower
-                  faces with pegging, world-aligned textured planes, a
-                  view-angled sky, a per-pixel depth buffer and the
-                  masked-middle collection) and `view/texels.rs`
+                  bucketed sorted portal column walk: textured
+                  upper/middle/lower faces with pegging, world-aligned
+                  textured planes, a view-angled sky, a per-pixel depth
+                  buffer and the masked-middle collection) on
+                  `caster/span.rs` (the camera-plane-clipped `edge_span`
+                  projection of one edge onto its column range and the
+                  `Bucketed` per-column edge lists, tested in
+                  `caster/span/tests.rs`) and `view/texels.rs`
                   (piercing, plane and wall texels, pegging, texture
                   keys and the edge and sidedef preparation), with that
                   module's tests in `view/tests.rs` plus

@@ -1,17 +1,22 @@
 //! The column caster: what one screen column walks, in which order.
 //!
 //! [`Caster::new`] prepares the castable [`Edge`]s and usable [`Side`]s
-//! once per render; [`Caster::draw_column`] intersects every edge with the
-//! column's direction, sorts the [`Hit`]s by exact ray parameter and
-//! walks them near to far. Each visit fills the rows of the
-//! [`super::walk::Window`] the faced sector's [`super::walk::Plane`]s own,
-//! shrinks the window to the wall's own rows and then paints the solid
-//! [`Slot::Middle`], or paints the [`Slot::Upper`] and [`Slot::Lower`]
-//! bands and collects the middle seen through the transparent crossing.
-//! Piercing, mapping and pegging run through the sibling `texels` module;
-//! [`Walk::paint`] is the one place a pixel and its depth are written.
+//! once per render and buckets the edges by the columns they can appear
+//! in (the child `span` module projects each edge's endpoints onto the
+//! column fan, clipped at the camera plane); [`Caster::draw_column`]
+//! intersects only that column's bucket (plus the whole-width edges)
+//! with the column's direction, sorts the [`Hit`]s by exact ray
+//! parameter and walks them near to far. Each visit fills the rows of
+//! the [`super::walk::Window`] the faced sector's [`super::walk::Plane`]s
+//! own, shrinks the window to the wall's own rows and then paints the
+//! solid [`Slot::Middle`], or paints the [`Slot::Upper`] and
+//! [`Slot::Lower`] bands and collects the middle seen through the
+//! transparent crossing. Piercing, mapping and pegging run through the
+//! sibling `texels` module; [`Walk::paint`] is the one place a pixel and
+//! its depth are written.
 
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use super::projection::Projection;
 use super::texels::{
@@ -24,6 +29,10 @@ use crate::render::light::{WallDir, colormap_index, shade};
 use crate::render::scene::Scene;
 use crate::render::settings::Lighting;
 
+mod span;
+
+use self::span::{Bucketed, bucket_edges};
+
 /// The column caster: the scene, the projection and the per-call
 /// preparations the column walk reads.
 pub(super) struct Caster<'scene> {
@@ -35,6 +44,10 @@ pub(super) struct Caster<'scene> {
     pub(super) proj: Projection,
     /// Castable linedefs.
     edges: Vec<Edge>,
+    /// The castable edges bucketed by the columns they can appear in.
+    buckets: Bucketed,
+    /// Edge/ray intersections tested so far: the caster's work counter.
+    tested: Cell<u64>,
     /// Prepared sidedefs, indexed by sidedef.
     sides: Vec<Option<Side<'scene>>>,
     /// The background colour.
@@ -47,21 +60,26 @@ impl<'scene> Caster<'scene> {
     /// Prepares one view render of `scene` from `camera`.
     pub(super) fn new(scene: &'scene Scene, camera: &ViewCamera, width: u32, height: u32) -> Self {
         let sky = scene.settings.sky.is_on().then_some(Surface::Sky);
-        let edges = scene
+        let edges: Vec<Edge> = scene
             .map
             .linedefs
             .iter()
             .enumerate()
             .filter_map(|(index, line)| edge(index, &scene.map, line))
             .collect();
+        let cam = (i64::from(camera.x), i64::from(camera.y));
+        let proj = Projection::new(camera, width, height);
+        let buckets = bucket_edges(&edges, &proj, cam);
         let sides = (0..scene.map.sidedefs.len())
             .map(|index| side(index, scene, sky))
             .collect();
         Self {
             scene,
-            cam: (i64::from(camera.x), i64::from(camera.y)),
-            proj: Projection::new(camera, width, height),
+            cam,
+            proj,
             edges,
+            buckets,
+            tested: Cell::new(0_u64),
             sides,
             background: scene.settings.background,
             lighting: scene.settings.lighting,
@@ -71,21 +89,59 @@ impl<'scene> Caster<'scene> {
     /// Casts and walks one screen column; whatever the walk leaves
     /// uncovered keeps the background and the `i64::MAX` depth.
     pub(super) fn draw_column(&self, walk: &mut Walk<'_>) {
-        for hit in self.hits(walk.d) {
+        for hit in self.hits(walk.column, walk.d) {
             self.visit(walk, &hit);
         }
     }
 
-    /// Every hit of direction `d`, sorted by ray parameter then linedef.
-    fn hits(&self, d: (i128, i128)) -> Vec<Hit> {
-        let mut found: Vec<Hit> = self
-            .edges
-            .iter()
-            .enumerate()
-            .filter_map(|(index, edge)| self.hit(index, edge, d))
-            .collect();
+    /// Every hit in `column`'s bucket (and among the whole-width edges)
+    /// for direction `d`, sorted by ray parameter then linedef. An
+    /// unrecognised column falls back to testing every edge.
+    pub(super) fn hits(&self, column: i64, d: (i128, i128)) -> Vec<Hit> {
+        let indexed = usize::try_from(column)
+            .ok()
+            .and_then(|index| self.buckets.columns.get(index));
+        let mut found = Vec::new();
+        match indexed {
+            Some(bucket) => {
+                let candidates = bucket.iter().chain(self.buckets.always.iter()).copied();
+                self.push_hits(&mut found, candidates, d);
+            }
+            None => self.push_hits(&mut found, 0..self.edges.len(), d),
+        }
         found.sort_unstable_by(|a, b| a.t.cmp_value(b.t).then(a.edge.cmp(&b.edge)));
         found
+    }
+
+    /// Tests every candidate edge against the column ray, keeping hits.
+    fn push_hits(
+        &self,
+        found: &mut Vec<Hit>,
+        candidates: impl Iterator<Item = usize>,
+        d: (i128, i128),
+    ) {
+        for index in candidates {
+            self.push_hit(found, index, d);
+        }
+    }
+
+    /// Tests `index`'s edge against the column ray and keeps its hit,
+    /// counting the intersection as work done.
+    fn push_hit(&self, found: &mut Vec<Hit>, index: usize, d: (i128, i128)) {
+        self.tested.set(self.tested.get().saturating_add(1_u64));
+        let Some(edge) = self.edges.get(index) else {
+            return;
+        };
+        if let Some(hit) = self.hit(index, edge, d) {
+            found.push(hit);
+        }
+    }
+
+    /// The total edge/ray intersections this caster has tested, for the
+    /// work-count checks.
+    #[cfg(test)]
+    pub(super) fn edge_tests(&self) -> u64 {
+        self.tested.get()
     }
 
     /// The hit of `edge` with direction `d`, `None` when the ray passes

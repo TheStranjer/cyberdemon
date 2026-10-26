@@ -209,6 +209,17 @@ impl Projection {
         self.horizon
     }
 
+    /// Camera facing cosine, raw 16.16: the caster's column bucketing
+    /// projects edge endpoints onto the camera axes with it.
+    pub(super) const fn cos(&self) -> i64 {
+        self.cos
+    }
+
+    /// Camera facing sine, raw 16.16, the mate of [`Self::cos`].
+    pub(super) const fn sin(&self) -> i64 {
+        self.sin
+    }
+
     /// The eye height, raw 16.16 map units: what a sprite's world height
     /// is measured against.
     pub(crate) fn eye16(&self) -> i128 {

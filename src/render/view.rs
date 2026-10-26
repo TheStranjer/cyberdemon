@@ -4,8 +4,10 @@
 //! The camera stands at an explicit `x`/`y`/`z` and looks `angle` degrees
 //! counter-clockwise from east, `pitch` degrees up from level, through a
 //! `fov` degree field onto a `width` by `height` raster. No `BSP` is
-//! needed: every column ray is intersected with every linedef, the hits
-//! are sorted by ray parameter and walked near-to-far (a portal caster).
+//! needed: each linedef is projected once onto the columns its endpoints
+//! span (clipped at the camera plane), and every column ray is
+//! intersected with just the linedefs bucketed onto it, the hits
+//! sorted by ray parameter and walked near-to-far (a portal caster).
 //! The walk keeps the window of rows still uncovered; each hit first
 //! fills that window with the faced sector's ceiling and floor, sampled
 //! from the flat at the world point the row's exact ray parameter lands
@@ -33,7 +35,8 @@
 //! prepared `Edge`s and `Side`s, the `Plane` facts of a sector, the `Hit`
 //! and `Visit` of a crossing, the `Window` of rows still uncovered and the
 //! `FlatRun`, `FacePlan` and `Part` rows painted from them), `caster` the
-//! `Caster` that sorts and visits one column's hits, and `texels` the
+//! `Caster` that buckets its edges by column and sorts and visits one
+//! column's hits, and `texels` the
 //! mapping helpers that turn a crossing into the texel, depth and colour
 //! each row reads. This module root is all the rest of the crate names:
 //! the pitch limits, the camera, the collected `MaskedMiddle`, the

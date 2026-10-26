@@ -91,7 +91,7 @@ pub(in crate::tools::plan) struct RectParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::tools::plan) struct ConnectionParam {
     /// Optional name used in reports and messages; defaults to the
-    /// `from->to` label.
+    /// `from->to` label. An `id` given must be unique in the plan.
     #[serde(default)]
     pub(in crate::tools::plan) id: Option<String>,
     /// Id of the room the connection starts from.
@@ -115,15 +115,17 @@ pub(in crate::tools::plan) struct ConnectionParam {
     #[serde(default)]
     pub(in crate::tools::plan) style: Option<String>,
     /// Window only: height of the glass bottom above the lower floor
-    /// (default `32`).
+    /// (default `32`; never negative, and `sill` + `lintel` must leave
+    /// glass in the rooms' opening).
     #[serde(default)]
     pub(in crate::tools::plan) sill: Option<i32>,
     /// Window only: height of the glass top below the higher ceiling
-    /// (default `24`).
+    /// (default `24`; never negative, and `sill` + `lintel` must leave
+    /// glass in the rooms' opening).
     #[serde(default)]
     pub(in crate::tools::plan) lintel: Option<i32>,
-    /// Stairs only: height of each step (default `16`, clamped to
-    /// `1..=24`).
+    /// Stairs only: height of each step, map units (default `16`; must
+    /// be `1..=24`, outside that the plan is refused).
     #[serde(default)]
     pub(in crate::tools::plan) step_height: Option<i32>,
     /// Stairs only: depth of each step, map units; must be positive

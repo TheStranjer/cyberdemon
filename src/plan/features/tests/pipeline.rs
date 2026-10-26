@@ -252,7 +252,7 @@ fn a_switch_naming_the_remote_door_silences_it() {
 }
 
 #[test]
-fn an_unnamed_remote_door_warns_under_its_derived_label() {
+fn an_unnamed_remote_door_asks_for_an_id_a_switch_can_reference() {
     let mut plan = door_features(vec![exit_feature("b", ExitStyle::WalkOver, false, None)]);
     if let Some(first) = plan.connections.first_mut() {
         first.id = None;
@@ -260,10 +260,10 @@ fn an_unnamed_remote_door_warns_under_its_derived_label() {
     assert_eq!(
         checked(&plan, &[]),
         vec![
-            "remote door at a->b is opened by no switch: add a switch feature whose \
-             opens is a->b"
+            "remote door at a->b is opened by no switch: give the connection an id and \
+             reference it in a switch feature's opens"
                 .to_owned()
         ],
-        "an unnamed door can never be named"
+        "an unnamed door cannot be opened until it is named"
     );
 }

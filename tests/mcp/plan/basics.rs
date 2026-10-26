@@ -18,7 +18,8 @@
 //! overwrite keeping one block, the one-step `undo` that takes the whole block
 //! back, and the plan-path-named refusals - a flat rectangle, both or neither
 //! footprint, unknown kind and style names - down to rooms that do not touch
-//! refusing with the connection path.
+//! refusing with the connection path, the duplicate connection id naming both
+//! indices, and the window-locked room warned unreachable.
 
 use serde_json::{Value, json};
 
@@ -467,6 +468,53 @@ async fn rooms_that_do_not_touch_refuse_with_the_connection_path() {
         message.contains("connections[0]") && message.contains("do not touch"),
         "the path and the compiler's words: {message}"
     );
+}
+
+#[tokio::test]
+async fn a_room_joined_only_by_a_window_warns_it_cannot_be_reached() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let glass_ward = json!({
+        "map": "MAP09",
+        "rooms": [
+            {"id": "a", "rect": {"x": 0_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}},
+            {"id": "b", "rect": {"x": 128_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64}},
+            {"id": "tower", "rect": {"x": 128_i64, "y": 128_i64, "w": 128_i64, "h": 128_i64}}
+        ],
+        "connections": [
+            {"from": "a", "to": "b", "kind": "opening"},
+            {"from": "b", "to": "tower", "kind": "window"}
+        ],
+        "player_start": {"room": "a"}
+    });
+    let result = call(&client, "build_map_from_plan", glass_ward).await;
+    let warnings = result["warnings"].as_array().expect("a warning list");
+    assert!(
+        warnings.iter().any(|note| note
+            .as_str()
+            .is_some_and(|text| text.contains("room 'tower'")
+                && text.contains("cannot be reached")
+                && text.contains("window"))),
+        "the window-locked tower reports as unreachable: {warnings:?}"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_connection_ids_refuse_naming_the_path_and_both_indices() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let mut twin = plan_for("MAP05");
+    twin["connections"][1]["id"] = json!("d1");
+    let (code, message, _) = call_err(&client, "build_map_from_plan", twin).await;
+    assert_eq!(code, "invalid_argument", "one id, two rows");
+    assert!(
+        message.starts_with("connections[0]")
+            && message.contains("connections[1]")
+            && message.contains("its own id"),
+        "the plan path, both indices and the way out: {message}"
+    );
+    let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
+    assert_eq!(maps["maps"], json!([]), "the refusal wrote nothing");
 }
 
 /// The raw bytes of the working archive's `SIDEDEFS` lump, read back through

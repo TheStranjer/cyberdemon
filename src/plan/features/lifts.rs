@@ -25,13 +25,19 @@ pub(super) fn lifts(
     dress: &FeatureDress,
     run: &mut FeatureRun,
 ) -> Result<(), CyberError> {
-    for feature in plan.features.clone() {
+    for feature in &plan.features {
+        if !matches!(feature, Feature::Lift { .. }) {
+            continue;
+        }
+        // A `&Feature` cannot be destructured with bindings under this
+        // crate's denied `pattern_type_mismatch` and `ref_patterns`, so
+        // only the matching row is cloned, never the whole vector.
         let Feature::Lift {
             room,
             low_floor,
             style,
             repeatable,
-        } = feature
+        } = feature.clone()
         else {
             continue;
         };

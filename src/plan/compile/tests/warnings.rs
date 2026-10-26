@@ -1,14 +1,16 @@
 //! The advisory notes: a later room painting over an L-shaped one, rooms
 //! that do not touch refusing to be connected, an unreachable room named
-//! in the warning, a floor gap too tall for an opening and a fully covered
+//! in the warning — glass-ward rooms included, since a window carries no
+//! way through — a floor gap too tall for an opening and a fully covered
 //! room earning its note.
 
 use super::compile;
 use super::{
-    TestRoles, assert_no_gaps, assert_valid, compiled, map_name, opening, rect_room, two_rooms,
+    TestRoles, assert_no_gaps, assert_valid, compiled, connection, map_name, opening, rect_room,
+    two_rooms,
 };
 use crate::geom::label::{Label, Labeler as _, LayerLabeler, SAMPLE_SCALE};
-use crate::plan::model::{Plan, Room, Shape};
+use crate::plan::model::{ConnectionKind, Plan, Room, Shape};
 use crate::plan::walls::room_layers;
 use crate::wad::classify::MapFormat;
 
@@ -105,6 +107,66 @@ fn an_unreachable_room_is_warned_about_by_name() {
             .is_some_and(|note| note.contains("attic") && note.contains("'a'")),
         "the note names the room and the root: {:?}",
         out.warnings
+    );
+    assert_valid(&out.map);
+}
+
+#[test]
+fn a_room_joined_only_by_a_window_cannot_be_reached() {
+    let window = connection(
+        "a",
+        "b",
+        ConnectionKind::Window {
+            sill: 32_i32,
+            lintel: 24_i32,
+        },
+    );
+    let out = compiled(&two_rooms(16, vec![window]));
+    assert_eq!(
+        out.warnings.len(),
+        1,
+        "the glass-locked room reports: {:?}",
+        out.warnings
+    );
+    let note = out.warnings.first().expect("one note");
+    assert!(
+        note.contains("room 'b'") && note.contains("room 'a'") && note.contains("window"),
+        "the note names the room, the root and the window: {note}"
+    );
+    assert_valid(&out.map);
+}
+
+#[test]
+fn a_window_does_not_carry_reachability_through_the_room_it_faces() {
+    let window = connection(
+        "a",
+        "b",
+        ConnectionKind::Window {
+            sill: 32_i32,
+            lintel: 24_i32,
+        },
+    );
+    let mut plan = two_rooms(16, vec![window]);
+    plan.rooms.push(rect_room("c", (256, 0), (128, 128)));
+    plan.connections.push(opening("b", "c"));
+    let out = compiled(&plan);
+    let notes: Vec<&str> = out
+        .warnings
+        .iter()
+        .filter(|note| note.contains("cannot be reached"))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        notes.len(),
+        2,
+        "the whole window-ward chain reports: {:?}",
+        out.warnings
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("'a'"))
+            && notes.iter().any(|note| note.contains("room 'b'"))
+            && notes.iter().any(|note| note.contains("room 'c'")),
+        "both rooms behind the glass name room 'a' as the root: {notes:?}"
     );
     assert_valid(&out.map);
 }

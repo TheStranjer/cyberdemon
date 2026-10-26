@@ -38,7 +38,13 @@ pub(super) fn teleporters(
     dress: &FeatureDress,
     run: &mut FeatureRun,
 ) -> Result<(), CyberError> {
-    for feature in plan.features.clone() {
+    for feature in &plan.features {
+        if !matches!(feature, Feature::Teleporter { .. }) {
+            continue;
+        }
+        // A `&Feature` cannot be destructured with bindings under this
+        // crate's denied `pattern_type_mismatch` and `ref_patterns`, so
+        // only the matching row is cloned, never the whole vector.
         let Feature::Teleporter {
             from_room,
             to_room,
@@ -46,7 +52,7 @@ pub(super) fn teleporters(
             destination,
             angle,
             two_way,
-        } = feature
+        } = feature.clone()
         else {
             continue;
         };

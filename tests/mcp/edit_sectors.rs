@@ -187,9 +187,9 @@ fn same_ends(line: &Value, ends: [(i32, i32); 2]) -> bool {
 /// Requires `validate_map` to report no unexpected error- or
 /// warning-severity findings for the working `map`. The geometry and
 /// health findings the drawing itself is allowed to leave behind are
-/// filtered out: rooms wear the vanilla default names (`FLOOR4_8`,
-/// `CEIL3_5`, `STARTAN3`) that this minimal fixture `IWAD` does not
-/// define, and every draw invalidates the node lumps.
+/// filtered out: the minimal fixture `IWAD` misses some of the names the
+/// theme dressing and the fixture maps pick, and every draw invalidates
+/// the node lumps.
 async fn validate_clean(client: &Client, map: &str) {
     const EXPECTED: [&str; 3] = ["missing_texture", "missing_flat", "nodes_missing"];
     let report = call(
@@ -227,3 +227,6 @@ mod edit;
 #[cfg(test)]
 #[path = "edit_sectors/remove.rs"]
 mod remove;
+#[cfg(test)]
+#[path = "edit_sectors/theme.rs"]
+mod theme;

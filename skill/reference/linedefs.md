@@ -45,8 +45,11 @@ maps** section.
   take their parameters from `args` instead. Binary `Doom` stores
   `special` and `tag` as `u16`.
 - **Args.** The five `args` exist only in the `Hexen` family; non-zero
-  args on a `Doom`-family map are `invalid_argument`, and the binary
-  `Hexen` record stores each one as `u8` (`0..=255`).
+  args on a `Doom`-family map are `invalid_argument` — on a `UDMF` map in
+  a `Doom` namespace the refusal points at `convert_map_format` to the
+  `zdoom` namespace (the map already is `UDMF`), on a binary `Doom` map
+  it suggests a `Hexen` or `UDMF` map — and the binary `Hexen` record
+  stores each one as `u8` (`0..=255`).
 - **Flags.** `flags` parameters take the raw bitset or names from the
   map's own table (below). Binary maps store the bitset as `u16`.
 - **Duplicates.** One linedef per vertex pair: `add_linedef` between two

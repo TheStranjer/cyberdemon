@@ -159,8 +159,8 @@ async fn create_sector_from_loop_grows_a_room_next_to_room_zero() {
     );
     assert_eq!(
         room["floor_flat"],
-        json!("FLOOR4_8"),
-        "the sector defaults stored"
+        json!("FLOOR1"),
+        "the theme-resolved sector defaults stored"
     );
     let summary = call(
         &client,
@@ -316,8 +316,8 @@ async fn create_sector_from_loop_with_none_outer_keeps_walls_single() {
     assert_eq!(line["back"], Value::Null, "no back side");
     assert_eq!(
         line["front"]["middle"],
-        json!("STARTAN3"),
-        "the default wall texture"
+        json!("STEP1"),
+        "the theme-resolved default wall texture"
     );
     validate_clean(&client, "MAP01").await;
 }

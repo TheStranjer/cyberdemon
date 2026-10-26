@@ -36,6 +36,12 @@
 //! `0..=255` in every format. A flat may not be `"-"`: that names no
 //! texture, not a floor or ceiling surface.
 //!
+//! The defaulting rule: an unasked floor, ceiling or new wall texture
+//! comes from the session theme's `Floor`, `Ceiling` and `Wall` roles,
+//! resolved once per call through [`crate::tools::themes::surfaces`] and
+//! standing in with the vanilla names when the theme has nothing of that
+//! kind — so a Heretic session gets Heretic flats, not `FLOOR4_8`.
+//!
 //! [`IndexSelector`]: crate::tools::maps::params::IndexSelector
 //! [`check_index`]: crate::tools::maps::params::check_index
 
@@ -65,10 +71,6 @@ use crate::wad::map::consts::NO_TEXTURE;
 const DEFAULT_FLOOR_HEIGHT: i32 = 0_i32;
 /// The `add_sector` default ceiling height, in map units.
 const DEFAULT_CEILING_HEIGHT: i32 = 128_i32;
-/// The `add_sector` default floor flat name.
-const DEFAULT_FLOOR_FLAT: &str = "FLOOR4_8";
-/// The `add_sector` default ceiling flat name.
-const DEFAULT_CEILING_FLAT: &str = "CEIL3_5";
 /// The `add_sector` default light level.
 const DEFAULT_LIGHT: i32 = 160_i32;
 /// The lowest light level the vanilla range allows.
@@ -83,8 +85,6 @@ const HEIGHT_MAX: i32 = 0x7FFF_i32;
 const FIELD_MIN: i32 = 0_i32;
 /// The highest value a `u16` binary `SECTORS` column holds (`u16::MAX`).
 const FIELD_MAX: i32 = 0xFFFF_i32;
-/// The `create_sector_from_loop` default middle texture of a new wall.
-const DEFAULT_WALL_TEXTURE: &str = "STARTAN3";
 /// The `outer_sector` mode that probes the sector outside each new edge.
 const OUTER_AUTO: &str = "auto";
 /// The `outer_sector` mode that keeps every new wall one-sided.
@@ -233,7 +233,7 @@ fn check_sector(format: MapFormat, sector: &Sector) -> Result<(), CyberError> {
 impl Cyberdemon {
     /// Appends one sector to a map in a single undoable edit.
     #[tool(
-        description = "Adds one sector (a region sharing floor, ceiling, flats, light and effect) to a map in a single undoable edit with vanilla-flavoured defaults; the appended record stays dead space until sidedefs reference it. Prefer create_sector_from_loop to grow a whole room with its walls in one call, or build_map_from_plan for a finished map; pair this with add_sidedef only for exact low-level control."
+        description = "Adds one sector (a region sharing floor, ceiling, flats, light and effect) to a map in a single undoable edit with theme-aware defaults (unasked flats come from the session theme's floor and ceiling roles); the appended record stays dead space until sidedefs reference it. Prefer create_sector_from_loop to grow a whole room with its walls in one call, or build_map_from_plan for a finished map; pair this with add_sidedef only for exact low-level control."
     )]
     fn add_sector(
         &self,

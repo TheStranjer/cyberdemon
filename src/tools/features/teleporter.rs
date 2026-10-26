@@ -26,13 +26,14 @@ use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
-use crate::tools::themes::theme_texture;
+use crate::tools::themes::{FALLBACK_WALL_TEXTURE, role_texture, theme_roles};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportBuild, TeleportSpec, build_teleporter};
 use crate::wad::map::ops::Point;
 
 use super::door::point_of;
-use super::{current_map, invalid, theme_wall};
+use super::{current_map, invalid};
 use crate::tools::maps::params::PointParam;
 
 /// Arguments for [`Cyberdemon::add_teleporter`].
@@ -99,15 +100,17 @@ pub(super) struct TeleporterReport {
 }
 
 /// The textures a teleporter wears: the theme's `teleport_floor` flat and
-/// `wall` fallback, validated for the map's format (the same resolution
-/// pattern [`lift_skins`] runs).
+/// `wall` fallback in one [`theme_roles`] pass, validated for the map's
+/// format (the same resolution pattern [`lift_skins`] runs).
 ///
 /// # Errors
 ///
-/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+/// [`theme_roles`]' errors and [`validate_texture_name`]' refusals.
 fn teleport_skins(session: &Session, format: MapFormat) -> Result<TeleportSkins, CyberError> {
-    let floor_flat = theme_texture(session, Role::TeleportFloor)?;
-    let wall = theme_wall(session)?;
+    let wanted = [Role::TeleportFloor, Role::Wall];
+    let resolved = theme_roles(session, None, &wanted)?;
+    let floor_flat = role_texture(&resolved, Role::TeleportFloor, NO_TEXTURE);
+    let wall = role_texture(&resolved, Role::Wall, FALLBACK_WALL_TEXTURE);
     Ok(TeleportSkins {
         floor_flat: validate_texture_name(&floor_flat, format)?,
         wall: validate_texture_name(&wall, format)?,

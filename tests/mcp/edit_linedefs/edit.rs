@@ -1,7 +1,8 @@
 //! `edit_linedef` as an MCP client calls it: replacing and adjusting the flag
 //! bits, setting `special` and `tag` on a list of lines, the nothing-to-change
 //! empty, conflicting and null requests refused with the missing references as
-//! `not_found` and the collapsed line refused, the flip verified through
+//! `not_found` and the collapsed line refused, the family refusals with their
+//! format-aware advice, the flip verified through
 //! `assemble_map`, the
 //! `back: null` closing a line one-sided, the in-place `front_side`
 //! texture-offset edit, and moving the vertex and sidedef references.
@@ -142,6 +143,55 @@ async fn edit_linedef_refuses_empty_conflicting_and_null_requests() {
     let stored = merged_linedef(&client, "MAP01", 0).await;
     assert_eq!(stored["special"], json!(0_i32), "nothing changed");
     assert_eq!(stored["v2"]["index"], json!(5_i32), "the endpoint stands");
+}
+
+#[tokio::test]
+async fn edit_linedef_args_advice_follows_the_map_format() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = doom_loaded(dir.path()).await;
+    let (code, binary_message, _) = call_err(
+        &client,
+        "edit_linedef",
+        json!({"index": 0_i32, "args": [7_i32, 0_i32, 0_i32, 0_i32, 0_i32]}),
+    )
+    .await;
+    assert_eq!(code, "invalid_argument", "binary Doom has no args");
+    assert!(
+        binary_message.contains("Doom-format linedefs have no args; use a Hexen or UDMF map"),
+        "the binary advice names the other formats: {binary_message}"
+    );
+    call(
+        &client,
+        "convert_map_format",
+        json!({"map": "MAP01", "to": "udmf"}),
+    )
+    .await;
+    let (udmf_code, udmf_message, _) = call_err(
+        &client,
+        "edit_linedef",
+        json!({"index": 0_i32, "args": [7_i32, 0_i32, 0_i32, 0_i32, 0_i32]}),
+    )
+    .await;
+    assert_eq!(
+        udmf_code, "invalid_argument",
+        "UDMF doom namespace has no args"
+    );
+    assert!(
+        udmf_message.contains("convert_map_format")
+            && udmf_message.contains("zdoom")
+            && udmf_message.contains("Hexen family"),
+        "the UDMF advice names the namespace conversion: {udmf_message}"
+    );
+    assert!(
+        !udmf_message.contains("use a Hexen or UDMF map"),
+        "it never tells a UDMF map to become UDMF: {udmf_message}"
+    );
+    let stored = merged_linedef(&client, "MAP01", 0).await;
+    assert_eq!(
+        stored["args"],
+        json!([0_i32, 0_i32, 0_i32, 0_i32, 0_i32]),
+        "the refusals wrote nothing"
+    );
 }
 
 #[tokio::test]

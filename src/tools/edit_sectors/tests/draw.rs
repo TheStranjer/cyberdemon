@@ -1,13 +1,14 @@
 //! The drawing topics: the two corner forms of a loop, the request
-//! `create_sector_from_loop` builds from them with its documented defaults,
+//! `create_sector_from_loop` builds from them with its theme defaults,
 //! the solid paint of a carve and the fields refused before anything is
 //! drawn.
 
-use super::{carve_args, code, loop_args, test_map, three_points_json};
+use super::{carve_args, code, loop_args, test_map, three_points_json, vanilla_surfaces};
 use crate::tools::edit_sectors::draw::{
     build_request, build_void_request, outer_sector_of, polygon_of,
 };
-use crate::tools::edit_sectors::{DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_FLAT, DEFAULT_LIGHT};
+use crate::tools::edit_sectors::{DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT};
+use crate::tools::themes::Surfaces;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::overlay::{Outside, Paint};
 
@@ -51,7 +52,7 @@ fn the_loop_needs_exactly_one_corner_form() {
 fn the_built_request_carries_the_documented_defaults() {
     let map = test_map();
     let args = loop_args(&three_points_json(""));
-    let request = build_request(&args, &map).expect("the minimal loop builds");
+    let request = build_request(&args, &map, &vanilla_surfaces()).expect("the minimal loop builds");
     assert_eq!(
         request.textures.wall, "STARTAN3",
         "the wall texture default"
@@ -73,19 +74,20 @@ fn the_built_request_carries_the_documented_defaults() {
     let Paint::Sector(sector) = request.paint else {
         panic!("a room paints a sector");
     };
+    assert_eq!(sector.floor_height, 0_i32);
+    assert_eq!(sector.ceiling_height, DEFAULT_CEILING_HEIGHT);
     assert_eq!(
-        (sector.floor_height, sector.ceiling_height, sector.light),
-        (0_i32, DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT),
+        sector.light, DEFAULT_LIGHT,
         "the sector defaults are add_sector's"
     );
-    assert_eq!(sector.floor_flat, DEFAULT_FLOOR_FLAT);
+    assert_eq!(sector.floor_flat, "FLOOR4_8");
     let full = loop_args(
         r#"{"points": [{"x": 0, "y": 0}, {"x": 128, "y": 0}, {"x": 64, "y": 128}],
             "ceiling_height": 192, "tag": 7, "wall_texture": "brick11",
             "upper_texture": "-", "lower_texture": "step1", "outer_sector": "none",
             "keep_interior": true}"#,
     );
-    let built = build_request(&full, &map).expect("the full loop builds");
+    let built = build_request(&full, &map, &vanilla_surfaces()).expect("the full loop builds");
     assert_eq!(built.textures.wall, "BRICK11", "names are uppercased");
     assert_eq!(built.textures.upper, "-", "a wall texture may be the dash");
     assert_eq!(built.textures.lower, "STEP1");
@@ -97,13 +99,37 @@ fn the_built_request_carries_the_documented_defaults() {
     assert_eq!(deep.ceiling_height, 192_i32);
     assert_eq!(deep.tag, 7_i32);
     let indexed = loop_args(r#"{"vertices": [0, 1, 2, 3], "outer_sector": 1}"#);
-    let explicit = build_request(&indexed, &map).expect("the indexed loop builds");
+    let explicit =
+        build_request(&indexed, &map, &vanilla_surfaces()).expect("the indexed loop builds");
     assert_eq!(explicit.outside, Outside::Face(1), "an index is taken");
     assert_eq!(
         explicit.polygon,
         vec![(0_i64, 0_i64), (128, 0), (128, 128), (0, 128)],
         "the indices resolve to their vertices' coordinates"
     );
+}
+
+#[test]
+fn a_themed_request_dresses_the_wall_and_flats_with_the_theme() {
+    let map = test_map();
+    let args = loop_args(&three_points_json(""));
+    let themed = Surfaces {
+        wall: "CSTLRCK".to_owned(),
+        floor: "FLOOR00".to_owned(),
+        ceiling: "FLAT513".to_owned(),
+    };
+    let dressed = build_request(&args, &map, &themed).expect("a themed loop builds");
+    assert_eq!(dressed.textures.wall, "CSTLRCK", "the theme wall dresses");
+    assert_eq!(
+        dressed.textures.upper, "CSTLRCK",
+        "and transitions follow it"
+    );
+    assert_eq!(dressed.textures.lower, "CSTLRCK");
+    let Paint::Sector(room) = dressed.paint else {
+        panic!("a room paints a sector");
+    };
+    assert_eq!(room.floor_flat, "FLOOR00", "the theme flats land");
+    assert_eq!(room.ceiling_flat, "FLAT513");
 }
 
 #[test]
@@ -137,7 +163,8 @@ fn bad_loop_fields_are_refused_before_anything_draws() {
     ];
     for json in &refusals {
         let args = loop_args(json);
-        let error = build_request(&args, &map).expect_err("the field must refuse on a binary map");
+        let error = build_request(&args, &map, &vanilla_surfaces())
+            .expect_err("the field must refuse on a binary map");
         assert_eq!(code(&error), "invalid_argument", "refusal code for {json}");
     }
     let mode = outer_sector_of(loop_args(r#"{"outer_sector": "AUTO"}"#).outer_sector)
@@ -149,5 +176,6 @@ fn bad_loop_fields_are_refused_before_anything_draws() {
         r#"{"points": [{"x": 0, "y": 0}, {"x": 40000, "y": 0}, {"x": 64, "y": 128}],
             "wall_texture": "a_long_udmf_wall_texture", "tag": 70000}"#,
     );
-    build_request(&wide, &udmf).expect("UDMF takes the wide coordinates, name and tag");
+    build_request(&wide, &udmf, &vanilla_surfaces())
+        .expect("UDMF takes the wide coordinates, name and tag");
 }

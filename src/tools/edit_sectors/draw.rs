@@ -4,15 +4,16 @@
 //!
 //! The [`crate::server::Cyberdemon`] router methods hand their parsed
 //! [`CreateSectorFromLoopParams`] and [`CarveVoidParams`] to [`create_run`]
-//! and [`carve_run`], which resolve the map (the carve also resolving the
-//! theme wall through [`theme_wall`]) and paint inside exactly one
+//! and [`carve_run`], which resolve the map (the loop also resolving the
+//! session theme's [`Surfaces`] wall/floor/ceiling defaults once, the
+//! carve the shared [`theme_wall`]) and paint inside exactly one
 //! [`crate::session::Session::edit_map`] step. [`build_request`] folds a
 //! room out of the polygon [`polygon_of`] reads in either of its two forms,
-//! the sector [`loop_sector`] describes under the parent's [`check_sector`],
-//! the three wall faces [`wall_faces`] defaults and the outer rule
-//! [`outer_sector_of`] parses; [`build_void_request`] folds a carve out of
-//! the same polygon with [`crate::wad::map::overlay::Paint::Void`] and one
-//! texture on every face.
+//! the sector [`loop_sector`] describes under the parent's [`check_sector`]
+//! with [`Surfaces`] defaults, the three wall faces [`wall_faces`] defaults
+//! and the outer rule [`outer_sector_of`] parses; [`build_void_request`]
+//! folds a carve out of the same polygon with
+//! [`crate::wad::map::overlay::Paint::Void`] and one texture on every face.
 
 use alloc::collections::BTreeMap;
 
@@ -23,19 +24,17 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::session::Session;
-use crate::themes::Role;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{PointParam, edit_result_fragment, validate_texture_name};
-use crate::tools::themes::theme_texture;
+use crate::tools::themes::{Surfaces, surfaces, theme_wall};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::query::{ElementKind, missing_index};
 use crate::wad::map::{Map, Sector};
 
 use super::{
-    COORD_MAX, COORD_MIN, DEFAULT_CEILING_FLAT, DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_FLAT,
-    DEFAULT_FLOOR_HEIGHT, DEFAULT_LIGHT, DEFAULT_WALL_TEXTURE, NO_TEXTURE, OUTER_AUTO, OUTER_NONE,
-    check_sector, flat_or_default,
+    COORD_MAX, COORD_MIN, DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_HEIGHT, DEFAULT_LIGHT, OUTER_AUTO,
+    OUTER_NONE, check_sector, flat_or_default,
 };
 
 /// Arguments for [`Cyberdemon::create_sector_from_loop`].
@@ -59,10 +58,12 @@ pub(super) struct CreateSectorFromLoopParams {
     /// Ceiling height in map units (default `128`).
     #[serde(default)]
     ceiling_height: Option<i32>,
-    /// Floor flat name (default `"FLOOR4_8"`).
+    /// Floor flat name (default: the session theme's `Floor` flat,
+    /// `FLOOR4_8` when the theme names none).
     #[serde(default)]
     floor_flat: Option<String>,
-    /// Ceiling flat name (default `"CEIL3_5"`).
+    /// Ceiling flat name (default: the session theme's `Ceiling` flat,
+    /// `CEIL3_5` when the theme names none).
     #[serde(default)]
     ceiling_flat: Option<String>,
     /// Light level, `0..=255` (default `160`).
@@ -74,7 +75,8 @@ pub(super) struct CreateSectorFromLoopParams {
     /// Tag matched by linedef actions (default `0`).
     #[serde(default)]
     tag: Option<i32>,
-    /// Middle texture of new one-sided walls (default `"STARTAN3"`).
+    /// Middle texture of new one-sided walls (default: the session
+    /// theme's `Wall` texture, `STARTAN3` when the theme names none).
     #[serde(default)]
     wall_texture: Option<String>,
     /// Upper texture of new two-sided transitions (default: `wall_texture`).
@@ -243,13 +245,18 @@ fn fits_coord(field: &str, value: i32) -> Result<(), CyberError> {
     )))
 }
 
-/// The sector the loop parameters describe, checked like `add_sector`'s.
-fn loop_sector(args: &CreateSectorFromLoopParams, format: MapFormat) -> Result<Sector, CyberError> {
+/// The sector the loop parameters describe, checked like `add_sector`'s,
+/// with the theme `defaults` standing under the unasked flats.
+fn loop_sector(
+    args: &CreateSectorFromLoopParams,
+    format: MapFormat,
+    defaults: &Surfaces,
+) -> Result<Sector, CyberError> {
     let sector = Sector {
         floor_height: args.floor_height.unwrap_or(DEFAULT_FLOOR_HEIGHT),
         ceiling_height: args.ceiling_height.unwrap_or(DEFAULT_CEILING_HEIGHT),
-        floor_flat: flat_or_default(args.floor_flat.as_ref(), DEFAULT_FLOOR_FLAT, format)?,
-        ceiling_flat: flat_or_default(args.ceiling_flat.as_ref(), DEFAULT_CEILING_FLAT, format)?,
+        floor_flat: flat_or_default(args.floor_flat.as_ref(), &defaults.floor, format)?,
+        ceiling_flat: flat_or_default(args.ceiling_flat.as_ref(), &defaults.ceiling, format)?,
         light: args.light.unwrap_or(DEFAULT_LIGHT),
         special: args.special.unwrap_or_default(),
         tag: args.tag.unwrap_or_default(),
@@ -271,13 +278,15 @@ fn texture_or_default(
     )
 }
 
-/// The three wall face textures: the one-sided wall and the two transition
-/// faces, each defaulting to `wall_texture`.
+/// The three wall face textures: the one-sided wall defaulting to the
+/// theme `defaults`' wall, and the two transition faces, each defaulting
+/// to `wall_texture`.
 fn wall_faces(
     args: &CreateSectorFromLoopParams,
     format: MapFormat,
+    defaults: &Surfaces,
 ) -> Result<(String, String, String), CyberError> {
-    let wall = texture_or_default(args.wall_texture.as_ref(), DEFAULT_WALL_TEXTURE, format)?;
+    let wall = texture_or_default(args.wall_texture.as_ref(), &defaults.wall, format)?;
     let upper = args.upper_texture.as_ref().map_or_else(
         || Ok(wall.clone()),
         |name| validate_texture_name(name, format),
@@ -311,7 +320,8 @@ pub(super) fn outer_sector_of(given: Option<OuterSectorParam>) -> Result<Outside
     }
 }
 
-/// The validated [`OverlayRequest`] the parameters and the map describe.
+/// The validated [`OverlayRequest`] the parameters, the map and the theme
+/// `defaults` describe.
 ///
 /// # Errors
 ///
@@ -321,11 +331,12 @@ pub(super) fn outer_sector_of(given: Option<OuterSectorParam>) -> Result<Outside
 pub(super) fn build_request(
     args: &CreateSectorFromLoopParams,
     map: &Map,
+    defaults: &Surfaces,
 ) -> Result<OverlayRequest, CyberError> {
-    let (wall, upper, lower) = wall_faces(args, map.format)?;
+    let (wall, upper, lower) = wall_faces(args, map.format, defaults)?;
     Ok(OverlayRequest {
         polygon: polygon_of(args.points.as_ref(), args.vertices.as_ref(), map)?,
-        paint: Paint::Sector(loop_sector(args, map.format)?),
+        paint: Paint::Sector(loop_sector(args, map.format, defaults)?),
         keep_interior: args.keep_interior,
         textures: WallTextures { wall, upper, lower },
         outside: outer_sector_of(args.outer_sector.clone())?,
@@ -359,32 +370,23 @@ pub(super) fn build_void_request(
     })
 }
 
-/// `create_sector_from_loop`'s work: resolve the map, then run the
-/// one-step painting on it.
+/// `create_sector_from_loop`'s work: resolve the map and the theme
+/// surfaces once, then run the one-step painting on it.
 pub(super) fn create_run(
     session: &mut Session,
     args: &CreateSectorFromLoopParams,
 ) -> Result<LoopToolReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let defaults = surfaces(session)?;
     let label = "create sector from loop".to_owned();
     let (result, report) = session.edit_map(name, &label, |map| {
-        let request = build_request(args, map)?;
+        let request = build_request(args, map, &defaults)?;
         overlay::apply_overlay(map, &request)
     })?;
     Ok(LoopToolReport {
         result,
         edit: edit_result_fragment(&report),
     })
-}
-
-/// The wall texture a carve dresses bare sectors with: the session
-/// theme's `Wall`, else the `create_sector_from_loop` default.
-fn theme_wall(session: &Session) -> Result<String, CyberError> {
-    let themed = theme_texture(session, Role::Wall)?;
-    if themed == NO_TEXTURE {
-        return Ok(DEFAULT_WALL_TEXTURE.to_owned());
-    }
-    Ok(themed)
 }
 
 /// `carve_void`'s work: resolve the map and the theme wall, then run the

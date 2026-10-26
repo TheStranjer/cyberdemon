@@ -25,8 +25,10 @@
 //! exit tools, [`specials`] the two sector-special steps, and
 //! [`place_params`] and [`place`] the `place_things` wire parsing and
 //! distribution run. This root keeps the shared refusal helpers, the map
-//! read ([`current_map`]), the theme helpers ([`theme_wall`], [`skin`]
-//! and [`theme_skin`]), the result handoff ([`reply`]) and the
+//! read ([`current_map`]), the theme helpers ([`skin`] and [`theme_skin`],
+//! on the shared [`crate::tools::themes`] `theme_wall` and
+//! [`theme_roles`] machinery so no group re-resolves what another
+//! already does), the result handoff ([`reply`]) and the
 //! router; the group's unit tests live in `features/tests.rs`.
 
 mod door;
@@ -67,7 +69,7 @@ use crate::tools::features::window::{AddWindowParams, add_window_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::validate_texture_name;
 use crate::tools::reply;
-use crate::tools::themes::theme_texture;
+use crate::tools::themes::{FALLBACK_WALL_TEXTURE, role_texture, theme_roles};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::consts::NO_TEXTURE;
@@ -99,20 +101,6 @@ fn sector_lost() -> CyberError {
     CyberError::Internal("the door recess paint reported no sector (server bug)".to_owned())
 }
 
-/// The wall texture a carved strip's bare edges fall back to.
-const DEFAULT_WALL_TEXTURE: &str = "STARTAN3";
-
-/// The wall texture a carved strip's bare edges fall back to: the
-/// session theme's `Wall`, else [`DEFAULT_WALL_TEXTURE`].
-fn theme_wall(session: &Session) -> Result<String, CyberError> {
-    let themed = theme_texture(session, Role::Wall)?;
-    Ok(if themed == NO_TEXTURE {
-        DEFAULT_WALL_TEXTURE.to_owned()
-    } else {
-        themed
-    })
-}
-
 /// One skin entry: the explicit name when given, else the theme's,
 /// validated for the map's format.
 fn skin(given: Option<&str>, themed: &str, format: MapFormat) -> Result<String, CyberError> {
@@ -121,21 +109,24 @@ fn skin(given: Option<&str>, themed: &str, format: MapFormat) -> Result<String, 
 
 /// The textures the door wears: theme roles by default (the coloured
 /// track for the locked styles), explicit `texture`/`track_texture`
-/// overrides validated for the map's format.
+/// overrides validated for the map's format. The four roles resolve
+/// through [`theme_roles`] in one pass.
 ///
 /// # Errors
 ///
-/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+/// [`theme_roles`]' errors and [`validate_texture_name`]' refusals.
 fn theme_skin(
     session: &Session,
     style: DoorStyle,
     args: &AddDoorParams,
     format: MapFormat,
 ) -> Result<DoorSkins, CyberError> {
-    let door = theme_texture(session, Role::Door)?;
-    let track = theme_texture(session, track_role(style))?;
-    let floor = theme_texture(session, Role::DoorFloor)?;
-    let wall = theme_wall(session)?;
+    let wanted = [Role::Door, track_role(style), Role::DoorFloor, Role::Wall];
+    let resolved = theme_roles(session, None, &wanted)?;
+    let door = role_texture(&resolved, Role::Door, NO_TEXTURE);
+    let track = role_texture(&resolved, track_role(style), NO_TEXTURE);
+    let floor = role_texture(&resolved, Role::DoorFloor, NO_TEXTURE);
+    let wall = role_texture(&resolved, Role::Wall, FALLBACK_WALL_TEXTURE);
     Ok(DoorSkins {
         door: skin(args.texture.as_deref(), &door, format)?,
         track: skin(args.track_texture.as_deref(), &track, format)?,

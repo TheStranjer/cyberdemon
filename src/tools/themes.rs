@@ -6,10 +6,13 @@
 //! with textures the merged view actually holds; the pure resolution order
 //! lives in [`crate::themes`]. [`theme_texture`] is the session-level
 //! helper every later high-level tool (drawing, doors, stairs, the plan
-//! builder) asks when it needs "a wall texture" without naming one.
-//! `auto_texture` and `align_textures` run their pure engines
-//! ([`crate::themes::auto`] and [`crate::themes::align`]) as exactly one
-//! [`crate::session::Session::edit_map`] step each.
+//! builder) asks when it needs "a wall texture" without naming one;
+//! [`theme_roles`] answers several roles in one pass, and [`surfaces`]
+//! and [`theme_wall`] are the shared theme-aware defaults (with their
+//! vanilla fallbacks) the sector-drawing and feature tools use instead of
+//! hard-coded names. `auto_texture` and `align_textures` run their pure
+//! engines ([`crate::themes::auto`] and [`crate::themes::align`]) as
+//! exactly one [`crate::session::Session::edit_map`] step each.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
@@ -46,6 +49,16 @@ use crate::wad::name::LumpName;
 const AUTO_LABEL: &str = "auto_texture";
 /// The `align_textures` step label prefix.
 const ALIGN_LABEL: &str = "align_textures";
+
+/// The wall texture the theme-aware defaults fall back to when the session
+/// has no wall texture at all.
+pub const FALLBACK_WALL_TEXTURE: &str = "STARTAN3";
+/// The floor flat the theme-aware defaults fall back to when the theme
+/// cannot answer.
+pub const FALLBACK_FLOOR_FLAT: &str = "FLOOR4_8";
+/// The ceiling flat the theme-aware defaults fall back to when the theme
+/// cannot answer.
+pub const FALLBACK_CEILING_FLAT: &str = "CEIL3_5";
 
 /// What the merged view provides, precomputed for role resolution. The
 /// bulk-edit machinery (`crate::tools::query::replace::Stock`) reads
@@ -215,6 +228,67 @@ pub fn theme_roles(
             )
         })
         .collect())
+}
+
+/// `role`'s texture out of a [`theme_roles`] answer.
+///
+/// The name as the theme resolved it, or `fallback` when the theme
+/// answered the no-texture dash (or did not carry the role at all).
+/// Shared by the sector-drawing and feature tools.
+#[must_use]
+#[inline]
+pub fn role_texture(resolved: &BTreeMap<Role, String>, role: Role, fallback: &str) -> String {
+    match resolved.get(&role) {
+        Some(name) if name != NO_TEXTURE => name.clone(),
+        _ => fallback.to_owned(),
+    }
+}
+
+/// The three surface names a room-drawing or feature tool defaults to.
+///
+/// The session theme's `Wall`, `Floor` and `Ceiling` roles, each standing
+/// in with its vanilla fallback when the theme has nothing of that kind.
+#[derive(Clone, Debug)]
+pub struct Surfaces {
+    /// Middle texture of a new wall.
+    pub wall: String,
+    /// Floor flat of a new sector.
+    pub floor: String,
+    /// Ceiling flat of a new sector.
+    pub ceiling: String,
+}
+
+/// The theme's `Wall`, `Floor` and `Ceiling` for one call.
+///
+/// Resolved through [`theme_roles`] in a single pass — what `add_sector`,
+/// `create_sector_from_loop` and the feature tools default their textures
+/// with instead of hard-coded vanilla names.
+///
+/// # Errors
+///
+/// [`theme_roles`]' errors.
+#[inline]
+pub fn surfaces(session: &Session) -> Result<Surfaces, CyberError> {
+    let resolved = theme_roles(session, None, &[Role::Wall, Role::Floor, Role::Ceiling])?;
+    Ok(Surfaces {
+        wall: role_texture(&resolved, Role::Wall, FALLBACK_WALL_TEXTURE),
+        floor: role_texture(&resolved, Role::Floor, FALLBACK_FLOOR_FLAT),
+        ceiling: role_texture(&resolved, Role::Ceiling, FALLBACK_CEILING_FLAT),
+    })
+}
+
+/// The wall texture bare faces fall back to.
+///
+/// The session theme's `Wall`, else [`FALLBACK_WALL_TEXTURE`]. Shared by
+/// `carve_void` and every feature tool so no group re-implements the
+/// fallback.
+///
+/// # Errors
+///
+/// [`surfaces`]' errors.
+#[inline]
+pub fn theme_wall(session: &Session) -> Result<String, CyberError> {
+    Ok(surfaces(session)?.wall)
 }
 
 /// One `get_texture_theme` role row.
@@ -399,19 +473,28 @@ fn selected_sectors(map: &Map, requested: Option<&[usize]>) -> Result<BTreeSet<u
     Ok(indices.iter().copied().collect())
 }
 
-/// Resolve the theme textures the engine paints with.
+/// Resolve the theme textures the engine paints with in one pass.
 ///
 /// # Errors
 ///
-/// [`theme_texture`]'s errors.
+/// [`theme_roles`]' errors.
 fn paint_set(session: &Session) -> Result<ThemeTextures, CyberError> {
+    let wanted = [
+        Role::Wall,
+        Role::Door,
+        Role::DoorTrack,
+        Role::Step,
+        Role::Floor,
+        Role::Ceiling,
+    ];
+    let resolved = theme_roles(session, None, &wanted)?;
     Ok(ThemeTextures {
-        wall: theme_texture(session, Role::Wall)?,
-        door: theme_texture(session, Role::Door)?,
-        door_track: theme_texture(session, Role::DoorTrack)?,
-        step: theme_texture(session, Role::Step)?,
-        floor: theme_texture(session, Role::Floor)?,
-        ceiling: theme_texture(session, Role::Ceiling)?,
+        wall: role_texture(&resolved, Role::Wall, NO_TEXTURE),
+        door: role_texture(&resolved, Role::Door, NO_TEXTURE),
+        door_track: role_texture(&resolved, Role::DoorTrack, NO_TEXTURE),
+        step: role_texture(&resolved, Role::Step, NO_TEXTURE),
+        floor: role_texture(&resolved, Role::Floor, NO_TEXTURE),
+        ceiling: role_texture(&resolved, Role::Ceiling, NO_TEXTURE),
     })
 }
 
@@ -617,7 +700,7 @@ fn side_lines(map: &Map, sector: usize) -> BTreeSet<usize> {
 impl Cyberdemon {
     /// Reads the session's texture theme and every role's current texture.
     #[tool(
-        description = "Reads the session's texture theme: the effective theme name, the themes the detected game offers, and every role (wall, floor, ceiling, door, door_track, switch, exit_switch, step, lift, window, teleport, liquid and the rest) with the texture standing for it now and how it matched. Use it before set_texture_theme; build_map_from_plan and auto_texture resolve roles against this table."
+        description = "Reads the session's texture theme: the effective theme name, the themes the detected game offers, and every role (wall, floor, ceiling, door, door_track, switch, exit_switch, step, lift, window, teleport, liquid and the rest) with the texture standing for it now and how it matched. Use it before set_texture_theme; add_sector, create_sector_from_loop, build_map_from_plan and auto_texture resolve roles against this table."
     )]
     fn get_texture_theme(&self) -> Result<CallToolResult, ErrorData> {
         reply(
@@ -674,7 +757,7 @@ mod tests {
 
     use super::{
         AlignTexturesParams, AutoTextureParams, SetThemeParams, is_door_action, mode_label,
-        parse_mode, push_tx_name, theme_roles,
+        parse_mode, push_tx_name, role_texture, surfaces, theme_roles, theme_wall,
     };
     use crate::session::Session;
     use crate::themes::auto::AutoMode;
@@ -795,5 +878,50 @@ mod tests {
         for name in &game_themes {
             assert!(broken.to_string().contains(name), "lists {name}");
         }
+    }
+
+    #[test]
+    fn role_texture_keeps_the_theme_name_and_stands_in_the_fallback() {
+        let resolved: alloc::collections::BTreeMap<Role, String> = [
+            (Role::Wall, "GRSTNPB".to_owned()),
+            (Role::Door, "-".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            role_texture(&resolved, Role::Wall, "STARTAN3"),
+            "GRSTNPB",
+            "a themed name stands"
+        );
+        assert_eq!(
+            role_texture(&resolved, Role::Door, "-"),
+            "-",
+            "a dash stays a dash without a fallback"
+        );
+        assert_eq!(
+            role_texture(&resolved, Role::Ceiling, "CEIL3_5"),
+            "CEIL3_5",
+            "a missing role falls back"
+        );
+    }
+
+    #[test]
+    fn surfaces_fall_back_to_the_vanilla_wall_on_an_empty_session() {
+        let session = Session::default();
+        let defaults = surfaces(&session).expect("an empty session answers");
+        assert_eq!(
+            defaults.wall, "STARTAN3",
+            "no wall texture anywhere: the vanilla fallback stands"
+        );
+        assert_eq!(
+            defaults.floor, "F_SKY1",
+            "F_SKY1 is the only flat an empty session holds"
+        );
+        assert_eq!(defaults.ceiling, "F_SKY1");
+        assert_eq!(
+            theme_wall(&session).expect("the wall asks the same pass"),
+            defaults.wall,
+            "theme_wall and surfaces agree"
+        );
     }
 }

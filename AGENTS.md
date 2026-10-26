@@ -613,8 +613,9 @@ src/
                   step (`dry_run` converts a copy and only reports);
                   `tools/features.rs` is the `features` group: its root
                   keeps the shared refusal helpers, the `current_map`
-                  read, the theme helpers (`theme_wall`, `skin`,
-                  `theme_skin`), the result handoff (`reported`) and the
+                  read, the theme skins (`skin`,
+                  `theme_skin`, all on the shared `tools/themes`
+                  `theme_roles`/`theme_wall`), the result handoff (`reported`) and the
                   router, the work split by tool into
                   `features/wall.rs` (the wall choice and void-strip
                   machinery `add_door` and `add_window` share:
@@ -802,9 +803,13 @@ src/
                   their refusals);
                   `tools/themes.rs` is the `themes` group plus the shared
                   `theme_texture(session, role)` every role-asking tool uses,
-                  and `theme_roles(session, override, roles)` which
+                  `theme_roles(session, override, roles)` which
                   `build_map_from_plan` uses to resolve a whole dressing set
-                  against an optional one-call theme override;
+                  against an optional one-call theme override, and
+                  `surfaces(session)`/`theme_wall(session)` (on
+                  `role_texture`) — the theme's Wall/Floor/Ceiling with their
+                  vanilla fallbacks, resolved once per call for the sector-
+                  drawing and feature tools;
                   `tools/plan.rs` is the `plan` group: `build_map_from_plan`
                   maps its wire `rooms`/`connections` onto `crate::plan::model`
                   (`tools/plan/params.rs`, whose root keeps the request, the

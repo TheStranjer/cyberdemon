@@ -46,7 +46,8 @@
 //! `features/switch`, `features/exit`, `features/secret`, `features/light`,
 //! `features/stairs`, `features/lift`, `features/teleporter` and
 //! `features/place` topic tests, the linedef/thing flag-name
-//! glossary guard in `flag_names`, the
+//! glossary guard in `flag_names`, the shared box-window, tap-blend and
+//! luminance-weight duplication guard in `shared_math`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
@@ -209,6 +210,9 @@ mod server;
 #[cfg(test)]
 #[path = "mcp/session.rs"]
 mod session;
+#[cfg(test)]
+#[path = "mcp/shared_math.rs"]
+mod shared_math;
 #[cfg(test)]
 #[path = "mcp/sketch.rs"]
 mod sketch;

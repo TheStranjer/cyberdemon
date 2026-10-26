@@ -10,7 +10,11 @@
 //! [`tone`], alpha handling in [`alpha`] and [`background`], seamless
 //! tiling in [`tile`], binarization in [`threshold`] (with the
 //! background-flattening uneven-light variant in [`adaptive`]), box blur in
-//! [`blur`] and dithered quantization in [`dither`].
+//! [`blur`] and dithered quantization in [`dither`]. The sliding box window
+//! the blur, the adaptive background and [`crate::sketch::morph`] walk, and
+//! the bilinear taps the samplers blend with, are each one shared piece of
+//! [`crate::gfx::filter`]; what an op averages, counts or thresholds is the
+//! op's own business.
 //! Everything here is pure: no MCP, no filesystem, no floats.
 //!
 //! The framework itself is split: this root keeps the op vocabulary -

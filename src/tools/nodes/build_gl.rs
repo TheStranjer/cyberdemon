@@ -10,7 +10,7 @@
 //! [`gl_lump_names`] right after the block at [`gl_insert_point`]'s
 //! position — all of it inside one [`crate::session::Session::edit`] entry.
 
-use crate::bsp::{BuildOptions, GlNodes, build_tree, to_gl};
+use crate::bsp::{GlNodes, to_gl};
 use crate::error::CyberError;
 use crate::session::MergedLump;
 use crate::session::map_edit::{self, MapEditReport};
@@ -20,7 +20,8 @@ use crate::wad::map::Map;
 use crate::wad::name::LumpName;
 
 use super::build_nodes::{
-    ClassicBuild, NodeBuildPlan, NodesBuilt, apply_build_nodes, require_binary, write_classic_run,
+    ClassicBuild, NodeBuildPlan, NodesBuilt, apply_build_nodes, build_with_cost, require_binary,
+    write_classic_run,
 };
 
 /// What one `gl` variant build wrote: the classic run's report and the
@@ -40,13 +41,7 @@ pub(super) struct GlBuild {
 /// caller splices it into the archive around this edit.
 pub(super) fn install_gl_nodes(map: &mut Map, split_cost: i64) -> Result<GlBuild, CyberError> {
     require_binary(map)?;
-    let tree = build_tree(
-        map,
-        BuildOptions {
-            split_cost,
-            ..BuildOptions::default()
-        },
-    )?;
+    let tree = build_with_cost(map, split_cost)?;
     let classic = write_classic_run(map, &tree)?;
     let run = to_gl(map, &tree)?;
     Ok(GlBuild { classic, run })

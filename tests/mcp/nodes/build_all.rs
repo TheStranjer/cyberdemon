@@ -1,8 +1,9 @@
 //! `build_all_nodes`, the one-shot tree-plus-reject-plus-blockmap build that
 //! writes everything a binary map needs in a single undoable step: the three
 //! products taking one `undo` back at once, the `gl` variant attaching the
-//! `GL_*` block in that same step, `UDMF` maps getting `ZNODES` alone (with
-//! the reject only when a `reject_mode` asks for it) and the bad-argument and
+//! `GL_*` block in that same step, `UDMF` maps getting `ZNODES` alone (and
+//! refusing any named `reject_mode`, since a `UDMF` map carries no
+//! `REJECT`) and the bad-argument and
 //! barren-map refusals that write nothing and leave the history alone.
 //!
 //! `assert_all_nodes_result` is the plain fixture's result shape; every other
@@ -229,42 +230,56 @@ async fn build_all_nodes_on_udmf_writes_znodes_only() {
 }
 
 #[tokio::test]
-async fn build_all_nodes_on_udmf_writes_a_reject_only_when_asked() {
+async fn build_all_nodes_on_udmf_refuses_a_named_reject_mode() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = nodes_loaded(dir.path()).await;
-    let asked = call(
+    let (code, message, _) = call_err(
         &client,
         "build_all_nodes",
-        json!({ "map": "MAP07", "reject_mode": "components" }),
+        json!({ "map": "MAP07", "reject_mode": "zero" }),
+    )
+    .await;
+    assert_eq!(code, "invalid_argument", "UDMF carries no REJECT");
+    assert!(
+        message.contains("UDMF maps carry no REJECT"),
+        "the message names the rule: {message}"
+    );
+    assert!(
+        message.contains("leave reject_mode out"),
+        "the message says what to do: {message}"
+    );
+    let (forced_code, forced_message, _) = call_err(
+        &client,
+        "build_all_nodes",
+        json!({ "map": "MAP07", "variant": "classic", "reject_mode": "components" }),
     )
     .await;
     assert_eq!(
-        asked["reject"]["mode"],
-        json!("components"),
-        "an explicit mode writes the matrix"
+        forced_code, "invalid_argument",
+        "a mode is refused with any variant"
     );
-    assert_eq!(asked["blockmap"], Value::Null, "the blockmap stays out");
-    let reject = call(&client, "get_reject", json!({ "map": "MAP07" })).await;
-    assert_eq!(reject["bytes"], json!(1_u64), "the written matrix");
-    assert_eq!(reject["size_ok"], json!(true), "at its expected size");
-    assert_eq!(reject["sectors"], json!(2_u64), "the two fixture sectors");
-    let (code, message, _) = call_err(
+    assert!(
+        forced_message.contains("UDMF maps carry no REJECT"),
+        "the shared rule: {forced_message}"
+    );
+    let (gl_code, gl_message, _) = call_err(
         &client,
         "build_all_nodes",
         json!({ "map": "MAP07", "variant": "gl" }),
     )
     .await;
-    assert_eq!(code, "invalid_argument", "gl writes the classic run too");
+    assert_eq!(gl_code, "invalid_argument", "gl writes the classic run too");
     assert!(
-        message.contains("UDMF maps use extended nodes"),
-        "the shared rule: {message}"
+        gl_message.contains("UDMF maps use extended nodes"),
+        "the shared rule: {gl_message}"
     );
     let info = call(&client, "get_session_info", json!({})).await;
-    assert_eq!(
-        info["undo"],
-        json!(["build all nodes"]),
-        "only the one successful build is history"
-    );
+    assert_eq!(info["undo"], json!([]), "no refusal touched the history");
+    let names = directory_names(&client, "working").await;
+    assert!(names.is_empty(), "and nothing was written: {names:?}");
+    let built = call(&client, "build_all_nodes", json!({ "map": "MAP07" })).await;
+    assert_eq!(built["variant"], json!("extended"), "the plain build runs");
+    assert_eq!(built["reject"], Value::Null, "and still writes no matrix");
 }
 
 #[tokio::test]

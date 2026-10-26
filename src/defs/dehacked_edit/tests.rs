@@ -124,6 +124,59 @@ fn a_text_block_body_is_opaque_until_consumed() {
 }
 
 #[test]
+fn a_crlf_text_block_counts_the_carriage_returns() {
+    let text = "Patch File for DeHackEd v3.0\r\nDoom version = 21\r\nPatch format = 6\r\n\r\n\
+                Text 7 14\r\nTroop\r\nBaron of Hell\r\n[CODEPTR]\r\nFRAMEZ = A_Light0\r\n";
+    let patch = parse(text);
+    let block = patch
+        .blocks
+        .iter()
+        .find(|entry| entry.kind == KIND_TEXT)
+        .expect("the Text block");
+    assert_eq!(block.end, 7, "ends after the two CRLF body lines");
+    let section = patch
+        .sections
+        .first()
+        .expect("the section header follows the exact byte budget");
+    assert_eq!(section.name, "CODEPTR", "the body did not swallow it");
+    assert_eq!(section.entries.len(), 1, "and its entry parsed");
+}
+
+#[test]
+fn a_text_block_counts_bytes_not_characters() {
+    // Eight characters, sixteen UTF-8 bytes: a character count falls
+    // eight bytes short and lets the body swallow the `Misc` block.
+    const WIDE_BODY: &str = "\u{c5}\u{e4}\u{f6}\u{fc}\u{e9}\u{e8}\u{e7}\u{ed}";
+    let first = WIDE_BODY.len().saturating_add(1_usize);
+    let text = format!("Text {first} 4\n{WIDE_BODY}\nBar\n\nMisc\ntotal = 7\n");
+    let patch = parse(&text);
+    let block = patch
+        .blocks
+        .iter()
+        .find(|entry| entry.kind == KIND_TEXT)
+        .expect("the Text block");
+    assert_eq!(
+        block.end, 3,
+        "the declared bytes are exactly the two body lines"
+    );
+    let misc = patch
+        .blocks
+        .iter()
+        .find(|entry| entry.kind == "Misc")
+        .expect("the multibyte body cannot swallow the next block");
+    assert_eq!(
+        misc.fields.first().expect("one key").value,
+        "7",
+        "the key after the body parsed"
+    );
+    assert!(
+        patch.warnings.is_empty(),
+        "nothing to note: {:?}",
+        patch.warnings
+    );
+}
+
+#[test]
 fn misc_and_bex_entries_read_their_fields() {
     let patch = parse(SAMPLE);
     let misc = patch

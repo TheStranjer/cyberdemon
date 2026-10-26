@@ -3,9 +3,11 @@
 //! `doom_ed_nums` lifts the `DoomEdNums { <number> = <ClassName> }`
 //! entries out of one MAPINFO-shaped text. `//` and `/* */` comments are
 //! dropped (across lines) and quoted strings keep their contents but never
-//! their braces. Other blocks (`GameInfo`, `map`, `addmap`, …) are skipped
-//! by brace matching; only the entries of a braced `DoomEdNums` block are
-//! returned. Anything unparseable inside the block becomes a warning.
+//! their braces; inside a string a backslash escapes the character after
+//! it, so `\"` cannot close the string. Other blocks (`GameInfo`, `map`,
+//! `addmap`, …) are skipped by brace matching; only the entries of a
+//! braced `DoomEdNums` block are returned. Anything unparseable inside the
+//! block becomes a warning.
 
 use alloc::collections::VecDeque;
 
@@ -122,6 +124,44 @@ fn split_close(line: &str) -> Option<(String, String)> {
     state.tail.map(|rest| (state.head, rest))
 }
 
+/// The string state of a character scan over MAPINFO text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Quote {
+    /// Outside a quoted string.
+    #[default]
+    Out,
+    /// Inside a quoted string.
+    In,
+    /// Inside a quoted string, with the next character escaped by the
+    /// backslash just seen.
+    Escaped,
+}
+
+/// Whether the scan sits outside every quoted string.
+const fn outside(quote: Quote) -> bool {
+    matches!(quote, Quote::Out)
+}
+
+/// The string state after one character: a backslash inside a string
+/// escapes the character after it and only an unescaped `"` closes it.
+const fn next_quote(quote: Quote, ch: char) -> Quote {
+    match quote {
+        Quote::Escaped => Quote::In,
+        Quote::In => match ch {
+            '\\' => Quote::Escaped,
+            '"' => Quote::Out,
+            _ => Quote::In,
+        },
+        Quote::Out => {
+            if ch == '"' {
+                Quote::In
+            } else {
+                Quote::Out
+            }
+        }
+    }
+}
+
 /// The split point state while scanning for the closing brace.
 #[derive(Default)]
 struct SplitState {
@@ -129,17 +169,15 @@ struct SplitState {
     head: String,
     /// Text after the split brace, once found.
     tail: Option<String>,
-    /// Whether a quoted string is open.
-    in_string: bool,
+    /// The string state of the scan.
+    quote: Quote,
 }
 
-/// One character before the split point: quotes toggle string mode and the
-/// first outside-string `}` starts the tail.
+/// One character before the split point: the first outside-string `}`
+/// starts the tail, every other character joins the head.
 fn take_head_char(ch: char, state: &mut SplitState) {
-    if ch == '"' {
-        state.in_string = !state.in_string;
-    }
-    if !state.in_string && ch == '}' {
+    state.quote = next_quote(state.quote, ch);
+    if ch == '}' && outside(state.quote) {
         state.tail = Some(String::new());
         return;
     }
@@ -202,27 +240,41 @@ fn class_name(text: &str) -> Option<String> {
     Some(head.to_owned())
 }
 
-/// The count of `{` and `}` outside quoted spans of one line.
-fn braces(line: &str) -> (usize, usize) {
-    let mut opens = 0_usize;
-    let mut closes = 0_usize;
-    let mut in_string = false;
-    for ch in line.chars() {
-        if ch == '"' {
-            in_string = !in_string;
-            continue;
+/// The `{`/`}` counter of one line, tracking quoted spans.
+#[derive(Default)]
+struct Counter {
+    /// Braces opened outside strings.
+    opens: usize,
+    /// Braces closed outside strings.
+    closes: usize,
+    /// The string state of the scan.
+    quote: Quote,
+}
+
+impl Counter {
+    /// Feeds one character of the line; braces inside strings never count.
+    const fn take(&mut self, ch: char) {
+        let was_outside = outside(self.quote);
+        self.quote = next_quote(self.quote, ch);
+        if !was_outside {
+            return;
         }
-        if in_string {
-            continue;
-        }
-        if ch == '{' {
-            opens = opens.saturating_add(1);
-        }
-        if ch == '}' {
-            closes = closes.saturating_add(1);
+        match ch {
+            '{' => self.opens = self.opens.saturating_add(1_usize),
+            '}' => self.closes = self.closes.saturating_add(1_usize),
+            _ => {}
         }
     }
-    (opens, closes)
+}
+
+/// The count of `{` and `}` outside quoted spans of one line; inside a
+/// string a backslash escapes the character after it.
+fn braces(line: &str) -> (usize, usize) {
+    let mut counter = Counter::default();
+    for ch in line.chars() {
+        counter.take(ch);
+    }
+    (counter.opens, counter.closes)
 }
 
 /// The line-comment state machine behind [`strip_comments`].
@@ -231,8 +283,8 @@ struct Stripper {
     out: String,
     /// Whether a `/* */` comment is open.
     block: bool,
-    /// Whether a quoted string is open.
-    string: bool,
+    /// The string state of the scan.
+    quote: Quote,
 }
 
 impl Stripper {
@@ -245,15 +297,35 @@ impl Stripper {
             self.block = !(ch == '*' && eat_char(chars, '/'));
             return true;
         }
-        if self.string {
-            self.out.push(ch);
-            self.string = ch != '"';
-            return true;
+        match self.quote {
+            Quote::Escaped => {
+                self.quote = Quote::In;
+                self.out.push(ch);
+                true
+            }
+            Quote::In => {
+                self.take_in(ch);
+                true
+            }
+            Quote::Out => self.take_out(ch, chars),
         }
+    }
+
+    /// One character inside a string: kept as written, with the backslash
+    /// and closing-quote transitions read off it.
+    fn take_in(&mut self, ch: char) {
+        self.out.push(ch);
+        self.quote = next_quote(Quote::In, ch);
+    }
+
+    /// One character outside comments and strings: quotes open a string,
+    /// a `/` may start a comment, everything else is kept.
+    fn take_out<T>(&mut self, ch: char, chars: &mut core::iter::Peekable<T>) -> bool
+    where
+        T: Iterator<Item = char>,
+    {
         if ch == '"' {
-            self.string = true;
-            self.out.push(ch);
-            return true;
+            self.quote = Quote::In;
         }
         if ch == '/' {
             return self.take_slash(chars);
@@ -302,7 +374,7 @@ fn strip_comments(line: &str, block_open: bool) -> (String, bool) {
     let mut stripper = Stripper {
         out: String::new(),
         block: block_open,
-        string: false,
+        quote: Quote::default(),
     };
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -372,6 +444,32 @@ mod tests {
     fn a_bare_doomednums_without_a_block_is_ignored() {
         let found = entries("DoomEdNums\n5001 = Foo\n");
         assert!(found.is_empty(), "the braced form is required");
+    }
+
+    #[test]
+    fn an_escaped_quote_keeps_a_string_open_to_its_real_close() {
+        let text = "addmap x {\n note = \"a \\\" b { c\"\n}\nDoomEdNums {\n 7 = Real\n}\n";
+        let found = entries(text);
+        assert_eq!(
+            found.len(),
+            1,
+            "the skipped block's string brace dug no deeper hole"
+        );
+        assert_eq!(found.first().expect("entry").number, 7, "its number");
+    }
+
+    #[test]
+    fn helpers_honour_backslash_escapes_in_strings() {
+        assert_eq!(
+            braces("q \"a \\\" b { c\""),
+            (0, 0),
+            "the open brace sits inside the string"
+        );
+        assert_eq!(
+            strip_comments("\"a \\\"// keep\" // cut", false).0,
+            "\"a \\\"// keep\" ",
+            "the escaped quote keeps the slashes inside the string; the real comment cuts"
+        );
     }
 
     #[test]

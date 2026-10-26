@@ -6,10 +6,12 @@
 //! sector types a given [`crate::wad::game::Game`] can use. [`boom`]
 //! decodes the bit-packed Boom generalized specials and the Boom sector
 //! special bits that no table enumerates. [`custom`] overlays the built-in
-//! tables with the custom thing definitions of the loaded archives, read
-//! through the tolerant subset parsers [`dehacked`], [`decorate`],
-//! [`zscript`] and [`mapinfo`]. [`dehacked_edit`] is the line-oriented
-//! DeHackEd/BEX reader and editor behind the scripts tools.
+//! tables with the custom thing definitions of the loaded archives:
+//! DEHACKED patches through the shared line reader [`dehacked_edit`] — the
+//! same blocks the scripts tools list and edit — and custom scripts through
+//! the tolerant subset parsers [`decorate`], [`zscript`] and [`mapinfo`].
+//! [`dehacked_edit`] is also the line-oriented DeHackEd/BEX reader and
+//! editor behind the scripts tools.
 
 pub mod boom;
 pub mod custom;

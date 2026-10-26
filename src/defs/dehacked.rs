@@ -1,15 +1,20 @@
 //! DeHackEd thing overrides: the `Thing <n>` block subset and the mobj map.
 //!
 //! A DeHackEd patch edits an internal mobj table indexed from 1 in Doom II
-//! order. `apply` reads the `Thing <n> (<name>)` blocks of one DEHACKED
-//! lump text and moves the built-in definitions: `ID #` sets a new
-//! doomednum (`-1` makes the mobj unplaceable), `Width` replaces the
-//! blocking radius (written in 16.16 fixed point), and every other key is
-//! ignored. Unparseable parts become warnings, never errors; the only
-//! error is a broken embedded mobj table, which is a build bug.
+//! order. `apply` reads the patch text through the shared line reader
+//! `crate::defs::dehacked_edit::parse` — the same one `get_dehacked` and
+//! `edit_dehacked` list and edit blocks with — and moves the built-in
+//! definitions of its `Thing <n>` blocks: `ID #` sets a new doomednum
+//! (`-1` makes the mobj unplaceable), `Width` replaces the blocking radius
+//! (written in 16.16 fixed point), and every other key is ignored. `#`
+//! comment lines are skipped and every other block kind or BEX section
+//! simply bounds the Thing blocks, so both readers always see the same
+//! blocks. Unparseable parts become warnings, never errors; the only error
+//! is a broken embedded mobj table, which is a build bug.
 
 use std::sync::LazyLock;
 
+use crate::defs::dehacked_edit::{self, Block};
 use crate::defs::registry::{Definitions, game_label};
 use crate::defs::table::ThingDef;
 use crate::error::CyberError;
@@ -24,14 +29,17 @@ const DEH_MOBJ_TSV: &str = include_str!("../../data/defs/deh_mobj.tsv");
 /// The [`ThingDef::source`] label of rows moved or edited by DEHACKED.
 const SOURCE_DEHACKED: &str = "dehacked";
 
+/// The warning prefix naming this overlay as the reporting stream.
+const WARNING_PREFIX: &str = "dehacked";
+
 /// The category of synthesized rows whose mobj has no built-in definition.
 const CATEGORY_DEHACKED: &str = "Custom (DeHackEd)";
 
 /// The radius of a synthesized row whose patch names none.
 const DEFAULT_RADIUS: u32 = 20;
 
-/// The block header word.
-const HEADER_THING: &str = "thing";
+/// The canonical block kind whose header numbers a mobj.
+const KIND_THING: &str = "Thing";
 
 /// The key that moves a thing's doomednum.
 const KEY_ID: &str = "id #";
@@ -50,26 +58,6 @@ const MOBJ_FIELDS: usize = 2;
 /// a panic: broken embedded data is a build bug.
 static DEH_MOBJS: LazyLock<Result<Vec<i64>, String>> =
     LazyLock::new(|| parse_mobj_table(DEH_MOBJ_TSV));
-
-/// One parsed `Thing <n>` block.
-struct ThingBlock {
-    /// The 1-based mobj index from the header.
-    number: i64,
-    /// The parenthesised display name, when the header gives one.
-    name: Option<String>,
-    /// The `key = value` lines, keys lowercased and both sides trimmed.
-    keys: Vec<(String, String)>,
-}
-
-impl ThingBlock {
-    /// The trimmed value of the lowercased `key`, when the block sets it.
-    fn value(&self, key: &str) -> Option<&str> {
-        self.keys
-            .iter()
-            .find(|pair| pair.0 == key)
-            .map(|pair| pair.1.as_str())
-    }
-}
 
 /// One `Thing <n>` block reduced to the values the table edit needs.
 struct Edit {
@@ -97,9 +85,14 @@ pub(crate) fn apply(text: &str, game: Game, defs: &mut Definitions) -> Result<()
             "embedded dehacked mobj table is malformed (this is a server bug): {reason}"
         ))
     })?;
-    let (blocks, warnings) = thing_blocks(text);
-    defs.warnings.extend(warnings);
-    for block in &blocks {
+    let patch = dehacked_edit::parse(text);
+    defs.warnings.extend(
+        patch
+            .warnings
+            .into_iter()
+            .map(|note| format!("{WARNING_PREFIX}: {note}")),
+    );
+    for block in patch.blocks.iter().filter(|block| block.kind == KIND_THING) {
         if let Some(edit) = build_edit(block, mobjs, &mut defs.warnings) {
             apply_edit(&edit, game, defs);
         }
@@ -158,107 +151,46 @@ fn parse_mobj_table(text: &str) -> Result<Vec<i64>, String> {
     Ok(doomednums)
 }
 
-/// Splits `text` into its `Thing <n>` blocks: keys run until the next
-/// header line (without `=`) or a blank line. Other block headers end the
-/// current block and contribute nothing.
-fn thing_blocks(text: &str) -> (Vec<ThingBlock>, Vec<String>) {
-    let mut blocks: Vec<ThingBlock> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-    let mut current: Option<ThingBlock> = None;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            finish(&mut blocks, &mut current);
-            continue;
-        }
-        if !trimmed.contains('=') {
-            finish(&mut blocks, &mut current);
-            current = header_of(trimmed, &mut warnings);
-            continue;
-        }
-        let Some(block) = current.as_mut() else {
-            continue;
-        };
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        block
-            .keys
-            .push((key.trim().to_ascii_lowercase(), value.trim().to_owned()));
-    }
-    finish(&mut blocks, &mut current);
-    (blocks, warnings)
-}
-
-/// Moves the block under construction into the finished list, if any.
-fn finish(blocks: &mut Vec<ThingBlock>, current: &mut Option<ThingBlock>) {
-    if let Some(block) = current.take() {
-        blocks.push(block);
-    }
-}
-
-/// Whether the first word of `line` names a `Thing` block header.
-fn starts_with_thing(line: &str) -> bool {
-    line.split_whitespace()
-        .next()
-        .is_some_and(|word| word.eq_ignore_ascii_case(HEADER_THING))
-}
-
-/// The block header when this non-key line opens a `Thing` block; other
-/// headers (and their blocks) contribute nothing.
-fn header_of(line: &str, warnings: &mut Vec<String>) -> Option<ThingBlock> {
-    if !starts_with_thing(line) {
-        return None;
-    }
-    parse_header(line, warnings)
-}
-
-/// Parses the `Thing <n> (<name>)` header line, warning about one that
-/// names no numeric index.
-fn parse_header(line: &str, warnings: &mut Vec<String>) -> Option<ThingBlock> {
-    let (_, rest) = line
-        .split_once(char::is_whitespace)
-        .map_or((line, ""), |(head, tail)| (head, tail));
-    let (index_part, name) = rest.split_once('(').map_or((rest, None), |(head, tail)| {
-        (head, tail.strip_suffix(')').map(str::trim))
-    });
-    let Ok(number) = index_part.trim().parse::<i64>() else {
-        warnings.push(format!(
-            "dehacked: thing header {line:?} names no numeric mobj index"
-        ));
-        return None;
-    };
-    Some(ThingBlock {
-        number,
-        name: name.map(str::to_owned),
-        keys: Vec::new(),
-    })
+/// The trimmed value of the block's `Key = Value` line whose key matches
+/// the lowercased `key` case-insensitively, when the block sets it.
+fn block_value<'block>(block: &'block Block, key: &str) -> Option<&'block str> {
+    block
+        .fields
+        .iter()
+        .find(|field| field.key.eq_ignore_ascii_case(key))
+        .map(|field| field.value.as_str())
 }
 
 /// Resolves the block's mobj index against `mobjs` and reads the keys, or
-/// warns and returns `None` for an index outside the table.
-fn build_edit(block: &ThingBlock, mobjs: &[i64], warnings: &mut Vec<String>) -> Option<Edit> {
-    let position = usize::try_from(block.number)
+/// warns and returns `None` for a header that names no index or one outside
+/// the table.
+fn build_edit(block: &Block, mobjs: &[i64], warnings: &mut Vec<String>) -> Option<Edit> {
+    let Some(number) = block.number else {
+        warnings.push(format!(
+            "{WARNING_PREFIX}: the Thing block on line {} names no mobj index; its keys are \
+             ignored",
+            block.line.saturating_add(1)
+        ));
+        return None;
+    };
+    let position = usize::try_from(number)
         .ok()
         .filter(|index| *index > 0_usize)
         .and_then(|index| index.checked_sub(1));
     let mapped = position.and_then(|offset| mobjs.get(offset).copied());
     let Some(original) = mapped else {
         warnings.push(format!(
-            "dehacked: thing index {} is outside the mobj table of {} entries",
-            block.number,
+            "{WARNING_PREFIX}: thing index {number} is outside the mobj table of {} entries",
             mobjs.len()
         ));
         return None;
     };
     Some(Edit {
-        index: block.number,
+        index: number,
         original,
         name: block.name.clone(),
-        id: block.value(KEY_ID).map(str::to_owned),
-        radius: block
-            .value(KEY_WIDTH)
-            .and_then(|text| parse_width(text, warnings)),
+        id: block_value(block, KEY_ID).map(str::to_owned),
+        radius: block_value(block, KEY_WIDTH).and_then(|text| parse_width(text, warnings)),
     })
 }
 
@@ -266,7 +198,7 @@ fn build_edit(block: &ThingBlock, mobjs: &[i64], warnings: &mut Vec<String>) -> 
 fn parse_width(text: &str, warnings: &mut Vec<String>) -> Option<u32> {
     let Ok(fixed) = text.parse::<i64>() else {
         warnings.push(format!(
-            "dehacked: Width {text:?} is not a 16.16 fixed-point number"
+            "{WARNING_PREFIX}: Width {text:?} is not a 16.16 fixed-point number"
         ));
         return None;
     };
@@ -275,7 +207,7 @@ fn parse_width(text: &str, warnings: &mut Vec<String>) -> Option<u32> {
         .and_then(|units| u32::try_from(units).ok());
     if radius.is_none() {
         warnings.push(format!(
-            "dehacked: Width {text:?} is not a positive 16.16 fixed-point radius"
+            "{WARNING_PREFIX}: Width {text:?} is not a positive 16.16 fixed-point radius"
         ));
     }
     radius
@@ -290,7 +222,7 @@ fn apply_edit(edit: &Edit, game: Game, defs: &mut Definitions) {
     };
     let Ok(number) = id_text.parse::<i64>() else {
         defs.warnings.push(format!(
-            "dehacked: thing {} has ID # {id_text:?}, which is not a number",
+            "{WARNING_PREFIX}: thing {} has ID # {id_text:?}, which is not a number",
             edit.index
         ));
         return;
@@ -304,7 +236,8 @@ fn apply_edit(edit: &Edit, game: Game, defs: &mut Definitions) {
     match u32::try_from(number) {
         Ok(kind) => place(edit, kind, game, defs),
         Err(_) => defs.warnings.push(format!(
-            "dehacked: thing {} has ID # {id_text:?}, which is above the thing number range",
+            "{WARNING_PREFIX}: thing {} has ID # {id_text:?}, which is above the thing number \
+             range",
             edit.index
         )),
     }
@@ -340,7 +273,8 @@ fn place(edit: &Edit, kind: u32, game: Game, defs: &mut Definitions) {
 fn synthesize(edit: &Edit, kind: u32, game: Game, defs: &mut Definitions) {
     let Some(name) = edit.name.as_deref() else {
         defs.warnings.push(format!(
-            "dehacked: thing {} has no built-in row to move to {kind} and the header names none",
+            "{WARNING_PREFIX}: thing {} has no built-in row to move to {kind} and the header \
+             names none",
             edit.index
         ));
         return;
@@ -390,13 +324,18 @@ fn replace_kind(defs: &mut Definitions, def: ThingDef) {
 
 #[cfg(test)]
 mod tests {
-    use crate::defs::dehacked::{DEH_MOBJ_TSV, apply, parse_mobj_table, thing_blocks};
+    use crate::defs::dehacked::{DEH_MOBJ_TSV, apply, parse_mobj_table};
     use crate::defs::registry::definitions_for;
     use crate::wad::game::Game;
 
     /// A fresh DOOM II table to patch.
     fn defs() -> crate::defs::Definitions {
         definitions_for(Game::Doom2).expect("the embedded tables are valid")
+    }
+
+    /// Whether any warning contains `needle`.
+    fn warns(defs: &crate::defs::Definitions, needle: &str) -> bool {
+        defs.warnings.iter().any(|w| w.contains(needle))
     }
 
     #[test]
@@ -426,30 +365,94 @@ mod tests {
     }
 
     #[test]
-    fn blocks_run_until_the_next_header_or_a_blank_line() {
-        let text = "Thing 12 (Imp Thing)\nID # = 20000\nWidth = 655360\n\nMisc\nID # = 5\n";
-        let (blocks, warnings) = thing_blocks(text);
-        assert!(warnings.is_empty(), "the text parses: {warnings:?}");
-        assert_eq!(blocks.len(), 1, "only the Thing block is kept");
-        let block = blocks.first().expect("one block");
-        assert_eq!(block.number, 12, "the header index");
+    fn a_comment_inside_a_thing_block_keeps_its_keys() {
+        let mut defs = defs();
+        let text = "Thing 12 (Evil Imp)\n# a note\nID # = 20000\nWidth = 655360\n";
+        apply(text, Game::Doom2, &mut defs).expect("the table is valid");
+        assert!(defs.thing(3001).is_none(), "3001 no longer spawns the Imp");
+        let moved = defs
+            .thing(20_000)
+            .expect("the comment did not close the block");
+        assert_eq!(moved.name, "Evil Imp", "the header name");
         assert_eq!(
-            block.name.as_deref(),
-            Some("Imp Thing"),
-            "the parenthesised name"
+            moved.radius, 10,
+            "the Width after the comment still applies"
         );
-        assert_eq!(block.value("id #"), Some("20000"), "the ID # value");
-        assert_eq!(block.value("width"), Some("655360"), "the Width value");
-        assert_eq!(block.value("bits"), None, "an absent key stays absent");
+        assert!(defs.warnings.is_empty(), "no warnings: {:?}", defs.warnings);
     }
 
     #[test]
-    fn a_non_numeric_thing_header_warns_and_cannot_collect_keys() {
+    fn keys_run_until_the_next_header_or_a_blank_line() {
+        let mut defs = defs();
+        let text = "Thing 12\nID # = 20000\n\nID # = 30001\n";
+        apply(text, Game::Doom2, &mut defs).expect("the table is valid");
+        assert!(
+            defs.thing(20_000).is_some(),
+            "the block's own ID # moved it"
+        );
+        assert!(defs.thing(30_001).is_none(), "the stray key edited nothing");
+        assert_eq!(defs.warnings.len(), 1, "the stray key warns once");
+        assert!(
+            warns(&defs, "outside any block"),
+            "the warning names the stray key: {:?}",
+            defs.warnings
+        );
+    }
+
+    #[test]
+    fn a_non_numeric_thing_header_warns_and_cannot_move_anything() {
+        let mut defs = defs();
         let text = "Thing xx\nID # = 20000\nThing 12\nID # = 20001\n";
-        let (blocks, warnings) = thing_blocks(text);
-        assert_eq!(warnings.len(), 1, "one header warning: {warnings:?}");
-        assert_eq!(blocks.len(), 1, "only the second block survives");
-        assert_eq!(blocks.first().expect("block").number, 12, "its index");
+        apply(text, Game::Doom2, &mut defs).expect("the table is valid");
+        assert_eq!(
+            defs.warnings.len(),
+            2,
+            "both notes arrive: {:?}",
+            defs.warnings
+        );
+        assert!(
+            warns(&defs, "header number"),
+            "the shared parser's own note is kept: {:?}",
+            defs.warnings
+        );
+        assert!(
+            defs.thing(3001).is_none(),
+            "the later block still moves the Imp"
+        );
+        assert!(defs.thing(20_001).is_some(), "to its own number");
+    }
+
+    #[test]
+    fn bex_sections_and_text_blocks_frame_the_thing_edits() {
+        let mut defs = defs();
+        let text = "Patch File for DeHackEd v3.0\nDoom version = 21\nPatch format = 6\n\n\
+                    Thing 12\nID # = 20000\n\n[STRINGS]\nHUDSTR_X = HELLO\n\nText 6 13\n\
+                    Troop\nBaron of Hell\n\nMisc\nID # = 9\n";
+        apply(text, Game::Doom2, &mut defs).expect("the table is valid");
+        assert!(defs.thing(20_000).is_some(), "the Thing block edited");
+        assert!(defs.thing(3001).is_none(), "and the old number is freed");
+        assert!(
+            defs.warnings.is_empty(),
+            "a well-formed BEX patch warns about nothing: {:?}",
+            defs.warnings
+        );
+    }
+
+    #[test]
+    fn a_text_block_body_never_opens_thing_blocks() {
+        let mut defs = defs();
+        let text = "Text 9 9\nThing 13\nID # = 7\n\nMisc\nID # = 8\n";
+        apply(text, Game::Doom2, &mut defs).expect("the table is valid");
+        assert_eq!(
+            defs.thing(7).expect("type 7").name,
+            "Spider Mastermind",
+            "the body's Thing line changed nothing"
+        );
+        assert!(
+            defs.warnings.is_empty(),
+            "the body stays opaque: {:?}",
+            defs.warnings
+        );
     }
 
     #[test]
@@ -457,7 +460,7 @@ mod tests {
         let mut defs = defs();
         apply("Thing 12\nID # = 20000\n", Game::Doom2, &mut defs).expect("the table is valid");
         assert!(defs.thing(3001).is_none(), "3001 no longer spawns the Imp");
-        let moved = defs.thing(20000).expect("20000 is the Imp now");
+        let moved = defs.thing(20_000).expect("20000 is the Imp now");
         assert_eq!(moved.name, "Imp", "the built-in name carries over");
         assert_eq!(moved.sprite, "TROO", "the built-in sprite carries over");
         assert_eq!(moved.radius, 20, "the built-in radius carries over");
@@ -470,7 +473,7 @@ mod tests {
         let mut defs = defs();
         let text = "Thing 12 (Evil Imp)\nID # = 20000\nWidth = 655360\n";
         apply(text, Game::Doom2, &mut defs).expect("the table is valid");
-        let moved = defs.thing(20000).expect("20000 exists");
+        let moved = defs.thing(20_000).expect("20000 exists");
         assert_eq!(moved.name, "Evil Imp", "the header name wins");
         assert_eq!(moved.radius, 10, "655360 fixed units are 10 map units");
     }
@@ -496,7 +499,7 @@ mod tests {
         let mut defs = defs();
         let text = "Thing 1 (Player Sprite)\nID # = 20001\nWidth = 1310720\n";
         apply(text, Game::Doom2, &mut defs).expect("the table is valid");
-        let made = defs.thing(20001).expect("the number is placed");
+        let made = defs.thing(20_001).expect("the number is placed");
         assert_eq!(made.name, "Player Sprite", "the header name");
         assert_eq!(made.sprite, "", "nothing to copy the sprite from");
         assert_eq!(made.radius, 20, "the Width still applies");
@@ -510,7 +513,7 @@ mod tests {
     fn a_moved_number_without_any_definition_or_name_warns() {
         let mut defs = defs();
         apply("Thing 1\nID # = 20001\n", Game::Doom2, &mut defs).expect("the table is valid");
-        assert!(defs.thing(20001).is_none(), "nothing can be copied");
+        assert!(defs.thing(20_001).is_none(), "nothing can be copied");
         assert_eq!(defs.warnings.len(), 1, "one warning: {:?}", defs.warnings);
     }
 

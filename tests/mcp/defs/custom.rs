@@ -1,6 +1,7 @@
 //! The session custom definitions as an MCP client sees them: the DEHACKED
-//! patch moving the Imp to its header name and fixed `Width`, the DECORATE
-//! actors joining the table with their inheritance and the MAPINFO `DoomEdNums`
+//! patch — comment lines inside its `Thing` block and all — moving the Imp
+//! to its header name and fixed `Width`, the DECORATE actors joining the
+//! table with their inheritance and the MAPINFO `DoomEdNums`
 //! mapping with its unknown-class warning, `ZScript` classes arriving through
 //! includes and `ZMapInfo`, `include_custom: false` hiding every custom row and
 //! the extra rows shifting the filtered counts.

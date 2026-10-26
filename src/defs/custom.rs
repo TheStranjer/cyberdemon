@@ -5,13 +5,18 @@
 //! and applies, in precedence order (built-in < DEHACKED < DECORATE/`ZScript`,
 //! with MAPINFO `DoomEdNums` completing the `ZScript` side):
 //!
-//! - [`crate::defs::dehacked`]: every `Thing <n>` block moves or edits the
-//!   built-in row of its mobj;
+//! - [`crate::defs::dehacked`]: every `Thing <n>` block of a patch, read
+//!   through the shared `crate::defs::dehacked_edit::parse`, moves or
+//!   edits the built-in row of its mobj;
 //! - [`crate::defs::decorate`] and [`crate::defs::zscript`]: actors with a
-//!   doomednum become things; classes resolve their parent's sprite and
-//!   radius, else default to an empty sprite and radius 20;
+//!   doomednum become things; every class is collected first and parents
+//!   resolved after the last text, so a parent may stand before or after
+//!   its child, and a stock parent names a built-in row whose sprite,
+//!   frame and radius pass down; with nothing to inherit from, a class
+//!   defaults to an empty sprite and radius 20;
 //! - [`crate::defs::mapinfo`]: every `DoomEdNums` number becomes (or is
-//!   replaced by) a thing named after its class.
+//!   replaced by) a thing named after its class; an entry for a class
+//!   nothing defined places a name-only row labelled `mapinfo`.
 //!
 //! Every parser is tolerant: unparseable text produces warnings on the
 //! result, never an error. The only error is the built-in table lookup's
@@ -42,6 +47,14 @@ const SOURCE_DECORATE: &str = "decorate";
 
 /// The [`ThingDef::source`] label of `ZScript` classes.
 const SOURCE_ZSCRIPT: &str = "zscript";
+
+/// The [`ThingDef::source`] label of the name-only row a `DoomEdNums`
+/// entry synthesizes for a class nothing defined.
+const SOURCE_MAPINFO: &str = "mapinfo";
+
+/// The [`ThingDef::source`] label of a built-in row read as a stock
+/// parent; a child still reports the language that defined it.
+const SOURCE_BUILTIN: &str = "builtin";
 
 /// The prefix of warnings about MAPINFO entries.
 const MAPINFO_LABEL: &str = "mapinfo";
@@ -75,12 +88,58 @@ struct ResolvedClass {
     source: &'static str,
 }
 
+/// One parsed class, collected before the inheritance pass.
+#[derive(Clone, Debug)]
+struct Pending {
+    /// The raw parse result.
+    raw: decorate::RawClass,
+    /// `"decorate"` or `"zscript"`, the language that defined it.
+    source: &'static str,
+    /// The category a placed row carries.
+    category: &'static str,
+}
+
+/// The resolved view of one pending class: its own values, else the
+/// parent's, else the defaults.
+fn inherit(pending: &Pending, parent: Option<&ResolvedClass>) -> ResolvedClass {
+    ResolvedClass {
+        name: pending.raw.name.clone(),
+        sprite: pending
+            .raw
+            .sprite
+            .clone()
+            .or_else(|| parent.map(|base| base.sprite.clone()))
+            .unwrap_or_default(),
+        frame: pending
+            .raw
+            .frame
+            .or_else(|| parent.map(|base| base.frame))
+            .unwrap_or(DEFAULT_FRAME),
+        radius: pending
+            .raw
+            .radius
+            .or_else(|| parent.map(|base| base.radius))
+            .unwrap_or(DEFAULT_RADIUS),
+        source: pending.source,
+    }
+}
+
 /// The thing-table editor behind the class and `DoomEdNums` overlays.
+///
+/// Classes are collected first and resolved once the last text was read,
+/// so a parent may stand anywhere in the run — in any DECORATE/`ZScript`
+/// text, before or after its child — or be a stock class named by a
+/// built-in row.
 struct Overlay<'defs> {
     /// The definitions being overlaid (things and warnings).
     defs: &'defs mut Definitions,
     /// The resolved classes, keyed by lowercase class name, last wins.
     classes: BTreeMap<String, ResolvedClass>,
+    /// Every collected class, keyed by lowercase name, last wins.
+    pending: BTreeMap<String, Pending>,
+    /// The collected names, lowercase, one entry per occurrence in text
+    /// order.
+    order: Vec<String>,
     /// The wire label of the game, for synthesized rows.
     game: &'static str,
 }
@@ -91,6 +150,8 @@ impl<'defs> Overlay<'defs> {
         Self {
             defs,
             classes: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            order: Vec::new(),
             game: game_label(game),
         }
     }
@@ -100,34 +161,96 @@ impl<'defs> Overlay<'defs> {
         self.defs.warnings.append(&mut messages);
     }
 
-    /// Registers one parsed class: resolves inheritance, remembers it for
-    /// MAPINFO and places a thing when the header carries a doomednum.
-    fn register(&mut self, raw: decorate::RawClass, source: &'static str, category: &str) {
-        let parent = raw
-            .parent
-            .as_deref()
-            .and_then(|name| self.classes.get(&name.to_lowercase()))
-            .cloned();
-        let class = ResolvedClass {
-            sprite: raw
-                .sprite
-                .or_else(|| parent.as_ref().map(|base| base.sprite.clone()))
-                .unwrap_or_default(),
-            frame: raw
-                .frame
-                .or_else(|| parent.as_ref().map(|base| base.frame))
-                .unwrap_or(DEFAULT_FRAME),
-            radius: raw
-                .radius
-                .or_else(|| parent.as_ref().map(|base| base.radius))
-                .unwrap_or(DEFAULT_RADIUS),
-            name: raw.name.clone(),
-            source,
+    /// Collects one parsed class for [`Overlay::finish`]'s resolution pass,
+    /// remembering its language and category and the order of its
+    /// occurrence.
+    fn collect(&mut self, raw: decorate::RawClass, source: &'static str, category: &'static str) {
+        let key = raw.name.to_lowercase();
+        self.order.push(key.clone());
+        self.pending.insert(
+            key,
+            Pending {
+                raw,
+                source,
+                category,
+            },
+        );
+    }
+
+    /// Resolves every collected class against the whole run and places
+    /// the occurrences whose header carries a doomednum, in text order.
+    fn finish(&mut self) {
+        for key in self.order.clone() {
+            self.place_occurrence(&key);
+        }
+    }
+
+    /// Resolves one collected occurrence and places its row when the
+    /// header carried a doomednum.
+    fn place_occurrence(&mut self, key: &str) {
+        let doomednum = self.pending.get(key).and_then(|entry| entry.raw.doomednum);
+        let category = self
+            .pending
+            .get(key)
+            .map_or(CATEGORY_DECORATE, |entry| entry.category);
+        let Some(class) = self.resolve(key, &mut Vec::new()) else {
+            return;
         };
-        if let Some(kind) = raw.doomednum {
+        if let Some(kind) = doomednum {
             self.place(kind, &class, category);
         }
-        self.classes.insert(raw.name.to_lowercase(), class);
+    }
+
+    /// The resolved class named by the lowercase `key`, memoized once
+    /// found. `visiting` holds the chain being resolved and breaks an
+    /// inheritance cycle at its second visit; `None` answers only for a
+    /// key nothing was collected under.
+    fn resolve(&mut self, key: &str, visiting: &mut Vec<String>) -> Option<ResolvedClass> {
+        if let Some(done) = self.classes.get(key) {
+            return Some(done.clone());
+        }
+        if visiting.iter().any(|seen| seen == key) {
+            return None;
+        }
+        let pending = self.pending.get(key)?.clone();
+        visiting.push(key.to_owned());
+        let parent = self.parent_class(pending.raw.parent.as_deref(), visiting);
+        visiting.pop();
+        let class = inherit(&pending, parent.as_ref());
+        self.classes.insert(key.to_owned(), class.clone());
+        Some(class)
+    }
+
+    /// The values a named parent supplies: another collected class,
+    /// resolved wherever it stands, else the built-in row whose name is
+    /// the parent's, else nothing.
+    fn parent_class(
+        &mut self,
+        parent: Option<&str>,
+        visiting: &mut Vec<String>,
+    ) -> Option<ResolvedClass> {
+        let name = parent?;
+        let lower = name.to_lowercase();
+        if self.pending.contains_key(&lower) {
+            return self.resolve(&lower, visiting);
+        }
+        self.builtin_parent(&lower)
+    }
+
+    /// The built-in row named `name` (case-insensitively), read for the
+    /// sprite, frame and radius a stock class would pass down.
+    fn builtin_parent(&self, name: &str) -> Option<ResolvedClass> {
+        self.defs
+            .things
+            .iter()
+            .find(|row| row.name.eq_ignore_ascii_case(name))
+            .map(|row| ResolvedClass {
+                name: row.name.clone(),
+                sprite: row.sprite.clone(),
+                frame: row.frame,
+                radius: row.radius,
+                source: SOURCE_BUILTIN,
+            })
     }
 
     /// The thing a `DoomEdNums` entry maps `number` to: the class's sprite
@@ -148,7 +271,7 @@ impl<'defs> Overlay<'defs> {
                     sprite: String::new(),
                     frame: DEFAULT_FRAME,
                     radius: DEFAULT_RADIUS,
-                    source: SOURCE_DECORATE,
+                    source: SOURCE_MAPINFO,
                 }
             });
         self.place(entry.number, &class, CATEGORY_MAPINFO);
@@ -195,16 +318,17 @@ pub fn session_definitions(game: Game, texts: &CustomSources) -> Result<Definiti
         let (classes, messages) = decorate::parse_decorate(text);
         overlay.warn(messages);
         for class in classes {
-            overlay.register(class, SOURCE_DECORATE, CATEGORY_DECORATE);
+            overlay.collect(class, SOURCE_DECORATE, CATEGORY_DECORATE);
         }
     }
     for text in &texts.zscript {
         let (classes, messages) = zscript::parse(text);
         overlay.warn(messages);
         for class in classes {
-            overlay.register(class, SOURCE_ZSCRIPT, CATEGORY_DECORATE);
+            overlay.collect(class, SOURCE_ZSCRIPT, CATEGORY_DECORATE);
         }
     }
+    overlay.finish();
     for text in &texts.mapinfo {
         let (entries, messages) = mapinfo::doom_ed_nums(text);
         overlay.warn(messages);
@@ -282,6 +406,74 @@ mod tests {
     }
 
     #[test]
+    fn a_parent_defined_later_still_provides_its_values() {
+        let texts = CustomSources {
+            decorate: vec![
+                "actor Descendant : Ancestor 20031 { }".to_owned(),
+                "actor Ancestor { radius 44 states { spawn: TONK E 1 } }".to_owned(),
+            ],
+            ..CustomSources::default()
+        };
+        let defs = overlaid(&texts);
+        let child = defs
+            .thing(20_031)
+            .expect("the forward reference is a thing");
+        assert_eq!(child.sprite, "TONK", "the later parent's sprite");
+        assert_eq!(child.frame, 'E', "and its frame");
+        assert_eq!(child.radius, 44, "and its radius");
+    }
+
+    #[test]
+    fn a_stock_parent_supplies_the_built_in_row_s_values() {
+        let texts = CustomSources {
+            decorate: vec!["actor CacoEcho : Cacodemon 20030 { }".to_owned()],
+            ..CustomSources::default()
+        };
+        let defs = overlaid(&texts);
+        let echo = defs.thing(20_030).expect("the actor is a thing");
+        assert_eq!(echo.sprite, "HEAD", "the built-in Cacodemon sprite");
+        assert_eq!(echo.frame, 'A', "its frame");
+        assert_eq!(echo.radius, 32, "and its radius");
+        assert_eq!(echo.source, "decorate", "the child keeps its own language");
+    }
+
+    #[test]
+    fn parents_cross_the_language_and_order_boundaries() {
+        let texts = CustomSources {
+            decorate: vec![
+                "actor Fancy : Echo 20033 { }".to_owned(),
+                "actor Base { radius 22 states { spawn: TONK B 1 } }".to_owned(),
+                "actor Derived : Base { }".to_owned(),
+            ],
+            zscript: vec!["class Echo : Derived { Default { Speed 5; } }".to_owned()],
+            ..CustomSources::default()
+        };
+        let defs = overlaid(&texts);
+        let fancy = defs.thing(20_033).expect("the actor is a thing");
+        assert_eq!(
+            fancy.sprite, "TONK",
+            "a DECORATE parent may name a ZScript class"
+        );
+        assert_eq!(fancy.frame, 'B', "inherited down the whole chain");
+        assert_eq!(fancy.radius, 22, "across the text boundary");
+        assert_eq!(fancy.source, "decorate", "the child keeps its own language");
+    }
+
+    #[test]
+    fn an_inheritance_cycle_breaks_at_its_second_visit() {
+        let texts = CustomSources {
+            decorate: vec![
+                "actor LoopA : LoopB 20033 { } actor LoopB : LoopA { radius 9 }".to_owned(),
+            ],
+            ..CustomSources::default()
+        };
+        let defs = overlaid(&texts);
+        let looped = defs.thing(20_033).expect("the cyclic actor is placed");
+        assert_eq!(looped.radius, 9, "the chain still carried what resolved");
+        assert_eq!(looped.sprite, "", "the loop itself supplies nothing");
+    }
+
+    #[test]
     fn unknown_parents_default_to_the_ticket_values() {
         let texts = CustomSources {
             decorate: vec!["actor Orphan : Nowhere 20021 { }".to_owned()],
@@ -317,6 +509,7 @@ mod tests {
             .expect("the unknown class is placed anyway");
         assert_eq!(missing.name, "Missing", "name only");
         assert_eq!(missing.sprite, "", "nothing else is known");
+        assert_eq!(missing.source, "mapinfo", "the row names its own stream");
         assert!(
             defs.warnings
                 .iter()

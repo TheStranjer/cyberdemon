@@ -61,7 +61,8 @@ reports `internal`.
 
   `count` is the number of things after filtering and `things` is sorted
   by `type` ascending. `source` is `"builtin"`, `"dehacked"`,
-  `"decorate"` or `"zscript"`. `warnings` explains a fallback game and
+  `"decorate"`, `"zscript"` or `"mapinfo"`. `warnings` explains a fallback
+  game and
   quotes every custom-definition line the parsers refused to read; it is
   empty for a DOOM, DOOM II, Heretic or Hexen session without custom
   lumps.
@@ -77,9 +78,12 @@ built-in table, in this precedence: **built-in < DEHACKED < DECORATE /
 ZScript (+ MAPINFO)**. Load the archives first (`open_iwad`,
 `merge_wad`) for them to count; nothing is read from disk.
 
-- Every `DEHACKED` lump: `Thing <n>` blocks (1-based Doom II mobj index)
+- Every `DEHACKED` lump: `Thing <n>` blocks (1-based Doom II mobj index),
+  read through the same parser as `get_dehacked` (`reference/scripts.md`),
   use `ID #` (new doomednum, `-1` removes the thing from the editor) and
-  `Width` (radius in 16.16 fixed units). The moved row keeps the
+  `Width` (radius in 16.16 fixed units). `#` comment lines are skipped and
+  other block kinds (including `Text` bodies) bound the Thing blocks, so
+  the two readers always see the same blocks. The moved row keeps the
   built-in name, sprite, frame and category unless the header names one,
   and reports `source: "dehacked"`, category `Custom (DeHackEd)` when
   there was no built-in row to copy.
@@ -87,8 +91,10 @@ ZScript (+ MAPINFO)**. Load the archives first (`open_iwad`,
   [doomednum] { ... }` — actors with a doomednum become things (category
   `Custom (DECORATE)`, `source: "decorate"`); the sprite and frame come
   from the first state line after `Spawn:` in the `States` block, the
-  radius from `Radius <n>`; missing values inherit from a parent that was
-  parsed earlier, else sprite stays empty and radius is 20.
+  radius from `Radius <n>`; missing values inherit from the parent class
+  wherever it stands (any DECORATE/`ZScript` text, before or after the
+  child, or a built-in thing named by class name), else sprite stays empty
+  and radius is 20.
 - Every `ZSCRIPT` lump: `class Name : Parent { Default { Radius <n>; }
   States { Spawn: SPRT A ...; } }` — classes carry no doomednum of their
   own and become things only through MAPINFO.
@@ -98,7 +104,8 @@ ZScript (+ MAPINFO)**. Load the archives first (`open_iwad`,
 - Every `MAPINFO`/`ZMAPINFO` lump: `DoomEdNums { <number> = <ClassName>
   ... }` maps numbers to the parsed DECORATE/ZScript classes (category
   `Custom (MAPINFO)`, `source` naming the class's language). An entry
-  whose class was never parsed yields a name-only row and a warning.
+  whose class was never parsed yields a name-only row with
+  `source: "mapinfo"` and a warning.
 
 The parsers are deliberately subsets and always tolerant: unparseable
 text becomes a warning in `warnings`, never an error. Limits: DEHACKED

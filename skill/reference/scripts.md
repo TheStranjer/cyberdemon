@@ -18,8 +18,10 @@ editors run one tagged text operation over a whole lump. All of them feed
   `Pointer`, `Sound`, `Ammo`, `Weapon`, `Misc` (number optional), `Cheat`,
   `Sprite`, and `Text <len1> <len2>`; keys run until a blank line or the
   next header. A `Text` block stores its first length as `number` and its
-  second as `name`; its raw body lines are opaque (not parsed, not listed —
-  read them with `include_text`).
+  second as `name`; its raw body spans the next `len1 + len2` bytes of the
+  text, the exact newline bytes included (so CRLF and non-ASCII bodies
+  end exactly where the header says). The body lines are opaque (not
+  parsed, not listed — read them with `include_text`).
 - BEX sections `[CODEPTR]`, `[STRINGS]`, `[PARS]`, `[SPRITES]`, `[SOUNDS]`,
   `[MUSIC]`, `[HELPER]`; entries run until the next section or block
   header, so blank lines never cut a section.

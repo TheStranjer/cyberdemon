@@ -2,11 +2,12 @@
 //! parent declares, one line at a time.
 //!
 //! `Reading` carries the region a header line opened, the `Block` or
-//! `Section` being filled and the body characters an unfinished `Text`
-//! block still swallows. The helpers here split a header line into its kind
-//! word, number and parenthesised name, and a `Text` header into its two
-//! lengths. Every line the shapes cannot hold becomes a `Patch::warnings`
-//! entry, so `parse` never fails.
+//! `Section` being filled and the body bytes an unfinished `Text` block
+//! still swallows: DeHackEd lengths count the original text's BYTES, the
+//! exact newline bytes included. The helpers here split a header line into
+//! its kind word, number and parenthesised name, and a `Text` header into
+//! its two lengths. Every line the shapes cannot hold becomes a
+//! `Patch::warnings` entry, so `parse` never fails.
 
 use super::{
     Block, Field, KEY_DOOM_VERSION, KEY_PATCH_FORMAT, KIND_TEXT, KINDS, Opened, Patch, SECTIONS,
@@ -20,7 +21,8 @@ struct Reading {
     patch: Patch,
     /// The region collecting the current lines.
     open: Option<Opened>,
-    /// Body characters still to swallow for the open `Text` block.
+    /// Body bytes still to swallow for the open `Text` block, newline
+    /// bytes included.
     pending: usize,
 }
 
@@ -29,12 +31,13 @@ struct Reading {
 pub(crate) fn parse(text: &str) -> Patch {
     let mut reading = Reading::default();
     let mut total = 0_usize;
-    for (index, line) in text.lines().enumerate() {
+    for (index, chunk) in text.split_inclusive('\n').enumerate() {
         total = index.saturating_add(1);
         if reading.pending > 0 {
-            reading.swallow(index, line);
+            reading.swallow(index, chunk);
             continue;
         }
+        let line = chunk.strip_suffix('\n').unwrap_or(chunk);
         reading.line(index, line);
     }
     reading.finish(total);
@@ -60,11 +63,11 @@ impl Reading {
         self.header_line(index, trimmed);
     }
 
-    /// Swallows one opaque `Text` body line, closing the block when the
-    /// declared lengths are consumed.
-    fn swallow(&mut self, index: usize, line: &str) {
-        let eaten = line.chars().count().saturating_add(1_usize);
-        self.pending = self.pending.saturating_sub(eaten);
+    /// Swallows one opaque `Text` body line: its bytes with the exact
+    /// newline bytes that end it, closing the block when the declared
+    /// lengths are consumed.
+    fn swallow(&mut self, index: usize, chunk: &str) {
+        self.pending = self.pending.saturating_sub(chunk.len());
         if self.pending == 0_usize {
             self.close_current(index.saturating_add(1));
         }
@@ -238,7 +241,7 @@ pub(super) fn section_name(trimmed: &str) -> Option<&'static str> {
         .copied()
 }
 
-/// The header parts of a block: number, name and the body characters a
+/// The header parts of a block: number, name and the body bytes a
 /// `Text` header declares (0 for every other kind).
 fn parts_of(
     kind: &str,

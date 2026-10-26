@@ -174,7 +174,7 @@ pub(super) fn text_edit_run(
     let label = format!("{} {name}", tool.name);
     let body = outcome.text.clone();
     session.edit(&label, |wad| {
-        write_lump(wad, name, at, &body);
+        write_lump(wad, name, at, body.as_bytes());
         Ok(())
     })?;
     Ok(TextReport {

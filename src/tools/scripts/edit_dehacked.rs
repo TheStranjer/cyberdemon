@@ -2,14 +2,17 @@
 //! line, committed as exactly one undoable edit.
 //!
 //! [`plan`] parses the arguments into a [`Draft`] outside any lock,
-//! [`resolve`] finishes it (the `source` mode's fetch), and [`edit_run`]
+//! [`resolve`] finishes it (the `source` mode's fetch, read with
+//! [`super::decode_patch`] so every fetched byte survives), and [`edit_run`]
 //! computes the new text - [`apply_ops`] over [`current_text`] for the line
-//! modes, [`changed_against`] for a wholesale one - and commits it through
-//! one [`crate::session::Session::edit`] labelled [`super::UNDO_LABEL`],
-//! in place when the working archive already holds the lump and as an
-//! appended override otherwise ([`write_lump`], which the two script tools
-//! reuse). The read half lives in [`mod@super::get_dehacked`] and the
-//! router in [`super`].
+//! modes, the given text wholesale for the others - counts the change with
+//! the minimal line diff [`super::line_diff`] and commits the
+//! [`super::encode_patch`]ed bytes through one
+//! [`crate::session::Session::edit`] labelled [`super::UNDO_LABEL`], in
+//! place when the working archive already holds the lump and as an appended
+//! override otherwise ([`write_lump`], which the two script tools reuse).
+//! The read half lives in [`mod@super::get_dehacked`] and the router in
+//! [`super`].
 
 use alloc::sync::Arc;
 
@@ -23,7 +26,8 @@ use crate::state::AppState;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::name::LumpName;
 
-use super::UNDO_LABEL;
+use super::line_diff::line_diff;
+use super::{UNDO_LABEL, decode_patch, encode_patch};
 
 /// Arguments for [`Cyberdemon::edit_dehacked`]: exactly one of the four
 /// modes, named by the field that is present.
@@ -33,12 +37,14 @@ pub(super) struct EditDehackedParams {
     /// case-insensitively. Defaults to `"DEHACKED"`.
     #[serde(default)]
     pub(super) name: Option<String>,
-    /// Replace the whole lump text with this. Exactly one mode.
+    /// Replace the whole lump text with this, stored byte-preserving
+    /// (`Latin-1` one-byte characters, wider ones as `UTF-8`). Exactly one
+    /// mode.
     #[serde(default)]
     pub(super) text: Option<String>,
     /// A `.deh`/`.bex` file (absolute path, `file://` URI, `http(s)://`
-    /// URL or uploaded asset URL) whose bytes replace the lump text.
-    /// Exactly one mode.
+    /// URL or uploaded asset URL) whose bytes replace the lump text
+    /// verbatim. Exactly one mode.
     #[serde(default)]
     pub(super) source: Option<String>,
     /// Line updates to apply in order. Exactly one mode.
@@ -58,7 +64,8 @@ pub(super) struct SetEntry {
     /// The key to update or insert (case-insensitive match; the written
     /// line uses this spelling).
     pub(super) key: String,
-    /// The new value; must not contain newlines.
+    /// The new value; must not contain newlines. A character up to
+    /// `U+00FF` is stored as its one `Latin-1` byte.
     pub(super) value: String,
 }
 
@@ -80,8 +87,13 @@ pub(super) struct EditReport {
     pub(super) name: LumpName,
     /// Total lines of the resulting text.
     pub(super) lines: usize,
-    /// Lines rewritten, inserted or removed by this call.
-    pub(super) changed_lines: usize,
+    /// Lines the resulting text gained, from the minimal line diff against
+    /// the old text.
+    pub(super) added: usize,
+    /// Lines the resulting text lost, from the same diff.
+    pub(super) removed: usize,
+    /// Lines the same diff pairs off as rewritten in place.
+    pub(super) changed: usize,
     /// Whether the lump was created in the working archive (it was absent,
     /// or held only by a read-only layer that was copied-on-write).
     pub(super) created: bool,
@@ -125,17 +137,19 @@ impl Op {
         matches!(self, Self::Remove { .. })
     }
 
-    /// Runs the operation over a patch text, reporting lines changed.
+    /// Runs the operation over a patch text, answering the new text.
     ///
     /// # Errors
     ///
     /// [`dehacked_edit::set_patch`] and [`dehacked_edit::remove_patch`]
     /// errors pass through.
-    fn apply(&self, text: &str) -> Result<(String, usize), CyberError> {
+    fn apply(&self, text: &str) -> Result<String, CyberError> {
         match self.clone() {
-            Self::Set { block, key, value } => dehacked_edit::set_patch(text, &block, &key, &value),
+            Self::Set { block, key, value } => {
+                dehacked_edit::set_patch(text, &block, &key, &value).map(|(next, _)| next)
+            }
             Self::Remove { block, key } => {
-                dehacked_edit::remove_patch(text, &block, key.as_deref())
+                dehacked_edit::remove_patch(text, &block, key.as_deref()).map(|(next, _)| next)
             }
         }
     }
@@ -235,7 +249,9 @@ fn plan_remove(entries: &[RemoveEntry]) -> Result<Vec<Op>, CyberError> {
     Ok(ops)
 }
 
-/// Finish a draft outside the session lock: fetch the `source` mode's file.
+/// Finish a draft outside the session lock: fetch the `source` mode's file
+/// and read its bytes with the `Latin-1` codec, so a legacy patch keeps
+/// every byte.
 ///
 /// # Errors
 ///
@@ -245,9 +261,7 @@ pub(super) async fn resolve(state: &AppState, draft: Draft) -> Result<Body, Cybe
         Draft::Replace(body) => Ok(Body::Replace(body)),
         Draft::Fetch(raw) => {
             let fetched = state.fetch_source(&raw).await?;
-            Ok(Body::Replace(
-                String::from_utf8_lossy(&fetched.bytes).into_owned(),
-            ))
+            Ok(Body::Replace(decode_patch(&fetched.bytes)))
         }
         Draft::Ops(ops) => Ok(Body::Ops(ops)),
     }
@@ -262,36 +276,19 @@ pub(super) enum Body {
     Ops(Vec<Op>),
 }
 
-/// The text the winning copy of `name` holds, the working one first.
+/// The text the winning copy of `name` holds, the working one first, read
+/// with the `Latin-1` patch codec.
 fn current_text(session: &Session, name: LumpName, at: Option<usize>) -> Option<String> {
     if let Some(index) = at {
         let lump = session.working().lumps.get(index)?;
-        return Some(decode(lump));
+        return Some(decode_patch(&lump.data));
     }
     let entry = session
         .merged()
         .into_iter()
         .rev()
         .find(|found| found.lump.name == name)?;
-    Some(decode(&entry.lump))
-}
-
-/// A lump payload as text, invalid sequences replaced.
-fn decode(lump: &Lump) -> String {
-    String::from_utf8_lossy(&lump.data).into_owned()
-}
-
-/// The lines of `next` that differ from `base` (absent base counts every
-/// line as new).
-pub(super) fn changed_against(base: Option<&str>, next: &str) -> usize {
-    let old: Vec<&str> = base.unwrap_or("").lines().collect();
-    let new: Vec<&str> = next.lines().collect();
-    let common = old.len().min(new.len());
-    let same = old.iter().zip(&new).filter(|pair| pair.0 == pair.1).count();
-    let replaced = common.saturating_sub(same);
-    let dropped = old.len().saturating_sub(common);
-    let added = new.len().saturating_sub(common);
-    replaced.saturating_add(dropped).saturating_add(added)
+    Some(decode_patch(&entry.lump.data))
 }
 
 /// The result text of the operations mode, over the current text or the
@@ -306,7 +303,7 @@ pub(super) fn apply_ops(
     base: Option<&str>,
     ops: &[Op],
     name: LumpName,
-) -> Result<(String, usize), CyberError> {
+) -> Result<String, CyberError> {
     let mut text = match base {
         Some(found) => found.to_owned(),
         None if ops.iter().any(Op::is_remove) => {
@@ -317,21 +314,14 @@ pub(super) fn apply_ops(
         }
         None => dehacked_edit::NEW_PATCH_HEADER.to_owned(),
     };
-    let mut changed = 0_usize;
     for op in ops {
-        let (next, step) = op.apply(&text)?;
-        text = next;
-        changed = changed.saturating_add(step);
+        text = op.apply(&text)?;
     }
-    if base.is_none() {
-        changed = text.lines().count();
-    }
-    Ok((text, changed))
+    Ok(text)
 }
 
-/// Overwrite the working copy at `at`, or append the override.
-pub(super) fn write_lump(wad: &mut Wad, name: LumpName, at: Option<usize>, text: &str) {
-    let data = text.as_bytes();
+/// Overwrite the working copy at `at` with `data`, or append the override.
+pub(super) fn write_lump(wad: &mut Wad, name: LumpName, at: Option<usize>, data: &[u8]) {
     if let Some(index) = at
         && let Some(lump) = wad.lumps.get_mut(index)
     {
@@ -341,8 +331,9 @@ pub(super) fn write_lump(wad: &mut Wad, name: LumpName, at: Option<usize>, text:
     wad.lumps.push(Lump::new(name, data.to_vec()));
 }
 
-/// `edit_dehacked`'s synchronous half: compute the new text, then commit
-/// exactly one undoable write.
+/// `edit_dehacked`'s synchronous half: compute the new text, count the
+/// minimal line diff against the old one, then commit exactly one undoable
+/// write of the `Latin-1`-encoded bytes.
 ///
 /// # Errors
 ///
@@ -355,23 +346,24 @@ pub(super) fn edit_run(
 ) -> Result<EditReport, CyberError> {
     let at = session.working().find_last(name);
     let base = current_text(session, name, at);
-    let (text, changed) = match body {
-        Body::Replace(next) => {
-            let altered = changed_against(base.as_deref(), &next);
-            (next, altered)
-        }
+    let text = match body {
+        Body::Replace(next) => next,
         Body::Ops(ops) => apply_ops(base.as_deref(), &ops, name)?,
     };
+    let diff = line_diff(base.as_deref().unwrap_or_default(), &text);
     let created = at.is_none();
     let lines = text.lines().count();
+    let data = encode_patch(&text);
     session.edit(UNDO_LABEL, |wad| {
-        write_lump(wad, name, at, &text);
+        write_lump(wad, name, at, &data);
         Ok(())
     })?;
     Ok(EditReport {
         name,
         lines,
-        changed_lines: changed,
+        added: diff.added,
+        removed: diff.removed,
+        changed: diff.changed,
         created,
     })
 }

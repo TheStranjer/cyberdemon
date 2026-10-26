@@ -1,7 +1,8 @@
 //! The `scripts` tool group as seen by a real MCP client: `get_dehacked`
 //! reading fixture patches and `edit_dehacked` creating, copying-on-write,
-//! setting, removing and replacing DeHackEd/BEX lump texts, with undo and
-//! the `get_thing_types` round trip; plus `edit_decorate` and `edit_zscript`
+//! setting, removing and replacing DeHackEd/BEX lump texts with undo,
+//! byte-preserving `Latin-1` round trips and the `get_thing_types` round
+//! trip; plus `edit_decorate` and `edit_zscript`
 //! running single tagged text operations over script lumps, again with
 //! creation, copy-on-write, undo and the definitions round trip.
 
@@ -41,6 +42,123 @@ mod tests {
     /// The block header fields (`kind`, `number`, `name`) of a report row.
     fn head(block: &Value) -> Value {
         json!([block["kind"], block["number"], block["name"],])
+    }
+
+    /// The payload as `get_lump format=hex` spells it: space-separated
+    /// uppercase bytes.
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<String>>()
+            .join(" ")
+    }
+
+    /// Write a Latin-1 `.deh` file (byte `0xE9` in a value) into `dir`,
+    /// answering its raw bytes and path.
+    fn latin1_deh(dir: &std::path::Path) -> (Vec<u8>, String) {
+        let raw: Vec<u8> = b"Misc\nname = Caf\xE9\nspeed = 1\n".to_vec();
+        let file = dir.join("cafe.deh");
+        std::fs::write(&file, &raw).expect("write the Latin-1 source file");
+        (raw, file.display().to_string())
+    }
+
+    #[tokio::test]
+    async fn a_source_fetch_stores_latin1_bytes_verbatim() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let (raw, path) = latin1_deh(dir.path());
+        let fetched = call(
+            &client,
+            "edit_dehacked",
+            json!({ "name": "MYDEH", "source": path }),
+        )
+        .await;
+        assert_eq!(
+            fetched["added"],
+            json!(3_i64),
+            "three new lines against nothing"
+        );
+        let stored = call(
+            &client,
+            "get_lump",
+            json!({ "name": "MYDEH", "format": "hex" }),
+        )
+        .await;
+        assert_eq!(
+            stored["hex"],
+            json!(hex_of(&raw)),
+            "the fetched bytes are stored exactly"
+        );
+    }
+
+    #[tokio::test]
+    async fn editing_a_latin1_patch_preserves_every_untouched_byte() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = connect().await;
+        let (_, path) = latin1_deh(dir.path());
+        call(
+            &client,
+            "edit_dehacked",
+            json!({ "name": "MYDEH", "source": path }),
+        )
+        .await;
+        let edited = call(
+            &client,
+            "edit_dehacked",
+            json!({ "name": "MYDEH", "set": [{ "block": "Misc", "key": "speed", "value": "2" }] }),
+        )
+        .await;
+        assert_eq!(edited["changed"], json!(1_i64), "one line rewritten");
+        assert_eq!(edited["added"], json!(0_i64), "nothing inserted");
+        let after = call(
+            &client,
+            "get_lump",
+            json!({ "name": "MYDEH", "format": "hex" }),
+        )
+        .await;
+        assert_eq!(
+            after["hex"],
+            json!(hex_of(b"Misc\nname = Caf\xE9\nspeed = 2\n")),
+            "the 0xE9 byte survived the edit byte for byte"
+        );
+        let read = call(
+            &client,
+            "get_dehacked",
+            json!({ "name": "MYDEH", "include_text": true }),
+        )
+        .await;
+        assert_eq!(
+            read["text"],
+            json!("Misc\nname = Caf\u{E9}\nspeed = 2\n"),
+            "Latin-1 decoding, never a U+FFFD"
+        );
+        assert_eq!(
+            read["blocks"][0]["fields"]["name"],
+            json!("Caf\u{E9}"),
+            "the parsed value round trips"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_single_insertion_reports_one_added_line() {
+        let client = connect().await;
+        call(
+            &client,
+            "edit_dehacked",
+            json!({ "name": "MYDEH", "text": "Misc\nfoo = 1\n" }),
+        )
+        .await;
+        let inserted = call(
+            &client,
+            "edit_dehacked",
+            json!({ "name": "MYDEH", "set": [{ "block": "Misc", "key": "bar", "value": "2" }] }),
+        )
+        .await;
+        assert_eq!(inserted["added"], json!(1_i64), "the one inserted line");
+        assert_eq!(inserted["removed"], json!(0_i64), "nothing dropped");
+        assert_eq!(inserted["changed"], json!(0_i64), "nothing rewritten");
+        assert_eq!(inserted["lines"], json!(3_i64), "the patch grew by one");
     }
 
     #[tokio::test]
@@ -113,10 +231,12 @@ mod tests {
             "a new working override"
         );
         assert_eq!(
-            report["changed_lines"],
+            report["added"],
             json!(3_i64),
-            "blank, header and key added"
+            "blank, header and key inserted"
         );
+        assert_eq!(report["removed"], json!(0_i64), "nothing dropped");
+        assert_eq!(report["changed"], json!(0_i64), "nothing rewritten");
         assert_eq!(report["lines"], json!(4_i64), "the old line plus three");
         let moved = call(&client, "get_thing_types", json!({ "type": 20_000_i64 })).await;
         let row = moved["things"].get(0).expect("one row").clone();
@@ -138,7 +258,9 @@ mod tests {
             !again["created"].as_bool().expect("created"),
             "now edited in place"
         );
-        assert_eq!(again["changed_lines"], json!(1_i64), "one line rewritten");
+        assert_eq!(again["changed"], json!(1_i64), "one line rewritten");
+        assert_eq!(again["added"], json!(0_i64), "nothing inserted");
+        assert_eq!(again["removed"], json!(0_i64), "nothing dropped");
         let working = call(&client, "get_dehacked", json!({ "scope": "working" })).await;
         assert_eq!(
             working["source"]["kind"],
@@ -167,10 +289,8 @@ mod tests {
             report["created"].as_bool().expect("created"),
             "a fresh lump"
         );
-        assert_eq!(
-            report["changed_lines"], report["lines"],
-            "everything is new"
-        );
+        assert_eq!(report["added"], report["lines"], "everything is new");
+        assert_eq!(report["removed"], json!(0_i64), "an absent base drops none");
         let read = call(
             &client,
             "get_dehacked",
@@ -233,7 +353,9 @@ mod tests {
             json!({ "remove": [{ "block": "Thing 12", "key": "id #" }] }),
         )
         .await;
-        assert_eq!(removed["changed_lines"], json!(1_i64), "one line went");
+        assert_eq!(removed["removed"], json!(1_i64), "one line went");
+        assert_eq!(removed["added"], json!(0_i64), "nothing came");
+        assert_eq!(removed["changed"], json!(0_i64), "nothing rewrote");
         let read = call(&client, "get_dehacked", json!({ "scope": "working" })).await;
         let block = read["blocks"].get(1).expect("the Thing 12 block");
         assert_eq!(
@@ -255,10 +377,12 @@ mod tests {
         .await;
         assert_eq!(report["lines"], json!(5_i64), "the new line count");
         assert_eq!(
-            report["changed_lines"],
-            json!(5_i64),
-            "one old line replaced, four added"
+            report["changed"],
+            json!(1_i64),
+            "the old header line pairs with one new line"
         );
+        assert_eq!(report["added"], json!(4_i64), "four true inserts");
+        assert_eq!(report["removed"], json!(0_i64), "nothing dropped");
         let read = call(&client, "get_dehacked", json!({ "include_text": true })).await;
         assert_eq!(
             read["text"],
@@ -284,10 +408,16 @@ mod tests {
         )
         .await;
         assert_eq!(from_file["lines"], json!(2_i64), "two lines");
+        assert_eq!(from_file["changed"], json!(1_i64), "one line rewritten");
         assert_eq!(
-            from_file["changed_lines"],
-            json!(4_i64),
-            "one differs, three dropped"
+            from_file["removed"],
+            json!(3_i64),
+            "three lines dropped from the five"
+        );
+        assert_eq!(
+            from_file["added"],
+            json!(0_i64),
+            "the foo value is a rewrite"
         );
         let after = call(&client, "get_dehacked", json!({ "include_text": true })).await;
         assert_eq!(

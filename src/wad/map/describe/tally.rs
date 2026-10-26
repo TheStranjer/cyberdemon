@@ -17,7 +17,7 @@ use alloc::string::String;
 use alloc::string::ToString as _;
 use alloc::vec::Vec;
 
-use crate::defs::{Definitions, ThingDef};
+use crate::defs::{Category, Definitions, ThingDef};
 use crate::wad::map::consts::{NO_TEXTURE, PLAYER_START_TYPES};
 use crate::wad::map::geometry::{point_in_sector, sector_boundary};
 use crate::wad::map::model::Map;
@@ -73,20 +73,20 @@ fn thing_def(defs: &Definitions, kind: i32) -> Option<&ThingDef> {
         .and_then(|number| defs.thing(number))
 }
 
-/// The things whose definitions stand under one of `categories` (a
-/// category reads as a match when it starts with it), counted by display
-/// name; unknown and absent definitions count under neither tally.
+/// The things whose definitions stand in one of `groups`, counted by
+/// display name; unknown and absent definitions count under neither
+/// tally.
 pub(super) fn category_counts(
     map: &Map,
     defs: &Definitions,
-    categories: &[&str],
+    groups: &[Category],
 ) -> BTreeMap<String, u32> {
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
     for row in &map.things {
         let Some(def) = thing_def(defs, row.kind) else {
             continue;
         };
-        if categories.iter().any(|name| def.category.starts_with(name)) {
+        if groups.contains(&def.group) {
             bump(&mut counts, &def.name);
         }
     }

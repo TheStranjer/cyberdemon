@@ -1,7 +1,8 @@
 //! The `Doom` ↔ ZDoom translation table itself: the embedded
 //! `data/xlat/doom_to_zdoom.tsv`, the [`XlatFlags`] activation words and the
 //! [`XlatRow`] one file line becomes, [`parse_xlat_table`]'s parse of the
-//! five tab-separated columns, and the `LazyLock` accessor trio
+//! five tab-separated columns through the shared [`crate::defs::tsv`]
+//! reader, and the `LazyLock` accessor trio
 //! [`xlat_rows`], [`rows_for_doom`] and [`rows_for_zspecial`] that hand the
 //! parsed rows out. A malformed embedded table is kept as an error string
 //! and reported as [`CyberError::Internal`](crate::error::CyberError::Internal)
@@ -13,9 +14,9 @@
 //! [`linedefs_from_hexen`](super::linedefs_from_hexen) searches the rows of
 //! one action number in reverse.
 
-use core::str::FromStr as _;
 use std::sync::LazyLock;
 
+use crate::defs::tsv::{self, Row};
 use crate::error::CyberError;
 
 /// The number of tab-separated fields one translation row must carry.
@@ -159,12 +160,8 @@ pub struct XlatRow {
 /// first malformed row.
 #[inline]
 pub fn parse_xlat_table(text: &str) -> Result<Vec<XlatRow>, String> {
-    let lines = rows_of(&XLAT_HEADER, text)?;
-    let mut rows: Vec<XlatRow> = Vec::new();
-    for (number, line) in lines {
-        rows.push(parse_xlat_row(line, number)?);
-    }
-    Ok(rows)
+    let table = tsv::Table::parse("xlat table", &XLAT_HEADER, text)?;
+    table.rows().iter().map(parse_xlat_row).collect()
 }
 
 /// The parsed [`DOOM_TO_ZDOOM_TSV`], produced on first use. A parse failure
@@ -181,11 +178,7 @@ static XLAT_DOOM_TO_ZDOOM: LazyLock<Result<Vec<XlatRow>, String>> =
 /// a build bug rather than a client problem.
 #[inline]
 pub fn xlat_rows() -> Result<&'static [XlatRow], CyberError> {
-    XLAT_DOOM_TO_ZDOOM.as_deref().map_err(|reason| {
-        CyberError::Internal(format!(
-            "embedded Doom-to-ZDoom xlat table is malformed (this is a server bug): {reason}"
-        ))
-    })
+    tsv::embedded(&XLAT_DOOM_TO_ZDOOM, "Doom-to-ZDoom xlat").map(Vec::as_slice)
 }
 
 /// The embedded rows translating the vanilla special `special`, in file
@@ -216,84 +209,23 @@ pub fn rows_for_zspecial(zspecial: i32) -> Result<Vec<&'static XlatRow>, CyberEr
         .collect())
 }
 
-/// The row iterator of the table: `header` the expected columns, `text`
-/// the file contents. The iterator yields each non-blank row's 1-based
-/// file line number and text; the header itself is checked here.
-///
-/// # Errors
-///
-/// A `String` naming the missing or wrong header line.
-fn rows_of<'text>(
-    header: &[&str],
-    text: &'text str,
-) -> Result<impl Iterator<Item = (usize, &'text str)>, String> {
-    let mut lines = text.lines();
-    let Some(first) = lines.next() else {
-        return Err("xlat table is empty: no header line".to_owned());
-    };
-    check_header(first, header)?;
-    // The header is line 1, so the `enumerate` index plus two is the file's
-    // one-based line number of the row being parsed.
-    Ok(lines
-        .enumerate()
-        .filter(|&(_, line)| !line.is_empty())
-        .map(|(offset, line)| (offset.saturating_add(2), line)))
-}
-
-/// Check the header names exactly `expected`, tab-separated.
-///
-/// # Errors
-///
-/// A `String` showing both the found and the expected header.
-fn check_header(line: &str, expected: &[&str]) -> Result<(), String> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    if fields.as_slice() != expected {
-        let wanted = expected.join("\t");
-        return Err(format!(
-            "bad xlat table header {line:?}: expected {wanted:?}"
-        ));
-    }
-    Ok(())
-}
-
-/// Parse one tab-separated [`XlatRow`], `number` its 1-based file line for
-/// error text.
+/// Parse one tab-separated [`XlatRow`].
 ///
 /// # Errors
 ///
 /// A `String` naming the line and the first field that failed to parse.
-fn parse_xlat_row(line: &str, number: usize) -> Result<XlatRow, String> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    let Ok([doom, activation, zspecial, name, args]) = <[&str; XLAT_FIELDS]>::try_from(fields)
-    else {
-        return Err(format!(
-            "xlat table line {number}: expected {XLAT_FIELDS} tab-separated fields, found \
-             {line:?}"
-        ));
-    };
-    let flags = XlatFlags::parse(activation)
-        .map_err(|reason| format!("xlat table line {number}: {reason}"))?;
-    let (values, arg_count, tag_slot) = parse_args(args, number)?;
+fn parse_xlat_row(row: &Row<'_>) -> Result<XlatRow, String> {
+    let [doom, activation, zspecial, name, args] = row.columns::<XLAT_FIELDS>()?;
+    let flags = XlatFlags::parse(activation).map_err(|reason| row.fail(reason.as_str()))?;
+    let (values, arg_count, tag_slot) = parse_args(row, args)?;
     Ok(XlatRow {
-        doom: parse_number("doom", doom, number)?,
+        doom: row.i32("doom", doom)?,
         activation: flags,
-        zspecial: parse_number("zspecial", zspecial, number)?,
+        zspecial: row.i32("zspecial", zspecial)?,
         name: name.to_owned(),
         args: values,
         arg_count,
         tag_slot,
-    })
-}
-
-/// Parse a decimal column into its number; `column` names the field in
-/// error text.
-///
-/// # Errors
-///
-/// A `String` naming the line and column.
-fn parse_number(column: &str, text: &str, number: usize) -> Result<i32, String> {
-    i32::from_str(text).map_err(|error| {
-        format!("xlat table line {number}: column {column:?} is {text:?}: {error}")
     })
 }
 
@@ -305,29 +237,28 @@ fn parse_number(column: &str, text: &str, number: usize) -> Result<i32, String> 
 /// # Errors
 ///
 /// A `String` naming the line and the offending column.
-fn parse_args(text: &str, number: usize) -> Result<ArgsTemplate, String> {
+fn parse_args(row: &Row<'_>, text: &str) -> Result<ArgsTemplate, String> {
     let mut values: Vec<i32> = Vec::new();
     let mut tag_slot: Option<usize> = None;
     for entry in text.split(ARG_SEP) {
         if values.len() >= MAX_ARGS {
-            return Err(format!(
-                "xlat table line {number}: args column {text:?} carries more than {MAX_ARGS} \
-                 entries"
-            ));
+            return Err(row.fail(&format!(
+                "args column {text:?} carries more than {MAX_ARGS} entries"
+            )));
         }
         if entry == TAG_WORD {
-            claim_tag(&mut tag_slot, values.len(), number, text)?;
+            claim_tag(row, &mut tag_slot, values.len(), text)?;
             values.push(0_i32);
         } else {
-            values.push(parse_arg_value(entry, number)?);
+            values.push(parse_arg_value(row, entry)?);
         }
     }
     let arg_count = values.len();
     values.resize(MAX_ARGS, 0_i32);
     let Ok(args) = <[i32; MAX_ARGS]>::try_from(values) else {
-        return Err(format!(
-            "xlat table line {number}: args column {text:?} cannot fill {MAX_ARGS} slots"
-        ));
+        return Err(row.fail(&format!(
+            "args column {text:?} cannot fill {MAX_ARGS} slots"
+        )));
     };
     Ok((args, arg_count, tag_slot))
 }
@@ -340,16 +271,15 @@ fn parse_args(text: &str, number: usize) -> Result<ArgsTemplate, String> {
 /// A `String` naming the line and column when a `tag` slot was claimed
 /// before.
 fn claim_tag(
+    row: &Row<'_>,
     slot: &mut Option<usize>,
     index: usize,
-    number: usize,
     text: &str,
 ) -> Result<(), String> {
     if slot.replace(index).is_some() {
-        return Err(format!(
-            "xlat table line {number}: args column {text:?} carries more than one {TAG_WORD:?} \
-             entry"
-        ));
+        return Err(row.fail(&format!(
+            "args column {text:?} carries more than one {TAG_WORD:?} entry"
+        )));
     }
     Ok(())
 }
@@ -360,14 +290,12 @@ fn claim_tag(
 /// # Errors
 ///
 /// A `String` naming the line and the entry.
-fn parse_arg_value(text: &str, number: usize) -> Result<i32, String> {
+fn parse_arg_value(row: &Row<'_>, text: &str) -> Result<i32, String> {
     let whole = text.parse::<u32>().map_err(|error| {
-        format!(
-            "xlat table line {number}: args entry {text:?} is neither {TAG_WORD:?} nor a \
-             non-negative decimal: {error}"
-        )
+        row.fail(&format!(
+            "args entry {text:?} is neither {TAG_WORD:?} nor a non-negative decimal: {error}"
+        ))
     })?;
-    i32::try_from(whole).map_err(|error| {
-        format!("xlat table line {number}: args entry {text:?} is too large: {error}")
-    })
+    i32::try_from(whole)
+        .map_err(|error| row.fail(&format!("args entry {text:?} is too large: {error}")))
 }

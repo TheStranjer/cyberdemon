@@ -3,7 +3,9 @@
 //! [`definitions_for`] answers one question for a [`Game`]: what can an
 //! editor offer for it? The DOOM / DOOM II, the Heretic and the Hexen thing,
 //! linedef-special and sector-type tables are embedded in the binary with
-//! `include_str!` and parsed once on first use behind a `LazyLock`; Doom
+//! `include_str!`, parsed once on first use behind a `LazyLock` through the
+//! shared [`crate::defs::tsv`] reader, and assembled into a [`Definitions`]
+//! whose lookups run through indexes built once at assembly. Doom
 //! thing and special selection follows the `game` column, which names the
 //! first game that has each entry, while the Doom sector table covers both
 //! DOOM games. The Heretic and Hexen tables carry only their own rows; the
@@ -13,9 +15,12 @@
 
 use std::sync::LazyLock;
 
+use alloc::collections::BTreeMap;
+
 use crate::defs::table::{
     SectorTypeDef, SpecialDef, ThingDef, parse_sector_table, parse_special_table, parse_thing_table,
 };
+use crate::defs::tsv::embedded;
 use crate::error::CyberError;
 use crate::wad::game::Game;
 
@@ -108,28 +113,90 @@ static HEXEN_SECTORS: LazyLock<Result<Vec<SectorTypeDef>, String>> =
     LazyLock::new(|| parse_sector_table(HEXEN_SECTORS_TSV));
 
 /// Everything the server knows about one game's editing definitions.
+///
+/// The three tables answer by number, and by name for things, through
+/// private index maps built once when the value is assembled; the overlay
+/// mutators `put_thing`, `remove_thing` and `reindex_things` keep those
+/// indexes true, so a [`Definitions::thing`], [`Definitions::thing_by_name`],
+/// [`Definitions::special`] or [`Definitions::sector_type`] lookup is a map
+/// read wherever it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Definitions {
     /// The game these definitions were selected for.
-    pub game: Game,
+    pub(crate) game: Game,
     /// The thing types the game offers, sorted by type number.
-    pub things: Vec<ThingDef>,
+    pub(crate) things: Vec<ThingDef>,
     /// The special-table linedef actions the game offers, sorted by
     /// special number. Generalized values are not rows; see
     /// [`crate::defs::boom`].
-    pub specials: Vec<SpecialDef>,
+    pub(crate) specials: Vec<SpecialDef>,
     /// The sector types the game offers, sorted by type number.
-    pub sector_types: Vec<SectorTypeDef>,
+    pub(crate) sector_types: Vec<SectorTypeDef>,
     /// Non-fatal notes: fallback games taken.
-    pub warnings: Vec<String>,
+    pub(crate) warnings: Vec<String>,
+    /// Thing type number to its row's index; the first row of a number wins.
+    things_by_kind: BTreeMap<u32, usize>,
+    /// Lowercased thing name to its row's index; the first row of a name wins.
+    things_by_name: BTreeMap<String, usize>,
+    /// Special number to its row's index; the first row of a number wins.
+    specials_by_number: BTreeMap<u32, usize>,
+    /// Sector type value to its row's index; the first row of a number wins.
+    sector_types_by_number: BTreeMap<u32, usize>,
+}
+
+/// The three tables and the notes one [`Definitions`] value is assembled
+/// from, in the shape [`Definitions::new`] takes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DefinitionTables {
+    /// The thing rows.
+    pub(crate) things: Vec<ThingDef>,
+    /// The special rows.
+    pub(crate) specials: Vec<SpecialDef>,
+    /// The sector-type rows.
+    pub(crate) sector_types: Vec<SectorTypeDef>,
+    /// The non-fatal notes to carry.
+    pub(crate) warnings: Vec<String>,
 }
 
 impl Definitions {
+    /// The definitions for `game` over `tables`: the rows stand as given
+    /// (the builders hand them sorted by number), with the lookup indexes
+    /// built once over them. A number or name carried twice keeps its
+    /// first row, exactly as a linear first-match lookup did.
+    #[must_use]
+    pub(crate) fn new(game: Game, tables: DefinitionTables) -> Self {
+        let mut defs = Self {
+            game,
+            things: tables.things,
+            specials: tables.specials,
+            sector_types: tables.sector_types,
+            warnings: tables.warnings,
+            things_by_kind: BTreeMap::new(),
+            things_by_name: BTreeMap::new(),
+            specials_by_number: BTreeMap::new(),
+            sector_types_by_number: BTreeMap::new(),
+        };
+        defs.reindex();
+        defs
+    }
+
     /// The definition of thing type `kind`, when this game has one.
     #[must_use]
     #[inline]
     pub fn thing(&self, kind: u32) -> Option<&ThingDef> {
-        self.things.iter().find(|row| row.kind == kind)
+        self.things_by_kind
+            .get(&kind)
+            .and_then(|index| self.things.get(*index))
+    }
+
+    /// The definition whose thing name is `name`, compared
+    /// case-insensitively on the ASCII case fold; the first such row wins.
+    #[must_use]
+    #[inline]
+    pub fn thing_by_name(&self, name: &str) -> Option<&ThingDef> {
+        self.things_by_name
+            .get(&name.to_ascii_lowercase())
+            .and_then(|index| self.things.get(*index))
     }
 
     /// The definition of special-table linedef action `number`, when this
@@ -137,14 +204,68 @@ impl Definitions {
     #[must_use]
     #[inline]
     pub fn special(&self, number: u32) -> Option<&SpecialDef> {
-        self.specials.iter().find(|row| row.number == number)
+        self.specials_by_number
+            .get(&number)
+            .and_then(|index| self.specials.get(*index))
     }
 
     /// The definition of sector type `value`, when this game has one.
     #[must_use]
     #[inline]
     pub fn sector_type(&self, value: u32) -> Option<&SectorTypeDef> {
-        self.sector_types.iter().find(|row| row.number == value)
+        self.sector_types_by_number
+            .get(&value)
+            .and_then(|index| self.sector_types.get(*index))
+    }
+
+    /// Inserts or replaces the row of thing type `def.kind`, dropping any
+    /// row that already uses the number, and keeps the thing indexes true.
+    /// The new row stands at the table's end until the next sort.
+    pub(crate) fn put_thing(&mut self, def: ThingDef) {
+        self.things.retain(|row| row.kind != def.kind);
+        self.things.push(def);
+        self.reindex_things();
+    }
+
+    /// Drops the row of thing type `kind`, if this table has one, keeping
+    /// the thing indexes true.
+    pub(crate) fn remove_thing(&mut self, kind: u32) {
+        self.things.retain(|row| row.kind != kind);
+        self.reindex_things();
+    }
+
+    /// The mutable row of thing type `kind`, when this game has one.
+    pub(crate) fn thing_mut(&mut self, kind: u32) -> Option<&mut ThingDef> {
+        let index = self.things_by_kind.get(&kind).copied();
+        index.and_then(|at| self.things.get_mut(at))
+    }
+
+    /// Rebuilds the thing indexes after a direct edit of [`Self::things`],
+    /// e.g. the sort that closes a session overlay.
+    pub(crate) fn reindex_things(&mut self) {
+        let mut kinds = BTreeMap::new();
+        let mut names = BTreeMap::new();
+        for (index, row) in self.things.iter().enumerate() {
+            kinds.entry(row.kind).or_insert(index);
+            names.entry(row.name.to_ascii_lowercase()).or_insert(index);
+        }
+        self.things_by_kind = kinds;
+        self.things_by_name = names;
+    }
+
+    /// Builds every lookup index over the tables as they stand.
+    fn reindex(&mut self) {
+        self.reindex_things();
+        let mut specials = BTreeMap::new();
+        for (index, row) in self.specials.iter().enumerate() {
+            specials.entry(row.number).or_insert(index);
+        }
+        self.specials_by_number = specials;
+        let mut sectors = BTreeMap::new();
+        for (index, row) in self.sector_types.iter().enumerate() {
+            sectors.entry(row.number).or_insert(index);
+        }
+        self.sector_types_by_number = sectors;
     }
 }
 
@@ -194,13 +315,15 @@ pub fn definitions_for(game: Game) -> Result<Definitions, CyberError> {
             vec![doom2_fallback(game)],
         ),
     };
-    Ok(Definitions {
+    Ok(Definitions::new(
         game,
-        things,
-        specials,
-        sector_types,
-        warnings,
-    })
+        DefinitionTables {
+            things,
+            specials,
+            sector_types,
+            warnings,
+        },
+    ))
 }
 
 /// The embedded thing rows for the games whose tables exist, `with_doom2`
@@ -243,7 +366,7 @@ fn doom_specials(with_doom2: bool) -> Result<Vec<SpecialDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn doom_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
-    let mut rows: Vec<SectorTypeDef> = embedded(&DOOM_SECTORS, "sector table")?.to_vec();
+    let mut rows: Vec<SectorTypeDef> = embedded(&DOOM_SECTORS, "sector table")?.clone();
     rows.sort_by_key(|row| row.number);
     Ok(rows)
 }
@@ -256,7 +379,7 @@ fn doom_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn heretic_things() -> Result<Vec<ThingDef>, CyberError> {
-    let mut rows: Vec<ThingDef> = embedded(&HERETIC_THINGS, "heretic thing table")?.to_vec();
+    let mut rows: Vec<ThingDef> = embedded(&HERETIC_THINGS, "heretic thing table")?.clone();
     rows.sort_by_key(|row| row.kind);
     Ok(rows)
 }
@@ -267,7 +390,7 @@ fn heretic_things() -> Result<Vec<ThingDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn heretic_specials() -> Result<Vec<SpecialDef>, CyberError> {
-    let mut rows: Vec<SpecialDef> = embedded(&HERETIC_SPECIALS, "heretic special table")?.to_vec();
+    let mut rows: Vec<SpecialDef> = embedded(&HERETIC_SPECIALS, "heretic special table")?.clone();
     rows.sort_by_key(|row| row.number);
     Ok(rows)
 }
@@ -278,7 +401,7 @@ fn heretic_specials() -> Result<Vec<SpecialDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn heretic_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
-    let mut rows: Vec<SectorTypeDef> = embedded(&HERETIC_SECTORS, "heretic sector table")?.to_vec();
+    let mut rows: Vec<SectorTypeDef> = embedded(&HERETIC_SECTORS, "heretic sector table")?.clone();
     rows.sort_by_key(|row| row.number);
     Ok(rows)
 }
@@ -291,7 +414,7 @@ fn heretic_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn hexen_things() -> Result<Vec<ThingDef>, CyberError> {
-    let mut rows: Vec<ThingDef> = embedded(&HEXEN_THINGS, "hexen thing table")?.to_vec();
+    let mut rows: Vec<ThingDef> = embedded(&HEXEN_THINGS, "hexen thing table")?.clone();
     rows.sort_by_key(|row| row.kind);
     Ok(rows)
 }
@@ -303,7 +426,7 @@ fn hexen_things() -> Result<Vec<ThingDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn hexen_specials() -> Result<Vec<SpecialDef>, CyberError> {
-    let mut rows: Vec<SpecialDef> = embedded(&HEXEN_SPECIALS, "hexen special table")?.to_vec();
+    let mut rows: Vec<SpecialDef> = embedded(&HEXEN_SPECIALS, "hexen special table")?.clone();
     rows.sort_by_key(|row| row.number);
     Ok(rows)
 }
@@ -314,26 +437,9 @@ fn hexen_specials() -> Result<Vec<SpecialDef>, CyberError> {
 ///
 /// [`embedded`]'s [`CyberError::Internal`] for malformed embedded data.
 fn hexen_sectors() -> Result<Vec<SectorTypeDef>, CyberError> {
-    let mut rows: Vec<SectorTypeDef> = embedded(&HEXEN_SECTORS, "hexen sector table")?.to_vec();
+    let mut rows: Vec<SectorTypeDef> = embedded(&HEXEN_SECTORS, "hexen sector table")?.clone();
     rows.sort_by_key(|row| row.number);
     Ok(rows)
-}
-
-/// The parsed rows of an embedded table, or the internal error quoting its
-/// parse failure; `label` names the table in the message.
-///
-/// # Errors
-///
-/// [`CyberError::Internal`] when the embedded data is malformed.
-fn embedded<T>(
-    parsed: &'static LazyLock<Result<Vec<T>, String>>,
-    label: &str,
-) -> Result<&'static [T], CyberError> {
-    parsed.as_deref().map_err(|reason| {
-        CyberError::Internal(format!(
-            "embedded {label} is malformed (this is a server bug): {reason}"
-        ))
-    })
 }
 
 /// The warning for a game served by the DOOM II fallback tables.
@@ -357,354 +463,4 @@ pub(crate) const fn game_label(game: Game) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Definitions, definitions_for, game_label};
-    use crate::defs::boom::{SectorFamily, decode_sector_special};
-    use crate::wad::game::Game;
-
-    /// Whether any row in `defs` has this type number.
-    fn has_kind(defs: &Definitions, kind: u32) -> bool {
-        defs.things.iter().any(|row| row.kind == kind)
-    }
-
-    /// Whether `numbers` are in ascending order.
-    fn is_ascending(numbers: &[u32]) -> bool {
-        let mut sorted = numbers.to_vec();
-        sorted.sort_unstable();
-        sorted == numbers
-    }
-
-    #[test]
-    fn doom_excludes_the_doom_ii_only_things() {
-        let defs = definitions_for(Game::Doom).expect("the embedded table is valid");
-        assert_eq!(defs.game, Game::Doom, "the game is echoed");
-        assert_eq!(defs.things.len(), 97, "the doom rows of the thing table");
-        assert!(!has_kind(&defs, 65), "Chaingunner is a DOOM II thing");
-        assert!(has_kind(&defs, 3001), "Imp is a DOOM thing");
-        assert!(defs.warnings.is_empty(), "DOOM has its own table");
-    }
-
-    #[test]
-    fn doom2_adds_the_doom_ii_only_things() {
-        let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-        assert_eq!(defs.things.len(), 123, "both games' rows");
-        assert!(has_kind(&defs, 65), "Chaingunner is there");
-        assert!(has_kind(&defs, 3001), "and the DOOM things as well");
-        assert!(defs.warnings.is_empty(), "DOOM II has its own table");
-    }
-
-    #[test]
-    fn things_are_sorted_by_type_number() {
-        let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-        let sorts: Vec<u32> = defs.things.iter().map(|row| row.kind).collect();
-        let mut sorted = sorts.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorts, sorted, "type numbers ascend");
-    }
-
-    #[test]
-    fn doom_excludes_the_doom_ii_only_specials() {
-        let defs = definitions_for(Game::Doom).expect("the embedded table is valid");
-        assert_eq!(
-            defs.specials.len(),
-            100,
-            "the doom rows of the special table"
-        );
-        assert!(defs.special(1).is_some(), "DR Door is a DOOM special");
-        assert!(defs.special(117).is_none(), "DR Door Fast is DOOM II only");
-        let numbers: Vec<u32> = defs.specials.iter().map(|row| row.number).collect();
-        assert!(is_ascending(&numbers), "special numbers ascend");
-    }
-
-    #[test]
-    fn doom2_adds_the_doom_ii_only_specials() {
-        let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-        assert_eq!(defs.specials.len(), 139, "both games' rows");
-        let fast = defs.special(117).expect("DR Door Fast exists");
-        assert_eq!(fast.name, "DR Door Fast", "name");
-        assert_eq!(fast.category, "Doors/Local", "category");
-        assert_eq!(fast.target, "sector_back", "target column");
-        assert!(
-            fast.args.is_empty(),
-            "Doom-family specials take no arguments"
-        );
-        assert_eq!(fast.game, "doom2", "first game");
-        assert!(defs.special(1).is_some(), "and the DOOM specials as well");
-    }
-
-    #[test]
-    fn sector_types_are_shared_by_the_doom_games() {
-        let doom = definitions_for(Game::Doom).expect("the embedded table is valid");
-        let doom2 = definitions_for(Game::Doom2).expect("the embedded table is valid");
-        assert_eq!(doom.sector_types.len(), 16, "the shipped sector rows");
-        assert_eq!(
-            doom.sector_types, doom2.sector_types,
-            "both games use the same table"
-        );
-        let damage = doom.sector_type(16).expect("type 16 exists");
-        assert_eq!(damage.name, "20% Damage", "name lookup");
-        assert!(doom.sector_type(6).is_none(), "type 6 is unassigned");
-        let numbers: Vec<u32> = doom.sector_types.iter().map(|row| row.number).collect();
-        assert!(is_ascending(&numbers), "type numbers ascend");
-    }
-
-    #[test]
-    fn the_boom_decoder_names_every_sector_table_row() {
-        let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-        for row in &defs.sector_types {
-            let decoded = decode_sector_special(row.number, SectorFamily::Doom)
-                .expect("the Doom family decodes");
-            assert_eq!(decoded.base, row.number, "the base is the row itself");
-            assert_eq!(
-                decoded.base_name, row.name,
-                "boom and the table agree on type {}",
-                row.number
-            );
-        }
-    }
-
-    #[test]
-    fn heretic_ships_its_own_tables() {
-        let defs = definitions_for(Game::Heretic).expect("the embedded tables are valid");
-        assert_eq!(defs.game, Game::Heretic, "the game is echoed");
-        assert_eq!(defs.things.len(), 84, "the heretic thing rows");
-        assert_eq!(defs.specials.len(), 105, "the heretic special rows");
-        assert_eq!(defs.sector_types.len(), 47, "the heretic sector rows");
-        assert!(defs.warnings.is_empty(), "heretic has its own tables");
-        let kinds: Vec<u32> = defs.things.iter().map(|row| row.kind).collect();
-        assert!(is_ascending(&kinds), "thing types ascend");
-        let numbers: Vec<u32> = defs.specials.iter().map(|row| row.number).collect();
-        assert!(is_ascending(&numbers), "special numbers ascend");
-        let types: Vec<u32> = defs.sector_types.iter().map(|row| row.number).collect();
-        assert!(is_ascending(&types), "sector types ascend");
-    }
-
-    #[test]
-    fn heretic_lookups_name_the_heretic_rows() {
-        let defs = definitions_for(Game::Heretic).expect("the embedded tables are valid");
-        let gargoyle = defs.thing(66).expect("type 66 is the Gargoyle");
-        assert_eq!(gargoyle.name, "Gargoyle", "name");
-        assert_eq!(gargoyle.sprite, "IMPX", "sprite");
-        assert_eq!(gargoyle.frame, 'A', "frame");
-        assert_eq!(gargoyle.radius, 20, "radius");
-        assert_eq!(gargoyle.category, "Monsters", "category");
-        assert_eq!(gargoyle.game, "heretic", "game column");
-        let lich = defs.thing(6).expect("type 6 is the Iron Lich");
-        assert_eq!(lich.radius, 40, "a wide boss radius");
-        let corpse = defs.thing(51).expect("type 51 is the Hanging Corpse");
-        assert!(corpse.hanging, "the gore rows carry the hanging flag");
-        let door = defs.special(100).expect("special 100 is a heretic door");
-        assert_eq!(door.name, "WR Door Triple Speed", "name");
-        assert_eq!(door.category, "Doors/Remote", "category");
-        assert_eq!(door.target, "sector", "target column");
-        assert!(door.args.is_empty(), "heretic specials take no arguments");
-        let exit = defs.special(11).expect("special 11 is S1 Exit");
-        assert_eq!(exit.target, "-", "an exit acts on no sector");
-        let scroll = defs.sector_type(20).expect("sector type 20 exists");
-        assert_eq!(scroll.name, "Scroll East (5)", "name");
-        let damage = defs.sector_type(5).expect("sector type 5 exists");
-        assert_eq!(damage.name, "5% Lava Damage", "heretic damage naming");
-        assert!(defs.sector_type(6).is_none(), "type 6 is unassigned");
-        assert!(
-            defs.sector_type(17).is_none(),
-            "types 17 to 19 are unassigned"
-        );
-        assert!(defs.sector_type(51).is_some(), "the table ends at type 51");
-        assert!(defs.thing(3_001).is_none(), "no Doom monsters in here");
-    }
-
-    #[test]
-    fn heretic_tables_hold_no_doom_rows() {
-        let defs = definitions_for(Game::Heretic).expect("the embedded tables are valid");
-        assert!(
-            defs.things.iter().all(|row| row.game == "heretic"),
-            "no Doom thing rows leaked in"
-        );
-        assert!(
-            defs.specials.iter().all(|row| row.game == "heretic"),
-            "no Doom special rows leaked in"
-        );
-        assert!(!has_kind(&defs, 3001), "the Imp is not a heretic thing");
-        assert!(
-            defs.special(117).is_none(),
-            "DR Door Fast is a Doom II special"
-        );
-        let start = defs.thing(5).expect("heretic has a type 5");
-        assert_eq!(start.name, "Fire Gargoyle", "not the Doom Blue Keycard");
-        let pod = defs.thing(2035).expect("heretic has a type 2035");
-        assert_eq!(pod.name, "Gas Pod", "not the Doom Barrel");
-        assert_eq!(pod.sprite, "PPOD", "and its own sprite");
-        let doom2 = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-        let stairs = doom2.special(100).expect("DOOM II has a special 100");
-        assert_eq!(stairs.name, "W1 Build Stairs 16 + Crush", "its own meaning");
-    }
-
-    #[test]
-    fn the_doom_tables_hold_no_heretic_rows() {
-        let doom2 = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-        assert!(
-            doom2.things.iter().all(|row| row.game != "heretic"),
-            "the Doom thing sets stay as they were"
-        );
-        assert_eq!(doom2.things.len(), 123, "DOOM II keeps its own count");
-        assert_eq!(doom2.specials.len(), 139, "DOOM II keeps its own count");
-        assert_eq!(
-            doom2.sector_types.len(),
-            16,
-            "the Doom sector table is untouched"
-        );
-        assert_eq!(
-            doom2.thing(5).expect("DOOM II has a type 5").name,
-            "Blue Keycard",
-            "type 5 still means the Doom thing"
-        );
-    }
-
-    #[test]
-    fn hexen_ships_its_own_tables() {
-        let defs = definitions_for(Game::Hexen).expect("the embedded tables are valid");
-        assert_eq!(defs.game, Game::Hexen, "the game is echoed");
-        assert_eq!(defs.things.len(), 233, "the hexen thing rows");
-        assert_eq!(defs.specials.len(), 86, "the hexen special rows");
-        assert_eq!(defs.sector_types.len(), 46, "the hexen sector rows");
-        assert!(defs.warnings.is_empty(), "hexen has its own tables");
-        let kinds: Vec<u32> = defs.things.iter().map(|row| row.kind).collect();
-        assert!(is_ascending(&kinds), "thing types ascend");
-        let numbers: Vec<u32> = defs.specials.iter().map(|row| row.number).collect();
-        assert!(is_ascending(&numbers), "special numbers ascend");
-        let types: Vec<u32> = defs.sector_types.iter().map(|row| row.number).collect();
-        assert!(is_ascending(&types), "sector types ascend");
-    }
-
-    #[test]
-    fn hexen_lookups_name_the_hexen_rows() {
-        let defs = definitions_for(Game::Hexen).expect("the embedded tables are valid");
-        let ettin = defs.thing(10030).expect("type 10030 is the Ettin");
-        assert_eq!(ettin.name, "Ettin", "name");
-        assert_eq!(ettin.sprite, "ETTN", "sprite");
-        assert_eq!(ettin.frame, 'A', "frame");
-        assert_eq!(ettin.radius, 25, "radius");
-        assert_eq!(ettin.category, "Monsters", "category");
-        assert_eq!(ettin.game, "hexen", "game column");
-        let chandelier = defs.thing(17).expect("type 17 is the lit Chandelier");
-        assert!(chandelier.hanging, "the gore and chandelier rows hang");
-        let locked = defs.special(13).expect("special 13 is Door_LockedRaise");
-        assert_eq!(locked.name, "Door_LockedRaise", "name");
-        assert_eq!(locked.category, "Doors", "category");
-        assert_eq!(locked.target, "sector_or_back", "free-form target column");
-        let args: Vec<&str> = locked.args.iter().map(String::as_str).collect();
-        assert_eq!(
-            args,
-            vec!["Sector Tag", "Speed", "Delay", "Lock"],
-            "argument names in order, index 0 is arg1"
-        );
-        let acs = defs.special(80).expect("special 80 is ACS_Execute");
-        assert_eq!(acs.args.len(), 5, "five script arguments");
-        let endgame = defs.special(75).expect("special 75 is Teleport_EndGame");
-        assert!(endgame.args.is_empty(), "a no-argument special stays empty");
-        assert_eq!(endgame.target, "-", "an exit acts on nothing");
-        let quake = defs.special(120).expect("special 120 is Radius_Quake");
-        assert_eq!(quake.target, "ex_5thing", "ex_5thing passes through");
-        let sky = defs.sector_type(200).expect("sector type 200 exists");
-        assert_eq!(sky.name, "Sky 2 (MAPINFO)", "name");
-        assert!(
-            defs.sector_type(5).is_none(),
-            "Doom damage types are not rows"
-        );
-        assert!(defs.thing(3_001).is_none(), "no Doom monsters in here");
-    }
-
-    #[test]
-    fn hexen_tables_hold_no_doom_or_heretic_rows() {
-        let defs = definitions_for(Game::Hexen).expect("the embedded tables are valid");
-        assert!(
-            defs.things.iter().all(|row| row.game == "hexen"),
-            "no Doom or Heretic thing rows leaked in"
-        );
-        assert!(
-            defs.specials.iter().all(|row| row.game == "hexen"),
-            "no Doom or Heretic special rows leaked in"
-        );
-        assert!(!has_kind(&defs, 3_001), "the Imp is not a hexen thing");
-        assert!(
-            !defs.things.iter().any(|row| row.name == "Gargoyle"),
-            "the heretic Gargoyle is not in the hexen table"
-        );
-        let doom2 = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-        assert!(
-            doom2.things.iter().all(|row| row.game != "hexen")
-                && doom2.specials.iter().all(|row| row.game != "hexen"),
-            "the Doom sets stay free of hexen rows"
-        );
-        let heretic = definitions_for(Game::Heretic).expect("the embedded tables are valid");
-        assert!(
-            heretic.things.iter().all(|row| row.game != "hexen")
-                && heretic.specials.iter().all(|row| row.game != "hexen"),
-            "the heretic sets stay free of hexen rows"
-        );
-    }
-
-    #[test]
-    fn strife_and_unknown_fall_back_to_the_doom2_table() {
-        for game in [Game::Strife, Game::Unknown] {
-            let defs = definitions_for(game).expect("the embedded tables are valid");
-            assert_eq!(defs.game, game, "the requested game is echoed");
-            assert_eq!(defs.things.len(), 123, "the DOOM II things for {game:?}");
-            assert_eq!(
-                defs.specials.len(),
-                139,
-                "the DOOM II specials for {game:?}"
-            );
-            assert_eq!(defs.sector_types.len(), 16, "the sector table for {game:?}");
-            assert!(
-                defs.warnings.first().is_some_and(|w| w.contains("DOOM II")),
-                "the warning names the fallback: {:?}",
-                defs.warnings
-            );
-        }
-    }
-
-    #[test]
-    fn thing_returns_the_matching_definition() {
-        let defs = definitions_for(Game::Doom).expect("the embedded table is valid");
-        let imp = defs.thing(3001).expect("DOOM has the Imp");
-        assert_eq!(imp.name, "Imp", "name");
-        assert_eq!(imp.sprite, "TROO", "sprite");
-        assert_eq!(imp.frame, 'A', "frame");
-        assert_eq!(imp.radius, 20, "radius");
-        assert_eq!(imp.category, "Monsters", "category");
-        assert!(!imp.hanging, "the Imp does not hang");
-        assert_eq!(imp.game, "doom", "first game");
-        assert!(
-            defs.thing(65).is_none(),
-            "Chaingunner is not in the DOOM set"
-        );
-        assert!(defs.thing(0).is_none(), "type 0 exists in no game");
-    }
-
-    #[test]
-    fn the_hanging_flag_survives_parsing() {
-        let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-        let keen = defs.thing(72).expect("Hanging Keen exists");
-        assert!(keen.hanging, "the flags column marked it hanging");
-        assert_eq!(keen.game, "doom2", "it is a DOOM II thing");
-    }
-
-    #[test]
-    fn game_labels_match_the_wire_names() {
-        for game in [
-            Game::Doom,
-            Game::Doom2,
-            Game::Heretic,
-            Game::Hexen,
-            Game::Strife,
-            Game::Unknown,
-        ] {
-            assert_eq!(
-                serde_json::to_value(game).expect("games serialize"),
-                serde_json::Value::String(game_label(game).to_owned()),
-                "warning text and wire name agree for {game:?}"
-            );
-        }
-    }
-}
+mod tests;

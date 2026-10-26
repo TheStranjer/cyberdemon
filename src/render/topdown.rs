@@ -11,7 +11,7 @@
 //! borrows the classification and the thing visuals; `render_minimap`
 //! builds its whole picture from these pieces.
 
-use crate::defs::Definitions;
+use crate::defs::{Category, Definitions};
 use crate::fixed::{Angle, narrow_i64, rotate_point};
 use crate::gfx::palette::Palette;
 use crate::render::{Canvas, Pt, Rgba};
@@ -250,26 +250,18 @@ const THING_KEY: Rgba = [224, 224, 64, 255];
 /// Thing markers: every other category, and unknown types.
 const THING_OTHER: Rgba = [176, 176, 176, 255];
 
-/// The marker colour an editor category prefix selects.
+/// The marker colour an editor category group selects.
 #[must_use]
 #[inline]
-pub fn category_color(category: &str) -> Rgba {
-    if category.starts_with("Monsters") {
-        return THING_MONSTER;
+pub const fn category_color(group: Category) -> Rgba {
+    match group {
+        Category::Monsters => THING_MONSTER,
+        Category::PlayerStarts => THING_PLAYER,
+        Category::Weapons | Category::Ammunition => THING_WEAPON,
+        Category::HealthAndArmour | Category::Powerups => THING_SUPPORT,
+        Category::Keys => THING_KEY,
+        Category::Doors | Category::Other => THING_OTHER,
     }
-    if category.starts_with("Player Starts") {
-        return THING_PLAYER;
-    }
-    if category.starts_with("Weapons") || category.starts_with("Ammunition") {
-        return THING_WEAPON;
-    }
-    if category.starts_with("Health") || category.starts_with("Powerups") {
-        return THING_SUPPORT;
-    }
-    if category.starts_with("Keys") {
-        return THING_KEY;
-    }
-    THING_OTHER
 }
 
 /// World radius assumed for thing types the definitions do not know.
@@ -286,7 +278,7 @@ pub fn thing_visual(defs: &Definitions, kind: i32) -> (Rgba, u32) {
     let Some(row) = found else {
         return (THING_OTHER, UNKNOWN_THING_RADIUS);
     };
-    (category_color(&row.category), row.radius)
+    (category_color(row.group), row.radius)
 }
 
 /// Draws every linedef of `map` through `window` in its automap colour,
@@ -337,7 +329,7 @@ mod tests {
         automap_color, category_color, offset_pixel, paint_automap_lines, paint_player_arrow,
         paint_thing_dots, palette_pixel, scale_down, thing_visual,
     };
-    use crate::defs::definitions_for;
+    use crate::defs::{Category, definitions_for};
     use crate::fixed::{Angle, narrow_i64};
     use crate::gfx::palette::Palette;
     use crate::render::{Canvas, Rgba};
@@ -599,7 +591,11 @@ mod tests {
         assert_eq!(canvas.pixel(65, 65), Some(dot), "the 2x2 corner");
         assert_eq!(canvas.pixel(66, 64), Some(BLACK), "just past the dot");
         assert_eq!(THING_DOT_PX, 2, "the documented dot size");
-        assert_eq!(category_color("Monsters"), rgb(224, 64, 64), "monsters");
+        assert_eq!(
+            category_color(Category::Monsters),
+            rgb(224, 64, 64),
+            "monsters"
+        );
         assert_eq!(
             thing_visual(&defs, 4_000_000),
             (rgb(176, 176, 176), 16),

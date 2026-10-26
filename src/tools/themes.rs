@@ -23,7 +23,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
-use crate::defs::{decode_generalized_linedef, definitions_for, is_generalized};
+use crate::defs::{Category, decode_generalized_linedef, definitions_for, is_generalized};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::map_edit::MapEditReport;
@@ -519,13 +519,13 @@ fn door_lines(session: &Session, map: &Map) -> Result<BTreeSet<usize>, CyberErro
         .collect())
 }
 
-/// The special numbers the game's tables categorise as doors.
+/// The special numbers the game's tables group under doors.
 fn door_specials(game: Game) -> Result<BTreeSet<u32>, CyberError> {
     let defs = definitions_for(game)?;
     Ok(defs
         .specials
         .iter()
-        .filter(|row| row.category.starts_with("Doors"))
+        .filter(|row| row.group == Category::Doors)
         .map(|row| row.number)
         .collect())
 }

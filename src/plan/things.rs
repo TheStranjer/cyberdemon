@@ -111,11 +111,7 @@ pub struct Placement {
 /// candidate names (sorted, deduplicated by type) follow.
 #[inline]
 pub fn resolve_thing_kind(definitions: &Definitions, name: &str) -> Result<u32, String> {
-    if let Some(row) = definitions
-        .things
-        .iter()
-        .find(|row| row.name.eq_ignore_ascii_case(name))
-    {
+    if let Some(row) = definitions.thing_by_name(name) {
         return Ok(row.kind);
     }
     let matched = substring_matches(definitions, &name.to_ascii_lowercase());
@@ -380,8 +376,9 @@ mod tests {
         PLAYER_ONE_START, PlacementContext, PlannedThing, Skill, ThingSpot, candidate_names, place,
         presence_flags, resolve_thing_kind, room_slots, substring_matches, thing_clearance,
     };
+    use crate::defs::registry::DefinitionTables;
     use crate::defs::table::ThingDef;
-    use crate::defs::{Definitions, definitions_for};
+    use crate::defs::{Category, Definitions, definitions_for};
     use crate::plan::Units;
     use crate::wad::game::Game;
     use crate::wad::map::flags::{FlagFamily, FlagKind, to_names};
@@ -452,6 +449,7 @@ mod tests {
             frame: 'A',
             radius: 16_u32,
             category: String::new(),
+            group: Category::Other,
             hanging: false,
             game: "doom".to_owned(),
             source: "test".to_owned(),
@@ -543,17 +541,17 @@ mod tests {
 
     #[test]
     fn substring_candidates_dedupe_by_type_and_sort_their_names() {
-        let definitions = Definitions {
-            game: Game::Doom2,
-            things: vec![
-                thing_def(50, "zeta bot"),
-                thing_def(51, "alpha bot"),
-                thing_def(51, "alpha bot"),
-            ],
-            specials: Vec::new(),
-            sector_types: Vec::new(),
-            warnings: Vec::new(),
-        };
+        let definitions = Definitions::new(
+            Game::Doom2,
+            DefinitionTables {
+                things: vec![
+                    thing_def(50, "zeta bot"),
+                    thing_def(51, "alpha bot"),
+                    thing_def(51, "alpha bot"),
+                ],
+                ..DefinitionTables::default()
+            },
+        );
         let matched = substring_matches(&definitions, "bot");
         assert_eq!(
             matched.iter().map(|entry| entry.1).collect::<Vec<u32>>(),

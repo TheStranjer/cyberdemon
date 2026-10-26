@@ -25,7 +25,7 @@
 use alloc::collections::BTreeMap;
 
 use crate::defs::registry::{Definitions, definitions_for, game_label};
-use crate::defs::table::ThingDef;
+use crate::defs::table::{Category, ThingDef};
 use crate::defs::{decorate, dehacked, mapinfo, zscript};
 use crate::error::CyberError;
 use crate::wad::game::Game;
@@ -240,17 +240,13 @@ impl<'defs> Overlay<'defs> {
     /// The built-in row named `name` (case-insensitively), read for the
     /// sprite, frame and radius a stock class would pass down.
     fn builtin_parent(&self, name: &str) -> Option<ResolvedClass> {
-        self.defs
-            .things
-            .iter()
-            .find(|row| row.name.eq_ignore_ascii_case(name))
-            .map(|row| ResolvedClass {
-                name: row.name.clone(),
-                sprite: row.sprite.clone(),
-                frame: row.frame,
-                radius: row.radius,
-                source: SOURCE_BUILTIN,
-            })
+        self.defs.thing_by_name(name).map(|row| ResolvedClass {
+            name: row.name.clone(),
+            sprite: row.sprite.clone(),
+            frame: row.frame,
+            radius: row.radius,
+            source: SOURCE_BUILTIN,
+        })
     }
 
     /// The thing a `DoomEdNums` entry maps `number` to: the class's sprite
@@ -287,12 +283,12 @@ impl<'defs> Overlay<'defs> {
             frame: class.frame,
             radius: class.radius,
             category: category.to_owned(),
+            group: Category::parse(category),
             hanging: false,
             game: self.game.to_owned(),
             source: class.source.to_owned(),
         };
-        self.defs.things.retain(|row| row.kind != def.kind);
-        self.defs.things.push(def);
+        self.defs.put_thing(def);
     }
 }
 
@@ -338,6 +334,7 @@ pub fn session_definitions(game: Game, texts: &CustomSources) -> Result<Definiti
     }
     drop(overlay);
     defs.things.sort_by_key(|row| row.kind);
+    defs.reindex_things();
     Ok(defs)
 }
 

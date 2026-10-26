@@ -21,7 +21,7 @@ use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::defs::Definitions;
+use crate::defs::{Category, Definitions};
 use crate::wad::map::consts::is_sky_flat;
 use crate::wad::map::flags::{BLOCKING, Skill};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
@@ -53,15 +53,15 @@ const LIGHT_GAP: i32 = 16_i32;
 
 /// The rows `MapOverview::largest_sectors` answers with.
 const LARGEST_ROWS: usize = 5_usize;
-/// The definition category a monster stands under.
-const MONSTER_CATEGORY: &str = "Monsters";
-/// The definition categories an item counts under.
-const ITEM_CATEGORIES: [&str; 5] = [
-    "Weapons",
-    "Ammunition",
-    "Powerups",
-    "Keys",
-    "Health And Armour",
+/// The definition group the overview counts monsters from.
+const MONSTER_GROUPS: [Category; 1] = [Category::Monsters];
+/// The definition groups an item counts under.
+const ITEM_GROUPS: [Category; 5] = [
+    Category::Weapons,
+    Category::Ammunition,
+    Category::Powerups,
+    Category::Keys,
+    Category::HealthAndArmour,
 ];
 
 impl<'map> Describe<'map> {
@@ -306,8 +306,8 @@ impl<'map> Describe<'map> {
             locked_doors: self.play.locks.clone(),
             teleporters: self.targets.teleporters.clone(),
             secret_sectors: self.secret_sectors(),
-            monsters: category_counts(self.map, self.defs, &[MONSTER_CATEGORY]),
-            items: category_counts(self.map, self.defs, &ITEM_CATEGORIES),
+            monsters: category_counts(self.map, self.defs, &MONSTER_GROUPS),
+            items: category_counts(self.map, self.defs, &ITEM_GROUPS),
             top_wall_textures: top_rows(wall_tally(self.map)),
             top_flats: top_rows(flat_tally(self.map)),
             largest_sectors: self.largest_sectors(),

@@ -48,7 +48,8 @@
 //! `features/place` topic tests, the linedef/thing flag-name
 //! glossary guard in `flag_names`, the shared box-window, tap-blend and
 //! luminance-weight duplication guard in `shared_math`, the big-endian-helper
-//! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the
+//! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the shared
+//! TSV-reader and category-word single-owner guard in `tsv_tables`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
@@ -229,6 +230,9 @@ mod textures;
 #[cfg(test)]
 #[path = "mcp/themes.rs"]
 mod themes;
+#[cfg(test)]
+#[path = "mcp/tsv_tables.rs"]
+mod tsv_tables;
 #[cfg(test)]
 #[path = "mcp/usability.rs"]
 mod usability;

@@ -166,13 +166,27 @@ src/
   defs.rs         Definitions core module root: the game definitions registry
                   entry point, the Boom generalized/sector bit decoders, the
                   session-aware overlay entry (`session_definitions`) and
-                  the embedded-table re-exports.
+                  the embedded-table re-exports (including `Category`).
   defs/           Definition building blocks (no MCP concerns):
-                  `defs/table.rs` the TSV parser producing `ThingDef`,
-                  `SpecialDef` and `SectorTypeDef` rows,
-                  `defs/registry.rs` the `include_str!`-embedded tables
-                  parsed once behind `LazyLock` and the per-game selection
-                  (`definitions_for`), `defs/boom.rs` the generalized
+                  `defs/tsv.rs` the one shared TSV reader (`Table::parse`
+                  header/comment/blank handling, `Row::columns`' field-count
+                  check and the line-numbered `u32`/`i32`/`i64` field readers)
+                  plus the `embedded` `LazyLock` accessor every embedded
+                  table shares, its tests guarding the read and that every
+                  embedded defs, theme, translation and mobj table parses,
+                  `defs/table.rs` the definition-table parser producing
+                  `ThingDef`, `SpecialDef` and `SectorTypeDef` rows through
+                  that reader and classifying each row's editor category
+                  into the `Category` enum once (`Category::parse` owns the
+                  category path words), with that module's tests in
+                  `defs/table/tests.rs`, `defs/registry.rs` the
+                  `include_str!`-embedded tables parsed once behind
+                  `LazyLock`, the per-game selection (`definitions_for`) and
+                  the indexed `Definitions` (number and lowercased-name
+                  `BTreeMap` lookups built at assembly and kept true by the
+                  overlay mutators `put_thing`, `remove_thing`, `thing_mut`
+                  and `reindex_things`), with its tests in
+                  `defs/registry/tests.rs`, `defs/boom.rs` the generalized
                   linedef and Boom sector-special bit unpackers,
                   `defs/custom.rs` the `CustomSources` text bundle and the
                   built-in < DEHACKED < DECORATE/ZScript (+ MAPINFO)
@@ -1375,7 +1389,8 @@ data/
                   `fallback_role` columns, read by `src/themes/table.rs`.
   defs/           TSV definition tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by
-                  `src/defs/table.rs`. `doom_things.tsv` is the DOOM/DOOM II
+                  `src/defs/table.rs` on the shared `src/defs/tsv.rs`
+                  reader. `doom_things.tsv` is the DOOM/DOOM II
                   thing table, `doom_specials.tsv` and `doom_sectors.tsv` the
                   linedef special and sector type tables;
                   `heretic_things.tsv`, `heretic_specials.tsv` and
@@ -1387,7 +1402,8 @@ data/
                   the scripts tools.
   xlat/           TSV translation tables embedded in the binary (each file
                   under the 64 KiB `large_include_file` budget), parsed by
-                  `src/wad/map/xlat.rs`. `doom_to_zdoom.tsv` is the 141-row
+                  `src/wad/map/xlat.rs` on the shared `src/defs/tsv.rs`
+                  reader. `doom_to_zdoom.tsv` is the 141-row
                   Doom→ZDoom linedef-special table with `doom`,
                   `activation`, `zspecial`, `name` and `args` columns, the
                   args column naming the line-tag slot with `tag`.
@@ -1612,7 +1628,12 @@ tests/
                     weights are each defined once under `src/`;
                     single_owner.rs: the guard that a big-endian byte helper
                     is defined only in `wad/bytes.rs` and the shared MUS and
-                    MIDI vocabulary only in `music/consts.rs`; docs.rs:
+                    MIDI vocabulary only in `music/consts.rs`;
+                    tsv_tables.rs: the guard that the shared TSV reader's
+                    helper names are defined only in `defs/tsv.rs` and the
+                    editor category path words only in `defs/table.rs`'s
+                    `Category::parse`, nowhere else in production `src/`;
+                    docs.rs:
                     skill/ and README.md layout and tool/doc consistency
                     checks, the guide and `README.md`
                     line budgets and the 1000-line budget on every Rust file

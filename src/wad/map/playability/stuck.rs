@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use super::PLAYER_HEIGHT;
 use super::specials::spawns;
-use crate::defs::Definitions;
+use crate::defs::{Category, Definitions, ThingDef};
 use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
 use crate::wad::map::flags::{FlagFamily, Skill, blocks_players};
 use crate::wad::map::geometry::point_in_sector;
@@ -120,15 +120,15 @@ fn body_radius(defs: &Definitions, kind: i32) -> Option<i64> {
         .and_then(|number| defs.thing(number));
     match found {
         None => Some(UNKNOWN_THING_RADIUS),
-        Some(row) if is_body(&row.category) => Some(i64::from(row.radius)),
+        Some(row) if is_body(row) => Some(i64::from(row.radius)),
         Some(_) => None,
     }
 }
 
-/// Whether an editor category names a thing that stands on its own two
-/// feet (or legs): monsters and player starts.
-fn is_body(category: &str) -> bool {
-    category.starts_with("Monsters") || category.starts_with("Player Starts")
+/// Whether a thing definition stands on its own two feet (or legs): the
+/// [`Category::Monsters`] and [`Category::PlayerStarts`] groups.
+const fn is_body(row: &ThingDef) -> bool {
+    matches!(row.group, Category::Monsters | Category::PlayerStarts)
 }
 
 /// The headroom `sector` leaves between its floor and its ceiling, `None`

@@ -2,9 +2,10 @@
 //! target layout stores, what it has no room for and what happens to it.
 //! [`family_of`] and [`default_namespace`] read a layout as the flag family
 //! its `flags` live in, [`into_udmf`] and [`into_binary`] set the layout
-//! fields last — after [`as_line_id`] has folded each binary `Hexen`
+//! fields last — after [`fold_line_id`] has folded each binary `Hexen`
 //! `Line_SetIdentification` into the model's line id and [`store_line_ids`]
-//! has carried the ids the other way — and [`strip_node_lumps`],
+//! has carried the ids the other way with [`keep_line_id`] — and
+//! [`strip_node_lumps`],
 //! [`strip_behavior`], [`drop_extras`] and [`drop_udmf_extras`] remove what
 //! the target cannot carry, counting the dropped `UDMF` fields and the
 //! elements that held a rounded original through [`ExtraBag`] and naming
@@ -19,12 +20,12 @@ use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
+use crate::wad::map::xlat::{fold_line_id, keep_line_id};
 use crate::wad::udmf::{decimal_to_rounded_int, has_fraction};
 
 use super::plan::Plan;
 use super::{
-    Conversion, DOOM_NAMESPACE, HEXEN_NAMESPACE, KindCounts, MAX_BYTE, MAX_NAMESPACE_LEN,
-    SET_IDENTIFICATION, is_node_lump,
+    Conversion, DOOM_NAMESPACE, HEXEN_NAMESPACE, KindCounts, MAX_NAMESPACE_LEN, is_node_lump,
 };
 
 /// The flag family one target layout stores its `flags` in; a `UDMF` target
@@ -54,7 +55,7 @@ pub(super) fn default_namespace(family: FlagFamily) -> String {
 pub(super) fn into_udmf(map: &mut Map, plan: &Plan) {
     if map.format == MapFormat::Hexen {
         for line in &mut map.linedefs {
-            as_line_id(line);
+            fold_line_id(line);
         }
     }
     map.format = MapFormat::Udmf;
@@ -118,58 +119,14 @@ fn strip_behavior(map: &mut Map, conversion: &mut Conversion) {
     }
 }
 
-/// Moves one binary `Hexen` `Line_SetIdentification` onto the `UDMF` line id
-/// the format uses for it: `args[0]` becomes the id and the special, which
-/// `UDMF` has no room for, goes.
-const fn as_line_id(line: &mut Linedef) {
-    if line.special != SET_IDENTIFICATION {
-        return;
-    }
-    let [id, arg1, arg2, arg3, arg4] = line.args;
-    line.tag = id;
-    line.special = 0_i32;
-    line.args = [0_i32, arg1, arg2, arg3, arg4];
-}
-
-/// Folds every `UDMF` line id of `map` into what binary `Hexen` can store.
-/// A cross-family step's forward stage has already settled every id; the
-/// layout fields are set last precisely so this store never fires a second
-/// time.
+/// Folds every `UDMF` line id of `map` into what binary `Hexen` can store,
+/// each line through [`keep_line_id`]'s byte-limited path. A cross-family
+/// step's forward stage has already settled every id; the layout fields are
+/// set last precisely so this store never fires a second time.
 fn store_line_ids(map: &mut Map, warnings: &mut Vec<String>) {
     for (index, line) in map.linedefs.iter_mut().enumerate() {
-        store_line_id(line, index, warnings);
+        keep_line_id(line, index, true, warnings);
     }
-}
-
-/// Folds one line's id (the model's [`Linedef::tag`]) into its binary
-/// `Hexen` record: an otherwise plain line becomes
-/// `Line_SetIdentification` carrying the id in `args[0]`; an id over a
-/// byte's range, or on a line that already has a special, cannot be stored
-/// and drops with a warning naming the line.
-fn store_line_id(line: &mut Linedef, index: usize, warnings: &mut Vec<String>) {
-    let id = line.tag;
-    if id == 0_i32 {
-        return;
-    }
-    line.tag = 0_i32;
-    if line.special != 0_i32 {
-        warnings.push(format!(
-            "linedef {index} line id {id} was dropped: the line already uses special {}, and \
-             Hexen stores a line id only in Line_SetIdentification (special {SET_IDENTIFICATION})",
-            line.special
-        ));
-        return;
-    }
-    if id > MAX_BYTE {
-        warnings.push(format!(
-            "linedef {index} line id {id} was dropped: Hexen keeps it in one byte (0 to \
-             {MAX_BYTE}); lower the id or stay on a UDMF map"
-        ));
-        return;
-    }
-    let [_, arg1, arg2, arg3, arg4] = line.args;
-    line.args = [id, arg1, arg2, arg3, arg4];
-    line.special = SET_IDENTIFICATION;
 }
 
 /// Drops every `extra` bag of `map`, counting the fields and the elements

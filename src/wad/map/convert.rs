@@ -96,10 +96,6 @@ use crate::wad::name::LumpName;
 use layout::{into_binary, into_udmf, namespace_name, parse_format, strip_node_lumps};
 use plan::{Direction, Plan};
 
-/// The `Hexen` line special that stores a line id: `Line_SetIdentification`.
-const SET_IDENTIFICATION: i32 = 121_i32;
-/// The largest value a binary `Hexen` byte field stores.
-const MAX_BYTE: i32 = 255_i32;
 /// The `UDMF` namespace a `Doom` family map declares when the caller names none.
 const DOOM_NAMESPACE: &str = "doom";
 /// The `UDMF` namespace a `Hexen` family map declares when the caller names none.

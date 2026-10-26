@@ -1,7 +1,8 @@
-//! The reverse linedef stage of the cross-family conversion:
+//! The reverse linedef stage of the cross-family conversion.
+//!
 //! [`linedefs_from_hexen`] folds a binary `Hexen` line id back onto the
-//! model's tag field, searches the [`XlatRow`](super::XlatRow) rows of a
-//! line's action with [`best_match`], [`row_matches`] and [`row_arguments`]
+//! model's tag field, searches the [`XlatRow`] rows of a
+//! line's action with `best_match`, `row_matches` and `row_arguments`
 //! and writes the winning row's `Doom` special with the `tag`-slot argument
 //! as the trigger tag.
 //!
@@ -9,10 +10,10 @@
 //! [`LinesReport::untranslated`](super::LinesReport::untranslated); an
 //! activation field the table never writes matches nothing; a `UDMF` line id
 //! whose special translated has nowhere to ride on drops through
-//! [`note_busy_id`]; and the `Hexen`-only blocking bits drop as the pass
-//! masks every line down to [`SHARED_LINEDEF_BITS`].
+//! `note_busy_id`; and the `Hexen`-only blocking bits drop as the pass
+//! masks every line down to `SHARED_LINEDEF_BITS`.
 //! [`linedefs_to_hexen`](super::linedefs_to_hexen) is the forward half and
-//! [`expected_field`] the activation field both directions agree on.
+//! `expected_field` the activation field both directions agree on.
 
 use crate::error::CyberError;
 use crate::wad::map::flags::{
@@ -97,9 +98,10 @@ pub fn linedefs_from_hexen(map: &mut Map, source_udmf: bool) -> Result<LinesRepo
 
 /// Fold one binary `Hexen` `Line_SetIdentification` onto the line id the
 /// `UDMF` side of the model uses: `args[0]` becomes [`Linedef::tag`] and
-/// the id's own special and slot zero, the same fold the within-family
-/// binary-to-`UDMF` conversion makes.
-const fn fold_line_id(line: &mut Linedef) {
+/// the id's own special and slot zero. The layout step of a within-family
+/// `crate::wad::map::convert` conversion to a `UDMF` target makes the same
+/// fold with this same function.
+pub(crate) const fn fold_line_id(line: &mut Linedef) {
     if line.special != SET_IDENTIFICATION {
         return;
     }

@@ -1,21 +1,30 @@
 //! The three content-reading sweeps: trim the working `PNAMES` to the
 //! entries the merged textures reference and renumber those lumps, drop
-//! working `patches` no merged texture names, and drop working `flats`
-//! no merged sector uses.
+//! working `patches` no merged texture names, and drop working `flats` no
+//! merged sector uses.
 //!
 //! These are the only sweeps that can fail: each reads `PNAMES`, texture
-//! or map bytes through the [`Context`] snapshot's merged view and
-//! reports a malformed lump as [`CyberError::Format`] rather than guess.
-//! The redundancy sweeps over the same snapshots are the sibling
-//! `redundant` module.
+//! or map bytes through the [`Context`] snapshot's merged view and reports
+//! a malformed lump as [`CyberError::Format`] rather than guess. The
+//! redundancy sweeps over the same snapshots are the sibling `redundant`
+//! module.
+//!
+//! What each sweep reads as referenced is only the start: an engine finds
+//! an animation's frames by walking from a used name to the range's other
+//! endpoint, so every frame between them, every switch partner and every
+//! name a merged `ANIMATED` lump declares is kept too. Those tables are
+//! the sibling [`animations`] module, and what a sweep kept that way is
+//! counted in the plan's [`KeptForAnimation`](super::KeptForAnimation).
 
 use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
-use crate::wad::classify::{LumpKind, Namespace};
+use crate::wad::classify::{LumpInfo, LumpKind, Namespace};
 use crate::wad::lumps;
+use crate::wad::map::consts::normalized_picture;
 use crate::wad::map::read_map;
 use crate::wad::name::LumpName;
+use crate::wad::optimize::animations::Animations;
 use crate::wad::textures::{
     PatchMapping, TextureLump, parse_pnames, parse_texture_lump, remap_patches, write_pnames,
     write_texture_lump,
@@ -23,7 +32,10 @@ use crate::wad::textures::{
 
 use super::redundant::{is_global, last_global};
 use super::{Action, Context, Draft, Operation, PNAMES_ENTRY_LEN, Rewrite, Target};
-use crate::wad::map::consts::NO_TEXTURE;
+
+/// The flats every engine draws a sky with: no sector has to name one for
+/// the sweep to keep it, since a sky is chosen by map, not by sector.
+const SKY_FLATS: [&str; 2] = ["F_SKY1", "F_SKY"];
 
 /// The working `PNAMES` to trim: the last global copy, `None` when the
 /// working archive holds none or the plan already removes it — a
@@ -98,6 +110,35 @@ fn referenced_patches(
     Ok(used)
 }
 
+/// The `PNAMES` names the merged textures reference, before any animation
+/// or switch partner is added: what the sweep's own rule proves in use.
+///
+/// # Errors
+///
+/// [`referenced_patches`]' errors.
+fn direct_patch_names(
+    context: &Context<'_>,
+    names: &[String],
+) -> Result<BTreeSet<String>, CyberError> {
+    let used = referenced_patches(context, names.len())?;
+    Ok(used
+        .iter()
+        .filter_map(|entry| names.get(*entry))
+        .cloned()
+        .collect())
+}
+
+/// The `names` positions of every kept name, all occurrences included: a
+/// list may hold one patch name twice and the engine reads whichever copy
+/// a texture points at.
+fn kept_indices(names: &[String], kept: &BTreeSet<String>) -> BTreeSet<usize> {
+    names
+        .iter()
+        .enumerate()
+        .filter_map(|(entry, text)| kept.contains(text).then_some(entry))
+        .collect()
+}
+
 /// The renumbering that keeps only the `used` entries of `names`, `None`
 /// when every entry is referenced and the list stays as it is.
 ///
@@ -159,6 +200,12 @@ fn rewrite_merged_textures(
     Ok(())
 }
 
+/// Whether a classified entry is a sweep's candidate: a member of
+/// `namespace`'s region, never a marker.
+fn region_member(info: &LumpInfo, namespace: Namespace) -> bool {
+    info.namespace == Some(namespace) && info.kind != LumpKind::Marker
+}
+
 /// Sweeps [`Operation::UnusedPnames`]: trim the working `PNAMES` to the
 /// entries the merged textures reference and renumber those lumps. The
 /// trimmed entries become report rows; the re-encoded lumps become the
@@ -182,14 +229,21 @@ pub(super) fn unused_pnames(context: &Context<'_>, draft: &mut Draft) -> Result<
              edit_pnames or drop unused_pnames from operations"
         ))
     })?;
-    let used = referenced_patches(context, names.len())?;
+    let direct = direct_patch_names(context, &names)?;
+    let kept = Animations::read(context).expand(&names, &direct);
+    let spared = names
+        .iter()
+        .filter(|text| kept.contains(*text) && !direct.contains(*text))
+        .count();
+    draft.frames.pnames = draft.frames.pnames.saturating_add(spared);
+    let used = kept_indices(&names, &kept);
     let Some(mapping) = kept_mapping(&names, &used)? else {
         return Ok(());
     };
-    let mut kept = Vec::with_capacity(used.len());
+    let mut survivors = Vec::with_capacity(used.len());
     for (entry, text) in names.iter().enumerate() {
         if mapping.get(entry).copied().flatten().is_some() {
-            kept.push(text.clone());
+            survivors.push(text.clone());
         } else {
             draft.actions.push(Action {
                 operation: Operation::UnusedPnames,
@@ -200,7 +254,7 @@ pub(super) fn unused_pnames(context: &Context<'_>, draft: &mut Draft) -> Result<
         }
     }
     let mut rewrite = Rewrite {
-        pnames: write_pnames(&kept)?,
+        pnames: write_pnames(&survivors)?,
         texture1: None,
         texture2: None,
     };
@@ -210,60 +264,99 @@ pub(super) fn unused_pnames(context: &Context<'_>, draft: &mut Draft) -> Result<
 }
 
 /// Sweeps [`Operation::UnusedPatches`]: working `patches`-namespace lumps
-/// no merged texture references by `PNAMES` name. Without a merged
+/// no merged texture references by `PNAMES` name, keeping the animation
+/// frames and switch partners of every referenced name. Without a merged
 /// `PNAMES` no reference resolves to a name, so nothing is touched.
 ///
 /// # Errors
 ///
-/// [`merged_pnames`]' and [`referenced_patches`]' errors.
+/// [`merged_pnames`]' and [`direct_patch_names`]' errors.
 pub(super) fn unused_patches(context: &Context<'_>, draft: &mut Draft) -> Result<(), CyberError> {
     let Some(names) = merged_pnames(context)? else {
         return Ok(());
     };
-    let used = referenced_patches(context, names.len())?;
-    let referenced: BTreeSet<String> = used
-        .iter()
-        .filter_map(|entry| names.get(*entry))
-        .cloned()
-        .collect();
+    let direct = direct_patch_names(context, &names)?;
+    let kept = Animations::read(context).expand(&names, &direct);
+    let mut spared = 0_usize;
     for (info, lump) in context.working_info.iter().zip(context.working) {
-        if info.namespace != Some(Namespace::Patches) || info.kind == LumpKind::Marker {
+        if !region_member(info, Namespace::Patches) {
             continue;
         }
-        if !referenced.contains(&info.name.to_string()) {
+        let text = info.name.to_string();
+        if !kept.contains(&text) {
             draft.drop_lump(Operation::UnusedPatches, info.index, lump);
+            continue;
         }
+        spared = spared.saturating_add(usize::from(!direct.contains(&text)));
     }
+    draft.frames.patches = draft.frames.patches.saturating_add(spared);
     Ok(())
 }
 
 /// Sweeps [`Operation::UnusedFlats`]: working `flats`-namespace lumps no
-/// sector of any merged map uses.
+/// sector of any merged map uses, keeping the frames of every animation
+/// range a used flat sits in, every name a merged `ANIMATED` lump declares
+/// and the sky flats.
 ///
 /// # Errors
 ///
 /// [`used_flats`]' error when a merged map does not decode.
 pub(super) fn unused_flats(context: &Context<'_>, draft: &mut Draft) -> Result<(), CyberError> {
     let used = used_flats(context)?;
+    let order = merged_flat_order(context);
+    let kept = kept_flats(context, &order, &used);
+    let mut spared = 0_usize;
     for (info, lump) in context.working_info.iter().zip(context.working) {
-        if info.namespace != Some(Namespace::Flats) || info.kind == LumpKind::Marker {
+        if !region_member(info, Namespace::Flats) {
             continue;
         }
-        if !used.contains(info.name.as_bytes()) {
+        let text = info.name.to_string();
+        if !kept.contains(&text) {
             draft.drop_lump(Operation::UnusedFlats, info.index, lump);
+            continue;
         }
+        spared = spared.saturating_add(usize::from(!used.contains(&text)));
     }
+    draft.frames.flats = draft.frames.flats.saturating_add(spared);
     Ok(())
 }
 
-/// The flat names every merged sector uses, `NUL`-trimmed and uppercased.
+/// The flats the sweep keeps: the sectors' own names grown by every
+/// animation frame those names need, then the sky flats, which no sector
+/// needs to name for an engine to want them.
+fn kept_flats(
+    context: &Context<'_>,
+    order: &[String],
+    used: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut kept = Animations::read(context).expand(order, used);
+    for sky in SKY_FLATS {
+        kept.insert((*sky).to_owned());
+    }
+    kept
+}
+
+/// The merged view's flat names in directory order: the space a vanilla
+/// animation range walks when it looks for the frames between its two
+/// endpoints.
+fn merged_flat_order(context: &Context<'_>) -> Vec<String> {
+    context
+        .merged_info
+        .iter()
+        .filter(|info| region_member(info, Namespace::Flats))
+        .map(|info| info.name.to_string())
+        .collect()
+}
+
+/// The flat names every merged sector uses, uppercased and `NUL`-trimmed,
+/// the empty and `"-"` markers left out.
 ///
 /// # Errors
 ///
 /// [`CyberError::Format`] naming the map when a merged block does not
 /// decode: its sectors would stay unknown and every flat might still be
 /// in use.
-fn used_flats(context: &Context<'_>) -> Result<BTreeSet<Vec<u8>>, CyberError> {
+fn used_flats(context: &Context<'_>) -> Result<BTreeSet<String>, CyberError> {
     let mut used = BTreeSet::new();
     for block in context.merged_maps {
         let map = read_map(context.merged, block).map_err(|error| {
@@ -274,25 +367,17 @@ fn used_flats(context: &Context<'_>) -> Result<BTreeSet<Vec<u8>>, CyberError> {
             ))
         })?;
         for sector in &map.sectors {
-            add_flat_name(&mut used, sector.floor_flat.as_bytes());
-            add_flat_name(&mut used, sector.ceiling_flat.as_bytes());
+            add_flat_name(&mut used, &sector.floor_flat);
+            add_flat_name(&mut used, &sector.ceiling_flat);
         }
     }
     Ok(used)
 }
 
-/// Records one sector flat field, skipping the empty and `"-"` markers.
-fn add_flat_name(used: &mut BTreeSet<Vec<u8>>, bytes: &[u8]) {
-    let end = bytes
-        .iter()
-        .position(|&byte| byte == 0)
-        .unwrap_or(bytes.len());
-    let Some(name_bytes) = bytes.get(..end) else {
-        return;
-    };
-    if name_bytes.is_empty() || name_bytes == NO_TEXTURE.as_bytes() {
-        return;
+/// Records one sector flat field, skipping the empty and `"-"` markers the
+/// way every other stored picture name is read.
+fn add_flat_name(used: &mut BTreeSet<String>, name: &str) {
+    if let Some(text) = normalized_picture(name.trim_end_matches('\0')) {
+        used.insert(text);
     }
-    let name: Vec<u8> = name_bytes.iter().map(u8::to_ascii_uppercase).collect();
-    used.insert(name);
 }

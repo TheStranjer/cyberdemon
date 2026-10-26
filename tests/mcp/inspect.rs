@@ -508,6 +508,11 @@ mod tests {
             json!(["DECORATE"]),
             "the concatenated pair is kept and reported"
         );
+        assert_eq!(
+            report["kept_for_animation"],
+            json!({ "pnames": 0_i64, "patches": 0_i64, "flats": 0_i64 }),
+            "no content sweep ran, so nothing was kept for an animation"
+        );
     }
 
     #[tokio::test]
@@ -605,6 +610,88 @@ mod tests {
             "the message says what is unreadable: {message}"
         );
         assert_eq!(working_lumps(&client).await, 33, "the archive is untouched");
+    }
+
+    /// Stands each of `flats` in the working archive's flats region.
+    async fn add_flats(client: &Client, flats: &[&str]) {
+        for flat in flats {
+            call(
+                client,
+                "add_lump",
+                json!({ "name": flat, "text": "flat-bytes", "namespace": "flats" }),
+            )
+            .await;
+        }
+    }
+
+    /// The region `get_lump` reports `flat` in, for the working archive.
+    async fn working_namespace(client: &Client, flat: &str) -> Value {
+        let row = call(
+            client,
+            "get_lump",
+            json!({ "name": flat, "scope": "working", "format": "info" }),
+        )
+        .await;
+        row["namespace"].clone()
+    }
+
+    /// Asserts every one of `flats` still sits in the working flats region.
+    async fn assert_kept(client: &Client, flats: &[&str]) {
+        for flat in flats {
+            assert_eq!(
+                working_namespace(client, flat).await,
+                json!("flats"),
+                "{flat} stayed in the flats region"
+            );
+        }
+    }
+
+    /// A `PWAD` whose only animated flat is the one a sector wears: the run
+    /// beside it has to survive `unused_flats`, and the plan has to say how
+    /// much it kept for the animation.
+    #[tokio::test]
+    async fn optimize_wad_keeps_an_animation_and_counts_the_keeps() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        call(&client, "create_map", json!({ "name": "MAP01" })).await;
+        call(
+            &client,
+            "add_sector",
+            json!({ "floor_flat": "NUKAGE1", "ceiling_flat": "FLOOR4" }),
+        )
+        .await;
+        add_flats(&client, &["NUKAGE1", "NUKAGE2", "NUKAGE3", "SPARE"]).await;
+        let report = call(
+            &client,
+            "optimize_wad",
+            json!({ "operations": ["unused_flats"] }),
+        )
+        .await;
+        assert_eq!(
+            action_rows(&report),
+            vec![("unused_flats".to_owned(), "SPARE".to_owned())],
+            "a sector wearing NUKAGE1 keeps the run to NUKAGE3"
+        );
+        assert_eq!(
+            report["kept_for_animation"],
+            json!({ "pnames": 0_i64, "patches": 0_i64, "flats": 2_i64 }),
+            "the two frames no sector named are reported as keeps"
+        );
+        let applied = call(
+            &client,
+            "optimize_wad",
+            json!({ "operations": ["unused_flats"], "dry_run": false }),
+        )
+        .await;
+        assert_eq!(applied["dry_run"], json!(false), "the plan was applied");
+        let (code, _, _) = call_err(
+            &client,
+            "get_lump",
+            json!({ "name": "SPARE", "scope": "working", "format": "info" }),
+        )
+        .await;
+        assert_eq!(code, "not_found", "the flat outside the run is gone");
+        assert_kept(&client, &["NUKAGE1", "NUKAGE2", "NUKAGE3"]).await;
     }
 
     #[tokio::test]

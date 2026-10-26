@@ -1,10 +1,13 @@
 //! Shared builders and readers for the optimize tests: the lump and
 //! marker builders, the plan runners and row readers, the `PNAMES`,
-//! `TEXTURE1` and flat-`MAP` payload builders and the `patches`-region
-//! fixture. `redundant` runs the three redundancy sweeps and the plan
-//! bookkeeping; `unused` the content-reading sweeps, their errors, the
-//! wire shape of an [`Action`] row and [`super::apply`].
+//! `TEXTURE1` and flat-`MAP` payload builders, the `patches`-region
+//! fixture and the `ANIMATED`/`SWITCHES` lump writers. `redundant` runs
+//! the three redundancy sweeps and the plan bookkeeping; `unused` the
+//! content-reading sweeps, their errors, the wire shape of an [`Action`]
+//! row and [`super::apply`]; `animations` the animation and switch tables
+//! the sweeps expand with.
 
+mod animations;
 mod redundant;
 mod unused;
 
@@ -123,4 +126,73 @@ pub(super) fn patch_region(names: &[&str]) -> Vec<Lump> {
     }
     out.push(marker("P_END"));
     out
+}
+
+/// `text` padded with `NUL` to `WIDTH` bytes: the shape of one name field
+/// in either `Boom` lump.
+pub(super) fn padded_field<const WIDTH: usize>(text: &str) -> [u8; WIDTH] {
+    let mut field = [0_u8; WIDTH];
+    for (slot, byte) in field.iter_mut().zip(text.as_bytes()) {
+        *slot = *byte;
+    }
+    field
+}
+
+/// One `ANIMATED` record's bytes: two nine-byte name fields, a speed and
+/// the `kind` byte, `255` for the record that ends the list.
+pub(super) fn animated_record(first: &str, second: &str, kind: u8) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&padded_field::<9>(first));
+    out.extend_from_slice(&padded_field::<9>(second));
+    out.extend_from_slice(&8_i32.to_le_bytes());
+    out.push(kind);
+    out
+}
+
+/// The `ANIMATED` lump `records` make, closed by the `255` terminator.
+pub(super) fn animated_lump(records: &[Vec<u8>]) -> Lump {
+    let mut out = Vec::new();
+    for record in records {
+        out.extend_from_slice(record);
+    }
+    out.push(0xFF);
+    lump("ANIMATED", &out)
+}
+
+/// One `SWITCHES` record's bytes: the episode and two eight-byte names,
+/// the `0` episode ending the list.
+pub(super) fn switch_record(episode: i16, first: &str, second: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&episode.to_le_bytes());
+    out.extend_from_slice(&padded_field::<8>(first));
+    out.extend_from_slice(&padded_field::<8>(second));
+    out
+}
+
+/// The `SWITCHES` lump `records` make, closed by the zero-episode record.
+pub(super) fn switches_lump(records: &[Vec<u8>]) -> Lump {
+    let mut out = Vec::new();
+    for record in records {
+        out.extend_from_slice(record);
+    }
+    out.extend_from_slice(&switch_record(0, "", ""));
+    lump("SWITCHES", &out)
+}
+
+/// The `ANIMATED` lump declaring one flat range per row of `rows`.
+pub(super) fn animated_ranges(rows: &[(&str, &str)]) -> Lump {
+    let records: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|&(first, second)| animated_record(first, second, 0))
+        .collect();
+    animated_lump(&records)
+}
+
+/// The `SWITCHES` lump holding one pair per row of `pairs`.
+pub(super) fn switch_pairs(pairs: &[(&str, &str)]) -> Lump {
+    let records: Vec<Vec<u8>> = pairs
+        .iter()
+        .map(|&(first, second)| switch_record(1, first, second))
+        .collect();
+    switches_lump(&records)
 }

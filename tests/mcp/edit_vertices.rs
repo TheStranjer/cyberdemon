@@ -15,19 +15,11 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, pwad_empty_map, pwad_map_formats};
+    use crate::fixtures::{fixture_counts, iwad, pwad_empty_map, pwad_map_formats};
     use crate::support::{call, call_err, connect};
 
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
-
-    /// The fixture map's element counts, as `get_map_summary` reports them.
-    fn fixture_counts() -> Value {
-        json!({
-            "things": 2_i32, "vertices": 6_i32, "linedefs": 7_i32,
-            "sidedefs": 8_i32, "sectors": 2_i32,
-        })
-    }
 
     /// Open the `DOOM II` fixture (one two-room binary `Doom` `MAP01`) as
     /// the base layer and start an empty working archive over it.

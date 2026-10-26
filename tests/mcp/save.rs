@@ -11,12 +11,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::{iwad, pwad};
-    use crate::support::{call, call_err, connect};
-
-    /// The `{"path": ...}` argument object for `file`.
-    fn path_arg(file: &Path) -> Value {
-        json!({ "path": file.display().to_string() })
-    }
+    use crate::support::{call, call_err, connect, path_arg};
 
     /// The `{"path": ..., "mode": ...}` argument object for `file` and
     /// `mode` (`full` exports, anything else saves).

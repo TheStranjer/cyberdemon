@@ -13,7 +13,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::{iwad, pwad, pwad_custom_defs};
-    use crate::support::{call, call_err, connect};
+    use crate::support::{call, call_err, connect, hex_of};
 
     /// A connected MCP client.
     type Client = RunningService<RoleClient, ()>;
@@ -42,16 +42,6 @@ mod tests {
     /// The block header fields (`kind`, `number`, `name`) of a report row.
     fn head(block: &Value) -> Value {
         json!([block["kind"], block["number"], block["name"],])
-    }
-
-    /// The payload as `get_lump format=hex` spells it: space-separated
-    /// uppercase bytes.
-    fn hex_of(bytes: &[u8]) -> String {
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02X}"))
-            .collect::<Vec<String>>()
-            .join(" ")
     }
 
     /// Write a Latin-1 `.deh` file (byte `0xE9` in a value) into `dir`,

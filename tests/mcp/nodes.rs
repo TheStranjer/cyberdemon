@@ -7,7 +7,7 @@
 //! client on the `IWAD` fixture (empty node lumps on `MAP01`), on the nodes
 //! fixture (`MAP05` valid, `MAP06` malformed, `MAP07` `XNOD` in `ZNODES`) and
 //! on the `IWAD` whose one concave room's build appends one split vertex, the
-//! asset-`URL` splitter and fetcher, the `JSON` asset reader and the name
+//! `JSON` asset reader and the name
 //! column of one scope's directory. The tests themselves are split by topic
 //! into the `read`, `build_tables`, `build_nodes`, `build_gl` and `build_all`
 //! modules: the three inspection tools over the `SEGS`/`SSECTORS`/`NODES`
@@ -31,7 +31,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::{iwad, iwad_l_room, pwad_nodes};
-use crate::support::{call, connect, http_get};
+use crate::support::{call, connect, fetch_asset, path_arg};
 
 /// A connected client for one test.
 type Client = RunningService<RoleClient, ()>;
@@ -40,12 +40,7 @@ type Client = RunningService<RoleClient, ()>;
 async fn plain_iwad(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 
@@ -54,12 +49,7 @@ async fn plain_iwad(dir: &Path) -> Client {
 async fn nodes_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let extra = pwad_nodes(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": extra.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&extra)).await;
     client
 }
 
@@ -68,28 +58,8 @@ async fn nodes_loaded(dir: &Path) -> Client {
 async fn l_room_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad_l_room(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
-}
-
-/// Split an asset `URL` into the origin and the request path for
-/// [`http_get`].
-fn split_asset_url(url: &str) -> (String, String) {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    (base.to_owned(), format!("/assets/{rest}"))
-}
-
-/// Fetch a published asset with a raw `HTTP` `GET` and require success.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, path) = split_asset_url(url);
-    let (status, body) = http_get(&base, &path).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
 }
 
 /// The `asset.url` of a full-detail report, as a parsed value plus

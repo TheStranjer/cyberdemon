@@ -10,11 +10,9 @@ use alloc::vec;
 use serde_json::{json, to_value};
 
 use crate::wad::map::describe::{Describe, Neighbour};
-use crate::wad::map::flags::BLOCKING;
+use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 
-use super::{
-    TWO_SIDED, cell, described, doom_defs, hall, neighbour_across, slab, split_divider_map,
-};
+use super::{cell, described, doom_defs, hall, neighbour_across, slab, split_divider_map};
 
 #[test]
 fn equal_floors_meet_across_an_opening() {

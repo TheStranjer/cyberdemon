@@ -1,8 +1,9 @@
 //! WAD fixtures written to disk with the library itself.
 //!
-//! Shared by the integration tests: every helper takes the scratch
+//! Shared by the integration tests: every builder takes the scratch
 //! directory (keep the [`tempfile::TempDir`] alive for as long as the paths
-//! are used) and returns the path it wrote.
+//! are used) and returns the path it wrote; [`fixture_counts`] carries the
+//! shared two-room fixture's element counts.
 //!
 //! The builders split by subject: `fixtures/graphics` dresses the archives,
 //! `fixtures/iwads` and `fixtures/pwads` write whole archives,
@@ -15,6 +16,7 @@ use cyberdemon::wad::archive::write_file_atomic;
 use cyberdemon::wad::map::doom::write_doom_map;
 use cyberdemon::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 use cyberdemon::wad::{Lump, LumpName, MapFormat, Wad};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// Bytes in one flat this repo's fixtures use.
@@ -157,6 +159,17 @@ pub fn two_room_map() -> Map {
         other: node_lumps(),
         ..Default::default()
     }
+}
+
+/// The [`two_room_map`] fixture's element counts, as `get_map_summary`
+/// reports them.
+#[must_use]
+#[inline]
+pub fn fixture_counts() -> Value {
+    json!({
+        "things": 2_i32, "vertices": 6_i32, "linedefs": 7_i32,
+        "sidedefs": 8_i32, "sectors": 2_i32,
+    })
 }
 
 /// A single-sector L-shaped room: the concave corner makes a node build

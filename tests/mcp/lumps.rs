@@ -9,8 +9,7 @@
 //! The helpers every topic drives the server through live here: a connected
 //! client on the `IWAD` with the `PWAD` fixture merged in, the `IWAD`-only
 //! session the copy-on-write tests start from, the fixture's lump sizes, the
-//! `lumps` row readers, the `{"path": ...}` and `{"source": ...}` argument
-//! builders, the working-archive name and undo-label readers, the assertion
+//! `lumps` row readers, the working-archive name and undo-label readers, the assertion
 //! that a refused edit left nothing behind, the lumps the selection tests seed
 //! the working archive with and the fixture map block's round trip through the
 //! map model. The tests themselves are split by topic into the `list`,
@@ -30,7 +29,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::{iwad, pwad, two_room_map};
-use crate::support::{call, connect};
+use crate::support::{call, connect, hex_of, path_arg, source_arg};
 
 /// A connected client for one test.
 type Client = RunningService<RoleClient, ()>;
@@ -54,18 +53,8 @@ async fn iwad_plus_pwad(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad(dir);
     let extra = pwad(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
-    call(
-        &client,
-        "merge_wad",
-        json!({ "path": extra.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
+    call(&client, "merge_wad", path_arg(&extra)).await;
     client
 }
 
@@ -91,21 +80,7 @@ fn names(report: &Value) -> Vec<String> {
 
 /// The space-separated uppercase hex of `data`'s first `count` bytes.
 fn hex_head(data: &[u8], count: usize) -> String {
-    let head = &data[..count.min(data.len())];
-    head.iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// The `{"path": ...}` argument object for `file`.
-fn path_arg(file: &Path) -> Value {
-    json!({ "path": file.display().to_string() })
-}
-
-/// The `{"source": ...}` argument object for the absolute `file`.
-fn source_arg(file: &Path) -> Value {
-    json!({ "source": file.display().to_string() })
+    hex_of(data.get(..count).unwrap_or(data))
 }
 
 /// The working archive's lump names, in directory order.

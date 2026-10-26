@@ -14,7 +14,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::support::{call, call_err, connect, http_get};
+    use crate::support::{asset_url, call, call_err, connect, fetch_asset, hex_of, source_arg};
 
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
@@ -27,11 +27,6 @@ mod tests {
     const DMX_HEADER: usize = 8;
     /// Pad bytes a padded DMX lump carries at each end.
     const DMX_PAD: usize = 16;
-
-    /// The `{"source": ...}` argument object for the absolute `file`.
-    fn source_arg(file: &Path) -> Value {
-        json!({ "source": file.display().to_string() })
-    }
 
     /// `get_session_info`'s undo-label list.
     async fn undo_labels(client: &Client) -> Vec<String> {
@@ -528,15 +523,6 @@ mod tests {
     /// `PC` speaker ticks per second.
     const TICKS_PER_SECOND: usize = 140;
 
-    /// `bytes` as the space-separated uppercase hex `add_lump` expects.
-    fn hex_of(bytes: &[u8]) -> String {
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02X}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
     /// Stores `bytes` in the working archive as a lump named `name`.
     async fn add_working_lump(client: &Client, name: &str, bytes: &[u8]) {
         call(
@@ -570,22 +556,6 @@ mod tests {
     /// The `DPTEST` PC speaker fixture: three ticks, tones 0, 20 and 40.
     fn pc_speaker_fixture() -> Vec<u8> {
         vec![0_u8, 0, 3, 0, 0, 20, 40]
-    }
-
-    /// GET a published asset `URL` and require the bytes it serves.
-    async fn fetch_asset(url: &str) -> Vec<u8> {
-        let (base, rest) = url.split_once("/assets/").expect("an asset url");
-        let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-        assert_eq!(status, 200, "the asset serves: {url}");
-        body
-    }
-
-    /// The asset `URL` of a `preview_sound` report.
-    fn asset_url(report: &Value) -> String {
-        report["asset"]["url"]
-            .as_str()
-            .expect("the report carries an asset url")
-            .to_owned()
     }
 
     #[tokio::test]

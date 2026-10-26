@@ -11,8 +11,8 @@ use cyberdemon::gfx::grab::read_grab;
 use serde_json::json;
 
 use crate::graphics::{
-    Refusal, add, add_in, asset_of, asset_url, check_dims, check_offsets, fetch_asset, fetch_image,
-    hex_of, image_png, iwad_client, refuse, refuse_all, stripe_hex,
+    Refusal, add, add_in, asset_of, asset_url_of, check_dims, check_offsets, fetch_asset,
+    fetch_image, hex_of, image_png, iwad_client, refuse, refuse_all, stripe_hex,
 };
 use crate::support::{call, connect};
 
@@ -34,7 +34,7 @@ async fn get_flat_publishes_a_raw_flat_as_a_png_asset() {
         asset["size"].as_u64().expect("a size") > 0,
         "bytes were stored"
     );
-    let url = asset_url(&report, "asset");
+    let url = asset_url_of(&report, "asset");
     let image = fetch_image(&url).await;
     assert_eq!(
         image.get(0, 0),
@@ -60,7 +60,7 @@ async fn get_flat_quantizes_a_png_flat_to_palette_zero() {
     let report = call(&client, "get_flat", json!({ "name": "PNGFLAT" })).await;
     check_dims(&report, 64_u64, 64_u64);
     assert_eq!(report["asset"]["mime"], json!("image/png"), "a PNG asset");
-    let image = fetch_image(&asset_url(&report, "asset")).await;
+    let image = fetch_image(&asset_url_of(&report, "asset")).await;
     assert_eq!(
         image.get(32, 32),
         Some([64_u8, 191, 64, 255]),
@@ -91,7 +91,7 @@ async fn get_flat_scales_the_picture_and_repaints_it_from_another_palette() {
         json!("FLOOR1.png"),
         "the same name, another asset"
     );
-    let image = fetch_image(&asset_url(&doubled, "asset")).await;
+    let image = fetch_image(&asset_url_of(&doubled, "asset")).await;
     assert_eq!(
         image.get(1, 1),
         Some([1_u8, 254, 1, 255]),
@@ -109,8 +109,8 @@ async fn get_flat_scales_the_picture_and_repaints_it_from_another_palette() {
         "the palette entry is not a new image"
     );
     assert_eq!(
-        fetch_asset(&asset_url(&plain, "asset")).await,
-        fetch_asset(&asset_url(&coloured, "asset")).await,
+        fetch_asset(&asset_url_of(&plain, "asset")).await,
+        fetch_asset(&asset_url_of(&coloured, "asset")).await,
         "the fixture palettes are copies, so palette 13 paints the same picture"
     );
 }
@@ -136,7 +136,7 @@ async fn get_flat_publishes_raw_rgba_bytes_at_the_scaled_size() {
         "the raw asset media type"
     );
     check_dims(&rgba, 128_u64, 128_u64);
-    let bytes = fetch_asset(&asset_url(&rgba, "asset")).await;
+    let bytes = fetch_asset(&asset_url_of(&rgba, "asset")).await;
     assert_eq!(bytes.len(), rgba_len(128, 128), "row-major RGBA8 bytes");
     assert_eq!(
         bytes.first().copied(),
@@ -296,7 +296,7 @@ async fn get_patch_publishes_a_doom_patch_with_grab_offsets() {
     assert_eq!(report["name"], json!("WALLP1"), "the lump it read");
     check_dims(&report, 16_u64, 16_u64);
     check_offsets(&report, -2_i64, -14_i64);
-    let url = asset_url(&report, "asset");
+    let url = asset_url_of(&report, "asset");
     let bytes = fetch_asset(&url).await;
     assert_eq!(
         read_grab(&bytes).expect("a chunked PNG"),
@@ -318,7 +318,7 @@ async fn get_patch_publishes_a_doom_patch_with_grab_offsets() {
     check_dims(&doubled, 32_u64, 32_u64);
     check_offsets(&doubled, -4_i64, -28_i64);
     assert_eq!(
-        read_grab(&fetch_asset(&asset_url(&doubled, "asset")).await).expect("a chunked PNG"),
+        read_grab(&fetch_asset(&asset_url_of(&doubled, "asset")).await).expect("a chunked PNG"),
         Some((-4_i32, -28_i32)),
         "the chunk scales along with the picture"
     );
@@ -334,7 +334,7 @@ async fn get_patch_publishes_a_doom_patch_with_grab_offsets() {
         "the raw asset"
     );
     assert_eq!(
-        fetch_asset(&asset_url(&rgba, "asset")).await.len(),
+        fetch_asset(&asset_url_of(&rgba, "asset")).await.len(),
         16_usize
             .checked_mul(16)
             .expect("16x16 fits")
@@ -357,7 +357,7 @@ async fn get_patch_resolves_a_png_lump_and_a_working_override() {
     let report = call(&client, "get_patch", json!({ "name": "PNGPAT" })).await;
     check_dims(&report, 3_u64, 2_u64);
     check_offsets(&report, 3_i64, -4_i64);
-    let image = fetch_image(&asset_url(&report, "asset")).await;
+    let image = fetch_image(&asset_url_of(&report, "asset")).await;
     assert_eq!(
         image.get(0, 0),
         Some([17_u8, 238, 17, 255]),

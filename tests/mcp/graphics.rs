@@ -24,15 +24,10 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::iwad;
-use crate::support::{call, call_err, connect, http_get};
+use crate::support::{asset_url_of, call, call_err, connect, fetch_asset, hex_of, path_arg};
 
 /// A connected MCP client.
 type Client = RunningService<RoleClient, ()>;
-
-/// The `{"path": ...}` argument object for `file`.
-fn path_arg(file: &Path) -> Value {
-    json!({ "path": file.display().to_string() })
-}
 
 /// Load the fixture `IWAD` (flats, patches, sprites, textures) as the
 /// base.
@@ -41,14 +36,6 @@ async fn iwad_client(dir: &Path) -> Client {
     let base = iwad(dir);
     call(&client, "open_iwad", path_arg(&base)).await;
     client
-}
-
-/// The space-separated uppercase hex of `data`, for `add_lump` inputs.
-fn hex_of(data: &[u8]) -> String {
-    data.iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// A flat `PNG` of `width` by `height`, optionally with `grAb`
@@ -92,22 +79,6 @@ fn stripe_hex(width: u32, column: u32, offsets: (i16, i16)) -> String {
 /// The asset object a report carries under `field`.
 fn asset_of<'report>(report: &'report Value, field: &str) -> &'report Value {
     &report[field]
-}
-
-/// The `url` of the asset a report carries under `field`.
-fn asset_url(report: &Value, field: &str) -> String {
-    asset_of(report, field)["url"]
-        .as_str()
-        .expect("the report carries an asset url")
-        .to_owned()
-}
-
-/// GET a published asset and require the bytes it serves.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
 }
 
 /// GET a published asset and decode it as an image.

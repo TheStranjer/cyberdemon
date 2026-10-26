@@ -10,15 +10,10 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::{iwad, not_a_wad, pwad, pwad_redundant};
-    use crate::support::{call, call_err, connect};
+    use crate::support::{call, call_err, connect, path_arg};
 
     /// A connected client for one test.
     type Client = RunningService<RoleClient, ()>;
-
-    /// The `{"path": ...}` argument object for `file`.
-    fn path_arg(file: &Path) -> Value {
-        json!({ "path": file.display().to_string() })
-    }
 
     /// Load the `IWAD` fixture as the session's base layer.
     async fn load_iwad(client: &Client, dir: &Path) {

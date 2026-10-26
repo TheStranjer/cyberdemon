@@ -21,10 +21,11 @@ use crate::defs::{Definitions, definitions_for};
 use crate::plan::features::FeatureRow;
 use crate::wad::classify::MapFormat;
 use crate::wad::game::Game;
-use crate::wad::map::common::fixtures::{name, room, side, solid_line, spawn, vertex};
-use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
+use crate::wad::map::common::fixtures::{
+    cell, hall, name, one_sided, room, side, slab, solid_line, vertex,
+};
 use crate::wad::map::geometry::point_in_sector;
-use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing};
+use crate::wad::map::{Linedef, Map, Sector, Thing};
 
 use super::{Describe, Neighbour, SectorFacts};
 
@@ -132,118 +133,6 @@ pub(super) fn retune(map: &mut Map, row: Sector) {
 /// Stands `row` among `map`'s things.
 pub(super) fn stand(map: &mut Map, row: Thing) {
     map.things.push(row);
-}
-
-/// A hand-built room: `floor` under 128 units of ceiling.
-pub(super) fn cell(floor: i32) -> (i32, i32) {
-    (floor, floor.saturating_add(128))
-}
-
-/// A hand-built slab: a sector with no headroom at all, which is what
-/// a shut door sector looks like.
-pub(super) fn slab(floor: i32) -> (i32, i32) {
-    (floor, floor)
-}
-
-/// The `x` of hand-built room column `column`.
-fn edge(column: usize) -> i32 {
-    i32::try_from(column).map_or(i32::MAX, |index| index.saturating_mul(256))
-}
-
-/// A blocking one-sided wall from `v1` to `v2` wearing a fresh sidedef
-/// that faces `sector`.
-fn one_sided(v1: usize, v2: usize, sidedefs: &mut Vec<Sidedef>, sector: usize) -> Linedef {
-    sidedefs.push(side("-", "-", "WALL1", sector));
-    Linedef {
-        v1,
-        v2,
-        flags: BLOCKING,
-        front: Some(sidedefs.len().saturating_sub(1)),
-        ..Default::default()
-    }
-}
-
-/// The two-sided, unblocked divider between hall rooms `room` and
-/// `room + 1` of a `count`-room hall, its front facing `room`; it
-/// appends the two blank sidedefs it wears.
-fn hall_divider(room: usize, count: usize, sidedefs: &mut Vec<Sidedef>) -> Linedef {
-    let next = room.saturating_add(1);
-    let front = sidedefs.len();
-    sidedefs.push(side("-", "-", "-", room));
-    sidedefs.push(side("-", "-", "-", next));
-    Linedef {
-        v1: count.saturating_add(1).saturating_add(next),
-        v2: next,
-        flags: TWO_SIDED,
-        front: Some(front),
-        back: Some(front.saturating_add(1)),
-        ..Default::default()
-    }
-}
-
-/// A row of 256-unit rooms: `specs` is one `(floor, ceiling)` per
-/// room, room `i` spanning `x = 256i` to `x = 256(i + 1)` and owning
-/// sector `i`. Linedef `i` is the two-sided, unblocked divider between
-/// rooms `i` and `i + 1`, its front facing the lower-numbered room;
-/// the walls that close each room follow the dividers. A player 1
-/// start stands in the middle of room 0.
-pub(super) fn hall(specs: &[(i32, i32)]) -> Map {
-    let count = specs.len();
-    let bottom = |column: usize| column;
-    let top = |column: usize| count.saturating_add(1).saturating_add(column);
-    let mut vertices = Vec::new();
-    for column in 0..=count {
-        vertices.push(vertex(edge(column), 0));
-    }
-    for column in 0..=count {
-        vertices.push(vertex(edge(column), 256));
-    }
-    let mut linedefs = Vec::new();
-    let mut sidedefs = Vec::new();
-    for room_index in 0..count.saturating_sub(1) {
-        linedefs.push(hall_divider(room_index, count, &mut sidedefs));
-    }
-    for room_index in 0..count {
-        let next = room_index.saturating_add(1);
-        linedefs.push(one_sided(
-            top(room_index),
-            top(next),
-            &mut sidedefs,
-            room_index,
-        ));
-        linedefs.push(one_sided(
-            bottom(next),
-            bottom(room_index),
-            &mut sidedefs,
-            room_index,
-        ));
-    }
-    linedefs.push(one_sided(bottom(0), top(0), &mut sidedefs, 0));
-    let last = count.saturating_sub(1);
-    linedefs.push(one_sided(top(count), bottom(count), &mut sidedefs, last));
-    Map {
-        name: name("MAP01"),
-        format: MapFormat::Doom,
-        udmf_namespace: None,
-        extra_globals: Vec::new(),
-        extra_blocks: Vec::new(),
-        things: vec![spawn(1, 128, 128, 0)],
-        vertices,
-        linedefs,
-        sidedefs,
-        sectors: specs
-            .iter()
-            .map(|spec| Sector {
-                floor_height: spec.0,
-                ceiling_height: spec.1,
-                floor_flat: "FLOOR1".to_owned(),
-                ceiling_flat: "FLOOR1".to_owned(),
-                light: 160,
-                ..Default::default()
-            })
-            .collect(),
-        other: Vec::new(),
-    }
 }
 
 /// Two equal rooms, `A` at `x 0..256` and `B` at `x 256..512`, whose

@@ -22,7 +22,7 @@ use crate::e2e_sketch::{
     Client, GRID, MAP, SCALE_NUM, build_the_traced_plan, gap_between, player_start, point_of,
     rooms_with_source_ids, units,
 };
-use crate::support::{asset_png, call};
+use crate::support::{asset_png, asset_url, call};
 
 /// Overview width: wide enough for the built door band to be ten
 /// output pixels across, one column per line.
@@ -144,11 +144,6 @@ fn topdown_over_sketch(sketch: &str) -> Value {
         "labels": { "sectors": true },
         "underlay": { "source": sketch, "units": units() },
     })
-}
-
-/// The published asset's `URL` text.
-fn asset_url(report: &Value) -> &str {
-    report["asset"]["url"].as_str().expect("an asset url")
 }
 
 /// The one pixel `image` draws at world-pixel `x`/`y`, `None` off the
@@ -293,7 +288,7 @@ async fn the_topdown_overview_lands_the_built_door_on_the_drawn_wall() {
         overview["notes"]
     );
     assert_underlay_placement(&overview, &chain.trace);
-    let image = asset_png(asset_url(&overview)).await;
+    let image = asset_png(&asset_url(&overview)).await;
     assert_eq!(
         i64::from(image.width),
         overview["width"].as_i64().expect("a width"),
@@ -362,7 +357,7 @@ async fn the_view_from_the_player_start_draws_the_door_ahead() {
     let view = call(&chain.client, "render_view", view_from(&start)).await;
     assert_eq!(view["map"], json!(MAP), "the built map drew");
     assert_camera_is_the_start(&view, &start, &chain.built);
-    let image = asset_png(asset_url(&view)).await;
+    let image = asset_png(&asset_url(&view)).await;
     let ground = ground_pixel(&chain.client).await;
     let painted = painted_centre_column(&image, ground);
     let height = usize::try_from(image.height).expect("a test frame");

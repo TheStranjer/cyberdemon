@@ -17,7 +17,7 @@ mod tests {
     use cyberdemon::music::{MidiWriter, midi_to_mus};
 
     use crate::fixtures::iwad;
-    use crate::support::{call, call_err, connect, http_get, http_put};
+    use crate::support::{call, call_err, connect, fetch_asset, hex_of, http_put, path_arg};
 
     /// The client handle these tests call through.
     type Client = RunningService<RoleClient, ()>;
@@ -159,26 +159,12 @@ mod tests {
         );
     }
 
-    /// A tool argument naming one path.
-    fn path_arg(file: &Path) -> Value {
-        json!({ "path": file.display().to_string() })
-    }
-
     /// The fixture `IWAD` open as the session's base layer: flats, patches,
     /// sprites, textures, `PNAMES`, `PLAYPAL` and `COLORMAP`.
     async fn iwad_client(dir: &Path) -> Client {
         let client = connect().await;
         call(&client, "open_iwad", path_arg(&iwad(dir))).await;
         client
-    }
-
-    /// The hex spelling `add_lump` takes: byte values separated by spaces.
-    fn hex_of(bytes: &[u8]) -> String {
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02X}"))
-            .collect::<Vec<_>>()
-            .join(" ")
     }
 
     /// Adds one working-archive lump of `bytes`, optionally inside a region.
@@ -235,14 +221,6 @@ mod tests {
             report.get("width").is_none() && report.get("height").is_none(),
             "no dimensions for a playable file: {report}"
         );
-    }
-
-    /// GET a published asset and require the bytes it serves.
-    async fn fetch_asset(url: &str) -> Vec<u8> {
-        let (base, rest) = url.split_once("/assets/").expect("an asset url");
-        let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-        assert_eq!(status, 200, "the asset serves: {url}");
-        body
     }
 
     /// GET a published asset and decode it as an image.

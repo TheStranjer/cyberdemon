@@ -233,114 +233,15 @@ mod tests {
     use crate::plan::model::{Connection, ConnectionKind, Plan, Room, Shape};
     use crate::plan::textures::{TextureRole, TextureRoles};
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::common::fixtures::{name, side, spawn, vertex};
+    use crate::wad::map::Map;
+    use crate::wad::map::common::fixtures::{cell, hall, middle, name, slab, spawn};
     use crate::wad::map::flags::{BLOCKING, FlagFamily, Skill, TWO_SIDED};
     use crate::wad::map::playability::{Playability, analyze_playability};
-    use crate::wad::map::{Linedef, Map, Sector, Sidedef};
 
     /// The blue card thing type.
     const BLUE_CARD: i32 = 5_i32;
     /// The blue door use special.
     const BLUE_DOOR: i32 = 26_i32;
-
-    /// The `x` of hand-built room column `column`.
-    fn edge(column: usize) -> i32 {
-        i32::try_from(column).map_or(i32::MAX, |index| index.saturating_mul(256))
-    }
-
-    /// A hand-built room: `floor` under 128 units of ceiling.
-    fn cell(floor: i32) -> (i32, i32) {
-        (floor, floor.saturating_add(128))
-    }
-
-    /// A hand-built slab: a sector with no headroom at all, the way a shut
-    /// door band reads.
-    fn slab(floor: i32) -> (i32, i32) {
-        (floor, floor)
-    }
-
-    /// The middle of hand-built room `room`, where a thing certainly stands.
-    fn middle(room: usize) -> (i32, i32) {
-        (edge(room).saturating_add(128), 128)
-    }
-
-    /// A blocking one-sided wall from `v1` to `v2` wearing a fresh sidedef
-    /// that faces `sector`.
-    fn one_sided(v1: usize, v2: usize, sides: &mut Vec<Sidedef>, sector: usize) -> Linedef {
-        sides.push(side("-", "-", "WALL1", sector));
-        Linedef {
-            v1,
-            v2,
-            flags: BLOCKING,
-            front: Some(sides.len().saturating_sub(1)),
-            ..Default::default()
-        }
-    }
-
-    /// A row of 256-unit rooms: `specs` is one `(floor, ceiling)` per room,
-    /// room `i` spanning `x = 256i` to `x = 256(i + 1)` and owning sector
-    /// `i`. Linedef `i` is the two-sided divider between rooms `i` and
-    /// `i + 1`, its front facing the lower-numbered room; the walls that
-    /// close each room follow the dividers. A player 1 start stands in the
-    /// middle of room 0.
-    fn hall(specs: &[(i32, i32)]) -> Map {
-        let count = specs.len();
-        let bottom = |column: usize| column;
-        let top = |column: usize| count.saturating_add(1).saturating_add(column);
-        let mut vertices = Vec::new();
-        for column in 0..=count {
-            vertices.push(vertex(edge(column), 0));
-        }
-        for column in 0..=count {
-            vertices.push(vertex(edge(column), 256));
-        }
-        let mut linedefs = Vec::new();
-        let mut sides = Vec::new();
-        for room in 0..count.saturating_sub(1) {
-            let next = room.saturating_add(1);
-            sides.push(side("-", "-", "-", room));
-            sides.push(side("-", "-", "-", next));
-            linedefs.push(Linedef {
-                v1: top(next),
-                v2: bottom(next),
-                flags: TWO_SIDED,
-                front: Some(room.saturating_mul(2)),
-                back: Some(room.saturating_mul(2).saturating_add(1)),
-                ..Default::default()
-            });
-        }
-        for room in 0..count {
-            let next = room.saturating_add(1);
-            linedefs.push(one_sided(top(room), top(next), &mut sides, room));
-            linedefs.push(one_sided(bottom(next), bottom(room), &mut sides, room));
-        }
-        linedefs.push(one_sided(bottom(0), top(0), &mut sides, 0));
-        let last = count.saturating_sub(1);
-        linedefs.push(one_sided(top(count), bottom(count), &mut sides, last));
-        Map {
-            name: name("MAP01"),
-            format: MapFormat::Doom,
-            udmf_namespace: None,
-            extra_globals: Vec::new(),
-            extra_blocks: Vec::new(),
-            things: vec![spawn(1, 128, 128, 0)],
-            vertices,
-            linedefs,
-            sidedefs: sides,
-            sectors: specs
-                .iter()
-                .map(|spec| Sector {
-                    floor_height: spec.0,
-                    ceiling_height: spec.1,
-                    floor_flat: "FLOOR1".to_owned(),
-                    ceiling_flat: "FLOOR1".to_owned(),
-                    light: 160,
-                    ..Default::default()
-                })
-                .collect(),
-            other: Vec::new(),
-        }
-    }
 
     /// Sets the `(special, tag, flags)` triple on linedef `line` of `map`.
     fn wire(map: &mut Map, line: usize, action: (i32, i32, u32)) {

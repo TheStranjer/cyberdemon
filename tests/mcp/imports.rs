@@ -3,9 +3,9 @@
 //! fixture `IWAD` as its base, the palette-colour test pictures - the 8x8
 //! `PNG` rasters with an optional alpha hole and `grAb` chunk and the
 //! palette-cycling flat `PNG`s, all written with the library's own `PNG`
-//! encoder -, the `source` argument builder, the asset fetcher, the stored
-//! `RGBA` readers for patches, flats and sprites, the expected-pixel and
-//! report cross-checkers, the `steps`/`warnings` readers with their pixel
+//! encoder -, the stored `RGBA` readers for patches, flats and sprites, the
+//! expected-pixel and report cross-checkers, the `steps`/`warnings` readers
+//! with their pixel
 //! readers, and the `Refusal` table type with its `refuse_all` runner. The
 //! tests themselves are split by topic into the `patch`, `patch_sources`,
 //! `flat`, `raw`, `sprite`, `process`, `create_texture`, `create_flat` and
@@ -27,7 +27,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::iwad;
-use crate::support::{call, call_err, connect, http_get};
+use crate::support::{call, call_err, connect, fetch_asset, path_arg, source_args};
 
 /// A connected MCP client.
 type Client = RunningService<RoleClient, ()>;
@@ -54,12 +54,7 @@ const FIXTURE_FLATS: u64 = 2_u64;
 async fn iwad_client(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({ "path": base.display().to_string() }),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 
@@ -118,25 +113,6 @@ fn write_file(dir: &Path, file: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.join(file);
     std::fs::write(&path, bytes).expect("test files write");
     path
-}
-
-/// Arguments carrying a `source` path merged with an object of extras.
-fn source_args(file: &Path, extra: Value) -> Value {
-    let mut args = json!({ "source": file.display().to_string() });
-    if let Value::Object(additions) = extra {
-        args.as_object_mut()
-            .expect("a JSON object")
-            .extend(additions);
-    }
-    args
-}
-
-/// Fetch a published asset's bytes.
-async fn fetch_asset(url: &str) -> Vec<u8> {
-    let (base, rest) = url.split_once("/assets/").expect("an asset url");
-    let (status, body) = http_get(base, &format!("/assets/{rest}")).await;
-    assert_eq!(status, 200, "the asset serves: {url}");
-    body
 }
 
 /// The `RGBA` bytes of the stored patch `name`, via `get_patch`.

@@ -8,8 +8,8 @@
 use serde_json::{Value, json};
 
 use crate::patches::{
-    FIXTURE_PNAMES, PATCH_OFFSETS, Refusal, add, doom_patch, iwad_client, palette_png, patch_args,
-    refuse_all, stored_bytes, working_names, write_file,
+    FIXTURE_PNAMES, PATCH_OFFSETS, Refusal, add, doom_patch, iwad_client, palette_png, refuse_all,
+    source_args, stored_bytes, working_names, write_file,
 };
 use crate::support::{call, call_err};
 
@@ -94,7 +94,7 @@ async fn add_patch_stores_existing_doom_patch_bytes_unchanged() {
     let shifted = call(
         &client,
         "add_patch",
-        patch_args(
+        source_args(
             &file,
             json!({ "name": "SHIFTED", "offsets": { "x": 3_i64, "y": -5_i64 } }),
         ),
@@ -120,7 +120,7 @@ async fn add_patch_can_stay_out_of_pnames() {
     let report = call(
         &client,
         "add_patch",
-        patch_args(&file, json!({ "name": "OFFLIST", "add_to_pnames": false })),
+        source_args(&file, json!({ "name": "OFFLIST", "add_to_pnames": false })),
     )
     .await;
     assert_eq!(report["pnames_index"], Value::Null, "opted out");
@@ -155,7 +155,7 @@ async fn a_duplicate_add_refuses_and_names_replace_patch() {
     let (code, message, _) = call_err(
         &client,
         "add_patch",
-        patch_args(&file, json!({ "name": "TWIN" })),
+        source_args(&file, json!({ "name": "TWIN" })),
     )
     .await;
     assert_eq!(code, "already_exists", "the twin refuses");
@@ -193,19 +193,19 @@ async fn bad_add_arguments_are_refused_without_edits() {
         ),
         (
             "nine characters",
-            patch_args(&patch_file, json!({ "name": "TOOLONGNM" })),
+            source_args(&patch_file, json!({ "name": "TOOLONGNM" })),
             "invalid_argument",
             "name",
         ),
         (
             "preset",
-            patch_args(&patch_file, json!({ "name": "X", "offsets": "middle" })),
+            source_args(&patch_file, json!({ "name": "X", "offsets": "middle" })),
             "invalid_argument",
             "center_bottom",
         ),
         (
             "mode",
-            patch_args(
+            source_args(
                 &patch_file,
                 json!({ "name": "X", "transparency": { "mode": "blur" } }),
             ),
@@ -214,7 +214,7 @@ async fn bad_add_arguments_are_refused_without_edits() {
         ),
         (
             "offset past i16",
-            patch_args(
+            source_args(
                 &patch_file,
                 json!({ "name": "X", "offsets": { "x": 40000_i64, "y": 0_i64 } }),
             ),
@@ -223,7 +223,7 @@ async fn bad_add_arguments_are_refused_without_edits() {
         ),
         (
             "junk",
-            patch_args(&junk, json!({ "name": "X" })),
+            source_args(&junk, json!({ "name": "X" })),
             "format_error",
             "image",
         ),

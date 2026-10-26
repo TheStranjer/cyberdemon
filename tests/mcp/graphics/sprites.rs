@@ -12,8 +12,8 @@ use serde_json::json;
 
 use crate::fixtures::{iwad, pwad_custom_defs};
 use crate::graphics::{
-    Client, Refusal, add_in, add_stripe_mirror, asset_url, check_dims, check_offsets, fetch_asset,
-    fetch_image, hex_of, iwad_client, path_arg, refuse, refuse_all, stripe_bytes,
+    Client, Refusal, add_in, add_stripe_mirror, asset_url_of, check_dims, check_offsets,
+    fetch_asset, fetch_image, hex_of, iwad_client, path_arg, refuse, refuse_all, stripe_bytes,
 };
 use crate::support::{call, call_err, connect};
 
@@ -37,14 +37,14 @@ async fn get_sprite_serves_a_named_lump_as_stored() {
     assert_eq!(pair["mirrored"], json!(false), "as stored, not flipped");
     check_dims(&pair, 4_u64, 2_u64);
     check_offsets(&pair, 1_i64, 2_i64);
-    let image = fetch_image(&asset_url(&pair, "asset")).await;
+    let image = fetch_image(&asset_url_of(&pair, "asset")).await;
     assert_eq!(
         image.get(0, 0).map(|[_, _, _, alpha]| alpha),
         Some(255),
         "the stored image keeps its opaque column at the left"
     );
     assert_eq!(
-        read_grab(&fetch_asset(&asset_url(&pair, "asset")).await).expect("a chunked PNG"),
+        read_grab(&fetch_asset(&asset_url_of(&pair, "asset")).await).expect("a chunked PNG"),
         Some((1_i32, 2_i32)),
         "grAb carries the stored offsets"
     );
@@ -87,7 +87,7 @@ async fn get_sprite_serves_a_mirrored_pair_rotation_flipped() {
     assert_eq!(eight["mirrored"], json!(true), "flipped horizontally");
     check_dims(&eight, 4_u64, 2_u64);
     check_offsets(&eight, 3_i64, 2_i64);
-    let url = asset_url(&eight, "asset");
+    let url = asset_url_of(&eight, "asset");
     let image = fetch_image(&url).await;
     assert_eq!(
         image.get(3, 0).map(|[_, _, _, alpha]| alpha),
@@ -187,7 +187,7 @@ async fn decode_patch_publishes_both_encodings_of_a_lump() {
     check_dims(&report, 16_u64, 8_u64);
     check_offsets(&report, 0_i64, 0_i64);
     assert_eq!(report["palette"], json!(0_u64), "the default palette");
-    let png_url = asset_url(&report, "png");
+    let png_url = asset_url_of(&report, "png");
     assert_eq!(
         report["png"]["filename"],
         json!("STEPP1.png"),
@@ -210,7 +210,7 @@ async fn decode_patch_publishes_both_encodings_of_a_lump() {
         Some([150_u8, 105, 150, 255]),
         "the fill index 150 in colour"
     );
-    let raw = fetch_asset(&asset_url(&report, "rgba")).await;
+    let raw = fetch_asset(&asset_url_of(&report, "rgba")).await;
     assert_eq!(
         raw.len(),
         16_usize
@@ -317,7 +317,7 @@ async fn get_thing_sprite_publishes_the_definition_rotation() {
         json!("TROOA1.png"),
         "published under the rotation name"
     );
-    let image = fetch_image(&asset_url(&imp, "asset")).await;
+    let image = fetch_image(&asset_url_of(&imp, "asset")).await;
     assert_eq!(
         image.get(0, 0),
         Some([51_u8, 204, 51, 255]),

@@ -11,7 +11,7 @@ use cyberdemon::gfx::image::RgbaImage;
 use serde_json::{Value, json};
 
 use crate::sketch::{INK, bar, debug_image, paper, region, write_png};
-use crate::support::{call, call_err, connect};
+use crate::support::{call, call_err, connect, count_pixels};
 
 /// The noise fixture's sheet size, pixels.
 const NOISE_WIDTH: u32 = 400;
@@ -201,14 +201,6 @@ fn non_increasing(numbers: &[u64]) -> bool {
             (Some(high), Some(low)) => high >= low,
             _ => false,
         })
-}
-
-/// The exact `colour` pixels of a decoded picture.
-fn count_pixels(img: &RgbaImage, colour: [u8; 4]) -> usize {
-    (0..img.height)
-        .flat_map(|row| (0..img.width).map(move |column| (column, row)))
-        .filter(|&(column, row)| img.get(column, row) == Some(colour))
-        .count()
 }
 
 /// The overlay's gap-disc colour.

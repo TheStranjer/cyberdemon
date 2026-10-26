@@ -21,7 +21,7 @@ use rmcp::service::RunningService;
 use serde_json::{Value, json};
 
 use crate::fixtures::iwad_features;
-use crate::support::{call, call_err, connect};
+use crate::support::{call, call_err, connect, path_arg};
 
 /// A connected client for one test.
 type Client = RunningService<RoleClient, ()>;
@@ -31,12 +31,7 @@ type Client = RunningService<RoleClient, ()>;
 async fn features_loaded(dir: &Path) -> Client {
     let client = connect().await;
     let base = iwad_features(dir);
-    call(
-        &client,
-        "open_iwad",
-        json!({"path": base.display().to_string()}),
-    )
-    .await;
+    call(&client, "open_iwad", path_arg(&base)).await;
     client
 }
 

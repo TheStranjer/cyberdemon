@@ -7,8 +7,8 @@
 use serde_json::json;
 
 use crate::patches::{
-    FIXTURE_PNAMES, IWAD_SIDE, iwad_client, palette_png, patch_args, patch_row, pnames_list,
-    remove, replace, texture_patches, working_names, write_file,
+    FIXTURE_PNAMES, IWAD_SIDE, iwad_client, palette_png, patch_row, pnames_list, remove, replace,
+    source_args, texture_patches, working_names, write_file,
 };
 use crate::support::{call, call_err};
 
@@ -24,7 +24,7 @@ async fn remove_patch_deletes_the_working_lump_and_answers_on_the_list() {
     call(
         &client,
         "add_patch",
-        patch_args(&file, json!({ "name": "OFFLIST", "add_to_pnames": false })),
+        source_args(&file, json!({ "name": "OFFLIST", "add_to_pnames": false })),
     )
     .await;
     let report = remove(&client, "OFFLIST", json!({})).await;
@@ -68,7 +68,7 @@ async fn remove_patch_can_drop_the_pnames_entry_too() {
     call(
         &client,
         "add_patch",
-        patch_args(&on, json!({ "name": "ONLIST" })),
+        source_args(&on, json!({ "name": "ONLIST" })),
     )
     .await;
     let grown = call(&client, "list_pnames", json!({})).await;

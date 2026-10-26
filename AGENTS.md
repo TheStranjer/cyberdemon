@@ -1101,7 +1101,9 @@ src/
                   reader and writer the two binary formats share
                   (`SIDEDEFS`/`VERTEXES`/`SECTORS` are byte-identical, and one
                   `BinaryLayout` of each format's `THINGS`/`LINEDEFS` codecs,
-                  error label and tail lumps drives the shared lump run),
+                  error label and tail lumps drives the shared lump run) on
+                  the `common::fixtures` test module's element builders and
+                  hand-built room hall the map-layer tests share,
                   `map/udmf_map.rs` the `UDMF` `TEXTMAP`/`ENDMAP` reader and
                   writer over the model: the defaults and the flag-name
                   tables both halves read, the block walk dispatching a
@@ -1449,12 +1451,17 @@ data/
 tests/
   mcp.rs          Single integration test crate root.
   mcp/            support.rs: rmcp client harness (connect, call, call_err,
-                    raw-HTTP PUT/GET to the asset origin) plus a probe server
-                    speaking the structured-result contract and the picture
-                    helpers (PNG/MIDI/WAV builders, paper sheets);
+                    raw-HTTP PUT/GET to the asset origin), the wire shapes
+                    every group shares (the `{"path": ...}` and
+                    `{"source": ...}` argument builders, the `add_lump`
+                    hex form, the asset-`URL` splitter, fetcher and report
+                    readers and the exact-colour pixel count), a probe
+                    server speaking the structured-result contract and the
+                    picture helpers (PNG/MIDI/WAV builders, paper sheets);
                     fixtures.rs: WAD builders writing archives with the
                     library (the shared primitives, the two-room and L-room
-                    maps and the archive writer, re-exporting every moved
+                    maps, the two-room map's element-count row and the
+                    archive writer, re-exporting every moved
                     builder) on fixtures/graphics.rs (palettes, patch,
                     sprite and texture lump bytes and the textured-view
                     `IWAD`), fixtures/iwads.rs (the `DOOM II`, stock,
@@ -1472,7 +1479,8 @@ tests/
                     `lumps` group's shared helpers in `lumps.rs` (the
                     merged-layer and `IWAD`-only clients, the fixture lump
                     sizes, the row, working-name and undo-label readers, the
-                    `path`, `source` and replace-hex argument builders, the
+                    replace-hex argument builder with the shared `path` and
+                    `source` builders forwarded from `support.rs`, the
                     lump seeders and the refused-edit assertion) with its tests
                     in `lumps/list.rs` (the `list_lumps` scopes, filters and
                     paging), `lumps/search.rs` (the `search_lumps` globs,
@@ -1517,7 +1525,7 @@ tests/
                     `patches/remove.rs` (`remove_patch`), and the `graphics`
                     group's shared helpers in `graphics.rs` (the fixture-`IWAD`
                     client, the `add_lump` picture builders, the asset
-                    fetchers, the report checks and the refusal table) with its
+                    image readers, the report checks and the refusal table) with its
                     tests in `graphics/list.rs` (the flats, patch and sprite
                     listings with their `PNAMES`, namespace, prefix and paging
                     rules), `graphics/flat_patch.rs` (`get_flat` and `get_patch`
@@ -1526,8 +1534,7 @@ tests/
                     mirror rotations, `decode_patch` and `get_thing_sprite`),
                     the `imports` group's shared helpers in `imports.rs` (the
                     fixture-`IWAD` client, the palette-colour and
-                    palette-cycling `PNG` builders, the `source` argument
-                    builder, the asset fetcher, the stored `RGBA` readers, the
+                    palette-cycling `PNG` builders, the stored `RGBA` readers, the
                     report checkers, the pixel readers and the refusal runner)
                     with its tests in `imports/patch.rs` (the
                     `import_image_as_patch` pipeline, its alias, colour key,
@@ -1544,9 +1551,9 @@ tests/
                     `imports/create_flat.rs` (`create_flat_from_image`) and
                     `imports/create_sprite.rs` (`create_sprite_from_image`),
                     the `render` group's shared helpers in `render.rs` (the
-                    fixture-`IWAD` client, the `{"path": ...}` argument, the
-                    fitted top-down `transform` and its pixel mapping, the
-                    asset fetch, the PNG decode and the two pixel counters)
+                    fixture-`IWAD` client, the fitted top-down `transform`
+                    and its pixel mapping, the asset `PNG` decode and the
+                    non-background pixel count)
                     with its tests in `render/settings.rs` (the session
                     defaults and every setter's validation),
                     `render/topdown.rs` (the fitted picture, the styles,
@@ -1591,8 +1598,8 @@ tests/
                     `replace_flat`), `query/replace_things.rs`
                     (`replace_thing_type`) and `query/bulk.rs` (`bulk_edit`),
                     and the `maps` group's shared helpers in `maps.rs` (the
-                    three fixture loaders, the asset-`URL` splitter and fetcher
-                    and the `list_maps`/`get_map_lumps` row readers) with its
+                    three fixture loaders and the
+                    `list_maps`/`get_map_lumps` row readers) with its
                     tests in `maps/list.rs` (`list_maps` over the scopes and
                     the `get_map_lumps` raw set), `maps/summary.rs`
                     (`get_map_summary` and `set_active_map`),
@@ -1600,8 +1607,7 @@ tests/
                     (`create_map`) and `maps/copy_rename.rs` (`copy_map`,
                     `rename_map` and `remove_map`), and the `nodes` group's
                     shared helpers in `nodes.rs` (the three fixture loaders,
-                    the asset-`URL` splitter and fetcher, the `JSON` asset
-                    reader and the directory name column) with its tests in
+                    the `JSON` asset reader and the directory name column) with its tests in
                     `nodes/read.rs` (`get_nodes`, `get_reject` and
                     `get_blockmap` over the hand-built, malformed and `XNOD`
                     fixtures), `nodes/build_tables.rs` (`build_blockmap` and

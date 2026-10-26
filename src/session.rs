@@ -40,11 +40,10 @@
 //! replaced archive changes them.
 //!
 //! Read-only content reaches the working archive through [`cow`]:
-//! [`Session::copy_map_to_working`] copies one whole map block out of the
-//! merged view so the map tools can edit a map the `IWAD` owns, and
-//! [`map_edit`] wraps that copy, the typed edit and the node invalidation
-//! into the single undoable [`Session::edit_map`] step every map editing
-//! tool builds on.
+//! [`cow::copy_map_block`] copies one whole map block out of the merged view
+//! so the map tools can edit a map the `IWAD` owns, and [`map_edit`] wraps
+//! that copy, the typed edit and the node invalidation into the single
+//! undoable [`Session::edit_map`] step every map editing tool builds on.
 //!
 //! The scope and origin types are `scope`; the read-view bodies are `views`;
 //! the [`Session::custom_sources`] collection behind [`Session::definitions`]
@@ -553,30 +552,6 @@ impl Session {
     #[inline]
     pub fn find_global(&self, name: LumpName) -> Option<MergedLump> {
         views::find(self, name, None)
-    }
-
-    /// Copies the map block `map` from a read-only layer into the working
-    /// archive so it can be edited: the session's copy-on-write entry point.
-    ///
-    /// The whole block (header, member lumps and any `GL` node run, as the
-    /// merged view shows them) is appended to the working archive as one
-    /// undoable edit labelled `copy_map NAME`. Returns `false`, recording
-    /// nothing, when the working archive already holds that map: its own copy
-    /// is what the merged view shows anyway.
-    ///
-    /// # Errors
-    ///
-    /// [`CyberError::NotFound`] when no loaded archive holds a block named
-    /// `map`; neither the working archive nor the history changes.
-    #[inline]
-    pub fn copy_map_to_working(&mut self, map: LumpName) -> Result<bool, CyberError> {
-        if cow::has_map_block(self.working(), map) {
-            return Ok(false);
-        }
-        let merged = self.merged();
-        self.edit(&format!("copy_map {map}"), |wad| {
-            cow::copy_map_block(wad, &merged, map)
-        })
     }
 
     /// Runs one undoable edit of the map block named `map`, the step every

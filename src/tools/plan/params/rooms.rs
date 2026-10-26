@@ -159,7 +159,7 @@ impl RoomParam {
     /// The footprint: `rect` or `points`, never both and never neither.
     fn shape(&self, index: usize) -> Result<Shape, CyberError> {
         let at = format!("rooms[{index}]");
-        match (self.rect, self.points.clone()) {
+        match (self.rect, self.points.as_ref()) {
             (Some(rect), None) => Ok(Shape::Rect {
                 x: rect.x,
                 y: rect.y,
@@ -167,7 +167,7 @@ impl RoomParam {
                 h: rect.h,
             }),
             (None, Some(points)) => Ok(Shape::Polygon {
-                points: points.into_iter().map(<(i64, i64)>::from).collect(),
+                points: points.iter().copied().map(<(i64, i64)>::from).collect(),
             }),
             (Some(_), Some(_)) => Err(invalid_at(
                 &at,

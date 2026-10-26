@@ -180,7 +180,10 @@ impl<'defs> Overlay<'defs> {
     /// Resolves every collected class against the whole run and places
     /// the occurrences whose header carries a doomednum, in text order.
     fn finish(&mut self) {
-        for key in self.order.clone() {
+        // The order list is this pass's alone: it is drained here and read
+        // nowhere after, so the run takes it instead of cloning every name.
+        let keys = core::mem::take(&mut self.order);
+        for key in keys {
             self.place_occurrence(&key);
         }
     }

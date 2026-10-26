@@ -130,13 +130,14 @@ pub(super) struct TransformOutcome {
 }
 
 /// The `selection` parameter as the engine's expansion request, defaults
-/// applied.
-pub(super) fn selection_request(input: &SelectionInput) -> SelectionRequest {
+/// applied. The four index lists move in: the tool owns its parameters and
+/// the request is the only place they go, so nothing is copied here.
+pub(super) fn selection_request(input: SelectionInput) -> SelectionRequest {
     SelectionRequest {
-        vertices: input.vertices.clone().unwrap_or_default(),
-        linedefs: input.linedefs.clone().unwrap_or_default(),
-        sectors: input.sectors.clone().unwrap_or_default(),
-        things: input.things.clone().unwrap_or_default(),
+        vertices: input.vertices.unwrap_or_default(),
+        linedefs: input.linedefs.unwrap_or_default(),
+        sectors: input.sectors.unwrap_or_default(),
+        things: input.things.unwrap_or_default(),
         all: input.all.unwrap_or(false),
         include_things_in_sectors: input.include_things_in_sectors.unwrap_or(true),
     }
@@ -191,11 +192,11 @@ pub(super) fn counted(n: usize, singular: &str, plural: &str) -> String {
 /// transform as one undoable step.
 pub(super) fn transform_run(
     session: &mut Session,
-    args: &TransformSelectionParams,
+    args: TransformSelectionParams,
 ) -> Result<TransformOutcome, CyberError> {
-    let ops = operations_of(args)?;
+    let ops = operations_of(&args)?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let request = selection_request(&args.selection);
+    let request = selection_request(args.selection);
     let pivot = args.origin.as_ref().map(Point::from);
     let expanded = expand_selection(&current_map(session, name)?, &request)?;
     let label = format!(

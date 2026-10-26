@@ -279,8 +279,8 @@ fn load_flat_image(session: &Session, name: &str) -> Option<IndexedImage> {
 fn texture_names(map: &Map) -> BTreeSet<String> {
     map.sidedefs
         .iter()
-        .flat_map(|side| [side.upper.clone(), side.lower.clone(), side.middle.clone()])
-        .filter_map(|name| normalized_picture(&name))
+        .flat_map(|side| [&side.upper, &side.lower, &side.middle])
+        .filter_map(|name| normalized_picture(name))
         .collect()
 }
 
@@ -288,8 +288,8 @@ fn texture_names(map: &Map) -> BTreeSet<String> {
 fn flat_names(map: &Map) -> BTreeSet<String> {
     map.sectors
         .iter()
-        .flat_map(|sector| [sector.floor_flat.clone(), sector.ceiling_flat.clone()])
-        .filter_map(|name| normalized_picture(&name))
+        .flat_map(|sector| [&sector.floor_flat, &sector.ceiling_flat])
+        .filter_map(|name| normalized_picture(name))
         .collect()
 }
 

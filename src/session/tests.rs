@@ -1,8 +1,7 @@
 //! Unit tests of one editing session: the scope names, the layer stack and
 //! the merged view in `layers`, the labelled history and the batch scope in
 //! `history`, and the rest of the session's own state — active map, render
-//! settings, theme, the layer-only view, game detection and the
-//! copy-on-write step — in `state`.
+//! settings, theme, the layer-only view, game detection — in `state`.
 //!
 //! [`name`], [`lump`], [`marker`], [`pwad`], [`layer`], [`tagged`],
 //! [`loaded`], [`add_marker`], [`append_marker`] and [`payload`] are the

@@ -369,9 +369,9 @@ fn set_run(session: &mut Session, args: &SetThemeParams) -> Result<ThemeReport, 
     }
     let stock = inventory(session)?;
     let mut planned: Vec<(Role, Option<String>)> = Vec::new();
-    for (key, value) in args.overrides.clone().unwrap_or_default() {
-        let role = Role::parse(&key)?;
-        let name = validate_texture_name(&value, MapFormat::Doom)?;
+    for (key, value) in args.overrides.iter().flatten() {
+        let role = Role::parse(key)?;
+        let name = validate_texture_name(value, MapFormat::Doom)?;
         if name != NO_TEXTURE && !stock.available.names_for(role).contains(&name) {
             return Err(CyberError::NotFound(format!(
                 "override {role} = {name} does not exist in the merged view: list_textures / \
@@ -668,7 +668,7 @@ fn align_run(session: &mut Session, args: &AlignTexturesParams) -> Result<AlignR
 /// The linedefs the pass considers, validated against `map`.
 fn target_lines(map: &Map, args: &AlignTexturesParams) -> Result<BTreeSet<usize>, CyberError> {
     if let Some(selector) = args.linedefs.as_ref() {
-        let indices = selector.clone().indices()?;
+        let indices = selector.indices()?;
         for index in &indices {
             check_index(ElementKind::Linedefs, *index, map.linedefs.len())?;
         }

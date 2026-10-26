@@ -76,7 +76,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<FindElementsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reply(find_run(self.state(), &args))
+        reply(find_run(self.state(), args))
     }
 
     /// Applies one field-edit set to every element of a query selection.
@@ -87,7 +87,7 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<BulkEditParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        reply(bulk_run(self.state(), &args))
+        reply(bulk_run(self.state(), args))
     }
 
     /// Swaps wall texture names across whole maps in one undoable step.

@@ -344,7 +344,7 @@ fn remove_run(
     session: &mut Session,
     args: &RemoveVertexParams,
 ) -> Result<RemoveToolReport, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let label = format!("remove {} vertices", indices.len());
     let (removed, report) =

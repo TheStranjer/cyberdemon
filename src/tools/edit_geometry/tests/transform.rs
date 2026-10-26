@@ -102,7 +102,7 @@ fn the_step_label_counts_each_kind_by_its_own_form() {
 
 #[test]
 fn the_selection_defaults_to_including_sector_things() {
-    let bare = selection_request(&transform_args(r#"{"selection": {}}"#).selection);
+    let bare = selection_request(transform_args(r#"{"selection": {}}"#).selection);
     assert!(!bare.all, "all is off by default");
     assert!(
         bare.include_things_in_sectors,
@@ -119,7 +119,7 @@ fn the_selection_defaults_to_including_sector_things() {
         r#"{"selection": {"sectors": [1], "things": [0], "all": false,
             "include_things_in_sectors": false}}"#,
     );
-    let request = selection_request(&switched.selection);
+    let request = selection_request(switched.selection);
     assert_eq!(request.sectors, vec![1_usize], "the lists pass through");
     assert_eq!(request.things, vec![0_usize]);
     assert!(

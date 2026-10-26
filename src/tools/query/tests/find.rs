@@ -136,22 +136,22 @@ fn find_run_reports_parameter_and_map_errors() {
     let mut bad_limit = params(ElementKind::Sectors, vec![]);
     bad_limit.limit = Some(0);
     assert_eq!(
-        find_run(&state, &bad_limit).expect_err("zero rows").code(),
+        find_run(&state, bad_limit).expect_err("zero rows").code(),
         "invalid_argument",
         "the limit is checked before the session is touched"
     );
     let no_map = params(ElementKind::Things, vec![]);
     assert_eq!(
-        find_run(&state, &no_map)
+        find_run(&state, no_map)
             .expect_err("nothing is open")
             .code(),
         "not_found",
         "an explicit unknown map over an empty session is not_found"
     );
-    let mut anonymous = no_map;
+    let mut anonymous = params(ElementKind::Things, vec![]);
     anonymous.map = None;
     assert_eq!(
-        find_run(&state, &anonymous)
+        find_run(&state, anonymous)
             .expect_err("no map default exists")
             .code(),
         "invalid_argument",

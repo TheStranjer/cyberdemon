@@ -26,7 +26,7 @@ fn requested_edits_folds_the_wire_parts_into_the_engine_request() {
         "flags_set": ["ambush"],
         "flags_clear": [],
     }));
-    let edits = requested_edits(&args);
+    let edits = requested_edits(args.set, args.add, args.flags_set, args.flags_clear);
     assert_eq!(
         edits.set.get("angle"),
         Some(&json!(90_i64)),
@@ -43,7 +43,7 @@ fn bulk_in_session_edits_every_match_in_one_labeled_step() {
     let mut session = bulk_session();
     let report = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "sectors", "set": {"light": 96_i64}, "add": {"tag": 2_i64}})),
+        bulk_args(json!({"kind": "sectors", "set": {"light": 96_i64}, "add": {"tag": 2_i64}})),
     )
     .expect("the edit runs");
     let shown = serde_json::to_value(&report).expect("the report serializes");
@@ -85,7 +85,7 @@ fn bulk_in_session_previews_without_writing_or_recording() {
     let mut session = bulk_session();
     let report = bulk_in_session(
         &mut session,
-        &bulk_args(json!({
+        bulk_args(json!({
             "kind": "sectors",
             "where": [one_filter("index", "eq", &json!(1_i64))],
             "add": {"light": 8_i64},
@@ -133,7 +133,7 @@ fn bulk_in_session_previews_without_writing_or_recording() {
 #[test]
 fn bulk_in_session_refuses_an_empty_request_before_any_read() {
     let mut session = bulk_session();
-    let error = bulk_in_session(&mut session, &bulk_args(json!({"kind": "sectors"})))
+    let error = bulk_in_session(&mut session, bulk_args(json!({"kind": "sectors"})))
         .expect_err("no change was asked");
     assert_eq!(error.code(), "invalid_argument", "empty request code");
     assert!(
@@ -148,7 +148,7 @@ fn bulk_in_session_guards_the_matched_set_with_max() {
     let mut session = bulk_session();
     let error = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "vertices", "max": 1_i64, "add": {"x": 4_i64}})),
+        bulk_args(json!({"kind": "vertices", "max": 1_i64, "add": {"x": 4_i64}})),
     )
     .expect_err("two vertices match, max is one");
     assert_eq!(error.code(), "limit_exceeded", "over max code");
@@ -169,7 +169,7 @@ fn bulk_in_session_slides_vertices_as_geometry_and_things_as_property() {
     let mut session = bulk_session();
     let slid = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "vertices", "add": {"x": 8_i64}})),
+        bulk_args(json!({"kind": "vertices", "add": {"x": 8_i64}})),
     )
     .expect("the slide runs");
     let shown = serde_json::to_value(&slid).expect("the report serializes");
@@ -194,7 +194,7 @@ fn bulk_in_session_slides_vertices_as_geometry_and_things_as_property() {
     );
     let moved = bulk_in_session(
         &mut session,
-        &bulk_args(json!({
+        bulk_args(json!({
             "kind": "things",
             "where": [one_filter("type", "eq", &json!(3001_i64))],
             "add": {"x": 16_i64},
@@ -220,7 +220,7 @@ fn bulk_in_session_resolves_the_thing_type_name_and_refuses_the_stray() {
     let mut session = bulk_session();
     let swapped = bulk_in_session(
         &mut session,
-        &bulk_args(json!({
+        bulk_args(json!({
             "kind": "things",
             "where": [one_filter("name", "glob", &json!("imp*"))],
             "set": {"type": "demon"},
@@ -236,7 +236,7 @@ fn bulk_in_session_resolves_the_thing_type_name_and_refuses_the_stray() {
     );
     let stray = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "things", "set": {"type": "platypus"}})),
+        bulk_args(json!({"kind": "things", "set": {"type": "platypus"}})),
     )
     .expect_err("nothing is named platypus");
     assert_eq!(stray.code(), "invalid_argument", "unknown name code");
@@ -256,7 +256,7 @@ fn bulk_in_session_sets_linedef_flags_by_name() {
     let mut session = bulk_session();
     let gated = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "linedefs", "flags_set": ["blockmonsters"]})),
+        bulk_args(json!({"kind": "linedefs", "flags_set": ["blockmonsters"]})),
     )
     .expect("the flag edit runs");
     let shown = serde_json::to_value(&gated).expect("the report serializes");
@@ -275,7 +275,7 @@ fn bulk_in_session_sets_linedef_flags_by_name() {
     );
     let stray = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "linedefs", "flags_set": ["nope"]})),
+        bulk_args(json!({"kind": "linedefs", "flags_set": ["nope"]})),
     )
     .expect_err("nope is no flag");
     assert_eq!(stray.code(), "invalid_argument", "unknown flag code");
@@ -291,7 +291,7 @@ fn bulk_in_session_checks_the_stock_and_allow_missing_escapes_it() {
     let mut session = bulk_session();
     let missing = bulk_in_session(
         &mut session,
-        &bulk_args(json!({"kind": "sectors", "set": {"floor_flat": "slime9"}})),
+        bulk_args(json!({"kind": "sectors", "set": {"floor_flat": "slime9"}})),
     )
     .expect_err("the name is not part of the stock");
     assert_eq!(missing.code(), "not_found", "missing stock code");
@@ -301,7 +301,7 @@ fn bulk_in_session_checks_the_stock_and_allow_missing_escapes_it() {
     );
     let written = bulk_in_session(
         &mut session,
-        &bulk_args(json!({
+        bulk_args(json!({
             "kind": "sectors",
             "set": {"floor_flat": "slime9"},
             "allow_missing": true,
@@ -322,7 +322,7 @@ fn bulk_run_reports_the_no_map_refusal_through_the_state() {
     let state = AppState::default();
     let error = bulk_run(
         &state,
-        &bulk_args(json!({"kind": "sectors", "map": "MAP09", "set": {"light": 1_i64}})),
+        bulk_args(json!({"kind": "sectors", "map": "MAP09", "set": {"light": 1_i64}})),
     )
     .expect_err("nothing is open");
     assert_eq!(

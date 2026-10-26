@@ -62,7 +62,7 @@ pub(super) fn moved_to(
 /// a relative parameter together, neither at all, or absolute `x`/`y` asked
 /// for more than one vertex.
 pub(super) fn validate_move(args: &MoveVertexParams) -> Result<Vec<usize>, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     let absolute = args.x.is_some() || args.y.is_some();
     let relative = args.dx.is_some() || args.dy.is_some();
     if absolute && relative {

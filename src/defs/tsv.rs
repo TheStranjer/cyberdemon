@@ -109,11 +109,16 @@ impl<'text> Row<'text> {
     /// carries a different number of them than `N`.
     #[inline]
     pub fn columns<const N: usize>(&self) -> Result<[&'text str; N], String> {
-        let found: [&'text str; N] = self.fields.clone().try_into().map_err(|fields| {
-            self.fail(&format!(
-                "expected {N} tab-separated fields, found {fields:?}"
-            ))
-        })?;
+        if self.fields.len() != N {
+            return Err(self.fail(&format!(
+                "expected {N} tab-separated fields, found {:?}",
+                self.fields
+            )));
+        }
+        // The width is checked, so the copy takes exactly the row's fields;
+        // only the `&str` witnesses move, the row's own text is borrowed.
+        let mut found: [&'text str; N] = [""; N];
+        found.copy_from_slice(&self.fields);
         Ok(found)
     }
 

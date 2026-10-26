@@ -174,7 +174,7 @@ pub(super) fn has_change(args: &EditLinedefParams) -> bool {
 /// together with `set_flags`/`clear_flags`, `front: null`, `back: null`
 /// together with `back_side`, or no change at all.
 pub(super) fn validate_edit(args: &EditLinedefParams) -> Result<Vec<usize>, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     if args.flags.is_some() && (args.set_flags.is_some() || args.clear_flags.is_some()) {
         return Err(CyberError::InvalidArgument(
             "flags conflicts with set_flags/clear_flags: replace the bitset or adjust it, not \

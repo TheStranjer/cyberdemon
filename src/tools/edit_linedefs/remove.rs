@@ -138,7 +138,7 @@ pub(super) fn remove_run(
     session: &mut Session,
     args: &RemoveLinedefParams,
 ) -> Result<RemoveToolReport, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let label = format!("remove {} linedefs", indices.len());
     let (removed, report) =

@@ -60,24 +60,6 @@ pub struct Blockmap {
 }
 
 impl Blockmap {
-    /// The world-space `X` of block `col`'s left edge.
-    #[must_use]
-    #[inline]
-    pub fn block_x(&self, col: usize) -> Option<i32> {
-        let col_units = i32::try_from(col).ok()?;
-        let width = col_units.checked_mul(BLOCK_SIZE)?;
-        i32::from(self.origin_x).checked_add(width)
-    }
-
-    /// The world-space `Y` of block `row`'s bottom edge.
-    #[must_use]
-    #[inline]
-    pub fn block_y(&self, row: usize) -> Option<i32> {
-        let row_units = i32::try_from(row).ok()?;
-        let height = row_units.checked_mul(BLOCK_SIZE)?;
-        i32::from(self.origin_y).checked_add(height)
-    }
-
     /// Reads a whole `BLOCKMAP` lump.
     ///
     /// # Errors
@@ -414,15 +396,6 @@ mod tests {
         assert!(map.blocks[1].is_empty(), "the empty list");
         assert_eq!(map.blocks[2], vec![2], "the single-linedef list");
         assert_eq!(map.blocks[3], vec![5, 9], "the shared copy reads the same");
-    }
-
-    #[test]
-    fn block_edges_step_by_128_map_units() {
-        let map = Blockmap::parse(&build()).expect("the fixture parses");
-        assert_eq!(map.block_x(0), Some(-128_i32), "origin column");
-        assert_eq!(map.block_x(2), Some(128_i32), "two columns over");
-        assert_eq!(map.block_y(1), Some(-128_i32), "one row over");
-        assert_eq!(map.block_y(usize::MAX), None, "absurd row");
     }
 
     #[test]

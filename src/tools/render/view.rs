@@ -411,20 +411,22 @@ pub(super) fn view_report(
     args: &RenderViewParams,
 ) -> Result<ViewReport, CyberError> {
     let prepared = load_view(state, args)?;
-    let settings = prepared.scene.settings.clone();
+    let width = prepared.scene.settings.width;
+    let height = prepared.scene.settings.height;
+    let gamma = prepared.scene.settings.gamma;
     let camera = prepared.camera;
     let mut rendered = render_frame(
         &prepared.scene,
         &camera,
         ViewFrame {
-            width: settings.width,
-            height: settings.height,
+            width,
+            height,
             sprites: prepared.sprites,
         },
     );
     let masked_columns = rendered.masked_columns;
     let sprites_drawn = u32::try_from(rendered.sprites_drawn).unwrap_or(u32::MAX);
-    rendered.canvas.apply_gamma(&gamma_table(settings.gamma));
+    rendered.canvas.apply_gamma(&gamma_table(gamma));
     let png = encode_png(&rendered.canvas.to_rgba_image(), None)?;
     let asset = state.publish(
         &format!("{}{VIEW_SUFFIX}", prepared.scene.map.name),
@@ -444,8 +446,8 @@ pub(super) fn view_report(
             fov: camera.fov,
             sector: prepared.sector,
         },
-        width: settings.width,
-        height: settings.height,
+        width,
+        height,
         sprites_drawn,
         masked_columns,
         problems,

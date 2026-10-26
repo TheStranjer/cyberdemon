@@ -48,45 +48,45 @@ pub(super) struct BulkEditParams {
     /// map; with none active, the merged view's only map when it holds
     /// exactly one.
     #[serde(default)]
-    map: Option<String>,
+    pub(super) map: Option<String>,
     /// The element block to edit: "sectors", "linedefs", "sidedefs",
     /// "things" or "vertices".
-    kind: ElementKind,
+    pub(super) kind: ElementKind,
     /// The filters selecting the elements, exactly as `find_elements`'
     /// `where`: an empty list edits everything of the kind.
     #[serde(default, rename = "where")]
-    r#where: Vec<Filter>,
+    pub(super) r#where: Vec<Filter>,
     /// Bound the selection by region, exactly as `find_elements`'
     /// `within`.
     #[serde(default)]
-    within: Option<Within>,
+    pub(super) within: Option<Within>,
     /// New values by field name: integers, texture/flat names, and for
     /// things a doomednum integer or a definition name.
     #[serde(default)]
-    set: Option<BTreeMap<String, Value>>,
+    pub(super) set: Option<BTreeMap<String, Value>>,
     /// Integer amounts shifted onto each matched element's current value.
     #[serde(default)]
-    add: Option<BTreeMap<String, i64>>,
+    pub(super) add: Option<BTreeMap<String, i64>>,
     /// Flag names to set on each matched linedef or thing.
     #[serde(default)]
-    flags_set: Option<Vec<String>>,
+    pub(super) flags_set: Option<Vec<String>>,
     /// Flag names to clear on each matched linedef or thing; a bit named
     /// on both ends ends up set.
     #[serde(default)]
-    flags_clear: Option<Vec<String>>,
+    pub(super) flags_clear: Option<Vec<String>>,
     /// Write texture/flat names the merged view lacks without the
     /// existence check (default `false`). Numbers are never clamped
     /// either way.
     #[serde(default)]
-    allow_missing: Option<bool>,
+    pub(super) allow_missing: Option<bool>,
     /// Run the whole check and report the same numbers over a copy of the
     /// map, writing nothing and recording no undo step (default `false`).
     #[serde(default)]
-    dry_run: Option<bool>,
+    pub(super) dry_run: Option<bool>,
     /// Refuse (and write nothing) when more than this many elements match
     /// (default 5000); `max: 0` therefore refuses any non-empty match.
     #[serde(default)]
-    max: Option<usize>,
+    pub(super) max: Option<usize>,
 }
 
 /// Structured result of [`Cyberdemon::bulk_edit`]: the engine's [`Applied`]
@@ -130,13 +130,20 @@ const BULK_DRY_NEXT_STEPS: [&str; 2] = [
 pub(super) const BULK_NODES_STEP: &str =
     "nodes_invalidated is true: run build_nodes before playing the map in vanilla Doom";
 
-/// The tool's parameters as one engine [`FieldEdits`].
-pub(super) fn requested_edits(args: &BulkEditParams) -> FieldEdits {
+/// The four request parts of [`BulkEditParams`] as one engine
+/// [`FieldEdits`]. The rows move in rather than being cloned: the tool's run
+/// owns its parameters and needs them nowhere else afterwards.
+pub(super) fn requested_edits(
+    set: Option<BTreeMap<String, Value>>,
+    add: Option<BTreeMap<String, i64>>,
+    flags_set: Option<Vec<String>>,
+    flags_clear: Option<Vec<String>>,
+) -> FieldEdits {
     FieldEdits {
-        set: args.set.clone().unwrap_or_default(),
-        add: args.add.clone().unwrap_or_default(),
-        flags_set: args.flags_set.clone().unwrap_or_default(),
-        flags_clear: args.flags_clear.clone().unwrap_or_default(),
+        set: set.unwrap_or_default(),
+        add: add.unwrap_or_default(),
+        flags_set: flags_set.unwrap_or_default(),
+        flags_clear: flags_clear.unwrap_or_default(),
     }
 }
 
@@ -156,23 +163,19 @@ fn nothing_to_change() -> CyberError {
 fn selected(
     map: &Map,
     defs: &Definitions,
-    args: &BulkEditParams,
+    query: &Query,
+    cap: Option<usize>,
 ) -> Result<Vec<usize>, CyberError> {
     let ctx = QueryContext::new(map.flag_family(), defs);
-    let query = Query {
-        kind: args.kind,
-        r#where: args.r#where.clone(),
-        within: args.within.clone(),
-    };
-    let hits = run_query(map, &ctx, &query)?;
-    let max = args.max.unwrap_or(DEFAULT_MAX);
+    let hits = run_query(map, &ctx, query)?;
+    let max = cap.unwrap_or(DEFAULT_MAX);
     if hits.len() > max {
         return Err(CyberError::LimitExceeded(format!(
             "{} {} match this query, above max {max}: nothing was written, \
              dry_run included. Narrow the selection with where/within, or \
              raise max to at least {}",
             hits.len(),
-            args.kind.as_str(),
+            query.kind.as_str(),
             hits.len()
         )));
     }
@@ -270,17 +273,23 @@ pub(super) fn bulk_report(
 /// errors.
 pub(super) fn bulk_in_session(
     session: &mut Session,
-    args: &BulkEditParams,
+    args: BulkEditParams,
 ) -> Result<BulkReport, CyberError> {
-    let requested = requested_edits(args);
+    let kind = args.kind;
+    let requested = requested_edits(args.set, args.add, args.flags_set, args.flags_clear);
     if requested.is_empty() {
         return Err(nothing_to_change());
     }
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let mut map = common::load_map(session, name, Scope::Merged)?;
     let defs = session.definitions()?;
-    let hits = selected(&map, &defs, args)?;
-    let edits = resolve_thing_type(requested, args.kind, &defs)?;
+    let query = Query {
+        kind,
+        r#where: args.r#where,
+        within: args.within,
+    };
+    let hits = selected(&map, &defs, &query, args.max)?;
+    let edits = resolve_thing_type(requested, kind, &defs)?;
     let stock = Stock::load(session)?;
     let scope = EditScope {
         format: map.format,
@@ -290,12 +299,12 @@ pub(super) fn bulk_in_session(
         allow_missing: args.allow_missing.unwrap_or(false),
     };
     if args.dry_run.unwrap_or(false) {
-        let applied = apply(&mut map, args.kind, &hits, &edits, &scope)?;
+        let applied = apply(&mut map, kind, &hits, &edits, &scope)?;
         return Ok(bulk_report(applied, true, dry_fragment(name)));
     }
-    let label = format!("bulk_edit {} ({})", args.kind.as_str(), hits.len());
+    let label = format!("bulk_edit {} ({})", kind.as_str(), hits.len());
     let (applied, report) = session.edit_map(name, &label, |target| {
-        apply(target, args.kind, &hits, &edits, &scope)
+        apply(target, kind, &hits, &edits, &scope)
     })?;
     Ok(bulk_report(applied, false, edit_result_fragment(&report)))
 }
@@ -306,6 +315,6 @@ pub(super) fn bulk_in_session(
 ///
 /// [`bulk_in_session`]'s errors and the poisoned-lock
 /// [`CyberError::Internal`].
-pub(super) fn bulk_run(state: &AppState, args: &BulkEditParams) -> Result<BulkReport, CyberError> {
+pub(super) fn bulk_run(state: &AppState, args: BulkEditParams) -> Result<BulkReport, CyberError> {
     state.with_session(|session| bulk_in_session(session, args))
 }

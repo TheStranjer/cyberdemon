@@ -1,12 +1,11 @@
 //! The rest of the session's state: the active map, the render settings and
 //! the texture theme that ride through an undo and a replaced archive, the
-//! layer-only view under a working override, what the merged view reflects,
-//! which game the archives identify and the copy-on-write step that brings a
-//! layer's map into the working archive.
+//! layer-only view under a working override, what the merged view reflects
+//! and which game the archives identify.
 
 use super::{append_marker, layer, loaded, lump, marker, name, payload, pwad, tagged};
 use crate::render::{Lighting, RenderSettings};
-use crate::session::{LayerRole, Scope, Session, Source};
+use crate::session::{LayerRole, Session, Source};
 use crate::themes::Role;
 use crate::wad::game::Game;
 
@@ -318,57 +317,4 @@ fn layer_role_labels_are_the_documented_words() {
     assert_eq!(LayerRole::Resource.as_str(), "resource", "the wire word");
     assert_eq!(LayerRole::Iwad.label(), "IWAD", "the message label");
     assert_eq!(LayerRole::Resource.label(), "resource", "the message label");
-}
-
-#[test]
-fn copy_map_to_working_brings_a_layer_map_into_the_working_archive() {
-    let mut session = loaded();
-    let copied = session
-        .copy_map_to_working(name("MAP01"))
-        .expect("the base holds MAP01");
-    assert!(copied, "the working archive had no copy yet");
-    assert_eq!(
-        tagged(
-            &session
-                .lumps_in(Scope::Working)
-                .expect("the working archive")
-        ),
-        vec!["MAP01@W", "THINGS@W"],
-        "the whole block was appended, in view order"
-    );
-    assert_eq!(
-        session.undo_labels(),
-        vec!["copy_map MAP01"],
-        "the copy is one undoable edit"
-    );
-    assert!(session.is_dirty(), "and unsaved work");
-    assert!(
-        !session
-            .copy_map_to_working(name("MAP01"))
-            .expect("the working copy is already editable"),
-        "the second call copies nothing"
-    );
-    assert_eq!(
-        session.undo_labels(),
-        vec!["copy_map MAP01"],
-        "and records no history for it"
-    );
-    assert_eq!(
-        session.undo().expect("undo the copy"),
-        "copy_map MAP01",
-        "the label comes back"
-    );
-    assert!(session.working().is_empty(), "the block went back");
-}
-
-#[test]
-fn copy_map_to_working_reports_not_found_for_an_unknown_map() {
-    let mut session = loaded();
-    let error = session
-        .copy_map_to_working(name("MAP07"))
-        .expect_err("no archive holds MAP07");
-    assert_eq!(error.code(), "not_found", "unknown map code");
-    assert!(session.working().is_empty(), "nothing was copied");
-    assert!(session.undo_labels().is_empty(), "and nothing recorded");
-    assert!(!session.is_dirty(), "the session is still clean");
 }

@@ -9,9 +9,12 @@
 //! directions. [`box_render`] casts a whole box map and checks, pixel by
 //! pixel, where its walls, floor, ceiling, sky and background land.
 //! [`masked`] follows the masked middles a two-sided divider collects and
-//! how the render module's transparent pass paints them.
+//! how the render module's transparent pass paints them. [`columns`]
+//! weighs the caster's per-column edge buckets against a brute-force
+//! scan of every edge.
 
 mod box_render;
+mod columns;
 mod masked;
 mod math;
 mod texturing;

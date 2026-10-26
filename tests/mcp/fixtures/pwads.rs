@@ -120,8 +120,10 @@ pub fn pwad_map_formats(dir: &Path) -> PathBuf {
 }
 
 /// The DEHACKED text of the custom-definitions fixture: the Imp (mobj 12)
-/// moves to 20000 and gets a 10-unit radius (655360 in 16.16 fixed).
-const DEHACKED_CUSTOM: &str = "Thing 12 (Evil Imp)\nID # = 20000\nWidth = 655360\n";
+/// moves to 20000 and gets a 10-unit radius (655360 in 16.16 fixed). The
+/// `#` comment lines inside the block must not close it.
+const DEHACKED_CUSTOM: &str = "# the Imp gets a new number\nThing 12 (Evil Imp)\n\
+                               # and a tighter radius\nID # = 20000\nWidth = 655360\n";
 
 /// The DECORATE text: a plain actor, a parent and a child that inherits
 /// the parent's sprite and radius; the comment and string braces must not

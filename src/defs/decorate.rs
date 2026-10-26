@@ -1,8 +1,9 @@
 //! The DECORATE parser (subset): `actor` headers, radius and spawn sprite.
 //!
 //! `scan` tokenises DECORATE-shaped text, skipping `//` and `/* */`
-//! comments and quoted strings so braces inside them cannot shift the
-//! parser's brace-depth tracking. `parse` walks the tokens for
+//! comments and quoted strings (where a backslash escapes the character
+//! after it, so `\"` cannot close the string) so braces inside them cannot
+//! shift the parser's brace-depth tracking. `parse` walks the tokens for
 //! `<keyword> <Name> [: <Parent>] [replaces <Other>] [<doomednum>] { ... }`
 //! definitions and lifts out what the session definitions need: the
 //! `Radius` and the sprite and first frame letter of the first state line
@@ -153,7 +154,7 @@ where
         return;
     }
     if ch == '"' {
-        take_until_close(chars, '"');
+        skip_quoted(chars);
         return;
     }
     if ch.is_ascii_alphabetic() || ch == '_' {
@@ -224,6 +225,23 @@ where
     for (_, ch) in chars.by_ref() {
         if ch == close {
             return;
+        }
+    }
+}
+
+/// Drops a quoted string past its closing `"`. A backslash escapes the
+/// character after it, so an escaped `\"` cannot close the string.
+fn skip_quoted<T>(chars: &mut core::iter::Peekable<T>)
+where
+    T: Iterator<Item = (usize, char)>,
+{
+    while let Some((_, ch)) = chars.next() {
+        match ch {
+            '\\' => {
+                chars.next();
+            }
+            '"' => return,
+            _ => {}
         }
     }
 }
@@ -542,6 +560,26 @@ mod tests {
                 .any(|tok| tok.kind == Kind::Word && tok.text == "braces"),
             "string and comment contents never become tokens: {tokens:?}"
         );
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_close_a_string() {
+        let text = "actor A 1 { note = \"a \\\" { brace\" Radius 16 States { Spawn: TONK A 1 } }";
+        let tokens = scan(text);
+        assert!(
+            !tokens
+                .iter()
+                .any(|tok| tok.kind == Kind::Word && tok.text == "brace"),
+            "the escaped quote keeps the whole string dropped: {tokens:?}"
+        );
+        let (classes, warnings) = parse_decorate(text);
+        assert!(
+            warnings.is_empty(),
+            "the braces stay balanced: {warnings:?}"
+        );
+        let actor = classes.first().expect("one class");
+        assert_eq!(actor.radius, Some(16), "the radius after the string");
+        assert_eq!(actor.sprite.as_deref(), Some("TONK"), "and the spawn state");
     }
 
     #[test]

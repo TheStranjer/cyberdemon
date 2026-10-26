@@ -156,7 +156,8 @@ src/
                   `defs/custom.rs` the `CustomSources` text bundle and the
                   built-in < DEHACKED < DECORATE/ZScript (+ MAPINFO)
                   overlay, `defs/dehacked.rs` the `Thing <n>` block subset
-                  over the embedded `deh_mobj.tsv` map, `defs/decorate.rs`
+                  over the embedded `deh_mobj.tsv` map, read through the
+                  shared `dehacked_edit::parse`, `defs/decorate.rs`
                   the tokenising DECORATE `actor` reader, `defs/zscript.rs`
                   the `class` reader on the same scanner,
                   `defs/mapinfo.rs` the `DoomEdNums` block reader and

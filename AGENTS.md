@@ -957,15 +957,22 @@ src/
                   keyed by namespace, name and occurrence and the
                   length/`FNV`-1a/bytes content rule, `wad/optimize.rs` the
                   pure cleanup planner's (`optimize_wad`) root: the shared
-                  shapes and the `plan`, `run` and `apply` entry points, over
+                  shapes, the `KeptForAnimation` counts and the `plan`, `run`
+                  and `apply` entry points, over
                   `optimize/redundant.rs` (the identical-override,
                   empty-marker-pair and shadowed-duplicate sweeps, the
-                  `ZDoom`-concatenated names excepted) and `optimize/unused.rs`
+                  `ZDoom`-concatenated names excepted), `optimize/unused.rs`
                   (the unused `PNAMES`/patches/flats sweeps and the renumbered
-                  `PNAMES`/texture rewrite), with that module's tests in
+                  `PNAMES`/texture rewrite) and `optimize/animations.rs` (the
+                  vanilla `Doom` flat, texture and switch tables, the parsed
+                  `ANIMATED` ranges and `SWITCHES` pairs, and the frame
+                  expansion every content sweep grows its used names with),
+                  with that module's tests in
                   `optimize/tests.rs` (the shared builders and readers) plus
                   `optimize/tests/redundant.rs` (the redundancy sweeps and the
-                  plan bookkeeping) and `optimize/tests/unused.rs` (the
+                  plan bookkeeping), `optimize/tests/animations.rs` (the
+                  tables, their lump parsers and what a range or pair claims)
+                  and `optimize/tests/unused.rs` (the
                   content-reading sweeps, their refusals, the commit and the
                   wire shape), `wad/game.rs`
                   the pure game signature detection (`detect_game`),

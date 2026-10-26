@@ -7,11 +7,11 @@
 use serde_json::json;
 
 use super::{
-    dropped, flat_map, lump, marker, name, patch_region, planned, pnames, pnames_of, rows, targets,
-    texture1,
+    animated_ranges, dropped, flat_map, lump, marker, name, patch_region, planned, pnames,
+    pnames_of, rows, switch_pairs, targets, texture1,
 };
 use crate::wad::archive::{Lump, Wad, WadKind};
-use crate::wad::optimize::{Action, Inputs, Operation, Target, apply, plan};
+use crate::wad::optimize::{Action, Inputs, KeptForAnimation, Operation, Target, apply, plan};
 use crate::wad::textures::parse_texture_lump;
 
 #[test]
@@ -119,6 +119,136 @@ fn unused_patches_without_a_pnames_touches_nothing() {
 }
 
 #[test]
+fn a_switch_pair_keeps_both_states_of_a_referenced_patch() {
+    let base = vec![pnames(&["SW1PANEL", "SW2PANEL", "TALK"]), texture1(&[0])];
+    let working = patch_region(&["SW1PANEL", "SW2PANEL", "TALK"]);
+    let outcome = planned(&working, &base, &[Operation::UnusedPatches]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["TALK".to_owned()],
+        "the switch's other state stays with the one a texture references"
+    );
+    assert_eq!(
+        outcome.kept_for_animation.patches, 1,
+        "and is counted as the keep it is"
+    );
+}
+
+#[test]
+fn an_animated_lump_range_keeps_every_patch_it_numbers() {
+    let base = vec![
+        pnames(&["CUSTTX1", "CUSTTX2", "CUSTTX3", "TALK"]),
+        texture1(&[0]),
+    ];
+    let mut working = vec![animated_ranges(&[("CUSTTX1", "CUSTTX3")])];
+    working.extend(patch_region(&["CUSTTX1", "CUSTTX2", "CUSTTX3", "TALK"]));
+    let outcome = planned(&working, &base, &[Operation::UnusedPatches]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["TALK".to_owned()],
+        "the declared run holds its patches in"
+    );
+    assert_eq!(
+        outcome.kept_for_animation.patches, 2,
+        "the two frames no texture references by name"
+    );
+}
+
+#[test]
+fn the_three_content_sweeps_run_together_and_their_keeps_add_up() {
+    let base = flat_map("MAP01", "NUKAGE1", "FLOOR4");
+    let mut working = vec![pnames(&["SW1PANEL", "SW2PANEL", "TALK"]), texture1(&[0])];
+    working.extend(patch_region(&["SW1PANEL", "SW2PANEL", "TALK"]));
+    working.push(marker("F_START"));
+    for flat in ["NUKAGE1", "NUKAGE2", "NUKAGE3", "SPARE"] {
+        working.push(lump(flat, b"bytes"));
+    }
+    working.push(marker("F_END"));
+    let outcome = planned(
+        &working,
+        &base,
+        &[
+            Operation::UnusedPnames,
+            Operation::UnusedPatches,
+            Operation::UnusedFlats,
+        ],
+    );
+    assert_eq!(
+        targets(&outcome),
+        vec!["TALK".to_owned(), "TALK".to_owned(), "SPARE".to_owned()],
+        "one trimmed entry, one orphan patch and the flat outside the run"
+    );
+    assert_eq!(
+        outcome.kept_for_animation,
+        KeptForAnimation {
+            pnames: 1,
+            patches: 1,
+            flats: 2,
+        },
+        "each sweep counts its own keeps"
+    );
+    assert_eq!(outcome.kept_for_animation.total(), 4, "and they add up");
+}
+
+#[test]
+fn unused_pnames_keeps_a_switch_partner_and_still_trims_the_rest() {
+    let base: Vec<Lump> = Vec::new();
+    let working = vec![pnames(&["SW1PANEL", "SW2PANEL", "TALK"]), texture1(&[0])];
+    let outcome = planned(&working, &base, &[Operation::UnusedPnames]);
+    assert_eq!(
+        rows(&outcome),
+        vec![(Operation::UnusedPnames, "TALK".to_owned())],
+        "only the entry no animation needs goes"
+    );
+    assert_eq!(
+        outcome.kept_for_animation.pnames, 1,
+        "the partner entry is a reported keep"
+    );
+    let rewrite = outcome.rewrite.as_ref().expect("the trimmed list");
+    assert_eq!(
+        pnames_of(&rewrite.pnames),
+        vec!["SW1PANEL".to_owned(), "SW2PANEL".to_owned()],
+        "both states survive the renumbering"
+    );
+}
+
+#[test]
+fn a_vanilla_texture_range_keeps_every_patch_it_names() {
+    let base: Vec<Lump> = Vec::new();
+    let working = vec![
+        pnames(&["BLODGR1", "BLODGR2", "BLODGR3", "TALK"]),
+        texture1(&[0]),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedPnames]);
+    assert_eq!(
+        rows(&outcome),
+        vec![(Operation::UnusedPnames, "TALK".to_owned())],
+        "the range's middle frames stay listed"
+    );
+    assert_eq!(outcome.kept_for_animation.pnames, 2, "as two keeps");
+}
+
+#[test]
+fn a_switches_lump_pairs_protect_each_other() {
+    let base = vec![pnames(&["MYOFFA", "MYONA", "TALK"]), texture1(&[0])];
+    let working = vec![
+        switch_pairs(&[("MYOFFA", "MYONA")]),
+        marker("P_START"),
+        lump("MYOFFA", b"off"),
+        lump("MYONA", b"on"),
+        lump("TALK", b"nobody"),
+        marker("P_END"),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedPatches]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["TALK".to_owned()],
+        "the lump's pair holds both patches in"
+    );
+    assert_eq!(outcome.kept_for_animation.patches, 1, "one spared lump");
+}
+
+#[test]
 fn unused_flats_drops_only_what_no_merged_sector_uses() {
     let base = flat_map("MAP01", "FLOOR1", "F_SKY1");
     let working = vec![
@@ -154,6 +284,101 @@ fn a_sector_wearing_the_dash_placeholder_marks_no_flat_as_used() {
         targets(&outcome),
         vec!["-".to_owned()],
         "the `\"-\"` flat is a placeholder, never a used name"
+    );
+}
+
+#[test]
+fn a_used_flat_keeps_the_frames_of_its_vanilla_animation() {
+    // Vanilla finds an animation by walking the directory from one named
+    // endpoint to the other, so a sector wearing `NUKAGE1` depends on the
+    // two frames that sit between it and `NUKAGE3`.
+    let base = flat_map("MAP01", "NUKAGE1", "FLOOR4");
+    let working = vec![
+        marker("F_START"),
+        lump("NUKAGE1", b"one"),
+        lump("NUKAGE2", b"two"),
+        lump("NUKAGE3", b"three"),
+        lump("SPARE", b"nobody"),
+        marker("F_END"),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedFlats]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["SPARE".to_owned()],
+        "the whole run stays and the flat outside it goes"
+    );
+    assert_eq!(
+        outcome.kept_for_animation.flats, 2,
+        "the two frames the sectors never named are counted as keeps"
+    );
+}
+
+#[test]
+fn the_sky_flats_are_never_dropped() {
+    let base = flat_map("MAP01", "FLOOR4", "FLOOR4");
+    let working = vec![
+        marker("F_START"),
+        lump("FLOOR4", b"used"),
+        lump("F_SKY1", b"sky"),
+        lump("F_SKY", b"another sky"),
+        lump("SPARE", b"nobody"),
+        marker("F_END"),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedFlats]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["SPARE".to_owned()],
+        "both sky flats stay"
+    );
+    assert_eq!(
+        outcome.kept_for_animation.flats, 2,
+        "and the sweep reports them as the keeps they are"
+    );
+}
+
+#[test]
+fn an_animated_lump_range_is_honoured_without_a_map_using_it() {
+    let base = flat_map("MAP01", "FLOOR4", "FLOOR4");
+    let working = vec![
+        animated_ranges(&[("CUSTOM1", "CUSTOM3")]),
+        marker("F_START"),
+        lump("FLOOR4", b"used"),
+        lump("CUSTOM1", b"one"),
+        lump("CUSTOM2", b"two"),
+        lump("CUSTOM3", b"three"),
+        lump("SPARE", b"nobody"),
+        marker("F_END"),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedFlats]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["SPARE".to_owned()],
+        "the declared run stays whole"
+    );
+    assert_eq!(
+        outcome.kept_for_animation.flats, 3,
+        "every frame of the declared range is a keep"
+    );
+}
+
+#[test]
+fn a_declared_animation_does_not_reach_past_its_own_run() {
+    let base = flat_map("MAP01", "FLOOR4", "FLOOR4");
+    let working = vec![
+        animated_ranges(&[("CUSTOM1", "CUSTOM3")]),
+        marker("F_START"),
+        lump("BEFORE", b"outside the run"),
+        lump("CUSTOM1", b"one"),
+        lump("CUSTOM2", b"two"),
+        lump("CUSTOM3", b"three"),
+        lump("AFTER", b"outside the run"),
+        marker("F_END"),
+    ];
+    let outcome = planned(&working, &base, &[Operation::UnusedFlats]);
+    assert_eq!(
+        targets(&outcome),
+        vec!["BEFORE".to_owned(), "AFTER".to_owned()],
+        "the neighbours of a declared run are still nobody's frames"
     );
 }
 

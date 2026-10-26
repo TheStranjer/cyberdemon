@@ -17,12 +17,14 @@
 //! keys are the same `(namespace, name, occurrence)` units the diff
 //! reports.
 //!
-//! The shared shapes and the [`plan`] and [`apply`] entry points, with
-//! the private `run` dispatcher between them, stay here; the three
-//! redundancy sweeps are the private `redundant` module and the
-//! `PNAMES`-trim, patch and flat sweeps that read the merged textures
-//! and maps are the private `unused` one.
+//! The shared shapes and the [`plan`] and [`apply`] entry points, with the
+//! private `run` dispatcher between them, stay here; the three redundancy
+//! sweeps are the private `redundant` module, the `PNAMES`-trim, patch and
+//! flat sweeps that read the merged textures and maps are the private
+//! `unused` one, and the animation and switch tables those three grow
+//! their used-name sets with are the private `animations` one.
 
+mod animations;
 mod redundant;
 mod unused;
 
@@ -64,12 +66,14 @@ pub enum Operation {
     /// the last copy; `ZDoom`-concatenated names are never pruned.
     ShadowedDuplicates,
     /// `PNAMES` entries no texture of the merged view references, removed
-    /// with every texture lump's patch references renumbered.
+    /// with every texture lump's patch references renumbered. A name the
+    /// animation or switch tables need beside a referenced patch is kept.
     UnusedPnames,
     /// Working `patches`-namespace lumps no texture references by
-    /// `PNAMES` name.
+    /// `PNAMES` name, keeping every animation and switch partner.
     UnusedPatches,
-    /// Working `flats`-namespace lumps no sector of any merged map uses.
+    /// Working `flats`-namespace lumps no sector of any merged map uses,
+    /// keeping every animation frame, `ANIMATED` name and sky flat.
     UnusedFlats,
 }
 
@@ -180,6 +184,35 @@ pub struct Rewrite {
     pub texture2: Option<Vec<u8>>,
 }
 
+/// What the content sweeps kept for an animation.
+///
+/// Each field counts the removal candidates one sweep left alone because
+/// the animation and switch tables need them alongside a name that is in
+/// use: the frames of a range a used name sits in, the other state of a
+/// switch pair, the names a merged `ANIMATED` lump declares and, for
+/// flats, the sky flats no sector has to name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct KeptForAnimation {
+    /// `PNAMES` entries the trim would otherwise have dropped.
+    pub pnames: usize,
+    /// Working `patches`-namespace lumps otherwise dropped.
+    pub patches: usize,
+    /// Working `flats`-namespace lumps otherwise dropped: animation
+    /// frames, `ANIMATED` names and the sky flats.
+    pub flats: usize,
+}
+
+impl KeptForAnimation {
+    /// Every keep the three content sweeps recorded, in `operation` order.
+    #[must_use]
+    #[inline]
+    pub const fn total(&self) -> usize {
+        self.pnames
+            .saturating_add(self.patches)
+            .saturating_add(self.flats)
+    }
+}
+
 /// The three directory snapshots one [`plan`] call reads.
 pub struct Inputs<'dir> {
     /// The editable working archive.
@@ -204,6 +237,9 @@ pub struct Plan {
     pub rewrite: Option<Rewrite>,
     /// Duplicated `ZDoom`-concatenated names the plan keeps whole.
     pub kept_concatenated: Vec<LumpName>,
+    /// Names the content sweeps kept because an animation, a switch pair
+    /// or the sky needs them beside a name that is in use.
+    pub kept_for_animation: KeptForAnimation,
 }
 
 impl Plan {
@@ -262,6 +298,9 @@ struct Draft {
     kept: BTreeSet<LumpName>,
     /// The pending `PNAMES`/texture rewrite.
     rewrite: Option<Rewrite>,
+    /// Names the content sweeps left alone for an animation, a switch or
+    /// the sky.
+    frames: KeptForAnimation,
 }
 
 impl Draft {
@@ -343,6 +382,7 @@ pub fn plan(inputs: &Inputs<'_>, operations: &[Operation]) -> Result<Plan, Cyber
         remove: draft.remove,
         rewrite: draft.rewrite,
         kept_concatenated: draft.kept.into_iter().collect(),
+        kept_for_animation: draft.frames,
     })
 }
 

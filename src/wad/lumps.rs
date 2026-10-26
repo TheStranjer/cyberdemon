@@ -22,6 +22,10 @@ pub const PNAMES: LumpName = LumpName::padded(*b"PNAMES\0\0");
 pub const TEXTURE1: LumpName = LumpName::padded(*b"TEXTURE1");
 /// The `TEXTURE2` lump of further composite texture definitions.
 pub const TEXTURE2: LumpName = LumpName::padded(*b"TEXTURE2");
+/// The `ANIMATED` lump: the `Boom` animated flat and texture ranges.
+pub const ANIMATED: LumpName = LumpName::padded(*b"ANIMATED");
+/// The `SWITCHES` lump: the `Boom` switch texture pairs.
+pub const SWITCHES: LumpName = LumpName::padded(*b"SWITCHES");
 
 /// The `THINGS` member lump of a binary map block.
 pub const THINGS: LumpName = LumpName::padded(*b"THINGS\0\0");
@@ -163,12 +167,14 @@ mod tests {
     type Expected = (&'static str, LumpName, [u8; NAME_LEN]);
 
     /// Every constant paired with its word and bytes.
-    const EXPECTED: [Expected; 35] = [
+    const EXPECTED: [Expected; 37] = [
         ("PLAYPAL", PLAYPAL, *b"PLAYPAL\0"),
         ("COLORMAP", COLORMAP, *b"COLORMAP"),
         ("PNAMES", PNAMES, *b"PNAMES\0\0"),
         ("TEXTURE1", TEXTURE1, *b"TEXTURE1"),
         ("TEXTURE2", TEXTURE2, *b"TEXTURE2"),
+        ("ANIMATED", ANIMATED, *b"ANIMATED"),
+        ("SWITCHES", SWITCHES, *b"SWITCHES"),
         ("THINGS", THINGS, *b"THINGS\0\0"),
         ("LINEDEFS", LINEDEFS, *b"LINEDEFS"),
         ("SIDEDEFS", SIDEDEFS, *b"SIDEDEFS"),

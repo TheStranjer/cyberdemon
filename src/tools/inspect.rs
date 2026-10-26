@@ -12,7 +12,9 @@
 //! [`Cyberdemon::optimize_wad`] answers "what can my `PWAD` drop?": it
 //! runs the pure [`crate::wad::optimize`] planner over the working, base
 //! and merged snapshots and, unless asked only to report, commits the
-//! whole plan as one undoable [`Session::edit`] step.
+//! whole plan as one undoable [`Session::edit`]. The content sweeps report
+//! in `kept_for_animation` what they left alone because an animation, a
+//! switch pair or the sky still needs it.
 
 use alloc::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -32,7 +34,7 @@ use crate::tools::{parse_limit, reply};
 use crate::wad::Lump;
 use crate::wad::diff::{Diff, LumpDiff, MapDiff, Mode, Status, Summary, diff};
 use crate::wad::name::LumpName;
-use crate::wad::optimize::{self, Action, Operation, Plan};
+use crate::wad::optimize::{self, Action, KeptForAnimation, Operation, Plan};
 
 /// Default side `a`: the layers without the working archive.
 const DEFAULT_A: &str = "base";
@@ -287,7 +289,9 @@ struct OptimizeWadParams {
     /// The cleanup operations to run; left out, every safe one runs
     /// (`identical_overrides`, `empty_namespaces`, `shadowed_duplicates`,
     /// `unused_pnames`). `unused_patches` and `unused_flats` only run when
-    /// named.
+    /// named. All three content sweeps keep the animation frames, switch
+    /// partners, `ANIMATED` names and sky flats of anything they do use,
+    /// counted in `kept_for_animation`.
     #[serde(default)]
     operations: Option<Vec<String>>,
     /// Report the plan without changing anything (the default); `false`
@@ -315,6 +319,10 @@ struct OptimizeReport {
     lumps_removed: usize,
     /// Duplicated `ZDoom`-concatenated names the plan kept whole.
     kept_concatenated: Vec<LumpName>,
+    /// What the content sweeps kept because an animation, a switch pair or
+    /// the sky needs it beside a name that is in use:
+    /// `{"pnames", "patches", "flats"}`.
+    kept_for_animation: KeptForAnimation,
 }
 
 /// The operations [`Cyberdemon::optimize_wad`] runs: the parsed,
@@ -350,6 +358,7 @@ fn optimize_report(dry_run: bool, plan: Plan) -> OptimizeReport {
         bytes_saved: plan.bytes_saved(),
         lumps_removed: plan.lumps_removed(),
         kept_concatenated: plan.kept_concatenated,
+        kept_for_animation: plan.kept_for_animation,
         actions: plan.actions,
     }
 }
@@ -415,7 +424,7 @@ impl Cyberdemon {
 
     /// Plans and optionally applies a cleanup of the working archive.
     #[tool(
-        description = "Plans and applies cleanups of the working archive: identical overrides, empty marker pairs and shadowed duplicate lumps (unused PNAMES entries, patches and flats are opt-in), rewriting PNAMES and the texture lumps with the renumbered names. dry_run true reports the plan; applying it runs the whole plan as one undoable edit. diff_wads shows what it dropped."
+        description = "Plans and applies cleanups of the working archive: identical overrides, empty marker pairs and shadowed duplicate lumps (unused PNAMES entries, patches and flats are opt-in), rewriting PNAMES and the texture lumps with the renumbered names. The opt-in sweeps keep every animation frame, switch partner, ANIMATED name and sky flat an engine still needs, counted in kept_for_animation. dry_run true reports the plan; applying it runs the whole plan as one undoable edit. diff_wads shows what it dropped."
     )]
     fn optimize_wad(
         &self,

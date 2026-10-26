@@ -135,6 +135,28 @@ Content is compared by length, then a 64-bit FNV-1a hash, then bytes.
     - `unused_flats` — working `flats`-namespace lumps no sector of any
       merged map uses. **Warning:** other PWADs loaded after this one in a
       game can still use them; this sweep can only see this session.
+  - All three content sweeps (`unused_pnames`, `unused_patches`,
+    `unused_flats`) read the animation and switch tables before they drop
+    anything, because an engine finds an animation's frames from the ones a
+    map or texture already uses. The tables are `Doom`'s own built-in lists (nine animated flat ranges, thirteen animated texture
+    ranges, forty switch pairs) plus the merged view's `ANIMATED` and
+    `SWITCHES` lumps when it holds them; `ANIMDEFS` scripts are not read.
+    - a **range**: the frames between two named endpoints, in the order the
+      engine walks (the flats region for a flat, `PNAMES` order for a
+      patch). A sector wearing `NUKAGE1` keeps `NUKAGE2` and `NUKAGE3`; a
+      used name numbered between a table's endpoints keeps the same run. A
+      numbered range is also read as its name family, so a space holding one
+      endpoint and not the other still keeps the frames it does hold.
+    - a **switch pair**: `SW1x` and `SW2x` are one texture's two states, so
+      either one in use keeps the other.
+    - the merged view's own `ANIMATED` lump: its rows are ranges, and every
+      name it declares is kept outright, used or not, since its author
+      declared an animation for it. Its `SWITCHES` sibling adds more pairs.
+    - the sky flats `F_SKY1` and `F_SKY` are never dropped: a sky is chosen
+      by map, not named by a sector.
+    Everything a sweep kept this way is counted in `kept_for_animation`. The
+    rules only ever add keeps: an unreadable record, or a range whose
+    endpoints sit in different spaces, costs a keep and drops nothing extra.
   - `dry_run` (bool, default `true`): report the plan without changing
     anything. `false` applies the whole plan as ONE undoable edit labelled
     `optimize_wad`; an empty plan records no history entry.
@@ -150,7 +172,8 @@ Content is compared by length, then a 64-bit FNV-1a hash, then bytes.
     ],
     "bytes_saved": 14856,
     "lumps_removed": 3,
-    "kept_concatenated": ["DECORATE"]
+    "kept_concatenated": ["DECORATE"],
+    "kept_for_animation": {"pnames": 0, "patches": 0, "flats": 2}
   }
   ```
 
@@ -158,10 +181,12 @@ Content is compared by length, then a 64-bit FNV-1a hash, then bytes.
   block's header index for a `"map"` row; the `PNAMES`-list position for a
   trimmed name, which removes no directory entry). `bytes` is the payload
   freed by that row; `bytes_saved` sums the rows and `lumps_removed` counts
-  the directory entries. Actions come in sweep order (the order listed
-  above), directory order within a sweep. Repeated runs converge: a sweep
-  only judges the current snapshot, so e.g. markers left empty by removed
-  region members need a second call.
+  the directory entries. `kept_for_animation` counts, per opt-in sweep, what
+  it left alone only because an animation, a switch pair or the sky needs it
+  beside a name in use — rows that are *not* in `actions`. Actions come in
+  sweep order (the order listed above), directory order within a sweep.
+  Repeated runs converge: a sweep only judges the current snapshot, so e.g.
+  markers left empty by removed region members need a second call.
 - Errors: `invalid_argument` for an unknown operation name (the message
   lists all six); `format_error` when a requested sweep cannot read its
   input — a malformed `PNAMES`/`TEXTURE1`/`TEXTURE2` (`unused_pnames`,

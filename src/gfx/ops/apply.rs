@@ -34,7 +34,10 @@ pub struct OpsReport {
 /// message names the op index and field, e.g. `ops[2].width`), when a
 /// result would exceed [`MAX_OP_DIMENSION`] on an edge, or when an op's
 /// precondition fails (a crop outside the image, nothing left to trim).
-/// The first failing op's error stops the chain.
+/// The nothing-left-to-trim refusal arrives as a [`CyberError::Emptied`]
+/// marker around its `invalid_argument`, so a caller that trims on the
+/// user's behalf can reword it without reading the text. The first failing
+/// op's error stops the chain.
 #[inline]
 pub fn apply_ops(img: RgbaImage, ops: &[ImageOp]) -> Result<(RgbaImage, OpsReport), CyberError> {
     let mut current = img;

@@ -291,7 +291,7 @@ async fn upload_handler(
     match store.insert(&filename, &mime, body) {
         Ok(asset) => upload_receipt(&state, &asset),
         Err(error) => {
-            let status = if error.code() == "limit_exceeded" {
+            let status = if error.is_limit_exceeded() {
                 StatusCode::PAYLOAD_TOO_LARGE
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR

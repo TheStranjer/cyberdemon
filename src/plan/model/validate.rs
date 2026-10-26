@@ -9,7 +9,7 @@ use super::{
     Connection, ConnectionKind, Feature, MAX_CONNECTIONS, MAX_FEATURES, MAX_ROOMS, Plan, Room,
     Shape,
 };
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::geom::Pt;
 use crate::wad::map::consts::MAX_STEP_HEIGHT;
 
@@ -26,6 +26,11 @@ impl Plan {
     /// switches, opening a connection that carries an `id`. Room
     /// `ceiling > floor` is *not* checked here; rooms are drawn in
     /// painter's order and may stack.
+    ///
+    /// Every refusal naming a room, a connection or a feature row carries
+    /// that element as a [`PlanRef`] (through
+    /// [`CyberError::at_plan`]), so the tool edge can name the wire row
+    /// without reading the message text.
     ///
     /// # Errors
     ///
@@ -83,23 +88,28 @@ impl Plan {
     }
 
     /// Checks room ids are unique and every room's shape is usable, and
-    /// returns the id set for the connection pass.
+    /// returns the id set for the connection pass. Each refusal is
+    /// attributed to the room row that raised it.
     fn validate_rooms(&self) -> Result<HashSet<&str>, CyberError> {
         let mut ids: HashSet<&str> = HashSet::with_capacity(self.rooms.len());
         for room in &self.rooms {
-            collect_room_id(&mut ids, room)?;
+            collect_room_id(&mut ids, room)
+                .map_err(|problem| problem.at_plan(PlanRef::room(&room.id)))?;
         }
         Ok(ids)
     }
 
     /// Checks every connection against the known room ids, and refuses a
     /// connection id two rows carry — the feature run keys its tags and
-    /// bands by it, so a duplicate makes `opens` ambiguous.
+    /// bands by it, so a duplicate makes `opens` ambiguous. Each refusal
+    /// is attributed to the connection row that raised it.
     fn validate_connections(&self, ids: &HashSet<&str>) -> Result<(), CyberError> {
         let mut seen: HashMap<&str, usize> = HashMap::with_capacity(self.connections.len());
         for (index, connection) in self.connections.iter().enumerate() {
-            collect_connection_id(&mut seen, connection, index)?;
-            validate_connection(connection, ids, &self.rooms)?;
+            let named = PlanRef::connection(&connection_label(connection));
+            collect_connection_id(&mut seen, connection, index)
+                .and_then(|()| validate_connection(connection, ids, &self.rooms))
+                .map_err(|problem| problem.at_plan(named.clone()))?;
         }
         Ok(())
     }
@@ -190,10 +200,7 @@ fn validate_connection(
 ) -> Result<(), CyberError> {
     let from = connection.from.as_str();
     let to = connection.to.as_str();
-    let label = connection
-        .id
-        .clone()
-        .unwrap_or_else(|| derived_label(connection));
+    let label = connection_label(connection);
     if !ids.contains(from) {
         return Err(CyberError::InvalidArgument(format!(
             "connection '{label}' starts from unknown room '{from}'"
@@ -294,6 +301,15 @@ fn window_opening(rooms: &[Room], connection: &Connection) -> Option<i64> {
     Some(ceiling.saturating_sub(floor))
 }
 
+/// The label a connection answers to in messages and lookups: its own
+/// `id`, or `from->to` when it carries none.
+fn connection_label(connection: &Connection) -> String {
+    connection
+        .id
+        .clone()
+        .unwrap_or_else(|| derived_label(connection))
+}
+
 /// The label a connection answers to when it carries no `id`:
 /// `from->to`.
 fn derived_label(connection: &Connection) -> String {
@@ -325,19 +341,22 @@ fn validate_feature(
     }
 }
 
-/// One feature's room reference must name a room of the plan.
+/// One feature's room reference must name a room of the plan; the refusal
+/// is attributed to the feature row that carried it.
 fn validate_feature_room(kind: &str, room: &str, ids: &HashSet<&str>) -> Result<(), CyberError> {
     if ids.contains(room) {
         return Ok(());
     }
     Err(CyberError::InvalidArgument(format!(
         "{kind} feature names unknown room '{room}'; point it at a room of the plan"
-    )))
+    ))
+    .at_plan(PlanRef::feature(room)))
 }
 
 /// A switch's `opens` must name a connection by its `id`; an unnamed
 /// connection cannot be referred to, and is refused by its `from->to`
-/// label.
+/// label — the refusal then points at that connection row, the one to
+/// give an `id`.
 fn validate_opens(opens: &str, connections: &[Connection]) -> Result<(), CyberError> {
     let named = connections
         .iter()
@@ -345,18 +364,19 @@ fn validate_opens(opens: &str, connections: &[Connection]) -> Result<(), CyberEr
     if named {
         return Ok(());
     }
-    if let Some(connection) = connections
+    let idless = connections
         .iter()
-        .find(|connection| connection.id.is_none() && derived_label(connection) == opens)
-    {
+        .any(|connection| connection.id.is_none() && derived_label(connection) == opens);
+    if idless {
         return Err(CyberError::InvalidArgument(format!(
-            "switch feature opens connection '{label}', which carries no id; give the \
-             connection an id and name it in opens",
-            label = derived_label(connection)
-        )));
+            "switch feature opens connection '{opens}', which carries no id; give the \
+             connection an id and name it in opens"
+        ))
+        .at_plan(PlanRef::connection(opens)));
     }
     Err(CyberError::InvalidArgument(format!(
         "switch feature opens unknown connection '{opens}'; pass the id of a connection \
          of the plan"
-    )))
+    ))
+    .at_plan(PlanRef::feature(opens)))
 }

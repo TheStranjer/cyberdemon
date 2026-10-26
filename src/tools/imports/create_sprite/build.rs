@@ -143,10 +143,12 @@ pub(super) fn fit_step(
 }
 
 /// Rewrite a failed automatic background/trim step into the documented
-/// instruction; any other error stands as it is.
+/// instruction; any other error stands as it is. The step's own refusal is
+/// the typed [`CyberError::is_emptied`] outcome [`trim`](crate::gfx::ops::alpha::trim)
+/// reports when the picture is left with no content, so nothing here reads
+/// the message.
 pub(super) fn emptied(cleanup: &Cleanup, error: CyberError) -> CyberError {
-    if !matches!(&error, CyberError::InvalidArgument(text) if text.contains("nothing left after trim"))
-    {
+    if !error.is_emptied() {
         return error;
     }
     if cleanup.remove {

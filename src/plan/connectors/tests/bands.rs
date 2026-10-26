@@ -5,6 +5,7 @@ use super::{
     assert_band, compile, error_of, find_piece, first, notch_plan, opening, raise_b, rect_room,
     two_rooms,
 };
+use crate::error::PlanRef;
 use crate::geom::arrange;
 use crate::geom::label::{Label, LayerLabeler};
 use crate::plan::connectors::final_layers;
@@ -152,6 +153,11 @@ fn non_touching_rooms_are_refused_with_a_hint() {
     };
     let error = error_of(&plan);
     assert_eq!(error.code(), "invalid_argument", "code");
+    assert_eq!(
+        error.plan_ref(),
+        Some(PlanRef::connection("a->b")),
+        "the refusal cites the connection by its derived label: {error}"
+    );
     assert!(
         error
             .to_string()
@@ -163,6 +169,11 @@ fn non_touching_rooms_are_refused_with_a_hint() {
 #[test]
 fn a_connection_naming_an_unknown_room_is_refused() {
     let error = error_of(&two_rooms(16, vec![opening("a", "ghost")]));
+    assert_eq!(
+        error.plan_ref(),
+        Some(PlanRef::connection("a->ghost")),
+        "the refusal cites the connection, not the room it cannot find"
+    );
     assert!(
         error.to_string().contains("unknown room 'ghost'"),
         "names the missing room: {error}"
@@ -176,6 +187,11 @@ fn a_wider_than_the_boundary_connection_is_refused() {
     wide.width = 200;
     let error = error_of(&two_rooms(16, vec![wide]));
     assert_eq!(error.code(), "invalid_argument", "code");
+    assert_eq!(
+        error.plan_ref(),
+        Some(PlanRef::connection("gate")),
+        "the carried id names the row"
+    );
     let message = error.to_string();
     assert!(
         message.contains("'gate'"),

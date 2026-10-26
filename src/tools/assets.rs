@@ -334,7 +334,7 @@ fn fallback_to_texture(
     request: &Request<'_>,
     error: CyberError,
 ) -> Result<Prepared, CyberError> {
-    if error.code() != "not_found" {
+    if !error.is_not_found() {
         return Err(error);
     }
     if !holds_texture(view.session, request.name)? {

@@ -164,7 +164,7 @@ pub(super) fn prepare_thing_sprite(
     let sprite = def.sprite.clone();
     let found = match load_sprite(session, &sprite, frame, request.rotation) {
         Ok(found) => found,
-        Err(error) if error.code() == "not_found" => {
+        Err(error) if error.is_not_found() => {
             return Err(missing_thing_sprite(&sprite, frame, request.rotation));
         }
         Err(error) => return Err(error),

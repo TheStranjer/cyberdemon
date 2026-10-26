@@ -7,6 +7,7 @@ use super::{
     assert_invalid, exit_in, lift_in, opening, plan, plan_with_features, room_with, square_room,
     switch_in, teleporter,
 };
+use crate::error::PlanRef;
 use crate::plan::model::{ConnectionKind, DoorStyle, KeyColor, Shape};
 
 #[test]
@@ -316,4 +317,79 @@ fn a_happy_plan_validates() {
         teleporter("courtyard", "lab"),
     ];
     plan.validate().expect("the plan is well-formed");
+}
+
+/// The build tool reads the offending wire row off a refusal's
+/// [`PlanRef`]; every structural pass carries one for the element it was
+/// checking, so no message text has to be parsed.
+#[test]
+fn every_structural_refusal_carries_its_plan_element() {
+    let flat = room_with(
+        "cellar",
+        Shape::Rect {
+            x: 0,
+            y: 0,
+            w: 64,
+            h: 0,
+        },
+    );
+    let room = plan(vec![square_room("a"), flat], vec![])
+        .validate()
+        .expect_err("a 0-high room is refused");
+    assert_eq!(
+        room.plan_ref(),
+        Some(PlanRef::room("cellar")),
+        "the room row the caller must fix: {room}"
+    );
+
+    let connection = plan(
+        vec![square_room("a"), square_room("b")],
+        vec![opening("a", "ghost")],
+    )
+    .validate()
+    .expect_err("an unknown endpoint is refused");
+    assert_eq!(
+        connection.plan_ref(),
+        Some(PlanRef::connection("a->ghost")),
+        "the unnamed connection's derived label: {connection}"
+    );
+
+    let ghost = plan_with_features(vec![square_room("a")], vec![], vec![exit_in("ghost")])
+        .validate()
+        .expect_err("a feature of no room is refused");
+    assert_eq!(
+        ghost.plan_ref(),
+        Some(PlanRef::feature("ghost")),
+        "the feature row names the room it cannot find: {ghost}"
+    );
+
+    let orphan = plan_with_features(vec![square_room("a")], vec![], vec![switch_in("a", "nope")])
+        .validate()
+        .expect_err("a switch of no connection is refused");
+    assert_eq!(
+        orphan.plan_ref(),
+        Some(PlanRef::feature("nope")),
+        "the feature row names the connection it cannot find: {orphan}"
+    );
+}
+
+/// A plan-wide refusal names no element, and so carries no reference for
+/// the build tool to turn into a path.
+#[test]
+fn a_plan_wide_refusal_carries_no_element() {
+    let empty = plan(vec![], vec![])
+        .validate()
+        .expect_err("an empty plan is refused");
+    assert_eq!(empty.plan_ref(), None, "nothing to point at: {empty}");
+
+    let mut negative = plan(vec![square_room("a")], vec![]);
+    negative.wall_thickness = -4_i64;
+    let error = negative
+        .validate()
+        .expect_err("a negative thickness is refused");
+    assert_eq!(
+        error.plan_ref(),
+        None,
+        "the request's own field, not a row: {error}"
+    );
 }

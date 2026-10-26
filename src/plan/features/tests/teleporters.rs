@@ -9,6 +9,7 @@ use super::{
     TestRoles, back_sector, door, dress, front_sector, line_at, map_name, opening, refuse_features,
     two_rooms, wired,
 };
+use crate::error::PlanRef;
 use crate::geom::Pt;
 use crate::plan::compile::compile;
 use crate::plan::model::{DoorStyle, Feature, KeyColor, Plan};
@@ -140,17 +141,25 @@ fn the_two_way_plan_teleporter_runs_the_return_leg() {
 
 #[test]
 fn a_teleporter_square_that_does_not_fit_names_its_room() {
-    for (feature, needle) in [
+    for (feature, needle, room) in [
         (
             teleporter_at("a", "b", Some((8_i64, 8_i64)), None),
             "the teleporter pad does not fit inside room 'a' with 8 units of clearance",
+            "a",
         ),
         (
             teleporter_at("a", "b", None, Some((128_i64, 64_i64))),
             "the teleporter destination does not fit inside room 'b' with 8 units of clearance",
+            "b",
         ),
     ] {
-        let message = refuse_features(&teleport_fixture(vec![feature])).to_string();
+        let error = refuse_features(&teleport_fixture(vec![feature]));
+        assert_eq!(
+            error.plan_ref(),
+            Some(PlanRef::room(room)),
+            "the square's own room row is the element to move"
+        );
+        let message = error.to_string();
         assert!(message.contains(needle), "{needle} must be in: {message}");
     }
 }

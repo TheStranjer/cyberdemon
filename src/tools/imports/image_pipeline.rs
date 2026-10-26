@@ -249,7 +249,7 @@ fn parse_offset_preset(text: &str) -> Result<OffsetMode, CyberError> {
         "center" => Ok(OffsetMode::Center),
         "center_bottom" => Ok(OffsetMode::CenterBottom),
         other => Err(CyberError::InvalidArgument(format!(
-            "offsets {other:?} is unknown: pass \"zero\", \"grab\", \"center\", \\\
+            "offsets {other:?} is unknown: pass \"zero\", \"grab\", \"center\", \
              \"center_bottom\" or an explicit {{\"x\": n, \"y\": n}} pair"
         ))),
     }
@@ -730,9 +730,15 @@ mod tests {
         assert_eq!(preset("center_bottom"), OffsetMode::CenterBottom);
         let error = parse_offset_preset("Corner").expect_err("case-sensitive");
         assert_eq!(code(&error), "invalid_argument");
+        assert_eq!(
+            error.message(),
+            "offsets \"Corner\" is unknown: pass \"zero\", \"grab\", \"center\", \
+             \"center_bottom\" or an explicit {\"x\": n, \"y\": n} pair",
+            "every preset is named in plain words"
+        );
         assert!(
-            error.to_string().contains("center_bottom"),
-            "the message lists the presets: {error}"
+            !error.message().contains('\\'),
+            "the message carries no escape leftovers: {error}"
         );
     }
 

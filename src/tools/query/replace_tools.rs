@@ -184,7 +184,7 @@ pub(super) struct ThingSwapReport {
 /// attributed to the `parameter` that carried the bad reference.
 fn resolve_side(session: &Session, value: &ThingRef, parameter: &str) -> Result<i32, CyberError> {
     match resolve_thing_ref(session, value) {
-        Err(error) if error.code() == "invalid_argument" => {
+        Err(error) if error.is_invalid_argument() => {
             Err(error.map_message(|problem| format!("{parameter}: {problem}")))
         }
         answered => answered,

@@ -1,19 +1,17 @@
 //! The names: the connection classes and the dressing roles the build
-//! resolves, the quoted ids a plan path is read off, the labels a feature
-//! row names and the bounds object the result carries.
+//! resolves, the element references a plan path is read from, the labels a
+//! feature row names and the bounds object the result carries.
 
 use alloc::collections::BTreeMap;
 
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::plan::features::FeatureDress;
 use crate::plan::model::ConnectionKind;
 use crate::plan::textures::{TextureRole, TextureRoles as _};
 use crate::themes::Role;
 use crate::tools::plan::PlanTheme;
 use crate::tools::plan::build::{bounds_of, plan_path, with_plan_path};
-use crate::tools::plan::{
-    FEATURE_ROLES, THEME_ROLES, connection_label, feature_dress, kind_name, quoted_first,
-};
+use crate::tools::plan::{FEATURE_ROLES, THEME_ROLES, connection_label, feature_dress, kind_name};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::name::LumpName;
@@ -148,36 +146,37 @@ fn unnamed_feature_roles_note_themselves_like_dressing_roles() {
 }
 
 #[test]
-fn quoted_first_reads_the_first_name_of_a_message() {
-    assert_eq!(quoted_first("room 'a' has no edge"), Some("a"));
+fn a_room_ref_names_its_wire_row_and_an_unknown_one_nothing() {
+    let plan = plan_args();
     assert_eq!(
-        quoted_first("connection 'd1' cannot be placed: rooms a and b"),
-        Some("d1")
+        plan_path(&plan, &PlanRef::room("b")).as_deref(),
+        Some("rooms[1]"),
+        "the plan's own id finds the row"
     );
-    assert_eq!(quoted_first("no names here"), None, "unquoted passes");
-    assert_eq!(quoted_first("empty '' name"), None, "empty is not a name");
+    assert_eq!(
+        plan_path(&plan, &PlanRef::room("ghost")),
+        None,
+        "an unknown name finds no path"
+    );
 }
 
 #[test]
-fn plan_paths_resolve_rooms_first_then_connection_labels() {
+fn a_connection_ref_names_the_row_by_its_id_or_derived_label() {
     let plan = plan_args();
     assert_eq!(
-        plan_path(&plan, "room 'b' has a 0x0 rectangle").as_deref(),
-        Some("rooms[1]")
-    );
-    assert_eq!(
-        plan_path(&plan, "connection 'a->b' is too wide").as_deref(),
+        plan_path(&plan, &PlanRef::connection("a->b")).as_deref(),
         Some("connections[0]"),
         "the derived label names the unnamed connection"
     );
     assert_eq!(
-        plan_path(&plan, "connection 'd1' rooms do not touch").as_deref(),
-        Some("connections[1]")
+        plan_path(&plan, &PlanRef::connection("d1")).as_deref(),
+        Some("connections[1]"),
+        "a carried id names its own row"
     );
     assert_eq!(
-        plan_path(&plan, "room 'ghost' is not in the plan"),
+        plan_path(&plan, &PlanRef::connection("nope")),
         None,
-        "an unknown name finds no path"
+        "an id no connection carries finds no path"
     );
 }
 
@@ -194,24 +193,29 @@ fn connection_labels_prefer_the_id_over_from_arrow_to() {
 fn plan_paths_reach_feature_rows_by_their_named_ids() {
     let plan = feature_plan();
     assert_eq!(
-        plan_path(&plan, "exit feature names unknown room 'ghost'").as_deref(),
+        plan_path(&plan, &PlanRef::feature("ghost")).as_deref(),
         Some("features[0]"),
         "a feature's room names the row"
     );
     assert_eq!(
-        plan_path(&plan, "switch feature opens unknown connection 'nope'").as_deref(),
+        plan_path(&plan, &PlanRef::feature("nope")).as_deref(),
         Some("features[1]"),
         "the opens value names the row"
     );
     assert_eq!(
-        plan_path(&plan, "room 'a' is painted over").as_deref(),
+        plan_path(&plan, &PlanRef::room("a")).as_deref(),
         Some("rooms[0]"),
-        "a live room wins over the switch that references it"
+        "a room ref names the room, not the switch that references it"
     );
     assert_eq!(
-        plan_path(&plan, "connection 'd1' needs a remote door").as_deref(),
+        plan_path(&plan, &PlanRef::connection("d1")).as_deref(),
         Some("connections[0]"),
-        "a real connection id wins over a feature naming it"
+        "a connection ref names the connection, not the feature naming it"
+    );
+    assert_eq!(
+        plan_path(&plan, &PlanRef::feature("nowhere")),
+        None,
+        "an id no feature row names finds no path"
     );
 }
 
@@ -219,7 +223,8 @@ fn plan_paths_reach_feature_rows_by_their_named_ids() {
 fn feature_refusals_carry_their_plan_path() {
     let plan = feature_plan();
     let prefixed = with_plan_path(
-        CyberError::InvalidArgument("switch feature opens unknown connection 'nope'".to_owned()),
+        CyberError::invalid("switch feature opens unknown connection 'nope'")
+            .at_plan(PlanRef::feature("nope")),
         &plan,
     );
     assert_eq!(prefixed.code(), "invalid_argument", "the code stands");
@@ -234,7 +239,7 @@ fn feature_refusals_carry_their_plan_path() {
 fn with_plan_path_prefixes_refusals_and_keeps_the_rest() {
     let plan = plan_args();
     let invalid = with_plan_path(
-        CyberError::InvalidArgument("room 'a' has a 0x64 rectangle".to_owned()),
+        CyberError::invalid("room 'a' has a 0x64 rectangle").at_plan(PlanRef::room("a")),
         &plan,
     );
     assert_eq!(invalid.code(), "invalid_argument", "the code stands");
@@ -244,24 +249,34 @@ fn with_plan_path_prefixes_refusals_and_keeps_the_rest() {
         "the path leads"
     );
     let limit = with_plan_path(
-        CyberError::LimitExceeded("connection 'd1' needs 9999 steps".to_owned()),
+        CyberError::LimitExceeded("connection 'd1' needs 9999 steps".to_owned())
+            .at_plan(PlanRef::connection("d1")),
         &plan,
     );
     assert_eq!(limit.code(), "limit_exceeded", "limits keep their code");
     assert!(limit.to_string().starts_with("connections[1]: "), "{limit}");
-    let unhandled = CyberError::Internal("room 'a' broke the server".to_owned());
-    assert!(
-        matches!(with_plan_path(unhandled, &plan), CyberError::Internal(text) if text == "room 'a' broke the server"),
-        "internal errors pass through"
+    let unhandled = with_plan_path(
+        CyberError::Internal("room 'a' broke the server".to_owned()).at_plan(PlanRef::room("a")),
+        &plan,
     );
-    let nameless = with_plan_path(
-        CyberError::InvalidArgument("plan has no rooms; add at least one room".to_owned()),
+    assert!(
+        matches!(&unhandled, CyberError::AtPlan { inner, at }
+            if matches!(**inner, CyberError::Internal(_)) && at.id() == "a"),
+        "a contract break keeps its own shape: {unhandled:?}"
+    );
+    assert_eq!(
+        unhandled.message(),
+        "room 'a' broke the server",
+        "and its own words"
+    );
+    let unattributed = with_plan_path(
+        CyberError::invalid("plan has no rooms; add at least one room"),
         &plan,
     );
     assert_eq!(
-        nameless.to_string(),
+        unattributed.to_string(),
         "plan has no rooms; add at least one room",
-        "no quoted id, no prefix"
+        "no element reference, no prefix"
     );
 }
 

@@ -13,7 +13,7 @@
 //! [`remap_rows`] follows every earlier row's line indices through the
 //! rebuild.
 
-use crate::error::CyberError;
+use crate::error::{CyberError, PlanRef};
 use crate::fixed::{midpoint, narrow_i32};
 use crate::geom::Pt;
 use crate::plan::emit::CompiledPlan;
@@ -280,7 +280,8 @@ fn centre_out_of_range(point: Pt, role: &str) -> CyberError {
     ))
 }
 
-/// The refusal for a teleporter square its room cannot hold.
+/// The refusal for a teleporter square its room cannot hold, attributed
+/// to that room row.
 fn square_too_big(square: &TeleportSquare<'_>, x: i32, y: i32) -> CyberError {
     invalid(&format!(
         "the teleporter {} does not fit inside room '{}' with {TELEPORT_CLEARANCE} units \
@@ -288,4 +289,5 @@ fn square_too_big(square: &TeleportSquare<'_>, x: i32, y: i32) -> CyberError {
          explicit {} point nearer the room's middle or move the rooms apart",
         square.role, square.room, square.role,
     ))
+    .at_plan(PlanRef::room(square.room))
 }

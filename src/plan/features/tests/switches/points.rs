@@ -3,6 +3,7 @@
 //! the fit refusal names the knob that moves it, and a point past the
 //! map range is refused by name.
 
+use crate::error::PlanRef;
 use crate::plan::compile::compile;
 use crate::plan::features::switches::panel_hint;
 use crate::plan::features::{FeatureLineEnds, apply_features};
@@ -134,6 +135,11 @@ fn the_panel_hint_rides_on_argument_refusals_alone() {
         "the hint answers: {}",
         argued.hint()
     );
+    assert_eq!(
+        argued.plan_ref().as_ref().map(PlanRef::id),
+        Some("cell"),
+        "the refusal carries its room row"
+    );
     let broken = panel_hint(
         crate::error::CyberError::Internal("a contract break".to_owned()),
         "cell",
@@ -147,6 +153,11 @@ fn the_panel_hint_rides_on_argument_refusals_alone() {
         broken.to_string(),
         "a contract break",
         "and reads unchanged"
+    );
+    assert_eq!(
+        broken.plan_ref(),
+        None,
+        "a contract break is attributed to nothing"
     );
 }
 

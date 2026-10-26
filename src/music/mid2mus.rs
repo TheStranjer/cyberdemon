@@ -4,7 +4,7 @@
 //! its tracks into one absolute-tick timeline, converts ticks to `MUS`
 //! ticks piecewise across tempo changes (`MUS` runs at 140 ticks per second)
 //! and encodes the result as a `MUS` header, instrument table and packed
-//! event stream. The [`crate::music::mus2mid`] controller tables drive the
+//! event stream. The `consts` module's `MUS` and `MIDI` tables drive the
 //! translation backwards, and the [`crate::music::midi_write`] `VLQ` helpers
 //! write the delays.
 //!
@@ -19,75 +19,26 @@
 //! volumes and the group delays, is the private `score` module's `Score`;
 //! this file keeps the timeline in front of it and the header, instrument
 //! table and byte layout around it. The `tests` module holds the shared
-//! helpers and the `convert` topic the conversion checks.
+//! helpers, the `convert` topic the conversion checks and the `golden` topic
+//! that pins both directions down to the byte.
 
 mod score;
 
 use crate::error::CyberError;
+use crate::music::consts::{
+    BEND_SHIFT, CHANNEL_MASK, EVENT_BEND, EVENT_CONTROL, EVENT_NOTE, EVENT_RELEASE, EVENT_SYSTEM,
+    EVENT_TYPE_SHIFT, MICROSECOND_HALF, MICROSECONDS_PER_SECOND, MUS_HEADER_LEN,
+    MUS_INSTRUMENT_BYTES, MUS_MAGIC, MUS_MAX_SCORE_LEN, MUS_TEMPO_MICROSECONDS,
+    MUS_TICKS_PER_SECOND, ZERO_VALUE, mus_control, mus_system,
+};
 use crate::music::midi_read::{MidiEvent, MidiFile, parse_midi};
-use crate::music::mus2mid::{ZERO_VALUE, midi_control, system_control};
 use crate::wad::bytes::Writer;
 use score::Score;
 
-/// Bytes of the fixed `MUS` header, ahead of the instrument table.
-const HEADER_LEN: usize = 16;
-/// The magic every `MUS` lump starts with.
-const MAGIC: [u8; 4] = *b"MUS\x1A";
-/// Header bytes each instrument table entry costs.
-const INSTRUMENT_BYTES: usize = 2_usize;
-/// The largest value the header's score length field counts.
-const MAX_SCORE_LEN: usize = 0xFFFF_usize;
-
-/// Ticks a `MUS` score runs at, per second.
-const MUS_TICKS_PER_SECOND: u128 = 140_u128;
-/// Microseconds in a second.
-const MICROSECONDS: u128 = 1_000_000_u128;
-/// Half of [`MICROSECONDS`], the round-up offset of a rounded quotient.
-const MICROSECOND_HALF: u128 = 500_000_u128;
-/// 500 000 microseconds per quarter note: the tempo a file omits.
-const DEFAULT_TEMPO: u32 = 500_000_u32;
-/// The `MUS` channels melodic parts may take; 15 is percussion.
-const MELODIC_CHANNELS: u8 = 15_u8;
-/// The first `MUS` controller number; 0 is a program change.
-const FIRST_CONTROL: u8 = 1_u8;
-/// The last `MUS` controller number.
-const LAST_CONTROL: u8 = 9_u8;
-/// The first `MUS` system event number.
-const FIRST_SYSTEM: u8 = 10_u8;
-/// The last `MUS` system event number.
-const LAST_SYSTEM: u8 = 14_u8;
-
-/// Set on the last event of a group; a delay in ticks follows its data.
-const LAST_EVENT_FLAG: u8 = 0x80_u8;
-/// How far the type bits sit above the channel bits.
-const TYPE_SHIFT: u32 = 4_u32;
-/// The channel bits of a descriptor byte.
-const CHANNEL_MASK: u8 = 0x0F_u8;
-/// Set on a key byte when a volume byte follows it.
-const VOLUME_FLAG: u8 = 0x80_u8;
-/// The largest key, controller value or patch a `MUS` byte carries.
-const MAX_VALUE: u8 = 0x7F_u8;
-/// Shift a 14-bit `MIDI` bend is reduced by to become a `MUS` value.
-const BEND_REDUCTION: u32 = 6_u32;
-/// The `MUS` controller number that means "change program".
-const PROGRAM_CONTROLLER: u8 = 0_u8;
 /// Number of distinct key, controller and patch values one byte counts.
 const VALUE_COUNT: usize = 256_usize;
 /// Offset a percussion key becomes its `MUS` instrument number at.
 const PERCUSSION_INSTRUMENT_BASE: usize = 100_usize;
-
-/// `MUS` event type 0: stop a note.
-const KIND_RELEASE: u8 = 0_u8;
-/// `MUS` event type 1: start a note.
-const KIND_NOTE: u8 = 1_u8;
-/// `MUS` event type 2: pitch bend.
-const KIND_BEND: u8 = 2_u8;
-/// `MUS` event type 3: a system controller.
-const KIND_SYSTEM: u8 = 3_u8;
-/// `MUS` event type 4: a controller value, or a program change at 0.
-const KIND_CONTROL: u8 = 4_u8;
-/// `MUS` event type 6: end of score.
-const KIND_SCORE_END: u8 = 6_u8;
 
 /// A `MUS` score and the count of what its stream could not carry.
 #[derive(Debug, Clone)]
@@ -131,18 +82,20 @@ pub fn midi_to_mus(bytes: &[u8]) -> Result<MusConversion, CyberError> {
 /// The fixed header, the ascending instrument table and the score bytes.
 fn assemble(score: &[u8], instruments: &[u8], primary: u8) -> Result<Vec<u8>, CyberError> {
     let score_len = score.len();
-    if score_len > MAX_SCORE_LEN {
+    if score_len > MUS_MAX_SCORE_LEN {
         return Err(CyberError::LimitExceeded(format!(
-            "the score is {score_len} bytes, longer than the {MAX_SCORE_LEN} a MUS header counts; use fewer events"
+            "the score is {score_len} bytes, longer than the {MUS_MAX_SCORE_LEN} a MUS header counts; use fewer events"
         )));
     }
     let table_len = instruments
         .len()
-        .checked_mul(INSTRUMENT_BYTES)
+        .checked_mul(MUS_INSTRUMENT_BYTES)
         .unwrap_or(0_usize);
-    let start = HEADER_LEN.checked_add(table_len).unwrap_or(HEADER_LEN);
+    let start = MUS_HEADER_LEN
+        .checked_add(table_len)
+        .unwrap_or(MUS_HEADER_LEN);
     let mut out = Writer::new();
-    out.put_bytes(&MAGIC);
+    out.put_bytes(&MUS_MAGIC);
     out.put_u16(usize_to_u16(score_len).unwrap_or(0_u16));
     out.put_u16(usize_to_u16(start).unwrap_or(0_u16));
     out.put_u16(u16::from(primary));
@@ -182,7 +135,7 @@ fn place_events(file: &MidiFile) -> PlacedTimeline {
     let division = u128::from(file.division);
     let mut segment_tick = 0_u128;
     let mut segment_us = 0_u128;
-    let mut tempo = u128::from(DEFAULT_TEMPO);
+    let mut tempo = u128::from(MUS_TEMPO_MICROSECONDS);
     let mut events: Vec<Placed> = Vec::new();
     let mut end_tick: Option<u64> = None;
     for item in &file.events {
@@ -218,9 +171,11 @@ fn microseconds(ticks: u128, tempo: u128, division: u128) -> u128 {
 /// Rounded `MUS` ticks for `us` microseconds, saturating at `u64::MAX`.
 fn mus_tick(us: u128) -> u64 {
     let rounded = us
-        .saturating_mul(MUS_TICKS_PER_SECOND)
+        .saturating_mul(u128::from(MUS_TICKS_PER_SECOND))
         .saturating_add(MICROSECOND_HALF);
-    let ticks = rounded.checked_div(MICROSECONDS).unwrap_or(u128::MAX);
+    let ticks = rounded
+        .checked_div(MICROSECONDS_PER_SECOND)
+        .unwrap_or(u128::MAX);
     u64::try_from(ticks).unwrap_or(u64::MAX)
 }
 
@@ -239,7 +194,7 @@ impl Body {
     /// A note start at `velocity`; the channel decides the volume byte.
     const fn note(note: u8, velocity: u8) -> Self {
         Self {
-            kind: KIND_NOTE,
+            kind: EVENT_NOTE,
             data1: note,
             data2: Some(velocity),
         }
@@ -248,7 +203,7 @@ impl Body {
     /// A note stop.
     const fn release(note: u8) -> Self {
         Self {
-            kind: KIND_RELEASE,
+            kind: EVENT_RELEASE,
             data1: note,
             data2: None,
         }
@@ -257,7 +212,7 @@ impl Body {
     /// A pitch bend, `value14` already reduced to one byte.
     const fn bend(value: u8) -> Self {
         Self {
-            kind: KIND_BEND,
+            kind: EVENT_BEND,
             data1: value,
             data2: None,
         }
@@ -266,7 +221,7 @@ impl Body {
     /// A controller change of `number` to `value`.
     const fn control(number: u8, value: u8) -> Self {
         Self {
-            kind: KIND_CONTROL,
+            kind: EVENT_CONTROL,
             data1: number,
             data2: Some(value),
         }
@@ -275,7 +230,7 @@ impl Body {
     /// A valueless system controller `number`.
     const fn system(number: u8) -> Self {
         Self {
-            kind: KIND_SYSTEM,
+            kind: EVENT_SYSTEM,
             data1: number,
             data2: None,
         }
@@ -284,7 +239,7 @@ impl Body {
 
 /// A descriptor byte: the event type above the channel, last bit clear.
 fn descriptor(kind: u8, channel: u8) -> u8 {
-    kind.checked_shl(TYPE_SHIFT)
+    kind.checked_shl(EVENT_TYPE_SHIFT)
         .unwrap_or(ZERO_VALUE)
         .checked_add(channel & CHANNEL_MASK)
         .unwrap_or(ZERO_VALUE)
@@ -300,18 +255,8 @@ fn control_body(number: u8, value: u8) -> Option<Body> {
 
 /// The `MUS` bend byte: the 14-bit `MIDI` value reduced by six bits.
 fn bend_byte(value: u16) -> u8 {
-    let reduced = value.checked_shr(BEND_REDUCTION).unwrap_or(0_u16);
+    let reduced = value.checked_shr(BEND_SHIFT).unwrap_or(0_u16);
     u8::try_from(reduced).unwrap_or(u8::MAX)
-}
-
-/// The `MUS` controller number for a mapped `MIDI` `CC`, backwards table.
-fn mus_control(controller: u8) -> Option<u8> {
-    (FIRST_CONTROL..=LAST_CONTROL).find(|number| midi_control(*number) == Some(controller))
-}
-
-/// The `MUS` system event number for a mapped `MIDI` `CC`, backwards table.
-fn mus_system(control: u8) -> Option<u8> {
-    (FIRST_SYSTEM..=LAST_SYSTEM).find(|number| system_control(*number) == Some(control))
 }
 
 #[cfg(test)]

@@ -1,12 +1,16 @@
-//! Bounds-checked little-endian byte access: a read cursor, an append
+//! Bounds-checked byte access in both byte orders: a read cursor, an append
 //! writer, and offset readers.
 //!
 //! [`Reader`] walks a borrowed slice, [`Writer`] accumulates bytes for a
 //! future lump payload, and the `*_at` functions read one integer at a
 //! fixed offset without a cursor. Every read past the end fails with
 //! [`CyberError::Format`] naming the offset that ran out; nothing here
-//! panics, and multi-byte values are little-endian, which is all `Doom`
-//! formats ever use. [`usize_to_u32`] and [`u32_to_usize`] are the
+//! panics. Plain reads and writes are little-endian, which is all `Doom`
+//! formats ever use, and the `_be` methods are the one place the crate
+//! spells the big-endian order that `PNG` chunks, `Standard MIDI Files` and
+//! the `grAb` chunk store their fields in: each reverses the bytes of the
+//! little-endian array its type already gives it, so no caller hand-rolls a
+//! reversal of its own. [`usize_to_u32`] and [`u32_to_usize`] are the
 //! checked conversions later parsers use instead of `as`.
 
 use crate::error::CyberError;
@@ -17,6 +21,14 @@ fn truncated(pos: usize, what: &str) -> CyberError {
     CyberError::Format(format!(
         "unexpected end of data at offset {pos} reading {what}"
     ))
+}
+
+/// `bytes` in the opposite order: the reversal behind every big-endian read
+/// and write, since the crate spells byte order through its little-endian
+/// `to_le_bytes` and `from_le_bytes` only.
+fn reversed<const N: usize>(mut bytes: [u8; N]) -> [u8; N] {
+    bytes.reverse();
+    bytes
 }
 
 /// A bounds-checked read cursor over borrowed bytes.
@@ -158,6 +170,43 @@ impl<'data> Reader<'data> {
         Ok(i32::from_le_bytes(self.read_array_as::<4>("i32")?))
     }
 
+    /// Reads a two-byte big-endian unsigned value: the order `PNG` chunks
+    /// and `Standard MIDI Files` store their widths and fields in.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Format`] when fewer than two bytes remain.
+    #[inline]
+    pub fn read_u16_be(&mut self) -> Result<u16, CyberError> {
+        Ok(u16::from_le_bytes(reversed(
+            self.read_array_as::<2>("u16")?,
+        )))
+    }
+
+    /// Reads a four-byte big-endian unsigned value.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Format`] when fewer than four bytes remain.
+    #[inline]
+    pub fn read_u32_be(&mut self) -> Result<u32, CyberError> {
+        Ok(u32::from_le_bytes(reversed(
+            self.read_array_as::<4>("u32")?,
+        )))
+    }
+
+    /// Reads a four-byte big-endian signed value: one `PNG` `grAb` offset.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Format`] when fewer than four bytes remain.
+    #[inline]
+    pub fn read_i32_be(&mut self) -> Result<i32, CyberError> {
+        Ok(i32::from_le_bytes(reversed(
+            self.read_array_as::<4>("i32")?,
+        )))
+    }
+
     /// Reads `count` raw bytes as a slice of the underlying data.
     ///
     /// # Errors
@@ -246,7 +295,8 @@ pub fn i32_at(data: &[u8], offset: usize) -> Result<i32, CyberError> {
     Ok(i32::from_le_bytes(array_at(data, offset, "i32")?))
 }
 
-/// An append-only little-endian byte sink for building lump payloads.
+/// An append-only byte sink for building lump payloads: little-endian by
+/// default, big-endian through the `_be` methods.
 #[derive(Debug, Default)]
 pub struct Writer {
     /// The bytes written so far.
@@ -304,6 +354,26 @@ impl Writer {
     #[inline]
     pub fn put_i32(&mut self, value: i32) {
         self.buf.extend_from_slice(&value.to_le_bytes());
+    }
+
+    /// Appends a two-byte big-endian unsigned value: the order `Standard
+    /// MIDI Files` write their header fields in.
+    #[inline]
+    pub fn put_u16_be(&mut self, value: u16) {
+        self.buf.extend_from_slice(&reversed(value.to_le_bytes()));
+    }
+
+    /// Appends a four-byte big-endian unsigned value: a `PNG` or `SMF`
+    /// chunk length.
+    #[inline]
+    pub fn put_u32_be(&mut self, value: u32) {
+        self.buf.extend_from_slice(&reversed(value.to_le_bytes()));
+    }
+
+    /// Appends a four-byte big-endian signed value: one `PNG` `grAb` offset.
+    #[inline]
+    pub fn put_i32_be(&mut self, value: i32) {
+        self.buf.extend_from_slice(&reversed(value.to_le_bytes()));
     }
 
     /// Appends raw bytes.
@@ -493,6 +563,83 @@ mod tests {
     }
 
     #[test]
+    fn big_endian_reads_reverse_the_byte_order() {
+        let bytes = [
+            0x00_u8, 0x46, 0x00, 0x00, 0x00, 0x06, 0xFF, 0xFF, 0xFF, 0xFE,
+        ];
+        let mut reader = Reader::new(&bytes);
+        assert_eq!(
+            reader.read_u16_be().expect("u16 BE"),
+            0x0046,
+            "a big-endian u16 reads high byte first"
+        );
+        assert_eq!(
+            reader.read_u32_be().expect("u32 BE"),
+            0x0000_0006,
+            "a big-endian u32 reads high byte first"
+        );
+        assert_eq!(
+            reader.read_i32_be().expect("i32 BE"),
+            -2_i32,
+            "FF FF FF FE big-endian is -2"
+        );
+        assert_eq!(reader.pos(), bytes.len(), "the cursor walked ten bytes");
+    }
+
+    #[test]
+    fn big_endian_reads_are_not_little_endian_reads() {
+        let bytes = [0x01_u8, 0x02, 0x03, 0x04, 0x05, 0x06];
+        assert_eq!(
+            Reader::new(&bytes).read_u16_be().expect("u16 BE"),
+            0x0102,
+            "big-endian"
+        );
+        assert_eq!(
+            Reader::new(&bytes).read_u16().expect("u16 LE"),
+            0x0201,
+            "the same two bytes little-endian are the other value"
+        );
+        assert_eq!(
+            Reader::new(&bytes).read_u32_be().expect("u32 BE"),
+            0x0102_0304,
+            "big-endian u32"
+        );
+        assert_eq!(
+            Reader::new(&bytes).read_i32_be().expect("i32 BE"),
+            0x0102_0304_i32,
+            "the signed big-endian read agrees on a positive value"
+        );
+    }
+
+    #[test]
+    fn big_endian_reads_report_truncation_and_hold_their_place() {
+        let mut short = Reader::new(&[0x00_u8]);
+        let word = short.read_u16_be().expect_err("one byte is no u16");
+        assert_eq!(
+            word.to_string(),
+            "unexpected end of data at offset 0 reading u16",
+            "u16 BE message"
+        );
+        assert_eq!(short.pos(), 0, "a failed read does not move the cursor");
+        let three = Reader::new(&[0x00_u8, 0x01, 0x02])
+            .read_u32_be()
+            .expect_err("three bytes are no u32");
+        assert_eq!(
+            three.to_string(),
+            "unexpected end of data at offset 0 reading u32",
+            "u32 BE message"
+        );
+        let mut tail = Reader::new(&[0x00_u8, 0x01, 0x02, 0x03, 0x04]);
+        tail.seek(2).expect("offset 2 is inside five bytes");
+        let signed = tail.read_i32_be().expect_err("three bytes are no i32");
+        assert_eq!(signed.code(), "format_error", "i32 BE code");
+        assert!(
+            signed.to_string().contains("at offset 2 reading i32"),
+            "the offset reported is the cursor's own: {signed}"
+        );
+    }
+
+    #[test]
     fn slice_and_array_reads() {
         let bytes = [0x01_u8, 0x02, 0x03, 0x04, 0x05];
         let mut reader = Reader::new(&bytes);
@@ -666,6 +813,40 @@ mod tests {
             "name round trip is uppercase"
         );
         assert_eq!(reader.pos(), data.len(), "everything was consumed");
+    }
+
+    #[test]
+    fn big_endian_writes_are_the_reverse_of_the_little_endian_ones() {
+        let mut writer = Writer::new();
+        writer.put_u16_be(0x0046);
+        writer.put_u32_be(0x0000_002B);
+        writer.put_i32_be(-32);
+        assert_eq!(
+            writer.into_inner(),
+            vec![0x00, 0x46, 0x00, 0x00, 0x00, 0x2B, 0xFF, 0xFF, 0xFF, 0xE0],
+            "high byte first, as PNG and SMF store them"
+        );
+    }
+
+    #[test]
+    fn big_endian_writes_round_trip_through_the_big_endian_reads() {
+        let mut writer = Writer::new();
+        writer.put_u16_be(0xFE_DC);
+        writer.put_u32_be(0xDEAD_BEEF);
+        writer.put_i32_be(i32::MIN);
+        let data = writer.into_inner();
+        let mut reader = Reader::new(&data);
+        assert_eq!(reader.read_u16_be().expect("u16 BE"), 0xFE_DC, "u16 BE");
+        assert_eq!(reader.read_u32_be().expect("u32 BE"), 0xDEAD_BEEF, "u32 BE");
+        assert_eq!(reader.read_i32_be().expect("i32 BE"), i32::MIN, "i32 BE");
+        assert_eq!(reader.pos(), data.len(), "everything was consumed");
+        let mixed = Reader::new(&data)
+            .read_u32_be()
+            .expect("the first four bytes");
+        assert_eq!(
+            mixed, 0xFEDC_DEAD,
+            "little-endian writes and big-endian reads see different values"
+        );
     }
 
     #[test]

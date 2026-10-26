@@ -8,6 +8,8 @@
 
 use serde::Serialize;
 
+use crate::music::consts::{MUS_MAGIC, SMF_HEADER_ID};
+
 /// Offset of the `SCRM` signature in an `S3M` module.
 const S3M_TAG_OFFSET: usize = 44;
 /// Offset of the four-byte channel tag in a `ProTracker` `MOD` module.
@@ -59,8 +61,8 @@ impl MusicKind {
 
 /// A magic at byte 0 paired with the kind it identifies, checked in order.
 const PREFIX_MAGICS: [(&[u8], MusicKind); 7] = [
-    (b"MUS\x1A", MusicKind::Mus),
-    (b"MThd", MusicKind::Midi),
+    (&MUS_MAGIC, MusicKind::Mus),
+    (&SMF_HEADER_ID, MusicKind::Midi),
     (b"OggS", MusicKind::Ogg),
     (b"ID3", MusicKind::Mp3),
     (b"fLaC", MusicKind::Flac),

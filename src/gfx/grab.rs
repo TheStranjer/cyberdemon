@@ -3,18 +3,22 @@
 //!
 //! Layout: a big-endian `u32` length (always 8), the type `grAb`, the
 //! payload (`x` and `y` as big-endian `i32`), and the `CRC-32` computed
-//! over type plus payload. The crate denies `to_be_bytes`/`from_be_bytes`,
-//! so big-endian values are produced and read by reversing the
-//! little-endian byte arrays.
+//! over type plus payload. Every one of those fields is read and written
+//! through [`Reader`] and [`Writer`], the crate's one spelling of byte
+//! order.
+//!
+//! [`Reader`]: crate::wad::bytes::Reader
+//! [`Writer`]: crate::wad::bytes::Writer
 
 use crate::error::CyberError;
+use crate::wad::bytes::{Reader, Writer};
 
 /// The `PNG` file signature every chunk walk starts from.
 pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 /// The `grAb` chunk type.
 const GRAB_TYPE: [u8; 4] = *b"grAb";
 /// The mandatory first chunk of every `PNG`.
-const IHDR_TYPE: [u8; 4] = *b"IHDR";
+pub(crate) const IHDR_TYPE: [u8; 4] = *b"IHDR";
 /// Size of the chunk length field, the chunk type, the chunk `CRC-32` and
 /// one `grAb` offset word: all four bytes.
 const FIELD_BYTES: usize = 4;
@@ -38,46 +42,22 @@ fn truncated() -> CyberError {
     CyberError::Format("PNG chunk stream is truncated or malformed".to_owned())
 }
 
-/// Reads a big-endian `u32` by reversing the bytes before decoding them
-/// little-endian (the `big_endian_bytes` lint denies `from_be_bytes`).
-pub(crate) fn read_u32_be(bytes: &[u8]) -> Option<u32> {
-    let mut word = *bytes.first_chunk::<FIELD_BYTES>()?;
-    word.reverse();
-    Some(u32::from_le_bytes(word))
-}
-
-/// Reads a big-endian `i32` by reversing the bytes before decoding them
-/// little-endian.
-fn read_i32_be(bytes: &[u8]) -> Option<i32> {
-    let mut word = *bytes.first_chunk::<FIELD_BYTES>()?;
-    word.reverse();
-    Some(i32::from_le_bytes(word))
-}
-
-/// Encodes a `u32` big-endian by reversing its little-endian bytes.
-fn be_u32(value: u32) -> [u8; 4] {
-    let mut word = value.to_le_bytes();
-    word.reverse();
-    word
-}
-
-/// Encodes an `i32` big-endian by reversing its little-endian bytes.
-fn be_i32(value: i32) -> [u8; 4] {
-    let mut word = value.to_le_bytes();
-    word.reverse();
-    word
-}
-
 /// The chunk stream after a valid `PNG` signature.
 fn after_signature(png: &[u8]) -> Result<&[u8], CyberError> {
     png.strip_prefix(&PNG_SIGNATURE)
         .ok_or_else(|| CyberError::Format("not a PNG file: bad signature".to_owned()))
 }
 
+/// The big-endian `u32` a chunk stream opens with, `None` when the stream is
+/// too short to hold one.
+fn u32_at_head(bytes: &[u8]) -> Option<u32> {
+    Reader::new(bytes).read_u32_be().ok()
+}
+
 /// Splits the next chunk into its type, payload and the remaining bytes;
 /// `None` when the stream ends mid-chunk.
 pub(crate) fn next_chunk(bytes: &[u8]) -> Option<Chunk<'_>> {
-    let length = usize::try_from(read_u32_be(bytes)?).ok()?;
+    let length = usize::try_from(u32_at_head(bytes)?).ok()?;
     let data_end = HEADER_BYTES.checked_add(length)?;
     let total = data_end.checked_add(FIELD_BYTES)?;
     let kind = *bytes
@@ -101,23 +81,26 @@ fn parse_offsets(data: &[u8]) -> Result<(i32, i32), CyberError> {
     if data.len() != GRAB_DATA_BYTES {
         return Err(bad());
     }
-    let mut words = data.chunks_exact(FIELD_BYTES);
-    let x = read_i32_be(words.next().ok_or_else(bad)?).ok_or_else(bad)?;
-    let y = read_i32_be(words.next().ok_or_else(bad)?).ok_or_else(bad)?;
+    let mut words = Reader::new(data);
+    let x = words.read_i32_be().ok().ok_or_else(bad)?;
+    let y = words.read_i32_be().ok().ok_or_else(bad)?;
     Ok((x, y))
 }
 
 /// Builds a complete `grAb` chunk: length, type, offsets and `CRC-32`
 /// over type plus payload.
 fn grab_chunk(x: i32, y: i32) -> Vec<u8> {
-    let mut chunk = Vec::with_capacity(GRAB_CHUNK_BYTES);
-    chunk.extend_from_slice(&be_u32(GRAB_DATA_LENGTH));
-    chunk.extend_from_slice(&GRAB_TYPE);
-    chunk.extend_from_slice(&be_i32(x));
-    chunk.extend_from_slice(&be_i32(y));
-    let crc = crc32fast::hash(chunk.split_at(FIELD_BYTES).1);
-    chunk.extend_from_slice(&be_u32(crc));
-    chunk
+    let mut body = Writer::new();
+    body.put_bytes(&GRAB_TYPE);
+    body.put_i32_be(x);
+    body.put_i32_be(y);
+    let payload = body.into_inner();
+    let crc = crc32fast::hash(&payload);
+    let mut chunk = Writer::with_capacity(GRAB_CHUNK_BYTES);
+    chunk.put_u32_be(GRAB_DATA_LENGTH);
+    chunk.put_bytes(&payload);
+    chunk.put_u32_be(crc);
+    chunk.into_inner()
 }
 
 /// The byte offset just after the `IHDR` chunk.
@@ -207,9 +190,10 @@ pub fn insert_grab(png: &[u8], x: i32, y: i32) -> Result<Vec<u8>, CyberError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FIELD_BYTES, GRAB_CHUNK_BYTES, GRAB_DATA_BYTES, GRAB_DATA_LENGTH, PNG_SIGNATURE, be_i32,
-        be_u32, insert_grab, read_grab, read_u32_be,
+        FIELD_BYTES, GRAB_CHUNK_BYTES, GRAB_DATA_BYTES, GRAB_DATA_LENGTH, PNG_SIGNATURE,
+        insert_grab, read_grab, u32_at_head,
     };
+    use crate::wad::bytes::{Reader, Writer};
 
     /// A minimal chunked PNG: signature, `IHDR`, `IDAT` and `IEND`, built
     /// by the `image` crate's encoder.
@@ -223,16 +207,27 @@ mod tests {
         buffer
     }
 
+    /// The bytes of `value` as one big-endian chunk field.
+    fn be_word(value: u32) -> Vec<u8> {
+        let mut out = Writer::new();
+        out.put_u32_be(value);
+        out.into_inner()
+    }
+
     /// The expected `grAb` chunk bytes for `(x, y)`, with an independently
     /// assembled `CRC-32` over type plus payload.
     fn expected_chunk(x: i32, y: i32) -> Vec<u8> {
-        let mut chunk = be_u32(GRAB_DATA_LENGTH).to_vec();
-        chunk.extend_from_slice(b"grAb");
-        chunk.extend_from_slice(&be_i32(x));
-        chunk.extend_from_slice(&be_i32(y));
-        let crc = crc32fast::hash(chunk.split_at(FIELD_BYTES).1);
-        chunk.extend_from_slice(&be_u32(crc));
-        chunk
+        let mut body = Writer::new();
+        body.put_bytes(b"grAb");
+        body.put_i32_be(x);
+        body.put_i32_be(y);
+        let payload = body.into_inner();
+        let crc = crc32fast::hash(&payload);
+        let mut chunk = Writer::new();
+        chunk.put_u32_be(GRAB_DATA_LENGTH);
+        chunk.put_bytes(&payload);
+        chunk.put_u32_be(crc);
+        chunk.into_inner()
     }
 
     /// The byte offset just after the `IHDR` chunk of a PNG.
@@ -240,7 +235,7 @@ mod tests {
         let length_start = PNG_SIGNATURE.len();
         let length_end = length_start.checked_add(FIELD_BYTES).expect("offset fits");
         let type_end = length_end.checked_add(FIELD_BYTES).expect("offset fits");
-        let ihdr_len = read_u32_be(
+        let ihdr_len = u32_at_head(
             png.get(length_start..length_end)
                 .expect("IHDR length present"),
         )
@@ -325,9 +320,32 @@ mod tests {
     }
 
     #[test]
+    fn the_chunk_words_are_read_big_endian() {
+        let chunk = expected_chunk(-5_i32, 9_i32);
+        assert_eq!(
+            u32_at_head(&chunk),
+            Some(GRAB_DATA_LENGTH),
+            "the length word holds the payload width, high byte first"
+        );
+        assert_eq!(
+            u32_at_head(&[0_u8, 1, 2]),
+            None,
+            "three bytes hold no length word"
+        );
+        let mut fields = Reader::new(chunk.get(FIELD_BYTES..).expect("the chunk past its length"));
+        assert_eq!(
+            fields.read_array::<4>().expect("the chunk type"),
+            *b"grAb",
+            "the type follows the length"
+        );
+        assert_eq!(fields.read_i32_be().expect("the x offset"), -5_i32, "x");
+        assert_eq!(fields.read_i32_be().expect("the y offset"), 9_i32, "y");
+    }
+
+    #[test]
     fn chunk_claiming_more_bytes_than_present_is_a_format_error() {
         let mut crafted: Vec<u8> = PNG_SIGNATURE.to_vec();
-        crafted.extend_from_slice(&be_u32(1_000_u32));
+        crafted.extend_from_slice(&be_word(1_000_u32));
         crafted.extend_from_slice(b"grAb");
         crafted.extend_from_slice(&[0_u8; GRAB_DATA_BYTES]);
         let error = read_grab(&crafted).expect_err("declared length exceeds the file");
@@ -337,7 +355,7 @@ mod tests {
     #[test]
     fn grab_with_wrong_payload_length_is_a_format_error() {
         let mut crafted: Vec<u8> = PNG_SIGNATURE.to_vec();
-        crafted.extend_from_slice(&be_u32(4_u32));
+        crafted.extend_from_slice(&be_word(4_u32));
         crafted.extend_from_slice(b"grAb");
         crafted.extend_from_slice(&[0_u8; FIELD_BYTES]);
         crafted.extend_from_slice(&[0_u8; FIELD_BYTES]);

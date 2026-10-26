@@ -12,70 +12,18 @@
 //! already a `MIDI` delta time, so delays are copied through unchanged.
 
 use crate::error::CyberError;
+use crate::music::consts::{
+    BEND_SHIFT, CHANNEL_COUNT, CHANNEL_MASK, DEFAULT_VOLUME, EVENT_BEND, EVENT_CONTROL,
+    EVENT_MEASURE_END, EVENT_NOTE, EVENT_RELEASE, EVENT_SCORE_END, EVENT_SYSTEM, EVENT_TYPE_MASK,
+    EVENT_TYPE_SHIFT, LAST_EVENT_FLAG, MAX_VALUE, MIDI_CHANNEL_LAST, MIDI_CHANNEL_POOL,
+    MIDI_CONTROL_CHANGE, MIDI_NOTE_OFF, MIDI_NOTE_ON, MIDI_PERCUSSION_CHANNEL, MIDI_PITCH_BEND,
+    MIDI_PROGRAM_CHANGE, MUS_HEADER_LEN, MUS_MAGIC, MUS_PERCUSSION_CHANNEL, MUS_SCORE_LEN_OFFSET,
+    MUS_SCORE_START_OFFSET, MUS_TEMPO_MICROSECONDS, MUS_TICKS_PER_QUARTER, PROGRAM_CONTROLLER,
+    VOLUME_FLAG, ZERO_VALUE, midi_control, system_control,
+};
 use crate::music::midi_write::{MidiWriter, read_vlq};
 use crate::wad::bytes::{Reader, u16_at};
 
-/// Bytes of the fixed `MUS` header, ahead of the instrument table.
-const HEADER_LEN: usize = 16;
-/// The magic every `MUS` lump starts with.
-const MAGIC: [u8; 4] = *b"MUS\x1A";
-/// Offset of the score length field, in bytes.
-const SCORE_LEN_OFFSET: usize = 4;
-/// Offset of the score start field, in bytes.
-const SCORE_START_OFFSET: usize = 6;
-
-/// Set on the last event of a group; a delay in ticks follows its data.
-const LAST_EVENT_FLAG: u8 = 0x80_u8;
-/// The event type bits of a descriptor byte.
-const TYPE_MASK: u8 = 0x70_u8;
-/// How far the type bits sit above the channel bits.
-const TYPE_SHIFT: u32 = 4_u32;
-/// The channel bits of a descriptor byte.
-const CHANNEL_MASK: u8 = 0x0F_u8;
-/// The note number bits of a key event.
-const NOTE_MASK: u8 = 0x7F_u8;
-/// Set on a key byte when a volume byte follows it.
-const VOLUME_FLAG: u8 = 0x80_u8;
-
-/// Ticks per quarter note of the written file: 70 at 500 000 microseconds
-/// per quarter is the 140 ticks per second `MUS` runs at.
-const TICKS_PER_QUARTER: u16 = 70_u16;
-/// 500 000 microseconds per quarter note.
-const TEMPO_MICROSECONDS: u32 = 500_000_u32;
-
-/// Status byte of a `MIDI` note off event.
-const MIDI_NOTE_OFF: u8 = 0x80_u8;
-/// Status byte of a `MIDI` note on event.
-const MIDI_NOTE_ON: u8 = 0x90_u8;
-/// Status byte of a `MIDI` control change.
-const MIDI_CONTROL_CHANGE: u8 = 0xB0_u8;
-/// Status byte of a `MIDI` program change.
-const MIDI_PROGRAM_CHANGE: u8 = 0xC0_u8;
-/// Status byte of a `MIDI` pitch bend.
-const MIDI_PITCH_BEND: u8 = 0xE0_u8;
-
-/// Number of `MUS` channels.
-pub(crate) const CHANNEL_COUNT: usize = 16;
-/// The `MUS` channel that carries percussion.
-pub(crate) const MUS_PERCUSSION_CHANNEL: u8 = 15_u8;
-/// The `MIDI` channel percussion plays on.
-pub(crate) const MIDI_PERCUSSION_CHANNEL: u8 = 9_u8;
-/// The `MIDI` channels handed to non-percussion `MUS` channels, in order of
-/// first use; 9 is reserved for percussion, so the pool skips it.
-const MIDI_CHANNEL_POOL: [u8; 15] = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
-/// The last pool entry, kept for a score that needs a sixteenth channel.
-const MIDI_CHANNEL_LAST: u8 = 15_u8;
-
-/// Highest value a `MIDI` data byte carries; larger `MUS` values clamp.
-const MAX_MIDI_VALUE: u8 = 0x7F_u8;
-/// Value of the `MUS` system events, which carry none of their own.
-pub(crate) const ZERO_VALUE: u8 = 0_u8;
-/// Velocity a channel plays at until a note gives it one.
-pub(crate) const DEFAULT_VOLUME: u8 = 127_u8;
-/// The `MUS` controller number that means "change program".
-const PROGRAM_CONTROLLER: u8 = 0_u8;
-/// Bits a `MUS` pitch value is shifted up to become a 14-bit bend.
-const PITCH_SHIFT: u32 = 6_u32;
 /// Shifts of the two 7-bit digits of a 14-bit value, least significant first.
 const BEND_DIGITS: [u32; 2] = [0_u32, 7_u32];
 /// Seven bits of a wider value, for splitting a 14-bit one.
@@ -84,21 +32,21 @@ const SEVEN_BITS: u32 = 0x7F_u32;
 /// The event type held in bits 4..6 of a descriptor byte.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum EventKind {
-    /// 0: stop a note.
+    /// `EVENT_RELEASE`: stop a note.
     Release,
-    /// 1: start a note, with an optional volume byte.
+    /// `EVENT_NOTE`: start a note, with an optional volume byte.
     Note,
-    /// 2: pitch bend, 128 at centre.
+    /// `EVENT_BEND`: pitch bend, 128 at centre.
     Bend,
-    /// 3: a system controller, which carries no value.
+    /// `EVENT_SYSTEM`: a system controller, which carries no value.
     System,
-    /// 4: a controller value, or a program change at number 0.
+    /// `EVENT_CONTROL`: a controller value, or a program change at number 0.
     Controller,
-    /// 5: end of measure, no data and no output.
+    /// `EVENT_MEASURE_END`: end of measure, no data and no output.
     MeasureEnd,
-    /// 6: end of score.
+    /// `EVENT_SCORE_END`: end of score.
     ScoreEnd,
-    /// 7: unused, no data.
+    /// Any other type bits: unused, no data.
     Unused,
 }
 
@@ -106,45 +54,15 @@ impl EventKind {
     /// Decodes the three type bits of a descriptor byte.
     pub(crate) const fn from_bits(bits: u8) -> Self {
         match bits {
-            0_u8 => Self::Release,
-            1_u8 => Self::Note,
-            2_u8 => Self::Bend,
-            3_u8 => Self::System,
-            4_u8 => Self::Controller,
-            5_u8 => Self::MeasureEnd,
-            6_u8 => Self::ScoreEnd,
+            EVENT_RELEASE => Self::Release,
+            EVENT_NOTE => Self::Note,
+            EVENT_BEND => Self::Bend,
+            EVENT_SYSTEM => Self::System,
+            EVENT_CONTROL => Self::Controller,
+            EVENT_MEASURE_END => Self::MeasureEnd,
+            EVENT_SCORE_END => Self::ScoreEnd,
             _ => Self::Unused,
         }
-    }
-}
-
-/// The `MIDI` controller a `MUS` system event selects, by `MUS` number.
-pub(crate) const fn system_control(number: u8) -> Option<u8> {
-    match number {
-        10_u8 => Some(120_u8),
-        11_u8 => Some(123_u8),
-        12_u8 => Some(126_u8),
-        13_u8 => Some(127_u8),
-        14_u8 => Some(121_u8),
-        _ => None,
-    }
-}
-
-/// The `MIDI` controller a `MUS` controller event selects, or `None` for a
-/// number with no counterpart. Number 0 is a program change, not a
-/// controller, and is handled by the caller.
-pub(crate) const fn midi_control(number: u8) -> Option<u8> {
-    match number {
-        1_u8 => Some(0_u8),
-        2_u8 => Some(1_u8),
-        3_u8 => Some(7_u8),
-        4_u8 => Some(10_u8),
-        5_u8 => Some(11_u8),
-        6_u8 => Some(91_u8),
-        7_u8 => Some(93_u8),
-        8_u8 => Some(64_u8),
-        9_u8 => Some(67_u8),
-        _ => None,
     }
 }
 
@@ -179,7 +97,7 @@ fn bend_digits(value: u32) -> [u8; 2] {
 pub fn mus_to_midi(bytes: &[u8]) -> Result<Vec<u8>, CyberError> {
     let score = score_bytes(bytes)?;
     let mut midi = MidiWriter::new();
-    midi.put_tempo(0_u32, TEMPO_MICROSECONDS);
+    midi.put_tempo(0_u32, MUS_TEMPO_MICROSECONDS);
     let mut converter = Converter::new(&mut midi);
     let mut reader = Reader::new(score);
     while reader.remaining() > 0 {
@@ -188,24 +106,24 @@ pub fn mus_to_midi(bytes: &[u8]) -> Result<Vec<u8>, CyberError> {
         }
     }
     let trailing_delay = converter.pending_delay;
-    midi.into_type0(TICKS_PER_QUARTER, trailing_delay)
+    midi.into_type0(MUS_TICKS_PER_QUARTER, trailing_delay)
 }
 
 /// The event stream the header declares, checked against the lump.
 fn score_bytes(bytes: &[u8]) -> Result<&[u8], CyberError> {
-    if !bytes.starts_with(&MAGIC) {
+    if !bytes.starts_with(&MUS_MAGIC) {
         return Err(CyberError::Format(
             "not a MUS file: the data does not start with 'MUS' and 0x1A; check the lump name starts with D_".to_owned(),
         ));
     }
-    if bytes.len() < HEADER_LEN {
+    if bytes.len() < MUS_HEADER_LEN {
         return Err(CyberError::Format(format!(
-            "MUS header is {} bytes, shorter than the {HEADER_LEN} bytes it needs; convert the whole D_* lump",
+            "MUS header is {} bytes, shorter than the {MUS_HEADER_LEN} bytes it needs; convert the whole D_* lump",
             bytes.len(),
         )));
     }
-    let score_len = usize::from(u16_at(bytes, SCORE_LEN_OFFSET)?);
-    let score_start = usize::from(u16_at(bytes, SCORE_START_OFFSET)?);
+    let score_len = usize::from(u16_at(bytes, MUS_SCORE_LEN_OFFSET)?);
+    let score_start = usize::from(u16_at(bytes, MUS_SCORE_START_OFFSET)?);
     // Both fields are 16-bit, so their sum always fits in a usize.
     let score_end = score_start.saturating_add(score_len);
     bytes.get(score_start..score_end).ok_or_else(|| {
@@ -280,8 +198,8 @@ impl<'writer> Converter<'writer> {
     /// last event. Returns `false` once the score has ended.
     fn event(&mut self, reader: &mut Reader<'_>) -> Result<bool, CyberError> {
         let descriptor = reader.read_u8()?;
-        let bits = (descriptor & TYPE_MASK)
-            .checked_shr(TYPE_SHIFT)
+        let bits = (descriptor & EVENT_TYPE_MASK)
+            .checked_shr(EVENT_TYPE_SHIFT)
             .unwrap_or(0_u8);
         let channel = descriptor & CHANNEL_MASK;
         let continued = match EventKind::from_bits(bits) {
@@ -301,7 +219,7 @@ impl<'writer> Converter<'writer> {
 
     /// `MUS` 0: stop a note at velocity 0.
     fn release(&mut self, reader: &mut Reader<'_>, channel: u8) -> Result<bool, CyberError> {
-        let note = reader.read_u8()? & NOTE_MASK;
+        let note = reader.read_u8()? & MAX_VALUE;
         self.emit(channel, MIDI_NOTE_OFF, &[note, ZERO_VALUE]);
         Ok(true)
     }
@@ -311,13 +229,13 @@ impl<'writer> Converter<'writer> {
     fn note(&mut self, reader: &mut Reader<'_>, channel: u8) -> Result<bool, CyberError> {
         let key = reader.read_u8()?;
         let volume = if key & VOLUME_FLAG != 0 {
-            let value = reader.read_u8()?.min(MAX_MIDI_VALUE);
+            let value = reader.read_u8()?.min(MAX_VALUE);
             self.set_volume(channel, value);
             value
         } else {
             self.volume(channel)
         };
-        self.emit(channel, MIDI_NOTE_ON, &[key & NOTE_MASK, volume]);
+        self.emit(channel, MIDI_NOTE_ON, &[key & MAX_VALUE, volume]);
         Ok(true)
     }
 
@@ -325,7 +243,7 @@ impl<'writer> Converter<'writer> {
     /// `MIDI` bend, sent as two 7-bit digits.
     fn bend(&mut self, reader: &mut Reader<'_>, channel: u8) -> Result<bool, CyberError> {
         let value = u32::from(reader.read_u8()?)
-            .checked_shl(PITCH_SHIFT)
+            .checked_shl(BEND_SHIFT)
             .unwrap_or(0_u32);
         self.emit(channel, MIDI_PITCH_BEND, &bend_digits(value));
         Ok(true)
@@ -344,7 +262,7 @@ impl<'writer> Converter<'writer> {
     /// or nothing at all when the number has no counterpart.
     fn controller(&mut self, reader: &mut Reader<'_>, channel: u8) -> Result<bool, CyberError> {
         let number = reader.read_u8()?;
-        let value = reader.read_u8()?.min(MAX_MIDI_VALUE);
+        let value = reader.read_u8()?.min(MAX_VALUE);
         match control_event(number, value) {
             Control::Program(patch) => self.emit(channel, MIDI_PROGRAM_CHANGE, &[patch]),
             Control::Change { controller, data } => {
@@ -419,7 +337,11 @@ impl<'writer> Converter<'writer> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIDI_CHANNEL_POOL, mus_to_midi};
+    use super::mus_to_midi;
+    use crate::music::consts::{
+        MIDI_CHANNEL_POOL, MUS_MAGIC, MUS_TICKS_PER_QUARTER, SMF_HEADER_BODY_LEN, SMF_HEADER_ID,
+        SMF_TRACK_ID,
+    };
     use crate::wad::bytes::Writer;
 
     /// The tempo meta event every track starts with.
@@ -430,7 +352,7 @@ mod tests {
     /// A `MUS` lump: the 16-byte header, one instrument, `score` at 18.
     fn mus_lump(score: &[u8]) -> Vec<u8> {
         let mut lump = Writer::new();
-        lump.put_bytes(b"MUS\x1A");
+        lump.put_bytes(&MUS_MAGIC);
         lump.put_u16(u16::try_from(score.len()).expect("a hand-built score fits in a u16"));
         lump.put_u16(18_u16);
         lump.put_u16(0x3FFF_u16);
@@ -445,15 +367,15 @@ mod tests {
 
     /// The complete type-0 file a given track body produces.
     fn smf(body: &[u8]) -> Vec<u8> {
-        let mut length = u32::try_from(body.len())
-            .expect("a hand-built track fits in a u32")
-            .to_le_bytes();
-        length.reverse();
-        let mut expected: Vec<u8> = Vec::new();
-        expected.extend_from_slice(b"MThd");
-        expected.extend_from_slice(&[0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x46]);
-        expected.extend_from_slice(b"MTrk");
-        expected.extend_from_slice(&length);
+        let mut head = Writer::new();
+        head.put_bytes(&SMF_HEADER_ID);
+        head.put_u32_be(SMF_HEADER_BODY_LEN);
+        head.put_u16_be(0_u16); // type 0
+        head.put_u16_be(1_u16); // one track
+        head.put_u16_be(MUS_TICKS_PER_QUARTER);
+        head.put_bytes(&SMF_TRACK_ID);
+        head.put_u32_be(u32::try_from(body.len()).expect("a hand-built track fits in a u32"));
+        let mut expected = head.into_inner();
         expected.extend_from_slice(body);
         expected
     }

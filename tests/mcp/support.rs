@@ -17,6 +17,7 @@ use cyberdemon::error::CyberError;
 use cyberdemon::gfx::codec::{decode_image, encode_png};
 use cyberdemon::gfx::image::RgbaImage;
 use cyberdemon::tools::{fail, ok};
+use cyberdemon::wad::bytes::Writer;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -278,33 +279,15 @@ fn split_reply(raw: &[u8]) -> (u16, Vec<u8>) {
     (status, raw[body_start..].to_vec())
 }
 
-/// Appends `value` as a big-endian `u32` by reversing its little-endian
-/// bytes (the crate denies `to_be_bytes`).
-fn put_be_u32(out: &mut Vec<u8>, value: u32) {
-    let mut word = value.to_le_bytes();
-    word.reverse();
-    out.extend_from_slice(&word);
-}
-
-/// Appends `value` as a big-endian `u16`.
-fn put_be_u16(out: &mut Vec<u8>, value: u16) {
-    let mut word = value.to_le_bytes();
-    word.reverse();
-    out.extend_from_slice(&word);
-}
-
 /// Appends one `PNG` chunk: length, kind, payload, `CRC32`.
-fn png_chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
-    put_be_u32(
-        out,
-        u32::try_from(data.len()).expect("a test chunk fits a u32"),
-    );
-    out.extend_from_slice(&kind);
-    out.extend_from_slice(data);
+fn png_chunk(out: &mut Writer, kind: [u8; 4], data: &[u8]) {
+    out.put_u32_be(u32::try_from(data.len()).expect("a test chunk fits a u32"));
+    out.put_bytes(&kind);
+    out.put_bytes(data);
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&kind);
     hasher.update(data);
-    put_be_u32(out, hasher.finalize());
+    out.put_u32_be(hasher.finalize());
 }
 
 /// The pixel run of one `PNG` scanline: cyan on the border columns,
@@ -338,10 +321,11 @@ fn png_row(side: u32, last: u32, edge: bool) -> Vec<u8> {
 pub fn png_bytes() -> Vec<u8> {
     let side = 16_u32;
     let last = side.checked_sub(1).expect("16 is above 1");
-    let mut header = Vec::new();
-    put_be_u32(&mut header, side);
-    put_be_u32(&mut header, side);
-    header.extend_from_slice(&[8_u8, 2_u8, 0_u8, 0_u8, 0_u8]);
+    let mut head = Writer::new();
+    head.put_u32_be(side);
+    head.put_u32_be(side);
+    head.put_bytes(&[8_u8, 2_u8, 0_u8, 0_u8, 0_u8]);
+    let header = head.into_inner();
     let mut raw = Vec::new();
     for y in 0..side {
         raw.push(0_u8);
@@ -351,12 +335,12 @@ pub fn png_bytes() -> Vec<u8> {
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
     encoder.write_all(&raw).expect("the test PNG deflates");
     let idat = encoder.finish().expect("the test PNG deflates");
-    let mut out = Vec::new();
-    out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    let mut out = Writer::new();
+    out.put_bytes(b"\x89PNG\r\n\x1a\n");
     png_chunk(&mut out, *b"IHDR", &header);
     png_chunk(&mut out, *b"IDAT", &idat);
     png_chunk(&mut out, *b"IEND", &[]);
-    out
+    out.into_inner()
 }
 
 /// A minimal type-0 `Standard MIDI` file.
@@ -380,19 +364,16 @@ pub fn midi_bytes() -> Vec<u8> {
         track.extend_from_slice(&[60_u8, 0x80, note, 0x40]);
     }
     track.extend_from_slice(&[0_u8, 0xFF, 0x2F, 0x00]);
-    let mut out = Vec::new();
-    out.extend_from_slice(b"MThd");
-    put_be_u32(&mut out, 6_u32);
-    put_be_u16(&mut out, 0_u16);
-    put_be_u16(&mut out, 1_u16);
-    put_be_u16(&mut out, 480_u16);
-    out.extend_from_slice(b"MTrk");
-    put_be_u32(
-        &mut out,
-        u32::try_from(track.len()).expect("a test track fits a u32"),
-    );
-    out.extend_from_slice(&track);
-    out
+    let mut out = Writer::new();
+    out.put_bytes(b"MThd");
+    out.put_u32_be(6_u32);
+    out.put_u16_be(0_u16);
+    out.put_u16_be(1_u16);
+    out.put_u16_be(480_u16);
+    out.put_bytes(b"MTrk");
+    out.put_u32_be(u32::try_from(track.len()).expect("a test track fits a u32"));
+    out.put_bytes(&track);
+    out.into_inner()
 }
 
 /// Appends one little-endian `RIFF` chunk: id, `u32` length, payload.

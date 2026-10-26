@@ -8,12 +8,17 @@
 //! [`Ev`] rows with the delay that closed each group. [`encode`] and
 //! [`lump`] go the other way, building a `MUS` lump no conversion was
 //! involved in; [`header`] reads the words a test asserts on. Every
-//! `#[test]` lives in the `convert` module below.
+//! `#[test]` lives in the `convert` module below or, for the byte-exact
+//! fixtures of both directions, in `golden`.
 
 mod convert;
+mod golden;
 
 use super::{MusConversion, midi_to_mus};
-use crate::music::midi_write::{put_be_u16, put_be_u32, read_vlq, write_vlq};
+use crate::music::consts::{
+    MUS_MAGIC, MUS_SCORE_LEN_OFFSET, MUS_SCORE_START_OFFSET, SMF_HEADER_ID, SMF_TRACK_ID,
+};
+use crate::music::midi_write::{read_vlq, write_vlq};
 use crate::wad::bytes::{Reader, Writer};
 
 /// One decoded `MUS` event, with the delay that closed its group.
@@ -28,26 +33,23 @@ pub(super) struct Ev {
 
 /// A chunk: its id, big-endian body length, then the body.
 pub(super) fn chunk(id: [u8; 4], body: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(&id);
-    put_be_u32(
-        &mut out,
-        u32::try_from(body.len()).expect("hand-built chunks are short"),
-    );
-    out.extend_from_slice(body);
-    out
+    let mut out = Writer::new();
+    out.put_bytes(&id);
+    out.put_u32_be(u32::try_from(body.len()).expect("hand-built chunks are short"));
+    out.put_bytes(body);
+    out.into_inner()
 }
 
 /// A complete type-0 file with one track closing at delta 0.
 pub(super) fn smf(body: &[u8]) -> Vec<u8> {
     let mut track = body.to_vec();
     track.extend_from_slice(&[0x00, 0xFF, 0x2F, 0x00]);
-    let mut header = Vec::new();
-    put_be_u16(&mut header, 0_u16);
-    put_be_u16(&mut header, 1_u16);
-    put_be_u16(&mut header, 70_u16);
-    let mut out = chunk(*b"MThd", &header);
-    out.extend_from_slice(&chunk(*b"MTrk", &track));
+    let mut header = Writer::new();
+    header.put_u16_be(0_u16);
+    header.put_u16_be(1_u16);
+    header.put_u16_be(70_u16);
+    let mut out = chunk(SMF_HEADER_ID, &header.into_inner());
+    out.extend_from_slice(&chunk(SMF_TRACK_ID, &track));
     out
 }
 
@@ -58,9 +60,9 @@ pub(super) fn convert(body: &[u8]) -> MusConversion {
 
 /// The events of a converted lump, score end included.
 pub(super) fn decode(mus: &[u8]) -> Vec<Ev> {
-    assert!(mus.starts_with(b"MUS\x1A"), "the output is a MUS lump");
-    let score_len = usize::from(word(mus, 4));
-    let score_start = usize::from(word(mus, 6));
+    assert!(mus.starts_with(&MUS_MAGIC), "the output is a MUS lump");
+    let score_len = usize::from(word(mus, MUS_SCORE_LEN_OFFSET));
+    let score_start = usize::from(word(mus, MUS_SCORE_START_OFFSET));
     let end = score_start.saturating_add(score_len);
     let mut reader = Reader::new(mus.get(score_start..end).expect("the declared score"));
     let mut out = Vec::new();
@@ -167,7 +169,7 @@ fn event_body(event: Ev, out: &mut Vec<u8>) {
 /// A complete lump: header claiming these score bytes at offset 16.
 pub(super) fn lump(score: &[u8]) -> Vec<u8> {
     let mut lump = Writer::new();
-    lump.put_bytes(b"MUS\x1A");
+    lump.put_bytes(&MUS_MAGIC);
     lump.put_u16(u16::try_from(score.len()).expect("a hand-built score fits"));
     lump.put_u16(16_u16);
     lump.put_u16(0_u16);
@@ -181,5 +183,9 @@ pub(super) fn lump(score: &[u8]) -> Vec<u8> {
 
 /// The header's `score_start`, primary-channel and instrument-count words.
 pub(super) fn header(mus: &[u8]) -> (u16, u16, u16) {
-    (word(mus, 6), word(mus, 8), word(mus, 12))
+    (
+        word(mus, MUS_SCORE_START_OFFSET),
+        word(mus, 8),
+        word(mus, 12),
+    )
 }

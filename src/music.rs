@@ -7,10 +7,12 @@
 //! the `SMF` bytes it produces; [`midi_read`] parses a `Standard MIDI File`
 //! and [`mid2mus`] writes the `MUS` lump equivalent. The `MIDI` side is the
 //! interchange format every music tool publishes, so the writer, the parser
-//! and the `VLQ` helpers are shared rather than inlined. Nothing here knows
-//! about MCP, lumps or the filesystem, and all arithmetic is integer-only
-//! (see [`crate::fixed`]).
+//! and the `VLQ` helpers are shared rather than inlined, and the `MUS` and
+//! `MIDI` vocabulary the two converters mirror across is spelled once in the
+//! `consts` module. Nothing here knows about MCP, lumps or the filesystem,
+//! and all arithmetic is integer-only (see [`crate::fixed`]).
 
+pub mod consts;
 pub mod mid2mus;
 pub mod midi_read;
 pub mod midi_write;

@@ -478,13 +478,17 @@ src/
                   named apart from `session/history.rs`, the stack itself)
                   and `session/tests.rs` (that group's unit tests),
                   `tools/scripts.rs` (the shared lump-name, scope and
-                  directory helpers, `DEFAULT_LUMP`, `UNDO_LABEL` and the
+                  directory helpers, the byte-preserving `Latin-1` patch
+                  `decode_patch`/`encode_patch` pair, `DEFAULT_LUMP`,
+                  `UNDO_LABEL` and the
                   router) with `scripts/get_dehacked.rs` (`get_dehacked`'s
                   parameters, the report rows, their builders and its run),
                   `scripts/edit_dehacked.rs` (the `edit_dehacked` parameters,
-                  the draft, the validated line `Op`s, the source fetch, the
-                  change counting, the shared `write_lump` and the one-edit
-                  run), `scripts/text_edit.rs` (the shared text-lump editor
+                  the draft, the validated line `Op`s, the source fetch,
+                  the shared `write_lump` and the one-edit
+                  run) over `scripts/line_diff.rs` (the minimal `LCS` line
+                  diff behind the added/removed/changed report),
+                  `scripts/text_edit.rs` (the shared text-lump editor
                   behind `edit_decorate`/`edit_zscript`) and
                   `scripts/text_tools.rs` (the two script tools' descriptors,
                   parameters, report and runs), with that group's unit tests

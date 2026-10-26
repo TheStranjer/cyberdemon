@@ -21,7 +21,7 @@ use crate::session::{Scope, Session, Source};
 use crate::tools::lumps::rows::LumpRow;
 use crate::wad::name::LumpName;
 
-use super::{find_lump, lump_name};
+use super::{decode_patch, find_lump, lump_name};
 
 /// Arguments for [`Cyberdemon::get_dehacked`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -34,7 +34,8 @@ pub(super) struct GetDehackedParams {
     /// sees), `"working"` or `"layer:N"` (0 is the `IWAD`).
     #[serde(default)]
     scope: Option<String>,
-    /// Also return the whole lump text, decoded lossily (default `false`).
+    /// Also return the whole lump text, the bytes read as `Latin-1`
+    /// (default `false`).
     #[serde(default)]
     include_text: Option<bool>,
 }
@@ -103,7 +104,8 @@ pub(super) struct GetReport {
     blocks: Vec<BlockEntry>,
     /// The BEX sections, in file order.
     bex: Vec<SectionEntry>,
-    /// The whole lump text; only present when `include_text` is true.
+    /// The whole lump text, the bytes read as `Latin-1`; only present when
+    /// `include_text` is true.
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     /// Lines the tolerant parser refused to read (1-based) and every
@@ -183,7 +185,7 @@ pub(super) fn get_run(
     let name = lump_name(args.name.as_deref())?;
     let scope = Scope::parse_or_merged(args.scope.as_deref())?;
     let row = find_lump(session, name, scope)?;
-    let text = String::from_utf8_lossy(&row.lump.data).into_owned();
+    let text = decode_patch(&row.lump.data);
     let patch = dehacked_edit::parse(&text);
     Ok(GetReport {
         name,

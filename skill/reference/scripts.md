@@ -35,11 +35,28 @@ Parsing is tolerant: an unrecognised header line, a non-numeric block
 number or a stray key ends the current region and lands in `warnings` with
 its 1-based line number, never as an error.
 
+## Encoding
+
+The two rules are deliberate opposites.
+
+- `get_dehacked` and `edit_dehacked` treat a patch lump as the
+  byte-oriented file `DeHackEd` always was: the lump's bytes are read
+  `Latin-1`-style, one byte per character (every byte value is valid, so
+  legacy `.deh` files with accented strings read and edit cleanly), and
+  written back with the same codec — a character up to `U+00FF` becomes its
+  single `Latin-1` byte, a wider character keeps its `UTF-8` bytes. Every
+  byte an edit does not touch round-trips exactly; bytes are never replaced
+  with `U+FFFD`. `source` mode stores the fetched file's bytes verbatim.
+- `edit_decorate` and `edit_zscript` keep their lumps strict `UTF-8`: a
+  non-`UTF-8` lump is a `format_error` refusal, and what they write is
+  canonical `UTF-8`.
+
 ## `get_dehacked`
 
 - Purpose: read one patch lump as structured data instead of raw text.
 - Arguments: `name` (default `"DEHACKED"`), `scope` (`"merged"` default,
-  `"working"`, `"layer:N"`), `include_text` (default `false`).
+  `"working"`, `"layer:N"`), `include_text` (default `false`; the text is
+  the lump bytes read `Latin-1`, one character per byte — see Encoding).
 - Returns:
 
   ```json
@@ -70,10 +87,11 @@ its 1-based line number, never as an error.
 - Purpose: write a patch lump with exactly one undoable edit (label
   `edit_dehacked`; take it back with `undo`).
 - Arguments: `name` (default `"DEHACKED"`) plus **exactly one mode**:
-  - `text` — replaces the whole lump with the given UTF-8 text.
+  - `text` — replaces the whole lump with the given text (stored
+    byte-preserving, see Encoding).
   - `source` — a `.deh`/`.bex` file (absolute path, `file://` URI,
     `http(s)://` URL or uploaded asset URL, see "Files and URLs" in
-    `SKILL.md`) whose bytes replace the lump text.
+    `SKILL.md`) whose bytes replace the lump text verbatim.
   - `set` — `[{block, key, value}]`, applied in order: rewrites the first
     `Key = Value` line matching `key` (case-insensitive) inside the first
     block matching `block`, inserts one after the block's last key when the
@@ -98,12 +116,15 @@ its 1-based line number, never as an error.
 - Returns:
 
   ```json
-  {"name": "DEHACKED", "lines": 8, "changed_lines": 1, "created": true}
+  {"name": "DEHACKED", "lines": 8, "added": 3, "removed": 0, "changed": 1, "created": true}
   ```
 
-  `lines` is the resulting line count and `changed_lines` the lines
-  rewritten, inserted or removed (for the whole-text modes: the lines that
-  differ from the old text, all of them when the lump is created).
+  `lines` is the resulting line count; `added`, `removed` and `changed`
+  come from a minimal line diff of the previous text against the result:
+  `changed` counts the rewrites the diff pairs off, `added` and `removed`
+  only the lines one side has, so inserting one line anywhere reports
+  `added: 1` however long the patch is (an absent previous lump makes
+  every resulting line an `added`).
 - Typical use:
 
   ```json
@@ -135,7 +156,8 @@ its 1-based line number, never as an error.
     inclusive 1-based range `S..=E` for `T`'s lines.
   - `{"op": "delete_lines", "start": S, "end": E}` — removes that range.
 - Line numbers out of range or `start > end` are `invalid_argument` and
-  change nothing; non-UTF-8 lump bytes are `format_error`. CRLF texts keep
+  change nothing; non-`UTF-8` lump bytes are `format_error` (see Encoding).
+  CRLF texts keep
   `\r\n` endings and LF texts keep LF; the trailing newline is preserved.
 - Creation and copy-on-write: a missing lump is created in the working
   archive by `replace_all`/`append` (`created` reports `true`); every other

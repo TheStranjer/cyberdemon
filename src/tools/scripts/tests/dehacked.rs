@@ -1,16 +1,20 @@
 //! The `DeHackEd` topic: the patch pair's defaults and refusals, the
 //! directory lookup the read builds on, the mode parsing, the line
-//! operations and their change counts, and the one labelled edit both
-//! commit modes make.
+//! operations, the `Latin-1` byte-preserving codecs and the one labelled
+//! edit both commit modes make.
+
+use serde_json::json;
 
 use super::{args, carrying, code, loaded, name};
-use crate::session::{Scope, Session};
+use crate::session::{Layer, LayerRole, Scope, Session};
 use crate::tools::lumps::rows::build_rows;
 use crate::tools::scripts::edit_dehacked::{
-    Body, Draft, EditDehackedParams, Op, RemoveEntry, SetEntry, apply_ops, changed_against,
-    edit_run, plan,
+    Body, Draft, EditDehackedParams, Op, RemoveEntry, SetEntry, apply_ops, edit_run, plan,
 };
-use crate::tools::scripts::{find_lump, lump_name};
+use crate::tools::scripts::get_dehacked::{GetDehackedParams, get_run};
+use crate::tools::scripts::{decode_patch, encode_patch, find_lump, lump_name};
+use crate::wad::archive::{Lump, Wad, WadKind};
+use std::path::PathBuf;
 
 #[test]
 fn the_default_name_is_dehacked_and_bad_names_are_refused() {
@@ -184,37 +188,13 @@ fn plan_validates_remove_entries_and_keeps_absent_keys() {
 }
 
 #[test]
-fn changed_lines_counts_positional_differences_and_new_text() {
-    assert_eq!(
-        changed_against(Some("a\nb\n"), "a\nx\n"),
-        1,
-        "one line differs"
-    );
-    assert_eq!(
-        changed_against(Some("a\nb\n"), "a\nb\n"),
-        0,
-        "identical texts"
-    );
-    assert_eq!(
-        changed_against(None, "a\nb\n"),
-        2,
-        "an absent base is all new"
-    );
-    assert_eq!(
-        changed_against(Some("a\nb\nc\n"), "a\n"),
-        2,
-        "dropped lines count"
-    );
-}
-
-#[test]
 fn apply_ops_creates_a_header_bearing_patch_for_a_set_on_nothing() {
     let ops = vec![Op::Set {
         block: "Thing 12".to_owned(),
         key: "ID #".to_owned(),
         value: "20000".to_owned(),
     }];
-    let (text, changed) = apply_ops(None, &ops, name("DEHACKED")).expect("a create");
+    let text = apply_ops(None, &ops, name("DEHACKED")).expect("a create");
     assert!(
         text.starts_with("Patch File for DeHackEd v3.0\n"),
         "the canonical header: {text}"
@@ -223,7 +203,6 @@ fn apply_ops_creates_a_header_bearing_patch_for_a_set_on_nothing() {
         text.contains("Thing 12\nID # = 20000\n"),
         "the block landed: {text}"
     );
-    assert_eq!(changed, text.lines().count(), "everything is new");
 }
 
 #[test]
@@ -265,7 +244,9 @@ fn edit_run_appends_the_override_and_undo_takes_it_back() {
     let report = edit_run(&mut session, name("DEHACKED"), body).expect("an override");
     assert!(report.created, "the layer copy was copied-on-write");
     assert_eq!(report.lines, 2, "two lines");
-    assert_eq!(report.changed_lines, 2, "one line replaced, one added");
+    assert_eq!(report.changed, 1, "the header line rewritten");
+    assert_eq!(report.added, 1, "the key line added");
+    assert_eq!(report.removed, 0, "nothing dropped");
     assert_eq!(
         session.undo_labels(),
         vec!["edit_dehacked"],
@@ -296,7 +277,9 @@ fn edit_run_overwrites_an_existing_working_copy_in_place() {
     }]);
     let report = edit_run(&mut session, name("DEHACKED"), body).expect("an overwrite");
     assert!(!report.created, "the working copy was edited in place");
-    assert_eq!(report.changed_lines, 1, "one line changed");
+    assert_eq!(report.changed, 1, "one line rewritten");
+    assert_eq!(report.added, 0, "nothing inserted");
+    assert_eq!(report.removed, 0, "nothing dropped");
     assert_eq!(report.lines, 2, "still two lines");
     let text = String::from_utf8(
         session
@@ -321,6 +304,120 @@ fn an_absent_lump_still_takes_a_full_replace() {
     )
     .expect("a create");
     assert!(report.created, "the lump is new");
-    assert_eq!(report.changed_lines, 2, "all lines are new");
+    assert_eq!(report.added, 2, "all lines are new");
+    assert_eq!(report.changed, 0, "nothing to rewrite against");
     assert_eq!(session.working().len(), 1, "one lump was appended");
+}
+
+#[test]
+fn edit_run_reports_a_one_line_insert_as_one_added() {
+    let mut session = loaded();
+    let body = Body::Replace("z\nThing 1 (Troop)\n".to_owned());
+    let report = edit_run(&mut session, name("DEHACKED"), body).expect("a replace");
+    assert_eq!(
+        (report.added, report.removed, report.changed),
+        (1_usize, 0_usize, 0_usize),
+        "inserting at line 1 counts the one new line, not the file"
+    );
+}
+
+/// A session whose `IWAD` layer holds a `DEHACKED` global as raw bytes.
+fn holding(raw: Vec<u8>) -> Session {
+    let mut session = Session::default();
+    session.set_iwad(Layer::new(
+        PathBuf::from("legacy.wad"),
+        LayerRole::Iwad,
+        Wad {
+            kind: WadKind::Iwad,
+            lumps: vec![Lump::new(name("DEHACKED"), raw)],
+        },
+    ));
+    session
+}
+
+#[test]
+fn a_latin1_set_round_trips_untouched_bytes_exactly() {
+    let mut session = holding(b"Misc\nname = Caf\xE9\n".to_vec());
+    let body = Body::Ops(vec![Op::Set {
+        block: "Misc".to_owned(),
+        key: "speed".to_owned(),
+        value: "2".to_owned(),
+    }]);
+    let report = edit_run(&mut session, name("DEHACKED"), body).expect("a set");
+    assert_eq!(report.added, 1, "the inserted key line");
+    assert_eq!(report.changed, 0, "no line rewritten");
+    let data = session
+        .working()
+        .lumps
+        .last()
+        .expect("the override")
+        .data
+        .to_vec();
+    assert_eq!(
+        data,
+        b"Misc\nname = Caf\xE9\nspeed = 2\n".to_vec(),
+        "the 0xE9 byte survived the edit untouched"
+    );
+}
+
+#[test]
+fn a_latin1_value_written_by_set_becomes_its_single_byte() {
+    let mut session = holding(b"Misc\nfoo = 1\n".to_vec());
+    let body = Body::Ops(vec![Op::Set {
+        block: "Misc".to_owned(),
+        key: "name".to_owned(),
+        value: "Caf\u{E9}".to_owned(),
+    }]);
+    edit_run(&mut session, name("DEHACKED"), body).expect("a set");
+    let data = session
+        .working()
+        .lumps
+        .last()
+        .expect("the override")
+        .data
+        .to_vec();
+    assert_eq!(
+        data,
+        b"Misc\nfoo = 1\nname = Caf\xE9\n".to_vec(),
+        "one byte"
+    );
+}
+
+#[test]
+fn get_run_reads_latin1_text_without_replacing_bytes() {
+    let session = holding(b"Misc\nname = Caf\xE9\n".to_vec());
+    let args: GetDehackedParams =
+        serde_json::from_value(json!({ "include_text": true })).expect("the defaults parse");
+    let report = serde_json::to_value(get_run(&session, &args).expect("the lump reads"))
+        .expect("a report serializes");
+    assert_eq!(
+        report["text"],
+        json!("Misc\nname = Caf\u{E9}\n"),
+        "the Latin-1 view, no U+FFFD anywhere"
+    );
+    assert_eq!(
+        report["blocks"][0]["fields"]["name"],
+        json!("Caf\u{E9}"),
+        "the parsed value round trips"
+    );
+}
+
+#[test]
+fn every_byte_value_round_trips_through_the_patch_codecs() {
+    let bytes = (0_u8..=u8::MAX).collect::<Vec<u8>>();
+    let text = decode_patch(&bytes);
+    assert_eq!(text.chars().count(), 256, "one character per byte");
+    assert_eq!(encode_patch(&text), bytes, "the bytes come back exactly");
+}
+
+#[test]
+fn encode_patch_keeps_wide_characters_as_their_utf8_bytes() {
+    let data = encode_patch("caf\u{E9} \u{2020}");
+    assert_eq!(
+        data,
+        vec![
+            0x63_u8, 0x61_u8, 0x66_u8, 0xE9_u8, 0x20_u8, 0xE2_u8, 0x80_u8, 0xA0_u8
+        ],
+        "Latin-1 as its one byte, wider characters as UTF-8, never U+FFFD"
+    );
 }

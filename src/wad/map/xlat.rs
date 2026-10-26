@@ -30,11 +30,16 @@
 //! This root holds the report shapes every stage answers with and the
 //! helpers they share: `move_field`, `count_if`, `count_bit` and
 //! `show_indices` with `GROUP_LIST_LIMIT`, the `HexenDrops` bit tally and
-//! the two field masks `FIELD_ONE` and `FIELD_TWO`. Five private modules
+//! the two field masks `FIELD_ONE` and `FIELD_TWO`. Five modules
 //! carry the rest, all re-exported below: `table` is the embedded TSV table
 //! with its rows and accessors, `things` and `sectors` are the thing-flag
 //! and sector-type stages, and `lines_to` and `lines_from` are the two
-//! directions of the linedef stage. The stages' tests are the private
+//! directions of the linedef stage. Those two stages' line-id helpers,
+//! `fold_line_id` and `keep_line_id`, are re-exported `pub(crate)` besides:
+//! the within-family layout steps of [`super::convert`] fold and store
+//! exactly this `Line_SetIdentification` pair, and their stage modules are
+//! `pub` only so those `pub(crate)` helpers may live in them. The stages'
+//! tests are the private
 //! `tests` module, its builders shared, the table, the thing and sector
 //! stages and the linedef round trips, loss warnings and tag rules one
 //! topic file apiece.
@@ -43,8 +48,8 @@
 //! [`Map`]: crate::wad::map::Map
 //! [`Thing`]: crate::wad::map::Thing
 
-mod lines_from;
-mod lines_to;
+pub mod lines_from;
+pub mod lines_to;
 mod sectors;
 mod table;
 mod things;
@@ -59,6 +64,9 @@ pub use table::{
     XlatFlags, XlatRow, parse_xlat_table, rows_for_doom, rows_for_zspecial, xlat_rows,
 };
 pub use things::{things_from_hexen, things_to_hexen};
+
+pub(crate) use lines_from::fold_line_id;
+pub(crate) use lines_to::keep_line_id;
 
 use serde::Serialize;
 

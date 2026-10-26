@@ -11,7 +11,7 @@
 
 use crate::wad::map::model::{Map, Sector};
 
-use super::{FIELD_ONE, FIELD_TWO, FieldReport, GROUP_LIST_LIMIT, count_if, move_field};
+use super::{FIELD_ONE, FIELD_TWO, FieldReport, count_if, move_field, show_indices};
 
 /// The highest Boom-style sector special: the `Doom` family packs its
 /// sector effects into bits 0 to 9.
@@ -73,22 +73,13 @@ fn boom_sector_bits(value: u32) -> Option<u32> {
     Some(out)
 }
 
-/// The grouped warning for the sectors whose `special` a stage cleared:
-/// up to [`GROUP_LIST_LIMIT`] indices, then the total.
+/// The grouped warning for the sectors whose `special` a stage cleared,
+/// its index list phrased by [`show_indices`].
 fn cleared_sectors(kind: &str, lost: &[usize]) -> String {
-    let total = lost.len();
-    let names: Vec<String> = lost
-        .iter()
-        .take(GROUP_LIST_LIMIT)
-        .map(usize::to_string)
-        .collect();
-    let mut shown = names.join(", ");
-    if total > GROUP_LIST_LIMIT {
-        let rest = total.saturating_sub(GROUP_LIST_LIMIT);
-        shown = format!("{shown}, and {rest} more");
-    }
     format!(
-        "{total} sectors had specials that are not {kind} (indices {shown}): they were set to 0"
+        "{} sectors had specials that are not {kind} (indices {}): they were set to 0",
+        lost.len(),
+        show_indices(lost),
     )
 }
 

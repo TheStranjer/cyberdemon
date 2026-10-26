@@ -1,18 +1,19 @@
-//! The forward linedef stage of the cross-family conversion:
+//! The forward linedef stage of the cross-family conversion.
+//!
 //! [`linedefs_to_hexen`] runs the embedded table onto every
-//! [`Linedef`](crate::wad::map::Linedef) special, writing the row's
-//! [`XlatRow`](super::XlatRow) action, template args and trigger bits,
+//! [`Linedef`] special, writing the row's
+//! [`XlatRow`] action, template args and trigger bits,
 //! parking a `Doom` `passuse` bit in the line's `extra` bag and settling a
 //! tag no argument slot took as the `Hexen`-family line id.
 //!
 //! A special the table does not cover, and under `byte_limited` a row whose
 //! action number, argument or `tag` slot value a binary `Hexen` byte cannot
-//! store, clear to 0 and join [`LinesReport`](super::LinesReport) as an
-//! [`Untranslated`](super::Untranslated) row, with the warnings this
-//! module's [`linedef_warning`], [`show_indices`](super::show_indices) and
-//! [`too_wide_note`] builders phrase. The constants here are the linedef
-//! bits and fields both directions read;
-//! [`linedefs_from_hexen`](super::linedefs_from_hexen) is the reverse.
+//! store, clear to 0 and join [`LinesReport`] as an
+//! [`Untranslated`] row, with the warnings this
+//! module's `linedef_warning`, `show_indices` and `too_wide_note` builders
+//! phrase. The constants here are the linedef bits and fields both
+//! directions read; [`linedefs_from_hexen`](super::linedefs_from_hexen) is
+//! the reverse.
 
 use crate::error::CyberError;
 use crate::wad::map::flags::{
@@ -274,8 +275,15 @@ const fn hexen_trigger_bits(row: &XlatRow) -> u32 {
 /// target stores ids only in `Line_SetIdentification`, so a plain line
 /// becomes special 121 carrying the id in `args[0]`, and an id on a line
 /// whose special the translation used, or one over a byte's range, drops
-/// with a warning naming the line.
-fn keep_line_id(line: &mut Linedef, index: usize, byte_limited: bool, warnings: &mut Vec<String>) {
+/// with a warning naming the line. The layout step of a within-family
+/// `crate::wad::map::convert` conversion to a binary `Hexen` target runs
+/// this on every line with `byte_limited` set.
+pub(crate) fn keep_line_id(
+    line: &mut Linedef,
+    index: usize,
+    byte_limited: bool,
+    warnings: &mut Vec<String>,
+) {
     let id = line.tag;
     if !byte_limited || id == 0_i32 {
         return;

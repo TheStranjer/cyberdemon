@@ -53,7 +53,7 @@
 //! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the shared
 //! TSV-reader and category-word single-owner guard in `tsv_tables`, the
 //! imports-group shared-helper and one-quantization guard in
-//! `imports_shared`, the
+//! `imports_shared`, the no-core-imports-the-tool-layer guard in `layering`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
 //! `nodes/build_tables`, `nodes/build_nodes`, `nodes/build_gl` and
@@ -174,6 +174,9 @@ mod imports_shared;
 #[cfg(test)]
 #[path = "mcp/inspect.rs"]
 mod inspect;
+#[cfg(test)]
+#[path = "mcp/layering.rs"]
+mod layering;
 #[cfg(test)]
 #[path = "mcp/lumps.rs"]
 mod lumps;

@@ -4,6 +4,7 @@
 //! write and the merged rows the set is read through.
 
 use crate::session::{Scope, Session};
+use crate::tools::textures::list::texture_rows;
 use crate::tools::textures::pnames::{
     EditPnamesParams, Operation, RenamePair, RenameRow, name_mapping, plan_edit,
 };
@@ -34,7 +35,7 @@ fn edit_pnames_rename_keeps_indices_and_textures() {
     let loaded = set_of(&session);
     assert_eq!(loaded.pnames[0], "WALLPX", "renamed in place");
     assert_eq!(
-        loaded.texture_rows()[0].patches,
+        texture_rows(&loaded)[0].patches,
         3,
         "WALL1 still has its refs"
     );

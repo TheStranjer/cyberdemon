@@ -21,10 +21,10 @@ use crate::gfx::image::IndexedImage;
 use crate::gfx::ops::luminance;
 use crate::gfx::palette::Palette;
 use crate::render::RenderSettings;
+use crate::session::mapdir::load_map;
+use crate::session::palette::load_palette;
+use crate::session::resolve::{load_flat, load_texture};
 use crate::session::{Scope, Session};
-use crate::tools::graphics::resolve::{load_flat, load_texture};
-use crate::tools::maps::common::load_map;
-use crate::tools::palette::load_palette;
 use crate::wad::game::Game;
 use crate::wad::lumps;
 use crate::wad::map::Map;
@@ -97,7 +97,7 @@ pub struct Scene {
 /// Prepare the [`Scene`] of map `map` from the session's merged view.
 ///
 /// Textures come through the shared texture compositor
-/// (`tools/graphics/resolve.rs`), flats through the flat resolver, and the
+/// (`session/resolve/texture.rs`), flats through the flat resolver, and the
 /// sky of a map that shows one through the texture definitions first and
 /// the flat resolver after them; the palette from `PLAYPAL` entry 0 and
 /// the lighting tables from the merged `COLORMAP` when it holds at least

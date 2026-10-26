@@ -13,12 +13,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::session::textures::TextureSet;
 use crate::session::{Scope, Session, Source};
 use crate::tools::lumps::rows::build_rows;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
-use super::{Page, TextureSet, passes};
+use super::{Page, passes};
 
 /// Arguments for [`Cyberdemon::list_textures`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -108,13 +109,29 @@ pub(super) fn list_textures_run(
     pattern: Option<&str>,
 ) -> Result<TexturesReport, CyberError> {
     let set = TextureSet::load(session)?;
-    let matched: Vec<TextureRow> = set
-        .texture_rows()
+    let matched: Vec<TextureRow> = texture_rows(&set)
         .into_iter()
         .filter(|row| passes(&row.name, pattern))
         .collect();
     let (total, textures) = page.take(matched);
     Ok(TexturesReport { total, textures })
+}
+
+/// Every defined texture of a [`TextureSet`] as a listing [`TextureRow`], in
+/// lump order: the merged definitions come from the session loader and this
+/// is where they take the tool's row shape.
+pub(in crate::tools) fn texture_rows(set: &TextureSet) -> Vec<TextureRow> {
+    set.texture_entries()
+        .into_iter()
+        .map(|(def, which, source)| TextureRow {
+            name: def.name.clone(),
+            width: def.width,
+            height: def.height,
+            patches: def.patches.len(),
+            lump: which.as_str(),
+            source,
+        })
+        .collect()
 }
 
 /// `list_pnames`' work over the session.

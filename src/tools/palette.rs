@@ -1,21 +1,21 @@
 //! Palette tools: reading the session's `PLAYPAL` and writing it back,
 //! with optional regeneration of the vanilla tints and the `COLORMAP`.
 //!
-//! `load_palette` is the shared helper every graphics tool reads the
-//! current colours through: the last (winning) `PLAYPAL` of the merged
-//! view, one 768-byte entry at a time. `get_palette` returns a palette as
-//! hex plus a published `PNG` swatch; `set_palette` replaces palettes from
-//! inline colours, a fetched image or raw palette bytes - copy-on-write
-//! into the working archive as one undoable edit - and can rebuild the 13
-//! vanilla tints from palette 0 and regenerate `COLORMAP` by
-//! nearest-colour matching. The tint and `COLORMAP` recipes approximate
-//! the vanilla tables; they are formulaic, integer-only and documented in
-//! the tool descriptions.
+//! The shared `load_palette` reader lives beside the session it reads in
+//! [`crate::session::palette`]; this group re-exports it so every graphics
+//! tool keeps reaching it at `crate::tools::palette::load_palette`.
+//! `get_palette` returns a palette as hex plus a published `PNG` swatch;
+//! `set_palette` replaces palettes from inline colours, a fetched image or
+//! raw palette bytes - copy-on-write into the working archive as one
+//! undoable edit - and can rebuild the 13 vanilla tints from palette 0 and
+//! regenerate `COLORMAP` by nearest-colour matching. The tint and `COLORMAP`
+//! recipes approximate the vanilla tables; they are formulaic, integer-only
+//! and documented in the tool descriptions.
 //!
 //! The `set_palette` side lives in the private `set` submodule: its
 //! parameter, payload and request types beside the steps that resolve one
 //! source, apply it to a copy of the merged `PLAYPAL` and commit the edit.
-//! This root keeps the shared reader, the swatch builder, the constants
+//! This root keeps the re-exported reader, the swatch builder, the constants
 //! both halves share and the two router methods.
 
 mod set;
@@ -32,7 +32,8 @@ use crate::gfx::codec::encode_png;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::palette::Palette;
 use crate::server::Cyberdemon;
-use crate::session::Session;
+pub(crate) use crate::session::palette::load_palette;
+use crate::session::palette::require_playpal;
 use crate::state::AppState;
 use crate::tools::palette::set::{SetPaletteParams, set_palette_run};
 use crate::tools::reply;
@@ -99,34 +100,6 @@ struct LoadedPalette {
     palette: Palette,
     /// Whether the session has a `COLORMAP` lump.
     has_colormap: bool,
-}
-
-/// The `index`th palette of the session's `PLAYPAL`.
-///
-/// Reads the last (winning) `PLAYPAL` of the merged view. This is the one
-/// entry point every graphics tool loads current colours through.
-///
-/// # Errors
-///
-/// [`CyberError::NotFound`] when no loaded archive holds a `PLAYPAL` or
-/// `index` names a palette the lump does not contain.
-#[inline]
-pub(crate) fn load_palette(session: &Session, index: usize) -> Result<Palette, CyberError> {
-    Palette::from_playpal(&require_playpal(session)?, index)
-}
-
-/// The merged view's winning `PLAYPAL` bytes.
-///
-/// # Errors
-///
-/// [`CyberError::NotFound`] naming `open_iwad` when no loaded archive
-/// holds a `PLAYPAL` lump.
-fn require_playpal(session: &Session) -> Result<Vec<u8>, CyberError> {
-    let entry = session.find_global(lumps::PLAYPAL).ok_or_else(|| {
-        CyberError::NotFound("no PLAYPAL in the session; open an IWAD with open_iwad".to_owned())
-            .with_hint("call open_iwad (game data) first, then new_wad or open_wad")
-    })?;
-    Ok(entry.lump.data.to_vec())
 }
 
 /// The 256x256 preview image: a 16x16 grid of 16-pixel cells in palette

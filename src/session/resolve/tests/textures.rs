@@ -6,7 +6,7 @@ use super::{
     code, definition, doom_patch, lump, name, place, pnames_lump, session, texture_bytes,
     with_extra,
 };
-use crate::tools::graphics::resolve::load_texture;
+use crate::session::resolve::load_texture;
 use crate::wad::archive::Lump;
 
 #[test]

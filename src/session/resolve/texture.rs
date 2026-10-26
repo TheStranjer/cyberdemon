@@ -9,7 +9,7 @@ use crate::error::CyberError;
 use crate::gfx::composite::{Component, Composite, compose};
 use crate::gfx::image::IndexedImage;
 use crate::session::Session;
-use crate::tools::textures::TextureSet;
+use crate::session::textures::TextureSet;
 use crate::wad::classify::Namespace;
 use crate::wad::lumps;
 use crate::wad::name::LumpName;
@@ -37,13 +37,13 @@ pub(crate) fn load_texture(session: &Session, name: LumpName) -> Result<Composit
     if let Some((def, _lump)) = set.find(&text) {
         return compose_texture(session, &text, def);
     }
-    let row = locate(
+    let entry = locate(
         &merged_rows(session)?,
         name,
         &[Place::In(Namespace::Textures)],
     )
     .ok_or_else(|| not_found("texture", "list_textures", name))?;
-    let patch = decode_patch_bytes(session, &row.lump.data)?;
+    let patch = decode_patch_bytes(session, &entry.lump.data)?;
     Ok(Composite {
         image: patch.image,
         missing: Vec::new(),

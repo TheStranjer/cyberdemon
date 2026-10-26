@@ -14,6 +14,7 @@ use serde_json::from_str;
 use super::draw::{CarveVoidParams, CreateSectorFromLoopParams};
 use super::edit::{AddSectorParams, EditSectorParams, RemoveSectorParams};
 use crate::error::CyberError;
+use crate::tools::themes::Surfaces;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
 use crate::wad::name::LumpName;
@@ -21,6 +22,17 @@ use crate::wad::name::LumpName;
 /// The error code of `error`, for compact asserts.
 pub(super) fn code(error: &CyberError) -> &str {
     error.code()
+}
+
+/// The vanilla surface defaults: what [`crate::tools::themes::surfaces`]
+/// answers on a session whose theme has nothing, which is what these
+/// pure steps take as their fallback parameter.
+pub(super) fn vanilla_surfaces() -> Surfaces {
+    Surfaces {
+        wall: "STARTAN3".to_owned(),
+        floor: "FLOOR4_8".to_owned(),
+        ceiling: "CEIL3_5".to_owned(),
+    }
 }
 
 /// An add request parsed from `json`.

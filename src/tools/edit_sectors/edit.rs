@@ -3,7 +3,8 @@
 //!
 //! The [`crate::server::Cyberdemon`] router methods hand their parsed
 //! [`AddSectorParams`], [`EditSectorParams`] and [`RemoveSectorParams`] to
-//! [`add_run`], [`edit_run`] and [`remove_run`]. Each resolves the map and
+//! [`add_run`], [`edit_run`] and [`remove_run`]. Each resolves the map (the
+//! add also resolving the session theme's [`Surfaces`] once) and
 //! then runs [`add_in_place`], [`edit_in_place`] or [`remove_in_place`] as
 //! one [`crate::session::Session::edit_map`] step, so a refused call never
 //! writes: an `edit_sector` request is validated up front by
@@ -25,6 +26,7 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{ElementKind, IndexSelector, check_index, edit_result_fragment};
+use crate::tools::themes::{Surfaces, surfaces};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
@@ -32,8 +34,8 @@ use crate::wad::map::remove::{
 use crate::wad::map::{Map, Sector};
 
 use super::{
-    DEFAULT_CEILING_FLAT, DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_FLAT, DEFAULT_FLOOR_HEIGHT,
-    DEFAULT_LIGHT, SectorDetail, check_sector, detail_of, edited_flat, flat_or_default,
+    DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_HEIGHT, DEFAULT_LIGHT, SectorDetail, check_sector,
+    detail_of, edited_flat, flat_or_default,
 };
 
 /// Arguments for [`Cyberdemon::add_sector`].
@@ -49,10 +51,12 @@ pub(super) struct AddSectorParams {
     /// Ceiling height in map units (default `128`).
     #[serde(default)]
     ceiling_height: Option<i32>,
-    /// Floor flat name (default `"FLOOR4_8"`).
+    /// Floor flat name (default: the session theme's `Floor` flat,
+    /// `FLOOR4_8` when the theme names none).
     #[serde(default)]
     floor_flat: Option<String>,
-    /// Ceiling flat name (default `"CEIL3_5"`).
+    /// Ceiling flat name (default: the session theme's `Ceiling` flat,
+    /// `CEIL3_5` when the theme names none).
     #[serde(default)]
     ceiling_flat: Option<String>,
     /// Light level, `0..=255` (default `160`).
@@ -188,13 +192,18 @@ pub(super) fn new_height(
     })
 }
 
-/// The sector the `add_sector` parameters describe for a map of `format`.
-pub(super) fn new_sector(args: &AddSectorParams, format: MapFormat) -> Result<Sector, CyberError> {
+/// The sector the `add_sector` parameters describe for a map of `format`,
+/// defaulting unasked flats to the theme `defaults`.
+pub(super) fn new_sector(
+    args: &AddSectorParams,
+    format: MapFormat,
+    defaults: &Surfaces,
+) -> Result<Sector, CyberError> {
     Ok(Sector {
         floor_height: args.floor_height.unwrap_or(DEFAULT_FLOOR_HEIGHT),
         ceiling_height: args.ceiling_height.unwrap_or(DEFAULT_CEILING_HEIGHT),
-        floor_flat: flat_or_default(args.floor_flat.as_ref(), DEFAULT_FLOOR_FLAT, format)?,
-        ceiling_flat: flat_or_default(args.ceiling_flat.as_ref(), DEFAULT_CEILING_FLAT, format)?,
+        floor_flat: flat_or_default(args.floor_flat.as_ref(), &defaults.floor, format)?,
+        ceiling_flat: flat_or_default(args.ceiling_flat.as_ref(), &defaults.ceiling, format)?,
         light: args.light.unwrap_or(DEFAULT_LIGHT),
         special: args.special.unwrap_or_default(),
         tag: args.tag.unwrap_or_default(),
@@ -232,8 +241,12 @@ pub(super) fn edited_sector(
 }
 
 /// `add_sector`'s step: build, validate and append the described sector.
-pub(super) fn add_in_place(map: &mut Map, args: &AddSectorParams) -> Result<EditRow, CyberError> {
-    let sector = new_sector(args, map.format)?;
+pub(super) fn add_in_place(
+    map: &mut Map,
+    args: &AddSectorParams,
+    defaults: &Surfaces,
+) -> Result<EditRow, CyberError> {
+    let sector = new_sector(args, map.format, defaults)?;
     check_sector(map.format, &sector)?;
     let index = map.sectors.len();
     map.sectors.push(sector.clone());
@@ -310,9 +323,10 @@ pub(super) fn planned_edits(
         check_index(ElementKind::Sectors, *index, map.sectors.len())?;
     }
     let format = map.format;
-    let mut planned = Vec::with_capacity(indices.len());
+    let wanted: BTreeSet<usize> = indices.iter().copied().collect();
+    let mut planned = Vec::with_capacity(wanted.len());
     for (index, slot) in map.sectors.iter().enumerate() {
-        if !indices.contains(&index) {
+        if !wanted.contains(&index) {
             continue;
         }
         let updated = edited_sector(slot, args, format)?;
@@ -402,14 +416,16 @@ pub(super) fn remove_in_place(
     apply_removal(map, &grown)
 }
 
-/// `add_sector`'s work: resolve the map, run the one-step append.
+/// `add_sector`'s work: resolve the map and the theme defaults, run the
+/// one-step append.
 pub(super) fn add_run(
     session: &mut Session,
     args: &AddSectorParams,
 ) -> Result<AddReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let defaults = surfaces(session)?;
     let label = "add sector".to_owned();
-    let (row, report) = session.edit_map(name, &label, |map| add_in_place(map, args))?;
+    let (row, report) = session.edit_map(name, &label, |map| add_in_place(map, args, &defaults))?;
     Ok(AddReport {
         index: row.index,
         sector: row.detail,

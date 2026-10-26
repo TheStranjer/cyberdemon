@@ -155,12 +155,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = plain_iwad(dir.path()).await;
         drop_the_start(&client).await;
-        call(&client, "add_sector", json!({ "map": "MAP01" })).await;
+        let added = call(&client, "add_sector", json!({ "map": "MAP01" })).await;
+        assert_eq!(
+            added["sector"]["floor_flat"],
+            json!("FLOOR1"),
+            "the theme default names a flat the fixture holds"
+        );
+        assert_eq!(added["sector"]["ceiling_flat"], json!("FLOOR1"));
         let report = call(&client, "validate_map", json!({ "map": "MAP01" })).await;
         assert_eq!(
             report["counts"]["error"],
-            json!(3_u64),
-            "the lost start and the two flats the added sector names: {report}"
+            json!(1_u64),
+            "only the lost start errors: the theme-default flats exist: {report}"
         );
         assert_eq!(
             report["counts"]["warning"],
@@ -187,8 +193,8 @@ mod tests {
             .filter(|row| row["code"] == json!("missing_flat"))
             .count();
         assert_eq!(
-            missing_flats, 2,
-            "both default flats of the added sector miss: {report}"
+            missing_flats, 0,
+            "the theme-resolved defaults miss nothing: {report}"
         );
         let working = call(
             &client,
@@ -198,7 +204,7 @@ mod tests {
         .await;
         assert_eq!(
             working["counts"]["error"],
-            json!(3_u64),
+            json!(1_u64),
             "the copy shows too"
         );
     }

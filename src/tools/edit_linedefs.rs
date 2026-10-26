@@ -31,9 +31,11 @@
 //! non-zero tag on a `Hexen`-family map (binary `Hexen`, `UDMF` outside the
 //! `doom`/`heretic`/`strife` namespace) is refused because `Hexen` specials
 //! take their parameters from `args`. `args` exist only in the `Hexen`
-//! family and the binary `Hexen` record stores each one as `u8`. Binary
-//! `Doom` stores `special` and `tag` as `u16`, binary `Hexen` `special` as
-//! `u8`.
+//! family and the binary `Hexen` record stores each one as `u8`; passing
+//! them on a `UDMF` map in a `Doom` namespace refuses with advice to run
+//! `convert_map_format` to the `zdoom` namespace, since the map already is
+//! `UDMF`. Binary `Doom` stores `special` and `tag` as `u16`, binary
+//! `Hexen` `special` as `u8`.
 //!
 //! [`IndexSelector`]: crate::tools::maps::params::IndexSelector
 //! [`check_index`]: crate::tools::maps::params::check_index
@@ -233,8 +235,13 @@ fn check_binary_offsets(format: MapFormat, side: &Sidedef) -> Result<(), CyberEr
 }
 
 /// The family rules: `tag` is `Doom` family only, `args` are `Hexen`
-/// family only.
-fn check_family_fields(family: FlagFamily, line: &Linedef) -> Result<(), CyberError> {
+/// family only; the args refusal of a `UDMF` map in a `Doom` namespace
+/// points at the namespace conversion, since the map already is `UDMF`.
+fn check_family_fields(
+    format: MapFormat,
+    family: FlagFamily,
+    line: &Linedef,
+) -> Result<(), CyberError> {
     if family == FlagFamily::Hexen && line.tag != 0_i32 {
         return Err(CyberError::InvalidArgument(
             "Hexen-family linedefs have no tag: Hexen specials take their parameters from \
@@ -243,9 +250,15 @@ fn check_family_fields(family: FlagFamily, line: &Linedef) -> Result<(), CyberEr
         ));
     }
     if family == FlagFamily::Doom && line.args != ZERO_ARGS {
-        return Err(CyberError::InvalidArgument(
-            "Doom-format linedefs have no args; use a Hexen or UDMF map".to_owned(),
-        ));
+        return Err(CyberError::InvalidArgument(match format {
+            MapFormat::Udmf => "UDMF linedefs in a Doom namespace have no args: run \
+                                convert_map_format to the UDMF zdoom namespace (Hexen family) \
+                                to store them"
+                .to_owned(),
+            MapFormat::Doom | MapFormat::Hexen => "Doom-format linedefs have no args; use a \
+                                                   Hexen or UDMF map"
+                .to_owned(),
+        }));
     }
     Ok(())
 }
@@ -271,7 +284,7 @@ fn check_binary_fields(format: MapFormat, line: &Linedef) -> Result<(), CyberErr
 
 /// Refuses a resulting linedef the map's format and family cannot store.
 fn check_line(format: MapFormat, family: FlagFamily, line: &Linedef) -> Result<(), CyberError> {
-    check_family_fields(family, line)?;
+    check_family_fields(format, family, line)?;
     check_binary_fields(format, line)
 }
 

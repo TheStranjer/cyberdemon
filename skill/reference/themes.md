@@ -61,8 +61,10 @@ detected game picks the default theme: `tech` (DOOM / DOOM II: also
   ```
 
   `roles` covers all twenty roles; see above for the `matched` kinds.
-  An empty session answers every role `{"texture": "-", "matched":
-  "default"}` — not an error.
+  An empty session answers every wall role `{"texture": "-", "matched":
+  "default"}` and every flat role `F_SKY1` (the one flat always in the
+  view) — not an error; the drawing and feature tools then substitute
+  their documented vanilla fallbacks where a dash would not do.
 - Errors: none from client input.
 
 ## `set_texture_theme`

@@ -32,16 +32,16 @@ async fn add_sector_appends_a_dead_sector_with_defaults() {
         result["sector"],
         json!({
             "floor_height": 0_i32, "ceiling_height": 128_i32,
-            "floor_flat": "FLOOR4_8", "ceiling_flat": "CEIL3_5",
+            "floor_flat": "FLOOR1", "ceiling_flat": "FLOOR1",
             "light": 160_i32, "special": 0_i32, "tag": 0_i32,
         }),
-        "the defaults echo"
+        "the theme-resolved defaults echo (the fixture's tech-theme flats)"
     );
     let rows = working_sectors(&client, "MAP01").await;
     assert_eq!(rows.len(), 3, "the map holds three sectors now");
     let added = rows.last().expect("the appended sector");
-    assert_eq!(added["floor_flat"], json!("FLOOR4_8"), "read back");
-    assert_eq!(added["ceiling_flat"], json!("CEIL3_5"));
+    assert_eq!(added["floor_flat"], json!("FLOOR1"), "read back");
+    assert_eq!(added["ceiling_flat"], json!("FLOOR1"));
     assert_eq!(added["light"], json!(160_i32));
     assert_eq!(
         added["sidedefs"].as_array().expect("a list").len(),
@@ -71,8 +71,8 @@ async fn add_sector_stores_custom_values_and_refuses_bad_ones() {
     );
     assert_eq!(
         result["sector"]["ceiling_flat"],
-        json!("CEIL3_5"),
-        "absent stays the default"
+        json!("FLOOR1"),
+        "absent stays the theme default"
     );
     assert_eq!(result["sector"]["light"], json!(255_i32));
     assert_eq!(result["sector"]["tag"], json!(66_i32));

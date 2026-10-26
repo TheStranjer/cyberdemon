@@ -1,47 +1,67 @@
-//! The `add_sector`, `edit_sector` and `remove_sector` topics: the vanilla
+//! The `add_sector`, `edit_sector` and `remove_sector` topics: the theme
 //! defaults, the flat, height and range checks, the request validation, the
 //! append and edit steps, the planning pass and the removal with its
 //! `conflict` refusal, cascade and pruning flags.
 
 use alloc::collections::BTreeSet;
 
-use super::{add_args, code, edit_args, remove_args, room, test_map};
+use super::{add_args, code, edit_args, remove_args, room, test_map, vanilla_surfaces};
 use crate::tools::edit_sectors::edit::{
     add_in_place, cascade_options, dependent_refusal, edit_in_place, edited_sector, has_change,
     join, new_height, new_sector, planned_edits, remove_in_place, validate_edit,
 };
 use crate::tools::edit_sectors::{
-    DEFAULT_CEILING_FLAT, DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_FLAT, DEFAULT_LIGHT, FIELD_MAX,
-    HEIGHT_MAX, HEIGHT_MIN, LIGHT_MAX, LIGHT_MIN, check_binary_ranges, check_height_order,
-    check_light, edited_flat, flat_or_default, validate_flat,
+    DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT, FIELD_MAX, HEIGHT_MAX, HEIGHT_MIN, LIGHT_MAX, LIGHT_MIN,
+    check_binary_ranges, check_height_order, check_light, edited_flat, flat_or_default,
+    validate_flat,
 };
+use crate::tools::themes::Surfaces;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Sector;
 
 #[test]
-fn added_sectors_take_the_vanilla_defaults() {
-    let plain = new_sector(&add_args("{}"), MapFormat::Doom).expect("defaults build");
+fn added_sectors_take_the_theme_defaults() {
+    let plain =
+        new_sector(&add_args("{}"), MapFormat::Doom, &vanilla_surfaces()).expect("defaults build");
     assert_eq!(
         (plain.floor_height, plain.ceiling_height),
         (0_i32, DEFAULT_CEILING_HEIGHT),
         "the heights default to 0 and 128"
     );
-    assert_eq!(plain.floor_flat, DEFAULT_FLOOR_FLAT, "the flat defaults");
-    assert_eq!(plain.ceiling_flat, DEFAULT_CEILING_FLAT);
+    assert_eq!(plain.floor_flat, "FLOOR4_8", "the flat defaults");
+    assert_eq!(plain.ceiling_flat, "CEIL3_5");
     assert_eq!(plain.light, DEFAULT_LIGHT, "and the light to 160");
     assert_eq!(
         (plain.special, plain.tag),
         (0_i32, 0_i32),
         "special and tag start at 0"
     );
+    let heretic = Surfaces {
+        wall: "GRSTNPB".to_owned(),
+        floor: "FLOOR03".to_owned(),
+        ceiling: "FLAT506".to_owned(),
+    };
+    let themed = new_sector(&add_args("{}"), MapFormat::Doom, &heretic).expect("a themed add");
+    assert_eq!(
+        themed.floor_flat, "FLOOR03",
+        "the Heretic theme's flats land"
+    );
+    assert_eq!(themed.ceiling_flat, "FLAT506");
     let named = add_args(
         r#"{"floor_height": -8, "ceiling_height": 200, "floor_flat": "floor1",
             "light": 255, "special": 11, "tag": 3000}"#,
     );
-    let custom = new_sector(&named, MapFormat::Doom).expect("a full request builds");
+    let custom = new_sector(&named, MapFormat::Doom, &heretic).expect("a full request builds");
     assert_eq!(custom.floor_height, -8_i32, "the given heights land");
     assert_eq!(custom.ceiling_height, 200_i32);
-    assert_eq!(custom.floor_flat, "FLOOR1", "the name is uppercased");
+    assert_eq!(
+        custom.floor_flat, "FLOOR1",
+        "the name is uppercased and wins"
+    );
+    assert_eq!(
+        custom.ceiling_flat, "FLAT506",
+        "the unasked flat stays themed"
+    );
     assert_eq!(custom.light, 255_i32, "the top of the vanilla range fits");
     assert_eq!((custom.special, custom.tag), (11_i32, 3_000_i32));
 }
@@ -49,7 +69,7 @@ fn added_sectors_take_the_vanilla_defaults() {
 #[test]
 fn flat_names_validate_uppercase_and_refuse_the_dash() {
     assert_eq!(
-        flat_or_default(None, DEFAULT_FLOOR_FLAT, MapFormat::Doom).expect("absent is the fallback"),
+        flat_or_default(None, "FLOOR4_8", MapFormat::Doom).expect("absent is the fallback"),
         "FLOOR4_8"
     );
     let dashed = validate_flat("-", MapFormat::Doom).expect_err("a dash is no flat");
@@ -195,29 +215,36 @@ fn edit_validation_names_conflicts_and_nothings() {
 fn adding_appends_only_after_every_check() {
     let mut map = test_map();
     let bad_flat = add_args(r#"{"floor_flat": "-"}"#);
-    let flat_error = add_in_place(&mut map, &bad_flat).expect_err("the dash refuses");
+    let flat_error =
+        add_in_place(&mut map, &bad_flat, &vanilla_surfaces()).expect_err("the dash refuses");
     assert_eq!(code(&flat_error), "invalid_argument", "flat code");
     let bright = add_args(r#"{"light": 300}"#);
     assert_eq!(
-        code(&add_in_place(&mut map, &bright).expect_err("light 300 refuses")),
+        code(&add_in_place(&mut map, &bright, &vanilla_surfaces()).expect_err("light 300 refuses")),
         "invalid_argument",
         "light code"
     );
     let sunken = add_args(r#"{"floor_height": 200}"#);
     assert_eq!(
-        code(&add_in_place(&mut map, &sunken).expect_err("ceiling below floor refuses")),
+        code(
+            &add_in_place(&mut map, &sunken, &vanilla_surfaces())
+                .expect_err("ceiling below floor refuses")
+        ),
         "invalid_argument",
         "order code"
     );
     let wide = add_args(r#"{"tag": 70000}"#);
     assert_eq!(
-        code(&add_in_place(&mut map, &wide).expect_err("a wide tag refuses on binary")),
+        code(
+            &add_in_place(&mut map, &wide, &vanilla_surfaces())
+                .expect_err("a wide tag refuses on binary")
+        ),
         "invalid_argument",
         "range code"
     );
     assert_eq!(map.sectors.len(), 3, "none of the refusals appended");
     map.format = MapFormat::Udmf;
-    let row = add_in_place(&mut map, &wide).expect("UDMF stores the wide tag");
+    let row = add_in_place(&mut map, &wide, &vanilla_surfaces()).expect("UDMF stores the wide tag");
     assert_eq!(row.index, 3, "after the existing three");
     assert_eq!(row.detail.tag, 70_000_i32, "and reports it");
     assert_eq!(map.sectors.len(), 4, "the list grew by one");

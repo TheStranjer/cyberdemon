@@ -17,7 +17,7 @@
 //! room-facing lines and [`crate::wad::map::features::apply_window`]
 //! blocks them off, dressing their room sides with the theme's
 //! `window_sill` (below) and `wall` (above) roles resolved exactly like
-//! a door's skins ([`crate::tools::features::theme_wall`],
+//! a door's skins ([`crate::tools::themes`] role resolution,
 //! [`crate::tools::maps::params::validate_texture_name`]). The whole
 //! window is one undoable edit.
 
@@ -30,9 +30,9 @@ use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{PointParam, edit_result_fragment, validate_texture_name};
-use crate::tools::themes::theme_texture;
+use crate::tools::themes::{FALLBACK_WALL_TEXTURE, role_texture, theme_roles};
 use crate::wad::classify::MapFormat;
-use crate::wad::map::consts::DEFAULT_LINTEL;
+use crate::wad::map::consts::{DEFAULT_LINTEL, NO_TEXTURE};
 use crate::wad::map::features::{
     WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines, door_rect, door_wall,
     outward_depth, window_record,
@@ -48,7 +48,7 @@ use super::wall::{
     STRIP_THICKNESS, carve_strip, choose_wall, outward_normal, require_landing, strip_face_lost,
     strip_wall, to_pts,
 };
-use super::{current_map, no_room, theme_wall, wall_lost};
+use super::{current_map, no_room, wall_lost};
 
 /// The `add_window` default sill height above the higher room floor.
 const DEFAULT_SILL: i32 = 32_i32;
@@ -152,15 +152,17 @@ pub(super) struct WindowReport {
 }
 
 /// The textures a window wears: the theme's `window_sill` and `wall`
-/// roles, validated for the map's format (the same resolution pattern
-/// [`theme_skin`] runs for a door).
+/// roles in one [`theme_roles`] pass, validated for the map's format (the
+/// same resolution pattern [`theme_skin`] runs for a door).
 ///
 /// # Errors
 ///
-/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+/// [`theme_roles`]' errors and [`validate_texture_name`]' refusals.
 fn window_skins(session: &Session, format: MapFormat) -> Result<WindowSkins, CyberError> {
-    let sill = theme_texture(session, Role::WindowSill)?;
-    let wall = theme_wall(session)?;
+    let wanted = [Role::WindowSill, Role::Wall];
+    let resolved = theme_roles(session, None, &wanted)?;
+    let sill = role_texture(&resolved, Role::WindowSill, NO_TEXTURE);
+    let wall = role_texture(&resolved, Role::Wall, FALLBACK_WALL_TEXTURE);
     Ok(WindowSkins {
         sill: validate_texture_name(&sill, format)?,
         wall: validate_texture_name(&wall, format)?,

@@ -49,14 +49,19 @@ in first (`copied_to_working: true`) — see `reference/maps.md` and
 ## `add_sector`
 
 `{map?, floor_height? = 0, ceiling_height? = 128, floor_flat? =
-"FLOOR4_8", ceiling_flat? = "CEIL3_5", light? = 160, special? = 0,
-tag? = 0}` → `{index, sector: {floor_height, ceiling_height, floor_flat,
-ceiling_flat, light, special, tag}, map, nodes_invalidated: true,
-copied_to_working}`
+the theme's Floor flat, ceiling_flat? = the theme's Ceiling flat,
+light? = 160, special? = 0, tag? = 0}` → `{index, sector: {floor_height,
+ceiling_height, floor_flat, ceiling_flat, light, special, tag}, map,
+nodes_invalidated: true, copied_to_working}`
 
 Appends one sector with the given fields (each optional, the defaults
-above) and reports its index and stored values. Because the sector list
-grew, the result reports `nodes_invalidated: true`.
+above) and reports its index and stored values. The unasked flats are
+theme-aware: `get_texture_theme`'s current `floor` and `ceiling` rows,
+resolved once per call against the merged view — a Heretic session gets
+the `castle` theme's `FLOOR03`/`FLAT506`, and the vanilla `FLOOR4_8`/
+`CEIL3_5` names only stand in when the theme has nothing of that kind.
+Because the sector list grew, the result reports `nodes_invalidated:
+true`.
 
 ```json
 call add_sector {"map": "MAP01"}
@@ -69,9 +74,10 @@ call add_sector {"map": "MAP01"}
 ## `create_sector_from_loop`
 
 `{map?, points? | vertices?, floor_height? = 0, ceiling_height? = 128,
-floor_flat? = "FLOOR4_8", ceiling_flat? = "CEIL3_5", light? = 160,
-special? = 0, tag? = 0, wall_texture? = "STARTAN3", upper_texture?,
-lower_texture?, outer_sector? = "auto", keep_interior? = false}` →
+floor_flat? = the theme's Floor flat, ceiling_flat? = the theme's
+Ceiling flat, light? = 160, special? = 0, tag? = 0, wall_texture? = the
+theme's Wall texture, upper_texture?, lower_texture?, outer_sector? =
+"auto", keep_interior? = false}` →
 `{sector, vertices_created, linedefs_created, sidedefs_created,
 linedef_map, removed_linedefs, empty_sectors, notes, map,
 nodes_invalidated: true, copied_to_working}`
@@ -92,11 +98,13 @@ are ever left crossing or overlapping.
   corners) or a self-intersecting ring. An unknown vertex or
   `outer_sector` index is `not_found`.
 - **Sector and textures**: the sector fields are `add_sector`'s, with its
-  defaults and format rules. `wall_texture` dresses the `middle` of new
-  one-sided walls; `upper_texture`/`lower_texture` (each defaulting to
-  `wall_texture`) dress a new two-sided face where the neighbour's
-  ceiling (`upper`) or floor (`lower`) differs. On binary maps coordinates
-  must fit `i16` and names 8 characters.
+  theme-aware defaults and format rules. `wall_texture` dresses the
+  `middle` of new one-sided walls (default: the session theme's `Wall`
+  texture, `STARTAN3` when the theme names none); `upper_texture`/
+  `lower_texture` (each defaulting to `wall_texture`) dress a new
+  two-sided face where the neighbour's ceiling (`upper`) or floor
+  (`lower`) differs. On binary maps coordinates must fit `i16` and names
+  8 characters.
 - **Existing walls are split, never duplicated**: a wall the polygon
   touches mid-span is cut; the piece along the boundary turns two-sided
   against the new sector (blocking cleared, and a one-sided wall opening

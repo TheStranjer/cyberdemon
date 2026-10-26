@@ -12,7 +12,7 @@
 //! installs the [`crate::wad::map::features::lift_specials`]
 //! down-wait-up action on those lines. The platform's face and floor
 //! wear the theme's `lift_side` and `lift_floor` roles
-//! ([`crate::tools::themes::theme_texture`],
+//! ([`crate::tools::themes::theme_roles`],
 //! [`crate::tools::maps::params::validate_texture_name`]), and a drop
 //! under [`crate::wad::map::features::MIN_LIFT_DROP`] is reported as a
 //! note (use stairs) rather than a refusal.
@@ -26,8 +26,9 @@ use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
-use crate::tools::themes::theme_texture;
+use crate::tools::themes::{role_texture, theme_roles};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::{LiftBuild, LiftPlatform, LiftSpec, LiftStyle, build_lift};
 
 use super::{current_map, invalid};
@@ -163,15 +164,17 @@ pub(super) fn lift_platform_of(
 }
 
 /// The textures a lift wears: the theme's `lift_side` and `lift_floor`
-/// roles, validated for the map's format (the same resolution pattern
-/// [`window_skins`] runs).
+/// roles in one [`theme_roles`] pass, validated for the map's format (the
+/// same resolution pattern [`window_skins`] runs).
 ///
 /// # Errors
 ///
-/// [`theme_texture`]'s errors and [`validate_texture_name`]' refusals.
+/// [`theme_roles`]' errors and [`validate_texture_name`]' refusals.
 fn lift_skins(session: &Session, format: MapFormat) -> Result<LiftSkins, CyberError> {
-    let side = theme_texture(session, Role::LiftSide)?;
-    let floor_flat = theme_texture(session, Role::LiftFloor)?;
+    let wanted = [Role::LiftSide, Role::LiftFloor];
+    let resolved = theme_roles(session, None, &wanted)?;
+    let side = role_texture(&resolved, Role::LiftSide, NO_TEXTURE);
+    let floor_flat = role_texture(&resolved, Role::LiftFloor, NO_TEXTURE);
     Ok(LiftSkins {
         side: validate_texture_name(&side, format)?,
         floor_flat: validate_texture_name(&floor_flat, format)?,

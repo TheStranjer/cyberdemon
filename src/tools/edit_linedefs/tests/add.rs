@@ -65,10 +65,11 @@ fn family_rules_move_tag_and_args_apart() {
         ..solid_line(0, 1, 0)
     };
     assert!(
-        check_family_fields(FlagFamily::Doom, &tagged).is_ok(),
+        check_family_fields(MapFormat::Doom, FlagFamily::Doom, &tagged).is_ok(),
         "the Doom family stores tags"
     );
-    let error = check_family_fields(FlagFamily::Hexen, &tagged).expect_err("Hexen has no tag");
+    let error = check_family_fields(MapFormat::Hexen, FlagFamily::Hexen, &tagged)
+        .expect_err("Hexen has no tag");
     assert_eq!(code(&error), "invalid_argument", "family rule code");
     assert!(
         error.to_string().contains("have no tag"),
@@ -79,15 +80,32 @@ fn family_rules_move_tag_and_args_apart() {
         ..solid_line(0, 1, 0)
     };
     assert!(
-        check_family_fields(FlagFamily::Hexen, &arged).is_ok(),
+        check_family_fields(MapFormat::Hexen, FlagFamily::Hexen, &arged).is_ok(),
         "the Hexen family stores args"
     );
+    let binary = check_family_fields(MapFormat::Doom, FlagFamily::Doom, &arged)
+        .expect_err("the Doom family refuses them");
     assert!(
-        check_family_fields(FlagFamily::Doom, &arged).is_err(),
-        "the Doom family refuses them"
+        binary
+            .to_string()
+            .contains("Doom-format linedefs have no args; use a Hexen or UDMF map"),
+        "the binary advice names the other formats: {binary}"
+    );
+    let udmf_doom = check_family_fields(MapFormat::Udmf, FlagFamily::Doom, &arged)
+        .expect_err("a UDMF map in the Doom namespace refuses them too");
+    let message = udmf_doom.to_string();
+    assert!(
+        message.contains("convert_map_format")
+            && message.contains("zdoom namespace")
+            && message.contains("(Hexen family)"),
+        "the UDMF advice names the namespace conversion: {message}"
     );
     assert!(
-        check_family_fields(FlagFamily::Doom, &solid_line(0, 1, 0)).is_ok(),
+        !message.contains("use a Hexen or UDMF map"),
+        "it never says the map is not already UDMF: {message}"
+    );
+    assert!(
+        check_family_fields(MapFormat::Doom, FlagFamily::Doom, &solid_line(0, 1, 0)).is_ok(),
         "zeros are plain"
     );
 }

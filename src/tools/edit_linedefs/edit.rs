@@ -16,6 +16,8 @@
 //! builds, and [`check_requested_references`] refuses references the map does
 //! not hold before anything is written.
 
+use alloc::collections::BTreeSet;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map as JsonMap, Value};
@@ -211,7 +213,7 @@ pub(super) struct EditPlan<'req> {
     /// The requested change parameters.
     args: &'req EditLinedefParams,
     /// The targets, sorted ascending without duplicates.
-    indices: Vec<usize>,
+    indices: BTreeSet<usize>,
     /// The resolved flag adjustments.
     bits: EditBits,
     /// The map's binary storage layout.
@@ -221,7 +223,8 @@ pub(super) struct EditPlan<'req> {
 }
 
 impl<'req> EditPlan<'req> {
-    /// Resolves `args` against `map`'s family and format.
+    /// Resolves `args` against `map`'s family and format, targeting the
+    /// sorted, deduplicated `indices`.
     ///
     /// # Errors
     ///
@@ -234,7 +237,7 @@ impl<'req> EditPlan<'req> {
     ) -> Result<Self, CyberError> {
         Ok(Self {
             args,
-            indices,
+            indices: indices.into_iter().collect(),
             bits: EditBits::resolve(args, map.flag_family())?,
             format: map.format,
             family: map.flag_family(),

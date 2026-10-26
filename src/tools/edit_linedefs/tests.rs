@@ -136,7 +136,7 @@ pub(super) fn spec_of(args: &AddLinedefParams) -> EndpointSpec<'_> {
 /// Run `remove_in_place` on `map` with the request parsed from `json`.
 pub(super) fn removal(json: &str, map: &mut Map) -> RemovalReport {
     let args = remove_args(json);
-    let indices = args.index.clone().indices().expect("test indices parse");
+    let indices = args.index.indices().expect("test indices parse");
     remove_in_place(map, &args, &indices).expect("the removal applies")
 }
 
@@ -144,6 +144,6 @@ pub(super) fn removal(json: &str, map: &mut Map) -> RemovalReport {
 /// `json`.
 pub(super) fn removal_error(json: &str, map: &mut Map) -> CyberError {
     let args = remove_args(json);
-    let indices = args.index.clone().indices().expect("test indices parse");
+    let indices = args.index.indices().expect("test indices parse");
     remove_in_place(map, &args, &indices).expect_err("the request must refuse")
 }

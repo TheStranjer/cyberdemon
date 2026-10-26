@@ -271,23 +271,24 @@ pub(super) struct FindReport {
 /// [`run_query`]'s refusals for a bad field, op or value.
 pub(super) fn find_run(
     state: &AppState,
-    args: &FindElementsParams,
+    args: FindElementsParams,
 ) -> Result<FindReport, CyberError> {
     let limit = parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
     let prepared = common::load(state, args.map.as_deref())?;
     let query = Query {
         kind: args.kind,
-        r#where: args.r#where.clone(),
-        within: args.within.clone(),
+        r#where: args.r#where,
+        within: args.within,
     };
     let ctx = QueryContext::new(prepared.map.flag_family(), &prepared.defs);
     let hits = run_query(&prepared.map, &ctx, &query)?;
     let (page, next_offset) = Page::new(args.offset.unwrap_or(0), limit).window(&hits);
+    let summary = rows(args.kind, &page, &prepared.map, &ctx);
     Ok(FindReport {
         kind: args.kind.as_str(),
         count: hits.len(),
-        indices: page.clone(),
-        rows: rows(args.kind, &page, &prepared.map, &ctx),
+        indices: page,
+        rows: summary,
         next_offset,
     })
 }

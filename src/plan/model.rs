@@ -368,6 +368,11 @@ impl Room {
     #[must_use]
     #[inline]
     pub fn polygon(&self) -> Vec<Pt> {
+        // The rectangle's corners are `Copy` and the ring's `Vec` is needed
+        // as the owned return value, so the shape is cloned rather than
+        // borrowed: binding a field out of a `&Shape` needs a pattern whose
+        // shape differs from the expression's, which this crate's denied
+        // `pattern_type_mismatch` and `ref_patterns` forbid.
         match self.shape.clone() {
             Shape::Rect {
                 x: left,

@@ -297,7 +297,7 @@ pub(super) const fn has_change(args: &EditSectorParams) -> bool {
 /// [`CyberError::InvalidArgument`] for an empty index list, an
 /// absolute/delta conflict or a request that changes nothing.
 pub(super) fn validate_edit(args: &EditSectorParams) -> Result<Vec<usize>, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     check_conflicts(args)?;
     if !has_change(args) {
         return Err(CyberError::InvalidArgument(
@@ -454,7 +454,7 @@ pub(super) fn remove_run(
     session: &mut Session,
     args: &RemoveSectorParams,
 ) -> Result<RemoveToolReport, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let label = format!("remove {} sectors", indices.len());
     let (removed, report) =

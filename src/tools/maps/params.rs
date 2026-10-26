@@ -82,13 +82,20 @@ pub enum IndexSelector {
 impl IndexSelector {
     /// The selected indices, sorted ascending with duplicates removed.
     ///
+    /// Takes the selector by reference, so every edit tool reads its index
+    /// parameter without cloning it first. The one copy happens here, where
+    /// the answer needs the list as its own: binding a field out of a
+    /// `&Self` would need a pattern of a different kind than the expression
+    /// it matches, which this crate's denied `pattern_type_mismatch` and
+    /// `ref_patterns` forbid.
+    ///
     /// # Errors
     ///
     /// [`CyberError::InvalidArgument`] when the list is empty: an edit
     /// over no elements is never what the caller meant.
     #[inline]
-    pub fn indices(self) -> Result<Vec<usize>, CyberError> {
-        let mut indices = match self {
+    pub fn indices(&self) -> Result<Vec<usize>, CyberError> {
+        let mut indices = match self.clone() {
             Self::One(index) => vec![index],
             Self::Many(list) => list,
         };

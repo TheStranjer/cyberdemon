@@ -304,7 +304,7 @@ pub(super) fn has_change(args: &EditThingParams) -> bool {
 /// absolute/delta or `flags`/`set_flags` conflict, an absolute `x`/`y`
 /// asked for more than one thing, or a request that changes nothing.
 pub(super) fn validate_edit(args: &EditThingParams) -> Result<Vec<usize>, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     check_conflicts(args)?;
     if (args.x.is_some() || args.y.is_some()) && indices.len() > 1 {
         return Err(CyberError::InvalidArgument(

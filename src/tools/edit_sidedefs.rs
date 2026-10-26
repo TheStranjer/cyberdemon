@@ -352,7 +352,7 @@ const fn has_change(args: &EditSidedefParams) -> bool {
 /// [`CyberError::InvalidArgument`] for an empty index list, an
 /// absolute/delta conflict or a request that changes nothing.
 fn validate_edit(args: &EditSidedefParams) -> Result<Vec<usize>, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     check_conflicts(args)?;
     if !has_change(args) {
         return Err(CyberError::InvalidArgument(
@@ -474,7 +474,7 @@ fn remove_run(
     session: &mut Session,
     args: &RemoveSidedefParams,
 ) -> Result<RemoveToolReport, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let label = format!("remove {} sidedefs", indices.len());
     let (removed, report) =

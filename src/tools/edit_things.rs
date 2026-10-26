@@ -334,7 +334,7 @@ fn add_run(session: &mut Session, args: &AddThingParams) -> Result<AddReport, Cy
 /// map does not hold is `not_found`), [`apply_removal`]'s errors and
 /// whatever [`crate::session::Session::edit_map`] reports.
 fn remove_run(session: &mut Session, args: &RemoveThingParams) -> Result<RemoveReport, CyberError> {
-    let indices = args.index.clone().indices()?;
+    let indices = args.index.indices()?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let label = format!("remove {} things", indices.len());
     let (removed, report) = session.edit_map(name, &label, |map| {

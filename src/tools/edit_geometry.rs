@@ -116,7 +116,7 @@ impl Cyberdemon {
     ) -> Result<CallToolResult, ErrorData> {
         reply(
             self.state()
-                .with_session(|session| transform_run(session, &args)),
+                .with_session(move |session| transform_run(session, args)),
         )
     }
 }

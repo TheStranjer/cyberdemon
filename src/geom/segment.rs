@@ -298,8 +298,8 @@ fn sweep_cuts(segs: &[Seg], cuts: &mut [Vec<Pt>]) {
     for current in order {
         let low = segs.get(current).map_or(i64::MIN, |seg| seg.min_x());
         active.retain(|other| segs.get(*other).is_some_and(|seg| seg.max_x() >= low));
-        for other in active.clone() {
-            pair_cuts(segs, current, other, cuts);
+        for other in &active {
+            pair_cuts(segs, current, *other, cuts);
         }
         active.push(current);
     }

@@ -7,9 +7,10 @@
 //! the order the merged view shows them, so overrides from higher layers come
 //! along as the merged bytes — to the end of the working archive. It is a
 //! plain function over `&mut Wad` plus the merged directory, which keeps it
-//! testable without a session; [`crate::session::Session::copy_map_to_working`]
-//! is the undoable wrapper the tools reach for, and every map-editing tool
-//! that meets a read-only map starts with the same copy.
+//! testable without a session; [`crate::session::map_edit`] runs it inside
+//! the single undoable [`crate::session::Session::edit_map`] step, so every
+//! map-editing tool that meets a read-only map copies and edits it in one
+//! step.
 
 use crate::error::CyberError;
 use crate::session::{MergedLump, merge::analyze_directory};

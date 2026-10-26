@@ -397,7 +397,7 @@ src/
                   typed conflict), and
                   `session/cow.rs` the copy-on-write step that brings one map
                   block from the merged view into the working archive
-                  (`copy_map_block`, `Session::copy_map_to_working`),
+                  (`has_map_block`, `copy_map_block`),
                   `session/views.rs` the bodies of the session's read views
                   (`merged`, `base_lumps`, `game`, `lumps_in` and `find`) as
                   free functions over a `&Session`, with the layer directory
@@ -419,8 +419,8 @@ src/
                   redo, dirty state, the cap and the batch scope with its
                   folds, rollbacks and refusals) and
                   `session/tests/state.rs` (the active map, the render
-                  settings and theme, the layer-only view, game detection, the
-                  effective-game/definitions reads and the copy-on-write step),
+                  settings and theme, the layer-only view, game detection and
+                  the effective-game/definitions reads),
                   and the resource readers the tools re-export so no core module
                   imports `crate::tools`: `session/resolve.rs` the shared picture
                   resolvers (a lump name in, decoded pixels out: `load_flat`,
@@ -1735,6 +1735,11 @@ The repo's deny list goes well beyond `pedantic`. Accepted fixes (tests are exem
   hand-rolled reversal.
 - No `v[i]`/`v[a..b]` in production code → `.get()`, `.split_at_checked()`, `.chunks_exact()`, iterators.
 - No `unwrap`/`expect`/`panic!`/`todo!`/`unreachable!` in production; never print (stdout is the MCP channel).
+- Both `pattern_type_mismatch` and `ref_patterns` are denied, so nothing can bind a field out of a
+  `&Enum` (only binding-free arms like `matches!` and `Variant { .. }` match it): a `match x.clone()`
+  that reads a non-Copy field is load-bearing, not a leftover. Drop a clone with `iter()`/`as_ref()`,
+  by taking a caller-owned parameter by value, or by a `&self` method that copies inside
+  (`IndexSelector::indices`) — never by loosening either lint.
 - Doc comments on every item, including private fields and functions.
 - Budgets: functions ≤ 60 lines, ≤ 4 parameters, cognitive complexity ≤ 10, nesting ≤ 3; files ≤ 1000 lines, aim for ≤ 500; enforced by `tests/mcp/docs.rs`, not Clippy, which has no such lint.
 - Modules are `src/a.rs` + `src/a/b.rs`, never `mod.rs`. Prefer `core::`/`alloc::` paths where they exist; `.to_owned()` on `&str`; no shadowing; suffixed literals (`0_u32`); no `_ =>` on enums; `else if` chains end with `else`.

@@ -186,9 +186,11 @@ pub fn resolve(
     let Some(selector) = maps else {
         return common::resolve_map_name(session, None).map(|name| vec![name]);
     };
-    // Matching the owned clone keeps every pattern's shape explicit;
-    // `IndexSelector::indices` in the shared params follows the same
-    // consume-a-clone style for the same reason.
+    // The selector is matched on an owned copy: binding a field out of a
+    // `&MapsSelector` would need a pattern of a different kind than the
+    // expression it matches, which this crate's denied
+    // `pattern_type_mismatch` and `ref_patterns` forbid
+    // (`IndexSelector::indices` copies internally for the same reason).
     match selector.clone() {
         MapsSelector::All(..) => every_map(session),
         MapsSelector::Names(names) => listed_maps(session, &names),

@@ -152,24 +152,6 @@ impl MidiWriter {
         self.body.extend_from_slice(data);
     }
 
-    /// Appends a meta event: the delta as a `VLQ`, `FF`, `kind`, the payload
-    /// length as a `VLQ`, then the payload.
-    ///
-    /// # Errors
-    ///
-    /// [`CyberError::LimitExceeded`] when the payload is longer than 32 bits
-    /// can count.
-    #[inline]
-    pub fn put_meta(&mut self, delta: u32, kind: u8, data: &[u8]) -> Result<(), CyberError> {
-        let length = usize_to_u32(data.len(), "MIDI meta event")?;
-        write_vlq(&mut self.body, delta);
-        self.body.push(MIDI_META_STATUS);
-        self.body.push(kind);
-        write_vlq(&mut self.body, length);
-        self.body.extend_from_slice(data);
-        Ok(())
-    }
-
     /// Appends a tempo meta event: `microseconds` per quarter note, the
     /// three-byte big-endian value `SMF` stores.
     #[inline]
@@ -326,18 +308,15 @@ mod tests {
         let mut midi = MidiWriter::new();
         midi.put_tempo(0, 500_000);
         midi.put_event(4, 0x90, &[0x3C, 0x7F]);
-        midi.put_meta(0, 0x58, &[4, 2, 24, 8])
-            .expect("a four byte meta payload");
         let mut body: Vec<u8> = TEMPO.to_vec();
         body.extend_from_slice(&[0x04, 0x90, 0x3C, 0x7F]);
-        body.extend_from_slice(&[0x00, 0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08]);
         body.extend_from_slice(&[0x81, 0x00, 0xFF, 0x2F, 0x00]);
-        assert_eq!(body.len(), 24, "hand-counted track length");
+        assert_eq!(body.len(), 16, "hand-counted track length");
         let mut expected: Vec<u8> = Vec::new();
         expected.extend_from_slice(b"MThd");
         expected.extend_from_slice(&[0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x46]);
         expected.extend_from_slice(b"MTrk");
-        expected.extend_from_slice(&[0x00, 0x00, 0x00, 0x18]);
+        expected.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]);
         expected.extend_from_slice(&body);
         let rendered = midi.into_type0(70, 128).expect("a short track");
         assert_eq!(

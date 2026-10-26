@@ -2,7 +2,14 @@
 //!
 //! `Doom` and `Hexen` store `SIDEDEFS`, `VERTEXES` and `SECTORS` with
 //! byte-identical little-endian records, so their readers and writers live
-//! here once. The module also holds the lump plumbing both formats use:
+//! here once. So do the whole-block passes: both formats emit the same lump
+//! run under the same zero-size header marker and carry every member they do
+//! not build themselves, so [`read_binary_map`] and [`write_binary_map`] hold
+//! that run once and take a [`BinaryLayout`] for the parts the two formats do
+//! not share (their `THINGS` and `LINEDEFS` codecs, the label read errors name
+//! and the `ACS` pair only `Hexen` writes).
+//!
+//! The module also holds the lump plumbing both formats use:
 //! [`member_data`] looks a required member up by name, [`records`] slices a
 //! payload into whole records, [`other_lumps`] and [`carried`] move the
 //! non-editable block lumps through [`Map::other`] untouched, and [`Element`]
@@ -16,9 +23,10 @@ use core::slice::ChunksExact;
 use crate::error::CyberError;
 use crate::wad::archive::Lump;
 use crate::wad::bytes::{Reader, Writer};
+use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::consts::NO_TEXTURE;
-use crate::wad::map::model::{Sector, Sidedef, Vertex};
+use crate::wad::map::model::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
 use crate::wad::name::{LumpName, NAME_LEN};
 
 /// Bytes in one `SIDEDEFS` record.
@@ -95,6 +103,132 @@ pub(super) fn carried(other: &[Lump], wanted: LumpName) -> Lump {
         .find(|lump| lump.name == wanted)
         .cloned()
         .unwrap_or_else(|| Lump::marker(wanted))
+}
+
+/// The lump run a binary format writes between `BLOCKMAP` and the remaining
+/// `other` lumps, which [`write_binary_map`] appends; the empty run of the
+/// layout that owns no lump beyond the vanilla block.
+pub(super) const fn no_tail(_: &[Lump]) -> Vec<Lump> {
+    Vec::new()
+}
+
+/// One layout's `THINGS` decoder.
+type ThingReader = fn(&[u8]) -> Result<Vec<Thing>, CyberError>;
+/// One layout's `LINEDEFS` decoder.
+type LinedefReader = fn(&[u8]) -> Result<Vec<Linedef>, CyberError>;
+/// One layout's `THINGS` encoder.
+type ThingWriter = fn(&[Thing]) -> Result<Vec<u8>, CyberError>;
+/// One layout's `LINEDEFS` encoder.
+type LinedefWriter = fn(&[Linedef]) -> Result<Vec<u8>, CyberError>;
+/// One layout's own lumps after the vanilla block.
+type TailWriter = fn(&[Lump]) -> Vec<Lump>;
+
+/// One binary map layout's own rules: everything the `Doom` and `Hexen`
+/// block readers and writers do not share. Both formats write the same lump
+/// run under the same zero-size header marker, decode `SIDEDEFS`, `VERTEXES`
+/// and `SECTORS` with the same records and carry every other member through
+/// [`Map::other`]; only the `THINGS` and `LINEDEFS` codecs, the word their
+/// errors speak and the tail lumps they own differ, so [`read_binary_map`]
+/// and [`write_binary_map`] hold the run once and take these rules for the
+/// rest.
+pub(super) struct BinaryLayout {
+    /// The word read errors name the layout by: `Doom` or `Hexen`.
+    pub(super) label: &'static str,
+    /// The format the reader records on the model.
+    pub(super) format: MapFormat,
+    /// The lumps the writer emits itself, in emit order; a copy of one of
+    /// these in [`Map::other`] is not appended again after the block.
+    pub(super) standard: &'static [LumpName],
+    /// Decodes the `THINGS` records into the model.
+    pub(super) read_things: ThingReader,
+    /// Decodes the `LINEDEFS` records into the model.
+    pub(super) read_linedefs: LinedefReader,
+    /// Encodes the model's things into the `THINGS` records.
+    pub(super) write_things: ThingWriter,
+    /// Encodes the model's linedefs into the `LINEDEFS` records.
+    pub(super) write_linedefs: LinedefWriter,
+    /// The lumps this layout owns beyond the vanilla block, written after
+    /// `BLOCKMAP` from whatever [`Map::other`] carries.
+    pub(super) tail: TailWriter,
+}
+
+/// Reads a whole binary map block under `layout`'s rules.
+///
+/// `name` is the block header's name; `members` are the block's lumps after
+/// the header, in directory order. The five editable lumps decode into the
+/// model, every other member is carried into [`Map::other`] verbatim, and the
+/// fields the layout does not store keep their zero values.
+///
+/// # Errors
+///
+/// [`CyberError::Format`] when a required lump (THINGS, LINEDEFS, SIDEDEFS,
+/// VERTEXES, SECTORS) is absent or when one holds a size that is not a whole
+/// number of its records.
+pub(super) fn read_binary_map(
+    layout: &BinaryLayout,
+    name: LumpName,
+    members: &[Lump],
+) -> Result<Map, CyberError> {
+    Ok(Map {
+        name,
+        format: layout.format,
+        udmf_namespace: None,
+        extra_globals: Vec::new(),
+        extra_blocks: Vec::new(),
+        things: (layout.read_things)(member_data(members, lumps::THINGS, layout.label)?)?,
+        vertices: read_vertices(member_data(members, lumps::VERTEXES, layout.label)?)?,
+        linedefs: (layout.read_linedefs)(member_data(members, lumps::LINEDEFS, layout.label)?)?,
+        sidedefs: read_sidedefs(member_data(members, lumps::SIDEDEFS, layout.label)?)?,
+        sectors: read_sectors(member_data(members, lumps::SECTORS, layout.label)?)?,
+        other: other_lumps(members),
+    })
+}
+
+/// Writes a whole binary map block under `layout`'s rules.
+///
+/// The result is the zero-size header (named after [`Map::name`]) followed by
+/// `THINGS LINEDEFS SIDEDEFS VERTEXES`, the classic node run, `SECTORS`,
+/// `REJECT` and `BLOCKMAP`, then the layout's own [`tail`]. `SEGS`,
+/// `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` come from [`Map::other`] when
+/// present and emit as empty markers otherwise; every `other` lump the layout
+/// does not emit itself follows in directory order.
+///
+/// # Errors
+///
+/// Whatever the layout's `THINGS` and `LINEDEFS` encoders report, plus
+/// [`CyberError::LimitExceeded`] or [`CyberError::InvalidArgument`] from the
+/// shared record writers.
+///
+/// [`tail`]: BinaryLayout::tail
+pub(super) fn write_binary_map(layout: &BinaryLayout, map: &Map) -> Result<Vec<Lump>, CyberError> {
+    let owned = layout.standard.len().saturating_add(1);
+    let mut lumps = Vec::with_capacity(owned.saturating_add(map.other.len()));
+    lumps.push(Lump::marker(map.name));
+    lumps.push(Lump::new(
+        lumps::THINGS,
+        (layout.write_things)(&map.things)?,
+    ));
+    lumps.push(Lump::new(
+        lumps::LINEDEFS,
+        (layout.write_linedefs)(&map.linedefs)?,
+    ));
+    lumps.push(Lump::new(lumps::SIDEDEFS, write_sidedefs(&map.sidedefs)?));
+    lumps.push(Lump::new(lumps::VERTEXES, write_vertexes(&map.vertices)?));
+    for node in lumps::CLASSIC_NODE_RUN_LUMPS {
+        lumps.push(carried(&map.other, node));
+    }
+    lumps.push(Lump::new(lumps::SECTORS, write_sectors(&map.sectors)?));
+    for trailing in [lumps::REJECT, lumps::BLOCKMAP] {
+        lumps.push(carried(&map.other, trailing));
+    }
+    lumps.extend((layout.tail)(&map.other));
+    lumps.extend(
+        map.other
+            .iter()
+            .filter(|lump| !layout.standard.contains(&lump.name))
+            .cloned(),
+    );
+    Ok(lumps)
 }
 
 /// Decodes one eight-byte texture/flat field: `NUL`-trimmed and uppercase,
@@ -469,6 +603,92 @@ pub(super) mod fixtures {
             .into_iter()
             .map(marker)
             .collect()
+    }
+
+    /// The bytes of the written lump named `wanted`, which the byte goldens
+    /// read out of a written block.
+    pub(in crate::wad::map) fn payload(lumps: &[Lump], wanted: &str) -> Vec<u8> {
+        lumps
+            .iter()
+            .find(|lump| lump.name.to_string() == wanted)
+            .map(|lump| lump.data.to_vec())
+            .expect("the writer emits the named lump")
+    }
+
+    /// The `SIDEDEFS` record [`one_of_each_map`]'s sidedef writes: the two
+    /// `i16` offsets, the none-texture above `STEP1` and `WALL1` and the
+    /// sector index. Byte-identical in both binary formats.
+    pub(in crate::wad::map) const GOLDEN_SIDEDEFS: [u8; 30] = [
+        0xfc_u8, 0xff_u8, 0x08_u8, 0x00_u8, 0x2d_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8,
+        0x00_u8, 0x00_u8, 0x53_u8, 0x54_u8, 0x45_u8, 0x50_u8, 0x31_u8, 0x00_u8, 0x00_u8, 0x00_u8,
+        0x57_u8, 0x41_u8, 0x4c_u8, 0x4c_u8, 0x31_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8,
+    ];
+    /// The `VERTEXES` record [`one_of_each_map`]'s vertex writes: `x` `-256`
+    /// and `y` `1024` as two `i16` fields.
+    pub(in crate::wad::map) const GOLDEN_VERTEXES: [u8; 4] = [0x00_u8, 0xff_u8, 0x00_u8, 0x04_u8];
+    /// The `SECTORS` record [`one_of_each_map`]'s sector writes: the two
+    /// heights, the two flats, the light level and the special and tag.
+    pub(in crate::wad::map) const GOLDEN_SECTORS: [u8; 26] = [
+        0x00_u8, 0x00_u8, 0x80_u8, 0x00_u8, 0x46_u8, 0x4c_u8, 0x4f_u8, 0x4f_u8, 0x52_u8, 0x34_u8,
+        0x5f_u8, 0x38_u8, 0x2d_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x00_u8,
+        0xc0_u8, 0x00_u8, 0x00_u8, 0x00_u8, 0x01_u8, 0x00_u8,
+    ];
+
+    /// One element of every kind, the shape both binary writers' byte
+    /// goldens are taken from: a thing carrying the `Hexen`-only `tid`, `z`,
+    /// `special` and `args` that `Doom` has no field for, a line whose
+    /// `special` fits both stored widths and whose `args` only `Hexen`
+    /// stores, one sidedef with the none-texture above a real name and one
+    /// sector with a full eight-byte flat and an empty ceiling.
+    pub(in crate::wad::map) fn one_of_each_map() -> Map {
+        Map {
+            name: name("MAP01"),
+            format: MapFormat::Doom,
+            things: vec![Thing {
+                tid: 5,
+                x: -24,
+                y: 300,
+                z: 128,
+                angle: 90,
+                kind: 3001,
+                flags: 7,
+                special: 3,
+                args: [1_i32, 2_i32, 3_i32, 4_i32, 5_i32],
+                ..Default::default()
+            }],
+            vertices: vec![vertex(-256, 1024)],
+            linedefs: vec![Linedef {
+                v1: 0,
+                v2: 0,
+                flags: 1,
+                special: 12,
+                tag: 0,
+                args: [9_i32, 8_i32, 7_i32, 6_i32, 5_i32],
+                front: Some(0),
+                back: None,
+                ..Default::default()
+            }],
+            sidedefs: vec![Sidedef {
+                x_offset: -4,
+                y_offset: 8,
+                upper: "-".to_owned(),
+                lower: "STEP1".to_owned(),
+                middle: "WALL1".to_owned(),
+                sector: 0,
+                ..Default::default()
+            }],
+            sectors: vec![Sector {
+                floor_height: 0,
+                ceiling_height: 128,
+                floor_flat: "FLOOR4_8".to_owned(),
+                ceiling_flat: "-".to_owned(),
+                light: 192,
+                tag: 1,
+                ..Default::default()
+            }],
+            other: node_lumps(),
+            ..Default::default()
+        }
     }
 
     /// The two-room test map: a hall and a raised back room split by a

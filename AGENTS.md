@@ -991,7 +991,8 @@ src/
                   reads and writes every PNG chunk, SMF field and grAb offset
                   shares — plus the checked usize/u32 casts,
                   `wad/archive.rs` the `Wad` archive with parsing,
-                  serialization (canonical and payload-deduplicating),
+                  serialization (canonical and payload-deduplicating through
+                  one planner taking a `Placement` and one writer),
                   lookup, the one `put_global` global-lump write every
                   copy-on-write edit shares, and atomic I/O on
                   `wad/archive/directory.rs` (the
@@ -1068,11 +1069,17 @@ src/
                   format-neutral `Map` model (`Thing`, `Vertex`,
                   `Linedef`, `Sidedef`, `Sector`, `extra` side-bags),
                   `map/doom.rs` the binary Doom map reader/writer
-                  (`read_doom_map`/`write_doom_map`),
+                  (`read_doom_map`/`write_doom_map` over the shared block
+                  passes, with the layout's own `THINGS` and `LINEDEFS`
+                  codecs and `LAYOUT`),
                   `map/hexen.rs` the binary `Hexen` map reader/writer
-                  (the vanilla block plus its `BEHAVIOR`),
-                  `map/common.rs` the record codecs the two binary formats
-                  share (`SIDEDEFS`/`VERTEXES`/`SECTORS` are byte-identical),
+                  (the vanilla block plus its `BEHAVIOR` and `SCRIPTS` tail,
+                  on its own codecs and `LAYOUT`),
+                  `map/common.rs` the record codecs and the whole-block
+                  reader and writer the two binary formats share
+                  (`SIDEDEFS`/`VERTEXES`/`SECTORS` are byte-identical, and one
+                  `BinaryLayout` of each format's `THINGS`/`LINEDEFS` codecs,
+                  error label and tail lumps drives the shared lump run),
                   `map/udmf_map.rs` the `UDMF` `TEXTMAP`/`ENDMAP` reader and
                   writer over the model: the defaults and the flag-name
                   tables both halves read, the block walk dispatching a
@@ -1636,6 +1643,13 @@ tests/
                     usability.rs; shared_math.rs: the guard that the box
                     window, the tap blend and the `Rec. 601` luminance
                     weights are each defined once under `src/`;
+                    map_writers.rs: the guard that the shared binary map
+                    block passes and record codecs are defined only in
+                    `wad/map/common.rs`, the `THINGS` and `LINEDEFS` codecs
+                    only in `wad/map/doom.rs` and `wad/map/hexen.rs` and the
+                    `WAD` position and payload-placement helpers only in
+                    `wad/archive.rs`, with the folded `dedup_plan` spelling
+                    banned;
                     single_owner.rs: the guard that a big-endian byte helper
                     is defined only in `wad/bytes.rs` and the shared MUS and
                     MIDI vocabulary only in `music/consts.rs`;

@@ -6,21 +6,20 @@
 //! solved from the four rectangle-corner to quad-corner correspondences
 //! (the `DLT` system) by partial-pivoted Gaussian elimination in `16.16`
 //! fixed point, every product and quotient rounded through
-//! [`crate::fixed`] helpers over `i128` intermediates. Sampling is the
-//! bilinear, alpha-weighted two-tap blend [`crate::gfx::ops::resample`]
-//! uses; a source position outside the picture reads as transparent
-//! black.
+//! [`crate::fixed`] helpers over `i128` intermediates. Sampling is the shared
+//! bilinear, alpha-weighted [`bilinear`] tap blend `resample` scales through;
+//! a source position outside the picture reads as transparent black.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::CyberError;
-use crate::fixed::{FRACBITS, FRACUNIT, Fixed, mul_div_round};
+use crate::fixed::{FRACUNIT, Fixed, mul_div_round};
+use crate::gfx::filter::{bilinear, last_centre};
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::resample::{accumulate, finish_pixel};
-use crate::gfx::ops::{arg_error, check_op_dimension, pixel_at};
-use crate::gfx::{pixel_index, rgba_byte_count};
+use crate::gfx::ops::{arg_error, check_op_dimension};
+use crate::gfx::rgba_byte_count;
 
 /// The `DLT` system's size: eight unknown projective coefficients.
 const SYSTEM: usize = 8;
@@ -37,10 +36,6 @@ const DEST_CORNERS: [(Fixed, Fixed); 4] = [
 /// No corner coordinate may exceed this once the power-of-two scaling is
 /// applied, keeping every elimination product inside `16.16`.
 const SCALED_LIMIT: i64 = 64;
-/// One whole pixel in `16.16` position and weight units (`65536`).
-const WEIGHT_ONE: u64 = 0x1_0000;
-/// The fractional bits of a sampling position.
-const FRAC_MASK: i64 = 0xFFFF;
 /// How far a solved source position may cross a picture edge in `16.16`
 /// units and still count as sitting on it (solver rounding noise).
 const EDGE_SLACK: i64 = 16;
@@ -405,39 +400,13 @@ fn div_fixed(numerator: Fixed, denominator: Fixed) -> Option<Fixed> {
 }
 
 /// The bilinear, alpha-weighted source sample at the `16.16` position
-/// `(x, y)`; transparent black when it lies outside the picture.
+/// `(x, y)`: the shared tap blend over the picture, pulled onto an edge the
+/// solver's rounding overshot by no more than [`EDGE_SLACK`], and
+/// transparent black when it still lies outside.
 fn sample(img: &RgbaImage, x: i64, y: i64) -> [u8; 4] {
-    let last_x = last_centre(img.width);
-    let last_y = last_centre(img.height);
-    let at_x = clamp_edge(x, last_x);
-    let at_y = clamp_edge(y, last_y);
-    if at_x < 0 || at_y < 0 || at_x > last_x || at_y > last_y {
-        return TRANSPARENT;
-    }
-    let columns = tap_pair(at_x, img.width);
-    let rows = tap_pair(at_y, img.height);
-    let mut channels = [0_u64; 3];
-    let mut premultiplied = 0_u64;
-    for &(row, row_weight) in &rows {
-        for &(column, column_weight) in &columns {
-            let position = pixel_index(img.width, column, row).unwrap_or(usize::MAX);
-            let pixel = pixel_at(&img.pixels, position).unwrap_or(TRANSPARENT);
-            let weight = row_weight.saturating_mul(column_weight);
-            accumulate(&mut channels, &mut premultiplied, pixel, weight);
-        }
-    }
-    finish_pixel(
-        channels,
-        premultiplied,
-        WEIGHT_ONE.saturating_mul(WEIGHT_ONE),
-    )
-}
-
-/// The `16.16` centre of an edge's last pixel.
-fn last_centre(length: u32) -> i64 {
-    i64::from(length.saturating_sub(1))
-        .checked_shl(FRACBITS)
-        .unwrap_or(i64::MAX)
+    let at_x = clamp_edge(x, last_centre(img.width));
+    let at_y = clamp_edge(y, last_centre(img.height));
+    bilinear(img, at_x, at_y).unwrap_or(TRANSPARENT)
 }
 
 /// Pulls a position sitting within [`EDGE_SLACK`] units of the picture
@@ -447,20 +416,12 @@ fn clamp_edge(value: i64, last: i64) -> i64 {
     if near { value.clamp(0, last) } else { value }
 }
 
-/// The two bilinear taps of a `16.16` position on an edge of `limit`
-/// pixels: source index and integer weight, like `resample`'s kernels.
-fn tap_pair(position: i64, limit: u32) -> [(u32, u64); 2] {
-    let low = u32::try_from(position.checked_shr(FRACBITS).unwrap_or(0)).unwrap_or(0_u32);
-    let high = low.saturating_add(1).min(limit.saturating_sub(1));
-    let fraction = u64::try_from(position & FRAC_MASK).unwrap_or(0_u64);
-    [(low, WEIGHT_ONE.saturating_sub(fraction)), (high, fraction)]
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Corner, PerspectiveSpec, correct, tap_pair};
+    use super::{Corner, PerspectiveSpec, correct};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
+    use crate::gfx::to_pixel;
 
     /// One corner, for compact quad literals.
     fn corner(x: i32, y: i32) -> Corner {
@@ -512,6 +473,78 @@ mod tests {
             panic!("expected InvalidArgument");
         };
         text
+    }
+
+    /// An image's pixels as arrays, for the golden comparisons.
+    fn picture(img: &RgbaImage) -> Vec<[u8; 4]> {
+        img.pixels.chunks_exact(4_usize).map(to_pixel).collect()
+    }
+
+    /// The trapezoid of `corners(0, 0)..(5, 1)..(5, 5)..(0, 7)` warped onto
+    /// a `4 x 4` rectangle, pixel by pixel.
+    const TRAPEZOID_4X4: [[u8; 4]; 16] = [
+        [255, 0, 0, 255],
+        [255, 0, 0, 255],
+        [28, 227, 0, 255],
+        [0, 255, 0, 255],
+        [255, 0, 0, 255],
+        [255, 0, 0, 255],
+        [28, 227, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 0, 255],
+        [0, 0, 0, 255],
+        [3, 25, 201, 255],
+        [0, 85, 170, 255],
+        [0, 0, 0, 255],
+        [0, 0, 0, 255],
+        [0, 0, 227, 255],
+        [0, 0, 255, 255],
+    ];
+
+    /// A stronger skew of the same quad onto a `5 x 3` rectangle.
+    const SKEW_5X3: [[u8; 4]; 15] = [
+        [255, 0, 0, 255],
+        [255, 0, 0, 255],
+        [143, 112, 0, 255],
+        [0, 255, 0, 255],
+        [0, 255, 0, 255],
+        [124, 0, 0, 255],
+        [187, 0, 0, 255],
+        [147, 105, 1, 255],
+        [0, 255, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 0, 255],
+        [0, 0, 0, 255],
+        [0, 0, 98, 255],
+        [0, 0, 255, 255],
+        [0, 0, 255, 255],
+    ];
+
+    #[test]
+    fn the_warped_samples_hold_their_golden_bytes() {
+        let source = quadrants();
+        let (trapezoid, _step) = correct(
+            &source,
+            0,
+            &spec(
+                [corner(0, 0), corner(5, 1), corner(5, 5), corner(0, 7)],
+                4,
+                4,
+            ),
+        )
+        .expect("the trapezoid is sound");
+        assert_eq!(picture(&trapezoid), TRAPEZOID_4X4.to_vec(), "the trapezoid");
+        let (skew, _other_step) = correct(
+            &source,
+            0,
+            &spec(
+                [corner(1, 1), corner(6, 0), corner(7, 6), corner(0, 7)],
+                5,
+                3,
+            ),
+        )
+        .expect("the skew is sound");
+        assert_eq!(picture(&skew), SKEW_5X3.to_vec(), "the skew");
     }
 
     #[test]
@@ -675,18 +708,5 @@ mod tests {
                 "row {row} of the left edge"
             );
         }
-    }
-
-    #[test]
-    fn bilinear_taps_keep_unit_weight_and_edge_clamping() {
-        let mid = tap_pair(0x0001_8000, 8);
-        assert_eq!(mid[0], (1, 0x8000), "halfway between pixel centres");
-        assert_eq!(mid[1], (2, 0x8000), "the far tap mirrors the near one");
-        let edge = tap_pair(0x0007_0000, 8);
-        assert_eq!(
-            edge,
-            [(7, 0x1_0000), (7, 0)],
-            "the last centre clamps both taps in place"
-        );
     }
 }

@@ -55,6 +55,13 @@ src/
                   `gfx/sprite_name.rs` the sprite lump name grammar,
                   `gfx/sprite_rotation.rs` the engine's viewer-angle to
                   rotation-number bucketing (`rotation_for`),
+                  `gfx/filter.rs` the one separable box window and the one
+                  bilinear tap blend every sampler shares: the `Window`
+                  running total with `window_line`, `window_span`,
+                  `box_filter` (the row pass, then the column pass over
+                  whatever the caller folds) and `box_sums`, and on the
+                  sampling side `Tap`, `Kernel`, `bilinear_kernel`, `blend`
+                  and `bilinear`, with their tests in `gfx/filter/tests.rs`,
                   `gfx/ops.rs` the image-op framework's root (`ImageOp` with
                   its `FitMode`/`Filter` knobs and serde defaults, the shared
                   re-exports) on `gfx/ops/apply.rs` (`apply_ops`, `OpsReport`
@@ -67,9 +74,11 @@ src/
                   `gfx/ops/tests/dispatch.rs` and `gfx/ops/tests/json.rs`;
                   with `gfx/ops/geometry.rs`
                   crop/fit/rotate/flip, `gfx/ops/resample.rs` nearest/
-                  bilinear/area sampling, `gfx/ops/tone.rs` auto-levels/
-                  adjust/grayscale, `gfx/ops/blur.rs` the separable alpha-weighted
-                  box blur behind `ImageOp::Blur`,
+                  bilinear/area sampling through `gfx::filter`'s kernels and
+                  blend, `gfx/ops/tone.rs` auto-levels/
+                  adjust/grayscale, `gfx/ops/blur.rs` the alpha-weighted box
+                  blur behind `ImageOp::Blur`: its premultiplied `Sums` is
+                  the fold `gfx::filter::box_filter` runs,
                   `gfx/ops/alpha.rs` colour key and trim,
                   `gfx/ops/background.rs` the border-driven background
                   removal, `gfx/ops/threshold.rs` binarization plus the
@@ -77,14 +86,14 @@ src/
                   `otsu_level`/`luminance_histogram`/`binary_mask` helpers
                   the sketch tools reuse, `gfx/ops/adaptive.rs` the
                   background-flattening binarizer (local means from
-                  separable integer running sums) behind
-                  `adaptive_threshold`, `gfx/ops/dither.rs` the
+                  `gfx::filter::box_sums`) behind `adaptive_threshold`,
+                  `gfx/ops/dither.rs` the
                   `Dither`-knopped quantization (Floyd–Steinberg serpentine),
                   and `gfx/ops/tile.rs` the seam-blend behind
                   `make_tileable`, and `gfx/ops/perspective.rs` the
                   corner-quad-to-rectangle homography warp (16.16 DLT
-                  Gaussian solve, bilinear alpha-weighted sampling) behind
-                  `perspective_correct`.
+                  Gaussian solve, sampling through `gfx::filter::bilinear`)
+                  behind `perspective_correct`.
   audio.rs        Audio core module root: sample-rate limits and the shared
                   unsigned-8-bit conversions.
   audio/          Audio building blocks (no MCP concerns): `audio/pcm.rs`
@@ -233,9 +242,10 @@ src/
   sketch/         Sketch building blocks (no MCP concerns):
                   `sketch/mask.rs` `Mask`, `InkMode`, `ink_mask` and
                   `stroke_width`, `sketch/morph.rs` square-element
-                  `dilate`/`erode`/`close` (separable running counts,
-                  O(w·h)), `sketch/components.rs` `Labels`, `Component`
-                  and deterministic scan-order `label_components`,
+                  `dilate`/`erode`/`close` (set-bit counts folded through
+                  `gfx::filter::box_filter`, O(w·h)),
+                  `sketch/components.rs` `Labels`, `Component` and
+                  deterministic scan-order `label_components`,
                   `sketch/analyze.rs` the `Analysis` pipeline: marks
                   split from walls, closing, regions, gaps and warnings,
                   `sketch/expand.rs` centreline BFS growth of regions
@@ -1585,8 +1595,11 @@ tests/
                     e2e_edit.rs and the capstone low-level workflow plus the
                     spawned-binary asset-server proof in e2e.rs; a
                     usability pass over hints and descriptions in
-                    usability.rs; docs.rs: skill/ and README.md layout and
-                    tool/doc consistency checks, the guide and `README.md`
+                    usability.rs; shared_math.rs: the guard that the box
+                    window, the tap blend and the `Rec. 601` luminance
+                    weights are each defined once under `src/`; docs.rs:
+                    skill/ and README.md layout and tool/doc consistency
+                    checks, the guide and `README.md`
                     line budgets and the 1000-line budget on every Rust file
                     in the repository; and flag_names.rs: the guard that
                     every linedef/thing flag-bit `const` is defined once,

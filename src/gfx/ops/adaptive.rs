@@ -10,11 +10,12 @@
 //! its local mean (and, when `invert`ed, `offset` or more above it — the
 //! mirrored test).
 //!
-//! The mean runs on separable integer sums exactly like
-//! [`crate::sketch::morph`]'s `window_counts`: a row pass then a column
-//! pass, each carrying one `i64` window sum forward (absorbing the value
-//! entering, releasing the one leaving), so the whole background costs
-//! `O(width * height)` regardless of the radius. The report's
+//! The mean runs on the separable [`crate::gfx::filter::box_sums`] pass every
+//! box filter in the crate shares: a row pass then a column pass, each
+//! carrying one running total forward (absorbing the value entering,
+//! releasing the one leaving), so the whole background costs
+//! `O(width * height)` regardless of the radius, and [`window_span`] answers
+//! how many samples each clipped window really covered. The report's
 //! `background_min` / `background_max` are the local-mean extremes over the
 //! picture, the measurable proof of how far the gradient was flattened.
 //!
@@ -26,6 +27,7 @@
 use serde_json::{Value, json};
 
 use crate::error::CyberError;
+use crate::gfx::filter::{box_sums, window_span};
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::threshold::OPAQUE_ALPHA;
 use crate::gfx::ops::{arg_error, luminance};
@@ -140,8 +142,8 @@ fn counts_as_ink(pixel: [u8; 4], mean: i64, spec: &AdaptiveThresholdSpec) -> boo
 
 /// The local background of every pixel, row-major: the mean luminance of
 /// the `(2r + 1) x (2r + 1)` window around it. The box sum comes from the
-/// separable [`window_sums`] passes (every row, then the row sums down
-/// every column) and divides by the clipped window's pixel count. An image
+/// shared [`box_sums`] pass (every row, then the row sums down every
+/// column) and divides by the clipped window's pixel count. An image
 /// without pixels answers no means.
 fn background_means(img: &RgbaImage, radius: u32) -> Vec<i64> {
     let width = match usize::try_from(img.width) {
@@ -149,111 +151,34 @@ fn background_means(img: &RgbaImage, radius: u32) -> Vec<i64> {
         _ => return Vec::new(),
     };
     let reach = usize::try_from(radius).unwrap_or(usize::MAX);
-    let values: Vec<i64> = img
+    let values: Vec<u8> = img
         .pixels
         .chunks_exact(BYTES_PER_PIXEL)
-        .map(|chunk| i64::from(background_value(to_pixel(chunk))))
+        .map(|chunk| background_value(to_pixel(chunk)))
         .collect();
-    let rows = pass_rows(&values, width, reach);
-    let boxes = pass_columns(&rows, width, reach);
+    let boxes = box_sums(&values, width, reach);
     means_of(&boxes, width, reach)
 }
 
-/// The row pass: every row's running window sums.
-fn pass_rows(values: &[i64], width: usize, reach: usize) -> Vec<i64> {
-    let mut rows = Vec::with_capacity(values.len());
-    for row in values.chunks_exact(width) {
-        rows.extend(window_sums(row, reach));
-    }
-    rows
-}
-
-/// The column pass: the row sums taken down every column window.
-fn pass_columns(rows: &[i64], width: usize, reach: usize) -> Vec<i64> {
-    let height = rows.len().checked_div(width).unwrap_or(0_usize);
-    let mut boxes = vec![0_i64; rows.len()];
-    for x in 0..width {
-        let column = column_of(rows, width, height, x);
-        let sums = window_sums(&column, reach);
-        write_column(&mut boxes, width, x, &sums);
-    }
-    boxes
-}
-
 /// Turns box sums into means over the clipped window areas.
-fn means_of(boxes: &[i64], width: usize, reach: usize) -> Vec<i64> {
+fn means_of(boxes: &[u64], width: usize, reach: usize) -> Vec<i64> {
     let height = boxes.len().checked_div(width).unwrap_or(0_usize);
     let mut means = Vec::with_capacity(boxes.len());
     for (y, row) in boxes.chunks_exact(width).enumerate() {
-        let hspan = i64::try_from(window_span(y, reach, height)).unwrap_or(1_i64);
+        let vertical = span_at(y, reach, height);
         for (x, &total) in row.iter().enumerate() {
-            let vspan = i64::try_from(window_span(x, reach, width)).unwrap_or(1_i64);
-            means.push(
-                total
-                    .checked_div(hspan.saturating_mul(vspan))
-                    .unwrap_or(0_i64),
-            );
+            let area = vertical.saturating_mul(span_at(x, reach, width));
+            let mean = total.checked_div(area).unwrap_or(0_u64);
+            means.push(i64::try_from(mean).unwrap_or(i64::MAX));
         }
     }
     means
 }
 
-/// The values of column `x`, top to bottom.
-fn column_of(rows: &[i64], width: usize, height: usize, x: usize) -> Vec<i64> {
-    (0..height)
-        .map(|y| {
-            rows.get(y.saturating_mul(width).saturating_add(x))
-                .copied()
-                .unwrap_or(0_i64)
-        })
-        .collect()
-}
-
-/// Writes one column of values back into the row-major grid, ignoring
-/// out-of-bounds rows.
-fn write_column(boxes: &mut [i64], width: usize, x: usize, column: &[i64]) {
-    for (y, &value) in column.iter().enumerate() {
-        if let Some(slot) = boxes.get_mut(y.saturating_mul(width).saturating_add(x)) {
-            *slot = value;
-        }
-    }
-}
-
-/// For every position of `line`, the sum of the window `[i - r, i + r]`
-/// clipped to the line, carried by a running `i64` sum: the shape
-/// [`crate::sketch::morph`]'s `window_counts` keeps, with values in place
-/// of set bits.
-fn window_sums(line: &[i64], radius: usize) -> Vec<i64> {
-    let len = line.len();
-    let mut sums = Vec::with_capacity(len);
-    if len == 0 {
-        return sums;
-    }
-    let reach = radius.min(len.saturating_sub(1));
-    let mut running: i64 = line.iter().take(reach.saturating_add(1)).sum();
-    for i in 0..len {
-        sums.push(running);
-        if let Some(next) = line.get(i.saturating_add(reach).saturating_add(1)) {
-            running = running.saturating_add(*next);
-        }
-        let leaving = if i >= reach {
-            line.get(i.saturating_sub(reach)).copied()
-        } else {
-            None
-        };
-        if let Some(old) = leaving {
-            running = running.saturating_sub(old);
-        }
-    }
-    sums
-}
-
-/// The number of in-line window positions at `i`, i.e. the count that
-/// divides the running sum there.
-fn window_span(i: usize, radius: usize, len: usize) -> usize {
-    let left = i.saturating_sub(radius);
-    let right = i.saturating_add(radius).min(len.saturating_sub(1));
-    right.saturating_sub(left).saturating_add(1)
+/// The clipped window's sample count along one axis, widened to the divisor
+/// [`means_of`] divides a box sum by.
+fn span_at(position: usize, reach: usize, len: usize) -> u64 {
+    u64::try_from(window_span(position, reach, len)).unwrap_or(1_u64)
 }
 
 /// Paints the classification over `img`: opaque black where `means` makes
@@ -285,12 +210,11 @@ fn extremes(means: &[i64]) -> (i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AdaptiveThresholdSpec, adaptive_threshold, check_offset, window_span, window_sums,
-    };
+    use super::{AdaptiveThresholdSpec, adaptive_threshold, background_means, check_offset};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::ops::threshold::{luminance_histogram, otsu_level};
+    use crate::gfx::to_pixel;
     use serde_json::Value;
 
     /// Builds the spec of an adaptive run at `radius` and `offset`.
@@ -299,6 +223,113 @@ mod tests {
             radius,
             offset,
             invert,
+        }
+    }
+
+    /// The alphas [`speckle`] cycles through, one per pixel.
+    const ALPHAS: [u8; 6] = [255_u8, 128, 0, 64, 255, 192];
+
+    /// One speckle channel: `(n * step + offset)` wrapped into a byte.
+    fn channel(step: u32, offset: u32, n: u32) -> u8 {
+        let scaled = n
+            .checked_mul(step)
+            .and_then(|value| value.checked_add(offset));
+        let wrapped = scaled
+            .and_then(|value| value.checked_rem(256_u32))
+            .unwrap_or(0_u32);
+        u8::try_from(wrapped).unwrap_or(0_u8)
+    }
+
+    /// The cycling alpha of speckle pixel `n`.
+    fn speckle_alpha(n: u32) -> u8 {
+        let slot = n
+            .checked_rem(6_u32)
+            .and_then(|rest| usize::try_from(rest).ok());
+        slot.and_then(|index| ALPHAS.get(index).copied())
+            .unwrap_or(255_u8)
+    }
+
+    /// The four bytes of speckle pixel `n`, the row-major index.
+    fn speckle_pixel(n: u32) -> [u8; 4] {
+        [
+            channel(37, 11, n),
+            channel(91, 5, n),
+            channel(53, 200, n),
+            speckle_alpha(n),
+        ]
+    }
+
+    /// A `width` x `height` picture with every channel and every alpha
+    /// moving, so a local mean depends on the window's exact shape.
+    fn speckle(width: u32, height: u32) -> RgbaImage {
+        let count = width.checked_mul(height).unwrap_or(0_u32);
+        let pixels: Vec<u8> = (0..count).flat_map(speckle_pixel).collect();
+        RgbaImage::new(width, height, pixels).expect("the speckle fixture is valid")
+    }
+
+    /// An image's pixels as arrays, for the golden comparisons.
+    fn picture(img: &RgbaImage) -> Vec<[u8; 4]> {
+        img.pixels.chunks_exact(4_usize).map(to_pixel).collect()
+    }
+
+    /// Opaque black at each of the `ink` row-major positions, opaque white
+    /// everywhere else: the picture the binarizer must paint.
+    fn painted(width: u32, height: u32, ink: &[usize]) -> Vec<[u8; 4]> {
+        let count = usize::try_from(width.checked_mul(height).unwrap_or(0_u32)).unwrap_or(0);
+        (0..count).map(|position| class(ink, position)).collect()
+    }
+
+    /// The one pixel of the expected picture at row-major `position`.
+    fn class(ink: &[usize], position: usize) -> [u8; 4] {
+        let shade = if ink.contains(&position) {
+            0_u8
+        } else {
+            255_u8
+        };
+        [shade, shade, shade, 255_u8]
+    }
+
+    /// The `7 x 5` speckle's local background means at radius `1`: the
+    /// box-sum golden every window mean must keep.
+    const MEANS_ONE: [i64; 35] = [
+        117_i64, 163, 211, 205, 172, 150, 146, 163, 180, 190, 172, 157, 164, 172, 210, 191, 163,
+        148, 159, 197, 208, 196, 171, 124, 134, 172, 213, 221, 166, 150, 111, 149, 195, 224, 219,
+    ];
+
+    /// The same picture's local background means at radius `3`.
+    const MEANS_THREE: [i64; 35] = [
+        169_i64, 168, 172, 175, 178, 176, 175, 158, 163, 170, 171, 173, 174, 174, 158, 163, 170,
+        171, 173, 174, 174, 158, 163, 170, 171, 173, 174, 174, 158, 166, 172, 176, 174, 171, 175,
+    ];
+
+    /// The row-major positions the `7 x 5` speckle inks at radius `1`.
+    const INK_ONE: [usize; 15] = [0_usize, 1, 4, 6, 7, 10, 12, 16, 17, 18, 22, 23, 29, 31, 34];
+
+    /// The same picture's ink at radius `3`.
+    const INK_THREE: [usize; 15] = [0_usize, 1, 4, 6, 7, 10, 12, 16, 17, 18, 23, 24, 29, 31, 34];
+
+    #[test]
+    fn the_background_window_holds_its_golden_means_and_ink() {
+        for (radius, means, ink) in [
+            (1_u32, MEANS_ONE.as_slice(), INK_ONE.as_slice()),
+            (3_u32, MEANS_THREE.as_slice(), INK_THREE.as_slice()),
+        ] {
+            let (out, step) = adaptive(speckle(7, 5), radius, 15, false);
+            assert_eq!(
+                background_means(&speckle(7, 5), radius),
+                means.to_vec(),
+                "the clipped window means at radius {radius}"
+            );
+            assert_eq!(
+                picture(&out),
+                painted(7, 5, ink),
+                "the ink pattern at radius {radius}"
+            );
+            let counted = i32::try_from(ink.len()).unwrap_or(0_i32);
+            assert_eq!(
+                step["ink_pixels"], counted,
+                "the reported count at radius {radius}"
+            );
         }
     }
 
@@ -476,40 +507,6 @@ mod tests {
         assert_eq!(step["background_max"], 230_i32, "every window is the whole");
         assert!(is_black(&out, 1, 1), "the core is ink");
         assert!(is_white(&out, 0, 0), "the paper is paper");
-    }
-
-    /// A freshly summed window `[i - r, i + r]`, clipped to the line: the
-    /// definition [`window_sums`]'s running sum must reproduce.
-    fn fresh_window_sum(line: &[i64], i: usize, radius: usize) -> i64 {
-        line.iter()
-            .enumerate()
-            .filter(|&(j, _)| j.abs_diff(i) <= radius)
-            .map(|(_, &value)| value)
-            .sum()
-    }
-
-    #[test]
-    fn window_sums_match_a_fresh_window_everywhere() {
-        let line = [5_i64, 250, 30, 100, 7];
-        for radius in 0_usize..5 {
-            let expected: Vec<i64> = (0..line.len())
-                .map(|i| fresh_window_sum(&line, i, radius))
-                .collect();
-            assert_eq!(
-                window_sums(&line, radius),
-                expected,
-                "radius {radius} matches a fresh clipped window at every position"
-            );
-        }
-        assert_eq!(window_sums(&[], 2), Vec::<i64>::new(), "an empty line");
-    }
-
-    #[test]
-    fn window_spans_clamp_at_both_borders() {
-        assert_eq!(window_span(0, 1, 5), 2, "clipped at the left edge");
-        assert_eq!(window_span(2, 1, 5), 3, "full window");
-        assert_eq!(window_span(4, 1, 5), 2, "clipped at the right edge");
-        assert_eq!(window_span(1, 9, 3), 3, "a huge radius covers the line");
     }
 
     #[test]

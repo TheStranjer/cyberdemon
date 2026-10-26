@@ -2,9 +2,11 @@
 //! [`erode`] and [`close`].
 //!
 //! Every operation uses the `(2r + 1) x (2r + 1)` square and runs in
-//! `O(width * height)` regardless of the radius: a separable two-pass
-//! scan keeps a running count of set bits in each row's window, then in
-//! each column's window of the row result.
+//! `O(width * height)` regardless of the radius through the shared
+//! [`crate::gfx::filter::box_filter`] pass: a running count of the set bits
+//! in each row's window, then in each column's window of the row results,
+//! with [`crate::gfx::filter::window_span`] answering how many in-image
+//! pixels each clipped window covers.
 //!
 //! Image borders follow the morphology convention the sketch pipeline
 //! needs: outside the image counts as paper for [`dilate`] (so dilation
@@ -13,20 +15,21 @@
 //! ink band that already touches the frame intact while bridging breaks
 //! up to `2r` pixels wide inside the image.
 
+use crate::gfx::filter::{Sum, box_filter};
 use crate::sketch::mask::Mask;
 
 /// What one [`morph`] pass requires of a window: some set bit (dilation)
-/// or only set bits (erosion).
-type Rule = fn(count: usize, span: usize) -> bool;
+/// or only set bits (erosion), counted over the clipped window's `span`.
+type Rule = fn(ink: u64, span: usize) -> bool;
 
 /// The union rule: set where the window contains at least one set bit.
-const fn some(count: usize, _span: usize) -> bool {
-    count > 0
+const fn holds_ink(ink: u64, _span: usize) -> bool {
+    ink > 0
 }
 
 /// The intersection rule: set where every in-image window pixel is set.
-const fn every(count: usize, span: usize) -> bool {
-    count == span
+fn holds_only_ink(ink: u64, span: usize) -> bool {
+    u64::try_from(span).is_ok_and(|total| ink == total)
 }
 
 /// Grows the ink by radius `r`: a pixel is set when any pixel within
@@ -35,7 +38,7 @@ const fn every(count: usize, span: usize) -> bool {
 #[must_use]
 #[inline]
 pub fn dilate(mask: &Mask, r: u32) -> Mask {
-    morph(mask, r, some)
+    morph(mask, r, holds_ink)
 }
 
 /// Shrinks the ink by radius `r`: a pixel is set when every pixel within
@@ -44,7 +47,7 @@ pub fn dilate(mask: &Mask, r: u32) -> Mask {
 #[must_use]
 #[inline]
 pub fn erode(mask: &Mask, r: u32) -> Mask {
-    morph(mask, r, every)
+    morph(mask, r, holds_only_ink)
 }
 
 /// [`erode`] after [`dilate`] with the same radius: bridges breaks in ink
@@ -55,116 +58,27 @@ pub fn close(mask: &Mask, r: u32) -> Mask {
     erode(&dilate(mask, r), r)
 }
 
-/// Runs the separable row-then-column scan for one rule. A mask with no
-/// pixels passes through unchanged.
+/// Runs the shared separable row-then-column window for one rule, folding
+/// every window into the bit the rule asks for. A mask with no pixels
+/// passes through unchanged.
 fn morph(mask: &Mask, r: u32, rule: Rule) -> Mask {
     let radius = usize::try_from(r).unwrap_or(usize::MAX);
     let width = match usize::try_from(mask.width) {
         Ok(width) if width > 0 && !mask.bits.is_empty() => width,
         _ => return mask.clone(),
     };
-    let rows_done = scan_rows(mask, width, radius, rule);
-    scan_columns(&rows_done, width, radius, rule)
-}
-
-/// Applies the row pass: window counts along each row, rule per pixel.
-fn scan_rows(mask: &Mask, width: usize, radius: usize, rule: Rule) -> Mask {
-    let mut bits = Vec::with_capacity(mask.bits.len());
-    for row in mask.bits.chunks_exact(width) {
-        let counts = window_counts(row, radius);
-        for (position, &count) in counts.iter().enumerate() {
-            bits.push(rule(count, window_span(position, radius, row.len())));
-        }
-    }
     Mask {
         width: mask.width,
         height: mask.height,
-        bits,
+        bits: box_filter(&mask.bits, width, radius, |window: &Sum, span| {
+            rule(window.0, span)
+        }),
     }
-}
-
-/// Applies the column pass: window counts down each column, rule per
-/// pixel, writing into the same row-major layout.
-fn scan_columns(mask: &Mask, width: usize, radius: usize, rule: Rule) -> Mask {
-    let height = match mask.bits.len().checked_div(width) {
-        Some(height) if height > 0 => height,
-        _ => return mask.clone(),
-    };
-    let mut bits = vec![false; mask.bits.len()];
-    for x in 0..width {
-        let counts = window_counts(&column_of(mask, width, height, x), radius);
-        for (y, &count) in counts.iter().enumerate() {
-            let kept = rule(count, window_span(y, radius, height));
-            write_kept(&mut bits, width, (x, y), kept);
-        }
-    }
-    Mask {
-        width: mask.width,
-        height: u32::try_from(height).unwrap_or(mask.height),
-        bits,
-    }
-}
-
-/// The pixels of column `x`, top to bottom.
-fn column_of(mask: &Mask, width: usize, height: usize, x: usize) -> Vec<bool> {
-    (0..height)
-        .map(|y| {
-            mask.bits
-                .get(y.saturating_mul(width).saturating_add(x))
-                .copied()
-                .unwrap_or_default()
-        })
-        .collect()
-}
-
-/// Writes one kept bit at row-major `(x, y)`, ignoring out-of-bounds.
-fn write_kept(bits: &mut [bool], width: usize, (x, y): (usize, usize), kept: bool) {
-    if let Some(slot) = bits.get_mut(y.saturating_mul(width).saturating_add(x)) {
-        *slot = kept;
-    }
-}
-
-/// For every position of `line`, the number of set bits in the window
-/// `[i - r, i + r]` clipped to the line, via a running count.
-fn window_counts(line: &[bool], radius: usize) -> Vec<usize> {
-    let len = line.len();
-    let mut counts = Vec::with_capacity(len);
-    if len == 0 {
-        return counts;
-    }
-    let r = radius.min(len.saturating_sub(1));
-    let mut running = line
-        .iter()
-        .take(r.saturating_add(1))
-        .filter(|bit| **bit)
-        .count();
-    for i in 0..len {
-        counts.push(running);
-        if line
-            .get(i.saturating_add(r).saturating_add(1))
-            .copied()
-            .unwrap_or_default()
-        {
-            running = running.saturating_add(1);
-        }
-        if i >= r && line.get(i.saturating_sub(r)).copied().unwrap_or_default() {
-            running = running.saturating_sub(1);
-        }
-    }
-    counts
-}
-
-/// The number of in-line window positions at `i`, i.e. the count a fully
-/// set window reaches there.
-fn window_span(i: usize, radius: usize, len: usize) -> usize {
-    let left = i.saturating_sub(radius);
-    let right = i.saturating_add(radius).min(len.saturating_sub(1));
-    right.saturating_sub(left).saturating_add(1)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{close, dilate, erode, window_counts, window_span};
+    use super::{close, dilate, erode};
     use crate::sketch::mask::Mask;
 
     /// A `width` x 1 mask with the given column bits.
@@ -197,6 +111,160 @@ mod tests {
     /// The number of set bits in a mask.
     fn ink_count(mask: &Mask) -> usize {
         mask.bits.iter().filter(|&&bit| bit).count()
+    }
+
+    /// A mask from rows of `0`/`1` text.
+    fn from_rows(rows: &[&str]) -> Mask {
+        let width = u32::try_from(rows.first().map_or(0, |row| row.len())).expect("fixture fits");
+        let height = u32::try_from(rows.len()).expect("fixture fits");
+        let bits: Vec<bool> = rows
+            .iter()
+            .flat_map(|row| row.chars().map(|letter| letter == '1'))
+            .collect();
+        Mask {
+            width,
+            height,
+            bits,
+        }
+    }
+
+    /// The `9 x 7` morphology fixture.
+    const SEED: [&str; 7] = [
+        "000000000",
+        "011100000",
+        "011101110",
+        "011111110",
+        "111101111",
+        "011111110",
+        "000011000",
+    ];
+    /// [`SEED`] dilated at radius `1`.
+    const SEED_DILATE_ONE: [&str; 7] = [
+        "111110000",
+        "111111111",
+        "111111111",
+        "111111111",
+        "111111111",
+        "111111111",
+        "111111111",
+    ];
+    /// [`SEED`] eroded at radius `1`.
+    const SEED_ERODE_ONE: [&str; 7] = [
+        "000000000",
+        "000000000",
+        "001000000",
+        "001000100",
+        "001000100",
+        "000000000",
+        "000000000",
+    ];
+    /// [`SEED`] dilated at radius `2`.
+    const SEED_DILATE_TWO: [&str; 7] = ["111111111"; 7];
+    /// [`SEED`] eroded at radius `2`.
+    const SEED_ERODE_TWO: [&str; 7] = ["000000000"; 7];
+
+    /// The `8 x 8` ring fixture: a filled plate with a one-pixel notch.
+    const RING: [&str; 8] = [
+        "00000000", "00111100", "01111110", "01111110", "01110110", "01111110", "00111100",
+        "00000000",
+    ];
+    /// [`RING`] dilated at radius `1`.
+    const RING_DILATE_ONE: [&str; 8] = [
+        "01111110", "11111111", "11111111", "11111111", "11111111", "11111111", "11111111",
+        "01111110",
+    ];
+    /// [`RING`] eroded at radius `1`.
+    const RING_ERODE_ONE: [&str; 8] = [
+        "00000000", "00000000", "00011000", "00100000", "00100000", "00000000", "00000000",
+        "00000000",
+    ];
+    /// [`RING`] closed at radius `1`: the notch is bridged, the plate grows.
+    const RING_CLOSE_ONE: [&str; 8] = [
+        "00111100", "00111100", "11111111", "11111111", "11111111", "11111111", "00111100",
+        "00111100",
+    ];
+
+    /// The `11 x 7` plate fixture, ink everywhere but the frame rows.
+    const PLATE: [&str; 7] = [
+        "00000000000",
+        "01111111110",
+        "01111111110",
+        "01111111110",
+        "01111111110",
+        "01111111110",
+        "00000000000",
+    ];
+    /// [`PLATE`] eroded at radius `1`.
+    const PLATE_ERODE_ONE: [&str; 7] = [
+        "00000000000",
+        "00000000000",
+        "00111111100",
+        "00111111100",
+        "00111111100",
+        "00000000000",
+        "00000000000",
+    ];
+    /// [`PLATE`] eroded at radius `2`.
+    const PLATE_ERODE_TWO: [&str; 7] = [
+        "00000000000",
+        "00000000000",
+        "00000000000",
+        "00011111000",
+        "00000000000",
+        "00000000000",
+        "00000000000",
+    ];
+
+    #[test]
+    fn the_square_element_holds_its_golden_masks() {
+        let seed = from_rows(&SEED);
+        assert_eq!(
+            dilate(&seed, 1).bits,
+            from_rows(&SEED_DILATE_ONE).bits,
+            "the seed dilated at radius 1"
+        );
+        assert_eq!(
+            erode(&seed, 1).bits,
+            from_rows(&SEED_ERODE_ONE).bits,
+            "the seed eroded at radius 1"
+        );
+        assert_eq!(
+            dilate(&seed, 2).bits,
+            from_rows(&SEED_DILATE_TWO).bits,
+            "the seed dilated at radius 2"
+        );
+        assert_eq!(
+            erode(&seed, 2).bits,
+            from_rows(&SEED_ERODE_TWO).bits,
+            "the seed eroded at radius 2"
+        );
+        let ring = from_rows(&RING);
+        assert_eq!(
+            dilate(&ring, 1).bits,
+            from_rows(&RING_DILATE_ONE).bits,
+            "the ring dilated at radius 1"
+        );
+        assert_eq!(
+            erode(&ring, 1).bits,
+            from_rows(&RING_ERODE_ONE).bits,
+            "the ring eroded at radius 1"
+        );
+        assert_eq!(
+            close(&ring, 1).bits,
+            from_rows(&RING_CLOSE_ONE).bits,
+            "the ring closed at radius 1"
+        );
+        let plate = from_rows(&PLATE);
+        assert_eq!(
+            erode(&plate, 1).bits,
+            from_rows(&PLATE_ERODE_ONE).bits,
+            "the plate eroded at radius 1"
+        );
+        assert_eq!(
+            erode(&plate, 2).bits,
+            from_rows(&PLATE_ERODE_TWO).bits,
+            "the plate eroded at radius 2"
+        );
     }
 
     #[test]
@@ -287,29 +355,5 @@ mod tests {
             empty.bits,
             "empty mask passes through"
         );
-    }
-
-    #[test]
-    fn running_window_counts_match_the_definition() {
-        let line = [true, false, true, true, false];
-        assert_eq!(
-            window_counts(&line, 1),
-            vec![1, 2, 2, 2, 1],
-            "window sizes follow the clipped square"
-        );
-        assert_eq!(
-            window_counts(&line, 0),
-            vec![1, 0, 1, 1, 0],
-            "radius 0 is the line"
-        );
-        assert_eq!(window_counts(&[], 2), Vec::<usize>::new(), "empty line");
-        assert_eq!(
-            window_counts(&line, 10),
-            vec![3; 5],
-            "a huge radius covers the whole line everywhere"
-        );
-        assert_eq!(window_span(0, 1, 5), 2, "clipped at the left edge");
-        assert_eq!(window_span(2, 1, 5), 3, "full window");
-        assert_eq!(window_span(4, 1, 5), 2, "clipped at the right edge");
     }
 }

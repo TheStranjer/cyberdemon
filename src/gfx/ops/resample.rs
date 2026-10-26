@@ -1,22 +1,19 @@
 //! Size changes: `resample` with nearest, bilinear and area filters, all in
 //! integer arithmetic.
 //!
-//! Bilinear sampling uses `16.16` fixed-point source positions of
-//! destination pixel centres; area sampling weights each source pixel by
-//! its integer footprint overlap. Both blend colours weighted by alpha, so
-//! transparent pixels never darken an edge.
+//! Bilinear sampling uses the `16.16` fixed-point source positions of
+//! destination pixel centres and the shared two-tap [`bilinear_kernel`];
+//! area sampling weights each source pixel by its integer footprint overlap
+//! into the same [`Kernel`] shape. Both then blend through [`blend`], which
+//! weights colours by alpha so transparent pixels never darken an edge.
 
-use crate::fixed::FRACBITS;
+use crate::gfx::filter::{Kernel, Tap, WEIGHT_ONE, bilinear_kernel, blend, last_centre};
 use crate::gfx::image::{RgbaImage, resize_nearest};
-use crate::gfx::ops::{Filter, div_ceil, pixel_at, rounded_div};
-use crate::gfx::{clamp_dimension, pixel_index, rgba_byte_count};
+use crate::gfx::ops::{Filter, div_ceil};
+use crate::gfx::{clamp_dimension, rgba_byte_count};
 
 /// Half of [`WEIGHT_ONE`]: the centre offset of a pixel (`32768`).
 const FIXED_HALF: i64 = 0x8000;
-/// The fractional bits of a sampling position.
-const FRAC_MASK: i64 = 0xFFFF;
-/// One whole pixel in `16.16` sampling positions and weight units (`65536`).
-const WEIGHT_ONE: u64 = 0x1_0000;
 
 /// The kernel used along one axis of a tap-based resample.
 #[derive(Clone, Copy)]
@@ -34,15 +31,6 @@ struct Axes {
     x: AxisMode,
     /// Vertical kernel.
     y: AxisMode,
-}
-
-/// The source pixels contributing to one destination coordinate on one
-/// axis.
-struct Taps {
-    /// `(source index, integer weight)` pairs, in increasing index order.
-    pairs: Vec<(u32, u64)>,
-    /// The sum of the weights; divides the blended totals.
-    total: u64,
 }
 
 /// Resamples `img` to `width` x `height` with `filter`.
@@ -87,18 +75,18 @@ const fn axis_mode(src_len: u32, dst_len: u32) -> AxisMode {
     }
 }
 
-/// Resamples through precomputed per-axis taps.
+/// Resamples through precomputed per-axis kernels.
 fn resample_taps(img: &RgbaImage, width: u32, height: u32, axes: Axes) -> RgbaImage {
-    let columns: Vec<Taps> = (0..width)
+    let columns: Vec<Kernel> = (0..width)
         .map(|dst| axis_line(img.width, width, dst, axes.x))
         .collect();
-    let rows: Vec<Taps> = (0..height)
+    let rows: Vec<Kernel> = (0..height)
         .map(|dst| axis_line(img.height, height, dst, axes.y))
         .collect();
     let mut pixels = Vec::with_capacity(rgba_byte_count(width, height).unwrap_or(0));
     for row in &rows {
         for column in &columns {
-            pixels.extend_from_slice(&blend_pixel(img, row, column));
+            pixels.extend_from_slice(&blend(img, row, column));
         }
     }
     RgbaImage {
@@ -108,24 +96,11 @@ fn resample_taps(img: &RgbaImage, width: u32, height: u32, axes: Axes) -> RgbaIm
     }
 }
 
-/// The taps of destination coordinate `dst` along one axis.
-fn axis_line(src_len: u32, dst_len: u32, dst: u32, mode: AxisMode) -> Taps {
+/// The kernel of destination coordinate `dst` along one axis.
+fn axis_line(src_len: u32, dst_len: u32, dst: u32, mode: AxisMode) -> Kernel {
     match mode {
-        AxisMode::Bilinear => bilinear_taps(src_len, dst_len, dst),
+        AxisMode::Bilinear => bilinear_kernel(bilinear_position(src_len, dst_len, dst), src_len),
         AxisMode::Area => area_taps(src_len, dst_len, dst),
-    }
-}
-
-/// The two bilinear taps of destination coordinate `dst`.
-fn bilinear_taps(src_len: u32, dst_len: u32, dst: u32) -> Taps {
-    let position = bilinear_position(src_len, dst_len, dst);
-    let whole = position.checked_shr(FRACBITS).unwrap_or(0_i64);
-    let low = u32::try_from(whole).unwrap_or(0_u32);
-    let high = low.saturating_add(1).min(src_len.saturating_sub(1));
-    let fraction = u64::try_from(position & FRAC_MASK).unwrap_or(0_u64);
-    Taps {
-        pairs: vec![(low, WEIGHT_ONE.saturating_sub(fraction)), (high, fraction)],
-        total: WEIGHT_ONE,
     }
 }
 
@@ -143,92 +118,44 @@ fn bilinear_position(src_len: u32, dst_len: u32, dst: u32) -> i64 {
         .unwrap_or(i64::MAX)
         .checked_sub(FIXED_HALF)
         .unwrap_or(0_i64);
-    let last_centre = u64::from(src_len)
-        .saturating_sub(1)
-        .saturating_mul(WEIGHT_ONE);
-    shifted.clamp(0_i64, i64::try_from(last_centre).unwrap_or(i64::MAX))
+    let last = last_centre(src_len);
+    shifted.clamp(0_i64, last)
 }
 
 /// The footprint taps of destination coordinate `dst`: every source pixel
 /// the box covers, weighted by its overlap. Weights are in `1 / dst_len`
 /// source-pixel units, so spans cross-multiply and never need fractions.
-fn area_taps(src_len: u32, dst_len: u32, dst: u32) -> Taps {
+fn area_taps(src_len: u32, dst_len: u32, dst: u32) -> Kernel {
     let source = u64::from(src_len);
     let target = u64::from(dst_len);
     let span_start = u64::from(dst).saturating_mul(source);
     let span_end = span_start.saturating_add(source);
     let first = span_start.checked_div(target).unwrap_or(0_u64);
     let last = div_ceil(span_end, target).min(source);
-    let pairs: Vec<(u32, u64)> = (first..last)
+    let taps: Vec<Tap> = (first..last)
         .filter_map(|index| overlap_weight(index, span_start, span_end, target))
         .collect();
-    let total = pairs.iter().map(|&(_, weight)| weight).sum();
-    Taps { pairs, total }
+    let total = taps.iter().map(|tap| tap.weight).sum();
+    Kernel { taps, total }
 }
 
-/// The contribution of source pixel `index` (in `1 / dst_len` units), or
-/// `None` when the overlap is empty or the index does not fit.
-fn overlap_weight(index: u64, span_start: u64, span_end: u64, target: u64) -> Option<(u32, u64)> {
+/// The [`Tap`] of source pixel `index` (in `1 / dst_len` units), or `None`
+/// when the overlap is empty or the index does not fit.
+fn overlap_weight(index: u64, span_start: u64, span_end: u64, target: u64) -> Option<Tap> {
     let pixel_start = index.saturating_mul(target);
     let start = span_start.max(pixel_start);
     let end = span_end.min(pixel_start.saturating_add(target));
     let weight = end.checked_sub(start)?;
-    let column = u32::try_from(index).ok()?;
-    (weight > 0).then_some((column, weight))
-}
-
-/// Blends the source pixels selected by `rows` and `columns` into one
-/// destination pixel.
-fn blend_pixel(img: &RgbaImage, rows: &Taps, columns: &Taps) -> [u8; 4] {
-    let mut channels = [0_u64; 3];
-    let mut premultiplied = 0_u64;
-    for &(row, row_weight) in &rows.pairs {
-        for &(column, column_weight) in &columns.pairs {
-            let position = pixel_index(img.width, column, row).unwrap_or(usize::MAX);
-            let pixel = pixel_at(&img.pixels, position).unwrap_or([0_u8; 4]);
-            let weight = row_weight.saturating_mul(column_weight);
-            accumulate(&mut channels, &mut premultiplied, pixel, weight);
-        }
-    }
-    finish_pixel(
-        channels,
-        premultiplied,
-        rows.total.saturating_mul(columns.total),
-    )
-}
-
-/// Adds one source pixel: colours weighted by alpha and footprint weight,
-/// alpha weighted by the footprint weight alone.
-pub(crate) fn accumulate(
-    channels: &mut [u64; 3],
-    premultiplied: &mut u64,
-    pixel: [u8; 4],
-    weight: u64,
-) {
-    let [red, green, blue, alpha] = pixel;
-    let scaled = weight.saturating_mul(u64::from(alpha));
-    for (channel, value) in channels.iter_mut().zip([red, green, blue]) {
-        *channel = channel.saturating_add(u64::from(value).saturating_mul(scaled));
-    }
-    *premultiplied = premultiplied.saturating_add(scaled);
-}
-
-/// Turns the accumulators into a pixel: alpha over the whole footprint,
-/// colour over the covered alpha; a fully transparent result gets colour 0.
-pub(crate) fn finish_pixel(channels: [u64; 3], premultiplied: u64, footprint: u64) -> [u8; 4] {
-    let alpha = u8::try_from(rounded_div(premultiplied, footprint)).unwrap_or(255_u8);
-    let color: [u8; 3] = if premultiplied == 0 {
-        [0_u8; 3]
-    } else {
-        channels.map(|sum| u8::try_from(rounded_div(sum, premultiplied)).unwrap_or(255_u8))
-    };
-    let [red, green, blue] = color;
-    [red, green, blue, alpha]
+    let source = u32::try_from(index).ok()?;
+    (weight > 0).then_some(Tap {
+        index: source,
+        weight,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AxisMode, axis_line, axis_mode, bilinear_position, resample};
+    use super::{AxisMode, Kernel, axis_line, axis_mode, bilinear_position, resample};
     use crate::gfx::image::RgbaImage;
     use crate::gfx::ops::Filter;
     use crate::gfx::to_pixel;
@@ -238,9 +165,112 @@ mod tests {
         RgbaImage::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]).expect("2x1 is valid")
     }
 
+    /// One kernel's taps as `(source index, weight)` pairs, for the
+    /// golden comparisons.
+    fn tap_row(kernel: &Kernel) -> Vec<(u32, u64)> {
+        kernel
+            .taps
+            .iter()
+            .map(|tap| (tap.index, tap.weight))
+            .collect()
+    }
+
     /// A 2x1 image: an opaque red pixel next to a fully transparent one.
     fn red_transparent() -> RgbaImage {
         RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 0, 0, 0]).expect("2x1 is valid")
+    }
+
+    /// The alphas [`speckle`] cycles through, one per pixel.
+    const ALPHAS: [u8; 6] = [255_u8, 128, 0, 64, 255, 192];
+
+    /// One speckle channel: `(n * step + offset)` wrapped into a byte.
+    fn channel(step: u32, offset: u32, n: u32) -> u8 {
+        let scaled = n
+            .checked_mul(step)
+            .and_then(|value| value.checked_add(offset));
+        let wrapped = scaled
+            .and_then(|value| value.checked_rem(256_u32))
+            .unwrap_or(0_u32);
+        u8::try_from(wrapped).unwrap_or(0_u8)
+    }
+
+    /// The cycling alpha of speckle pixel `n`.
+    fn speckle_alpha(n: u32) -> u8 {
+        let slot = n
+            .checked_rem(6_u32)
+            .and_then(|rest| usize::try_from(rest).ok());
+        slot.and_then(|index| ALPHAS.get(index).copied())
+            .unwrap_or(255_u8)
+    }
+
+    /// The four bytes of speckle pixel `n`, the row-major index.
+    fn speckle_pixel(n: u32) -> [u8; 4] {
+        [
+            channel(37, 11, n),
+            channel(91, 5, n),
+            channel(53, 200, n),
+            speckle_alpha(n),
+        ]
+    }
+
+    /// A `width` x `height` picture with every channel and every alpha
+    /// moving, so a blend depends on the exact taps and weights.
+    fn speckle(width: u32, height: u32) -> RgbaImage {
+        let count = width.checked_mul(height).unwrap_or(0_u32);
+        let pixels: Vec<u8> = (0..count).flat_map(speckle_pixel).collect();
+        RgbaImage::new(width, height, pixels).expect("the speckle fixture is valid")
+    }
+
+    /// An image's pixels as arrays, for the golden comparisons.
+    fn picture(img: &RgbaImage) -> Vec<[u8; 4]> {
+        img.pixels.chunks_exact(4_usize).map(to_pixel).collect()
+    }
+
+    /// The `3 x 2` speckle bilinearly upscaled to `5 x 4`, pixel by pixel.
+    const BILINEAR_5X4: [[u8; 4]; 20] = [
+        [11, 5, 200, 255],
+        [20, 28, 213, 204],
+        [48, 96, 253, 128],
+        [48, 96, 253, 51],
+        [0, 0, 0, 0],
+        [20, 6, 193, 207],
+        [44, 39, 200, 188],
+        [92, 103, 214, 160],
+        [125, 134, 213, 93],
+        [196, 204, 209, 48],
+        [59, 12, 158, 112],
+        [107, 68, 165, 156],
+        [143, 111, 170, 223],
+        [169, 157, 189, 176],
+        [196, 204, 209, 144],
+        [122, 22, 103, 64],
+        [149, 88, 142, 140],
+        [159, 113, 156, 255],
+        [179, 161, 184, 217],
+        [196, 204, 209, 192],
+    ];
+
+    /// The `4 x 3` speckle area-blended to `2 x 5` (shrinking columns,
+    /// growing rows), pixel by pixel.
+    const AREA_2X5: [[u8; 4]; 10] = [
+        [23, 35, 218, 192],
+        [122, 22, 103, 32],
+        [90, 86, 201, 204],
+        [152, 60, 40, 96],
+        [175, 152, 179, 224],
+        [160, 69, 24, 192],
+        [160, 135, 176, 109],
+        [148, 144, 92, 211],
+        [88, 56, 165, 32],
+        [141, 186, 131, 224],
+    ];
+
+    #[test]
+    fn the_tap_blends_hold_their_golden_bytes() {
+        let up = resample(&speckle(3, 2), 5, 4, Filter::Bilinear);
+        assert_eq!(picture(&up), BILINEAR_5X4.to_vec(), "bilinear 5x4");
+        let down = resample(&speckle(4, 3), 2, 5, Filter::Area);
+        assert_eq!(picture(&down), AREA_2X5.to_vec(), "area 2x5");
     }
 
     #[test]
@@ -362,7 +392,7 @@ mod tests {
     #[test]
     fn area_taps_weight_every_covered_source_pixel() {
         let lines: Vec<Vec<(u32, u64)>> = (0..3_u32)
-            .map(|dst| axis_line(7, 3, dst, AxisMode::Area).pairs)
+            .map(|dst| tap_row(&axis_line(7, 3, dst, AxisMode::Area)))
             .collect();
         assert_eq!(
             lines,
@@ -389,7 +419,7 @@ mod tests {
         let edge = axis_line(2, 4, 0, AxisMode::Bilinear);
         assert_eq!(edge.total, 0x0001_0000, "weights are in 16.16 units");
         assert_eq!(
-            edge.pairs.iter().map(|&(_, weight)| weight).sum::<u64>(),
+            edge.taps.iter().map(|tap| tap.weight).sum::<u64>(),
             edge.total,
             "tap weights sum to the total"
         );

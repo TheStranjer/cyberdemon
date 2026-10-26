@@ -1,20 +1,23 @@
 //! Separable integer box blur for [`crate::gfx::ops::ImageOp::Blur`].
 //!
 //! The window is the `(2r + 1) x (2r + 1)` square clipped at the image
-//! borders, applied per row and then per column with running sums: the
-//! same window-count technique [`crate::sketch::morph`] uses for its
-//! square structuring element, so a pass costs `O(width * height)`
-//! regardless of the radius.
+//! borders, run by [`crate::gfx::filter::box_filter`]: every row's windows
+//! are averaged first and every column of those averages second, so a pass
+//! costs `O(width * height)` regardless of the radius.
 //!
 //! Like the bilinear and area blends in [`crate::gfx::ops::resample`], the
 //! blur weights colours by alpha, so transparent pixels never darken an
 //! edge: the average colour of a window is `sum(color * alpha) /
 //! sum(alpha)` (`0` when the window carries no alpha at all) and its alpha
-//! is `sum(alpha)` over the clipped window's pixel count.
+//! is `sum(alpha)` over the clipped window's pixel count. That weighting is
+//! this module's own `Sums`, which the shared pass folds: the fold runs at
+//! the end of each pass, so the vertical pass blurs the horizontal pass's
+//! already-rounded pixels, exactly as the op always did.
 
 use serde_json::{Value, json};
 
 use crate::error::CyberError;
+use crate::gfx::filter::{Window, box_filter};
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::{arg_error, rounded_div};
 use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
@@ -48,14 +51,19 @@ pub(crate) fn blur(
         return Ok((img, report));
     };
     let reach = usize::try_from(radius).unwrap_or(usize::MAX);
-    let rows = blur_rows(&to_pixels(&img), width, reach);
-    let pixels = blur_columns(&rows, width, reach);
+    let blurred = box_filter(&to_pixels(&img), width, reach, average_window);
     let out = RgbaImage {
         width: img.width,
         height: img.height,
-        pixels: pixels.iter().flatten().copied().collect(),
+        pixels: blurred.iter().flatten().copied().collect(),
     };
     Ok((out, report))
+}
+
+/// The fold [`box_filter`] runs: one window's average pixel over the count
+/// of in-line samples its clipped window covers.
+fn average_window(window: &Sums, span: usize) -> [u8; 4] {
+    window.average(span)
 }
 
 /// The image's row-major pixels.
@@ -64,82 +72,6 @@ fn to_pixels(img: &RgbaImage) -> Vec<[u8; 4]> {
         .chunks_exact(BYTES_PER_PIXEL)
         .map(to_pixel)
         .collect()
-}
-
-/// One horizontal pass: every row box-blurred with the window reach.
-fn blur_rows(pixels: &[[u8; 4]], width: usize, reach: usize) -> Vec<[u8; 4]> {
-    let mut out = Vec::with_capacity(pixels.len());
-    for row in pixels.chunks_exact(width) {
-        out.extend(blur_line(row, reach));
-    }
-    out
-}
-
-/// One vertical pass: every column box-blurred with the window reach.
-fn blur_columns(pixels: &[[u8; 4]], width: usize, reach: usize) -> Vec<[u8; 4]> {
-    let height = pixels.len().checked_div(width).unwrap_or(0);
-    let mut out = vec![[0_u8; 4]; pixels.len()];
-    for x in 0..width {
-        let blurred = blur_line(&column_of(pixels, width, height, x), reach);
-        write_column(&mut out, width, x, &blurred);
-    }
-    out
-}
-
-/// Writes one blurred column back into the row-major grid, ignoring
-/// out-of-bounds rows.
-fn write_column(out: &mut [[u8; 4]], width: usize, x: usize, column: &[[u8; 4]]) {
-    for (y, pixel) in column.iter().enumerate() {
-        if let Some(slot) = out.get_mut(y.saturating_mul(width).saturating_add(x)) {
-            *slot = *pixel;
-        }
-    }
-}
-
-/// The pixels of column `x`, top to bottom.
-fn column_of(pixels: &[[u8; 4]], width: usize, height: usize, x: usize) -> Vec<[u8; 4]> {
-    (0..height)
-        .map(|y| {
-            pixels
-                .get(y.saturating_mul(width).saturating_add(x))
-                .copied()
-                .unwrap_or([0_u8; 4])
-        })
-        .collect()
-}
-
-/// Box-averages one line of pixels: the window `[i - r, i + r]`, clipped
-/// to the line and tracked by running premultiplied sums, the same sliding
-/// shape [`crate::sketch::morph`]'s `window_counts` keeps.
-fn blur_line(line: &[[u8; 4]], radius: usize) -> Vec<[u8; 4]> {
-    let len = line.len();
-    if len == 0 {
-        return Vec::new();
-    }
-    let reach = radius.min(len.saturating_sub(1));
-    let mut sums = line
-        .iter()
-        .take(reach.saturating_add(1))
-        .fold(Sums::default(), |sums, &pixel| sums.absorb(pixel));
-    let mut out = Vec::with_capacity(len);
-    for i in 0..len {
-        out.push(sums.average(window_span(i, radius, len)));
-        if let Some(next) = line.get(i.saturating_add(reach).saturating_add(1)) {
-            sums = sums.absorb(*next);
-        }
-        if let Some(old) = i.checked_sub(reach).and_then(|k| line.get(k)) {
-            sums = sums.release(*old);
-        }
-    }
-    out
-}
-
-/// The number of in-line window positions at `i`, i.e. the count that
-/// divides the alpha average there.
-fn window_span(i: usize, radius: usize, len: usize) -> usize {
-    let left = i.saturating_sub(radius);
-    let right = i.saturating_add(radius).min(len.saturating_sub(1));
-    right.saturating_sub(left).saturating_add(1)
 }
 
 /// One window's premultiplied running sums: colours weighted by alpha,
@@ -156,34 +88,35 @@ struct Sums {
     alpha: u64,
 }
 
+impl Window<[u8; 4]> for Sums {
+    #[inline]
+    fn enter(&mut self, sample: [u8; 4]) {
+        self.moved(sample, u64::saturating_add);
+    }
+
+    #[inline]
+    fn exit(&mut self, sample: [u8; 4]) {
+        self.moved(sample, u64::saturating_sub);
+    }
+}
+
 impl Sums {
-    /// Adds one pixel's premultiplied contribution to the window.
-    fn absorb(self, pixel: [u8; 4]) -> Self {
-        self.moved(pixel, u64::saturating_add)
-    }
-
-    /// Takes one pixel's premultiplied contribution out of the window.
-    fn release(self, pixel: [u8; 4]) -> Self {
-        self.moved(pixel, u64::saturating_sub)
-    }
-
-    /// Combines one pixel's contribution into every channel by `step`.
-    fn moved(self, pixel: [u8; 4], step: fn(u64, u64) -> u64) -> Self {
+    /// Combines one pixel's premultiplied contribution into every channel
+    /// by `step`.
+    fn moved(&mut self, pixel: [u8; 4], step: fn(u64, u64) -> u64) {
         let [red, green, blue, alpha] = pixel;
         let weight = u64::from(alpha);
-        Self {
-            red: step(self.red, u64::from(red).saturating_mul(weight)),
-            green: step(self.green, u64::from(green).saturating_mul(weight)),
-            blue: step(self.blue, u64::from(blue).saturating_mul(weight)),
-            alpha: step(self.alpha, weight),
-        }
+        self.red = step(self.red, u64::from(red).saturating_mul(weight));
+        self.green = step(self.green, u64::from(green).saturating_mul(weight));
+        self.blue = step(self.blue, u64::from(blue).saturating_mul(weight));
+        self.alpha = step(self.alpha, weight);
     }
 
     /// The window's average pixel: alpha over the `span` in-image window
     /// positions, colours over the covered alpha; a window without any
     /// alpha gets colour `0` (`rounded_div` answers `0` for a zero
     /// denominator).
-    fn average(self, span: usize) -> [u8; 4] {
+    fn average(&self, span: usize) -> [u8; 4] {
         let divisor = u64::try_from(span).unwrap_or(1_u64).max(1_u64);
         let colors = [self.red, self.green, self.blue]
             .map(|sum| clamp_channel(rounded_div(sum, self.alpha)));
@@ -200,9 +133,11 @@ fn clamp_channel(value: u64) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Sums, blur, blur_line, window_span};
+    use super::{Sums, blur};
     use crate::error::CyberError;
+    use crate::gfx::filter::{Window, window_line, window_span};
     use crate::gfx::image::RgbaImage;
+    use crate::gfx::to_pixel;
 
     /// A `size` x `size` opaque image of one colour.
     fn solid(size: u32, color: [u8; 3]) -> RgbaImage {
@@ -224,6 +159,172 @@ mod tests {
             panic!("expected InvalidArgument");
         };
         text
+    }
+
+    /// One horizontal pass: the shared line window, folded the way the blur
+    /// folds every window it walks.
+    fn blur_line(line: &[[u8; 4]], radius: usize) -> Vec<[u8; 4]> {
+        window_line::<Sums, [u8; 4]>(line, radius)
+            .iter()
+            .enumerate()
+            .map(|(position, window)| {
+                super::average_window(window, window_span(position, radius, line.len()))
+            })
+            .collect()
+    }
+
+    /// The samples whose window position `i` reaches at `radius`.
+    fn in_window(pixels: &[[u8; 4]], i: usize, radius: usize) -> Vec<[u8; 4]> {
+        pixels
+            .iter()
+            .enumerate()
+            .filter_map(|(position, &pixel)| (position.abs_diff(i) <= radius).then_some(pixel))
+            .collect()
+    }
+
+    /// A freshly summed window `[i - r, i + r]`, clipped to the line.
+    fn window_sum(pixels: &[[u8; 4]], i: usize, radius: usize) -> Sums {
+        let mut sums = Sums::default();
+        for pixel in in_window(pixels, i, radius) {
+            Window::enter(&mut sums, pixel);
+        }
+        sums
+    }
+
+    /// Every running-window value must match the fresh sums at `radius`.
+    fn check_running_sums(pixels: &[[u8; 4]], radius: usize) {
+        for (i, got) in blur_line(pixels, radius).iter().enumerate() {
+            let span = window_span(i, radius, pixels.len());
+            assert_eq!(
+                *got,
+                window_sum(pixels, i, radius).average(span),
+                "position {i}, radius {radius}"
+            );
+        }
+    }
+
+    /// The alphas [`speckle`] cycles through, one per pixel.
+    const ALPHAS: [u8; 6] = [255_u8, 128, 0, 64, 255, 192];
+
+    /// One speckle channel: `(n * step + offset)` wrapped into a byte.
+    fn channel(step: u32, offset: u32, n: u32) -> u8 {
+        let scaled = n
+            .checked_mul(step)
+            .and_then(|value| value.checked_add(offset));
+        let wrapped = scaled
+            .and_then(|value| value.checked_rem(256_u32))
+            .unwrap_or(0_u32);
+        u8::try_from(wrapped).unwrap_or(0_u8)
+    }
+
+    /// The cycling alpha of speckle pixel `n`.
+    fn speckle_alpha(n: u32) -> u8 {
+        let slot = n
+            .checked_rem(6_u32)
+            .and_then(|rest| usize::try_from(rest).ok());
+        slot.and_then(|index| ALPHAS.get(index).copied())
+            .unwrap_or(255_u8)
+    }
+
+    /// The four bytes of speckle pixel `n`, the row-major index.
+    fn speckle_pixel(n: u32) -> [u8; 4] {
+        [
+            channel(37, 11, n),
+            channel(91, 5, n),
+            channel(53, 200, n),
+            speckle_alpha(n),
+        ]
+    }
+
+    /// A `width` x `height` picture with every channel and every alpha
+    /// moving, so a box average depends on the window's exact shape.
+    fn speckle(width: u32, height: u32) -> RgbaImage {
+        let count = width.checked_mul(height).unwrap_or(0_u32);
+        let pixels: Vec<u8> = (0..count).flat_map(speckle_pixel).collect();
+        RgbaImage::new(width, height, pixels).expect("the speckle fixture is valid")
+    }
+
+    /// An image's pixels as arrays, for the golden comparisons.
+    fn picture(img: &RgbaImage) -> Vec<[u8; 4]> {
+        img.pixels.chunks_exact(4_usize).map(to_pixel).collect()
+    }
+
+    /// The `6 x 5` speckle blurred at radius `1`, pixel by pixel.
+    const BLUR_ONE: [[u8; 4]; 30] = [
+        [92, 52, 121, 192],
+        [92, 52, 121, 128],
+        [56, 88, 149, 64],
+        [135, 112, 176, 106],
+        [151, 153, 152, 170],
+        [158, 169, 155, 224],
+        [131, 69, 109, 192],
+        [131, 69, 109, 128],
+        [96, 105, 151, 64],
+        [118, 129, 139, 106],
+        [134, 138, 124, 170],
+        [141, 149, 119, 224],
+        [183, 103, 86, 192],
+        [183, 103, 86, 128],
+        [118, 139, 128, 64],
+        [84, 163, 116, 106],
+        [100, 140, 101, 170],
+        [107, 147, 96, 224],
+        [177, 137, 148, 192],
+        [177, 137, 148, 128],
+        [170, 173, 161, 64],
+        [67, 197, 92, 106],
+        [77, 142, 110, 170],
+        [73, 144, 109, 224],
+        [160, 154, 179, 192],
+        [160, 154, 179, 128],
+        [167, 190, 164, 64],
+        [59, 214, 106, 106],
+        [65, 159, 130, 170],
+        [56, 161, 140, 224],
+    ];
+
+    /// The same picture blurred at radius `3`.
+    const BLUR_THREE: [[u8; 4]; 30] = [
+        [133, 84, 121, 112],
+        [124, 113, 121, 140],
+        [128, 117, 118, 149],
+        [128, 117, 118, 149],
+        [119, 141, 126, 128],
+        [117, 139, 118, 128],
+        [138, 101, 135, 112],
+        [121, 130, 132, 140],
+        [122, 128, 131, 149],
+        [122, 128, 131, 149],
+        [112, 150, 136, 128],
+        [106, 146, 127, 128],
+        [138, 101, 135, 112],
+        [121, 130, 132, 140],
+        [122, 128, 131, 149],
+        [122, 128, 131, 149],
+        [112, 150, 136, 128],
+        [106, 146, 127, 128],
+        [138, 101, 135, 112],
+        [121, 130, 132, 140],
+        [122, 128, 131, 149],
+        [122, 128, 131, 149],
+        [112, 150, 136, 128],
+        [106, 146, 127, 128],
+        [163, 118, 119, 112],
+        [131, 147, 119, 140],
+        [126, 137, 116, 149],
+        [126, 137, 116, 149],
+        [104, 155, 124, 128],
+        [91, 149, 116, 128],
+    ];
+
+    #[test]
+    fn blur_holds_its_golden_bytes_at_radius_one_and_three() {
+        let (one, first_step) = blur(speckle(6, 5), 0, 1).expect("radius 1 is valid");
+        assert_eq!(picture(&one), BLUR_ONE.to_vec(), "radius 1");
+        assert_eq!(first_step["radius"], 1_i32, "the small radius echoes");
+        let (three, second_step) = blur(speckle(6, 5), 0, 3).expect("radius 3 is valid");
+        assert_eq!(picture(&three), BLUR_THREE.to_vec(), "radius 3");
+        assert_eq!(second_step["radius"], 3_i32, "the wider radius echoes");
     }
 
     #[test]
@@ -269,28 +370,6 @@ mod tests {
         );
     }
 
-    /// A freshly summed window `[i - r, i + r]`, clipped to the line.
-    fn window_sum(pixels: &[[u8; 4]], i: usize, radius: usize) -> Sums {
-        pixels
-            .iter()
-            .enumerate()
-            .filter(|&(j, _)| j.abs_diff(i) <= radius)
-            .map(|(_, &pixel)| pixel)
-            .fold(Sums::default(), Sums::absorb)
-    }
-
-    /// Every running-window value must match the fresh sums at `radius`.
-    fn check_running_sums(pixels: &[[u8; 4]], radius: usize) {
-        for (i, got) in blur_line(pixels, radius).iter().enumerate() {
-            let span = window_span(i, radius, pixels.len());
-            assert_eq!(
-                *got,
-                window_sum(pixels, i, radius).average(span),
-                "position {i}, radius {radius}"
-            );
-        }
-    }
-
     #[test]
     fn running_sums_match_a_fresh_window_everywhere() {
         let pixels = [
@@ -302,14 +381,6 @@ mod tests {
         for radius in 1_usize..4 {
             check_running_sums(&pixels, radius);
         }
-    }
-
-    #[test]
-    fn window_spans_clamp_at_both_borders() {
-        assert_eq!(window_span(0, 1, 5), 2, "clipped at the left edge");
-        assert_eq!(window_span(2, 1, 5), 3, "full window");
-        assert_eq!(window_span(4, 1, 5), 2, "clipped at the right edge");
-        assert_eq!(window_span(1, 9, 3), 3, "a huge radius covers the line");
     }
 
     #[test]

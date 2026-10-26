@@ -2,10 +2,10 @@
 //!
 //! Each file carries one game family's themes as tab-separated rows of
 //! `theme`, `role`, `candidates` (`|`-separated) and `fallback_role`
-//! (`-` for none). [`theme_table`] selects a theme for a [`Game`]; a
-//! theme that omits a role inherits the game's default theme row for it
-//! (reported as [`crate::themes::Matched::Fallback`] by
-//! [`super::resolve`]). A broken
+//! (`-` for none). [`theme_table`] selects a theme for a [`Game`]; a name
+//! the file does not carry is refused, and a theme that omits a role
+//! inherits the game's default theme row for it (reported as
+//! [`crate::themes::Matched::Fallback`] by [`super::resolve`]). A broken
 //! embedded file is a build bug: every accessor reports it as
 //! [`CyberError::Internal`], never a panic.
 
@@ -118,37 +118,50 @@ pub fn theme_names(game: Game) -> Result<Vec<String>, CyberError> {
 }
 
 /// The selected theme's table: `wanted` by name (case-insensitively) or
-/// the game's default theme, and a name the file does not carry falls back
-/// to that default.
+/// the game's default theme when `wanted` is `None`.
+///
+/// A name the file does not carry is refused, never silently replaced by
+/// the default: the fallback inside [`ThemeTable`]'s `base` answers
+/// missing *roles*, not a missing theme.
 ///
 /// # Errors
+///
+/// [`CyberError::InvalidArgument`] when `wanted` names no theme of the
+/// file, listing the ones it does and pointing at `get_texture_theme`.
 ///
 /// [`game_themes`]' [`CyberError::Internal`] for malformed embedded data.
 #[inline]
 pub fn theme_table(game: Game, wanted: Option<&str>) -> Result<ThemeTable, CyberError> {
     let themes = game_themes(game)?;
     let default = default_theme_name(game);
-    let chosen = wanted
-        .filter(|name| {
-            themes
-                .themes
-                .keys()
-                .any(|theme| theme.eq_ignore_ascii_case(name))
-        })
-        .unwrap_or(default)
-        .to_ascii_lowercase();
-    let rows = themes
-        .themes
-        .get(&chosen)
-        .or_else(|| themes.themes.get(default))
-        .cloned()
-        .unwrap_or_default();
-    let base = if chosen == default || !themes.themes.contains_key(&chosen) {
+    let chosen = match wanted {
+        None => default.to_ascii_lowercase(),
+        Some(name) => themes
+            .themes
+            .keys()
+            .find(|theme| theme.eq_ignore_ascii_case(name))
+            .cloned()
+            .ok_or_else(|| unknown_theme(name, &themes.themes))?,
+    };
+    let rows = themes.themes.get(&chosen).cloned().unwrap_or_default();
+    let base = if chosen == default {
         None
     } else {
         themes.themes.get(default).cloned()
     };
     Ok(ThemeTable::build(game, chosen, rows, base))
+}
+
+/// The refusal naming the themes the file does carry, so a misspelt name
+/// (`tech_base` typed for `tech`) comes back as an instruction rather
+/// than a silently default-dressed map.
+fn unknown_theme(name: &str, themes: &BTreeMap<String, BTreeMap<Role, ThemeRow>>) -> CyberError {
+    let listed: Vec<&str> = themes.keys().map(String::as_str).collect();
+    CyberError::InvalidArgument(format!(
+        "unknown texture theme {name:?} for this game: available themes are {}",
+        listed.join(", ")
+    ))
+    .with_hint("get_texture_theme lists the themes this game offers")
 }
 
 /// Parse one theme file.
@@ -329,15 +342,25 @@ mod tests {
     }
 
     #[test]
-    fn unknown_theme_names_fall_back_to_the_default_theme() {
-        let table = theme_table(Game::Doom2, Some("NO-SUCH")).expect("a table comes back");
-        assert_eq!(table.name(), "tech", "the unknown name was not in the file");
+    fn an_unknown_theme_name_is_refused_naming_the_choices() {
+        let error = theme_table(Game::Doom2, Some("NO-SUCH")).expect_err("no such theme");
+        assert_eq!(error.code(), "invalid_argument", "the caller's name broke");
+        for name in ["brick", "hell", "rock", "tech"] {
+            assert!(error.message().contains(name), "the refusal lists {name}");
+        }
+        assert!(
+            error.hint().contains("get_texture_theme"),
+            "the hint points at the listing tool: {}",
+            error.hint()
+        );
         let hell = theme_table(Game::Doom2, Some("HELL")).expect("case-insensitive hit");
         assert_eq!(
             hell.name(),
             "hell",
             "and the chosen theme is reported lowercased"
         );
+        let default = theme_table(Game::Doom2, None).expect("None still defaults");
+        assert_eq!(default.name(), "tech", "only no name selects the default");
     }
 
     #[test]

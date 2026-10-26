@@ -11,7 +11,9 @@ use crate::plan::textures::{TextureRole, TextureRoles as _};
 use crate::themes::Role;
 use crate::tools::plan::PlanTheme;
 use crate::tools::plan::build::{bounds_of, plan_path, with_plan_path};
-use crate::tools::plan::{FEATURE_ROLES, THEME_ROLES, connection_label, feature_dress, kind_name};
+use crate::tools::plan::{
+    FEATURE_ROLES, THEME_ROLES, connection_label, feature_dress, kind_name, with_theme_path,
+};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::name::LumpName;
@@ -277,6 +279,41 @@ fn with_plan_path_prefixes_refusals_and_keeps_the_rest() {
         unattributed.to_string(),
         "plan has no rooms; add at least one room",
         "no element reference, no prefix"
+    );
+}
+
+#[test]
+fn a_theme_override_refusal_carries_the_theme_plan_path() {
+    let refused = with_theme_path(
+        CyberError::invalid("unknown texture theme \"nope\" for this game")
+            .with_hint("get_texture_theme lists the themes this game offers"),
+        Some("nope"),
+    );
+    assert_eq!(refused.code(), "invalid_argument", "the code stands");
+    assert_eq!(
+        refused.message(),
+        "theme: unknown texture theme \"nope\" for this game",
+        "the path leads"
+    );
+    assert!(
+        refused.hint().contains("get_texture_theme"),
+        "the hint rides along: {}",
+        refused.hint()
+    );
+    let unhandled = with_theme_path(
+        CyberError::NotFound("TEXTURE1 is malformed".to_owned()),
+        Some("hell"),
+    );
+    assert_eq!(
+        unhandled.message(),
+        "TEXTURE1 is malformed",
+        "a read refusal is not the caller's theme name"
+    );
+    let stale = with_theme_path(CyberError::invalid("unknown texture theme"), None);
+    assert_eq!(
+        stale.message(),
+        "unknown texture theme",
+        "a session theme with no override in the request keeps its bare words"
     );
 }
 

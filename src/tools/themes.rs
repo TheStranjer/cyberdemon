@@ -140,10 +140,14 @@ struct ThemeView {
 
 /// Resolve every role for the session's current theme, with an optional
 /// one-call theme-name override (`None` follows the session's choice).
+/// A wanted name the game's table does not carry — the override or the
+/// name the session stored — is refused here, never replaced by the
+/// default theme.
 ///
 /// # Errors
 ///
-/// [`inventory`]'s errors and [`table::theme_names`]' /
+/// [`CyberError::InvalidArgument`] for a wanted theme name the game does
+/// not offer, plus [`inventory`]'s errors and [`table::theme_names`]' /
 /// [`table::theme_table`]' [`CyberError::Internal`] for broken embedded
 /// tables.
 fn theme_view(session: &Session, theme_override: Option<&str>) -> Result<ThemeView, CyberError> {
@@ -205,17 +209,14 @@ pub fn theme_texture(session: &Session, role: Role) -> Result<String, CyberError
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] when `theme_override` names a theme the
-/// session's game does not offer (listing the ones it does), plus
-/// `theme_view`'s errors.
+/// session's game does not offer (the refusal lists the ones it does),
+/// plus `theme_view`'s errors.
 #[inline]
 pub fn theme_roles(
     session: &Session,
     theme_override: Option<&str>,
     wanted: &[Role],
 ) -> Result<BTreeMap<Role, String>, CyberError> {
-    if let Some(text) = theme_override {
-        check_theme_name(session.game(), text)?;
-    }
     let view = theme_view(session, theme_override)?;
     Ok(wanted
         .iter()
@@ -398,15 +399,18 @@ fn set_run(session: &mut Session, args: &SetThemeParams) -> Result<ThemeReport, 
 }
 
 /// Refuse a theme the session's game does not offer.
+///
+/// Delegates to [`table::theme_table`]'s own refusal (it lists the game's
+/// themes and hints at `get_texture_theme`), so the session-level check
+/// and the resolution share one wording. `set_texture_theme` runs this
+/// before touching the session state.
+///
+/// # Errors
+///
+/// [`table::theme_table`]' [`CyberError::InvalidArgument`] for an unknown
+/// name and [`CyberError::Internal`] for broken embedded data.
 fn check_theme_name(game: Game, text: &str) -> Result<(), CyberError> {
-    let names = table::theme_names(game)?;
-    if names.iter().any(|name| name.eq_ignore_ascii_case(text)) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown texture theme {text:?} for this game: available themes are {}",
-        names.join(", ")
-    )))
+    table::theme_table(game, Some(text)).map(|_| ())
 }
 
 /// Arguments for [`Cyberdemon::auto_texture`].
@@ -878,6 +882,11 @@ mod tests {
         for name in &game_themes {
             assert!(broken.to_string().contains(name), "lists {name}");
         }
+        assert!(
+            broken.hint().contains("get_texture_theme"),
+            "the hint points at the listing tool: {}",
+            broken.hint()
+        );
     }
 
     #[test]

@@ -43,6 +43,16 @@ detected game picks the default theme: `tech` (DOOM / DOOM II: also
 `hell`, `brick`, `rock`), `castle` (Heretic), `forest` (Hexen), `urban`
 (Strife); an undetected session uses the DOOM table.
 
+Only omitting a name selects that default: a theme name the game's table
+does not carry is never silently replaced by it. `set_texture_theme` and
+a plan's `theme` override refuse an unknown name with `invalid_argument`,
+the refusal listing the themes the game does offer, and a session storing
+a name the current game lacks (the theme survives opening a different
+game's base) reports the same refusal from every theme-resolving tool
+until `set_texture_theme` picks a listed name. The documented fallbacks
+live inside a resolved theme only: a role's `fallback_role` chain and the
+default theme filling a role the theme omits.
+
 ## `get_texture_theme`
 
 - Purpose: read the session's theme and every role's current answer.
@@ -65,7 +75,10 @@ detected game picks the default theme: `tech` (DOOM / DOOM II: also
   "default"}` and every flat role `F_SKY1` (the one flat always in the
   view) — not an error; the drawing and feature tools then substitute
   their documented vanilla fallbacks where a dash would not do.
-- Errors: none from client input.
+- Errors: `invalid_argument` only when the session's stored theme name is
+  not one the current game offers (possible after opening a different
+  game's base layer); the refusal lists the themes that are, and
+  `set_texture_theme` with a listed name clears it.
 
 ## `set_texture_theme`
 

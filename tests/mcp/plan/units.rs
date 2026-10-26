@@ -131,10 +131,24 @@ async fn a_theme_override_dresses_one_call_and_leaves_the_session_alone() {
     assert_eq!(maps["maps"].as_array().expect("a list").len(), 1);
     let mut bad_theme = plan_for("MAP06");
     bad_theme["theme"] = json!("nope");
-    let (code, message, _) = call_err(&client, "build_map_from_plan", bad_theme).await;
+    let (code, message, hint) = call_err(&client, "build_map_from_plan", bad_theme).await;
     assert_eq!(code, "invalid_argument", "an unknown theme is refused");
+    assert!(
+        message.starts_with("theme: "),
+        "the refusal carries the plan path: {message}"
+    );
     assert!(
         message.contains("tech") && message.contains("hell"),
         "the refusal lists the themes: {message}"
+    );
+    assert!(
+        hint.contains("get_texture_theme"),
+        "the hint points at the listing tool: {hint}"
+    );
+    let left = call(&client, "list_maps", json!({"scope": "working"})).await;
+    assert_eq!(
+        left["maps"].as_array().expect("a list").len(),
+        1,
+        "the refused MAP06 was never written"
     );
 }

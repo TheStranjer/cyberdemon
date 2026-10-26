@@ -151,8 +151,9 @@ pub(super) struct BuildPlanParams {
     pub(super) player_start: Option<PlayerStartParam>,
     /// Texture theme to dress this map with, for this call only
     /// (case-insensitive; the session's theme stands when unset).
-    /// Unknown names fail `invalid_argument` listing the themes the
-    /// session's game offers; the session itself never changes.
+    /// Unknown names fail `invalid_argument` with the `theme` plan path
+    /// leading, listing the themes the session's game offers (see
+    /// `get_texture_theme`); the session itself never changes.
     #[serde(default)]
     pub(super) theme: Option<String>,
     /// Build the node run into the block before the write and validate

@@ -122,13 +122,21 @@ fn has_exit(plan: &Plan) -> bool {
 
 /// The remote-door warnings: one per remote connector no `switch` row
 /// names in its `opens`, in connection order. An unnamed connection can
-/// never be named, so it always reports, under its derived label.
+/// never be referenced — a switch aimed at its `from->to` label is
+/// refused — so its note asks for the `id` first.
 fn unswitched_remotes(plan: &Plan) -> Vec<String> {
     let mut switched: BTreeSet<String> = BTreeSet::new();
-    for feature in plan.features.clone() {
-        if let Feature::Switch { opens, .. } = feature {
-            switched.insert(opens);
+    for feature in &plan.features {
+        if !matches!(feature, Feature::Switch { .. }) {
+            continue;
         }
+        // A `&Feature` cannot be destructured with bindings under this
+        // crate's denied `pattern_type_mismatch` and `ref_patterns`, so
+        // only the matching row is cloned, never the whole vector.
+        let Feature::Switch { opens, .. } = feature.clone() else {
+            continue;
+        };
+        switched.insert(opens);
     }
     let mut notes = Vec::new();
     for connection in &plan.connections {
@@ -142,13 +150,27 @@ fn unswitched_remotes(plan: &Plan) -> Vec<String> {
         }
         let label = connection_name(connection);
         if !switched.contains(label.as_str()) {
-            notes.push(format!(
-                "remote door at {label} is opened by no switch: add a switch feature \
-                 whose opens is {label}"
-            ));
+            notes.push(remote_hint(connection, &label));
         }
     }
     notes
+}
+
+/// The note for one unswitched remote door: a named door points the
+/// caller at a `switch` row whose `opens` is its id; an unnamed one has
+/// no handle to aim a switch at, so the note asks for the id first.
+fn remote_hint(connection: &Connection, label: &str) -> String {
+    if connection.id.is_some() {
+        format!(
+            "remote door at {label} is opened by no switch: add a switch feature whose \
+                 opens is {label}"
+        )
+    } else {
+        format!(
+            "remote door at {label} is opened by no switch: give the connection an id \
+                 and reference it in a switch feature's opens"
+        )
+    }
 }
 
 /// A remote door a switch row may fire: its tagged band sector.

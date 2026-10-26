@@ -3,7 +3,7 @@
 //! thing at a time, refusing with the first failure that names the
 //! offending id.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     Connection, ConnectionKind, Feature, MAX_CONNECTIONS, MAX_FEATURES, MAX_ROOMS, Plan, Room,
@@ -11,14 +11,18 @@ use super::{
 };
 use crate::error::CyberError;
 use crate::geom::Pt;
+use crate::wad::map::consts::MAX_STEP_HEIGHT;
 
 impl Plan {
     /// Checks the plan's structure, one thing at a time, and returns the
     /// first failure naming the offending id: at least one room, counts
     /// within the `u32` region-label budget, unique room ids, usable
     /// shapes, a non-negative `wall_thickness`, connections joining two
-    /// distinct rooms with a positive width and, for stairs, a positive
-    /// step depth, and features naming rooms that exist and, for
+    /// distinct rooms with a positive width and an id no other connection
+    /// carries — with, for stairs, a positive step depth and a step
+    /// height between `1` and [`MAX_STEP_HEIGHT`], and for windows,
+    /// non-negative `sill` and `lintel` that together leave glass in the
+    /// rooms' opening — and features naming rooms that exist and, for
     /// switches, opening a connection that carries an `id`. Room
     /// `ceiling > floor` is *not* checked here; rooms are drawn in
     /// painter's order and may stack.
@@ -88,10 +92,14 @@ impl Plan {
         Ok(ids)
     }
 
-    /// Checks every connection against the known room ids.
+    /// Checks every connection against the known room ids, and refuses a
+    /// connection id two rows carry — the feature run keys its tags and
+    /// bands by it, so a duplicate makes `opens` ambiguous.
     fn validate_connections(&self, ids: &HashSet<&str>) -> Result<(), CyberError> {
-        for connection in &self.connections {
-            validate_connection(connection, ids)?;
+        let mut seen: HashMap<&str, usize> = HashMap::with_capacity(self.connections.len());
+        for (index, connection) in self.connections.iter().enumerate() {
+            collect_connection_id(&mut seen, connection, index)?;
+            validate_connection(connection, ids, &self.rooms)?;
         }
         Ok(())
     }
@@ -153,9 +161,33 @@ fn validate_polygon(id: &str, points: &[Pt]) -> Result<(), CyberError> {
     )))
 }
 
+/// Registers one connection's id: an explicit id must be new. Unnamed
+/// connections share their derived `from->to` label freely; only a
+/// carried `id` keys the feature run's lookups.
+fn collect_connection_id<'plan>(
+    seen: &mut HashMap<&'plan str, usize>,
+    connection: &'plan Connection,
+    index: usize,
+) -> Result<(), CyberError> {
+    let Some(id) = connection.id.as_deref() else {
+        return Ok(());
+    };
+    if let Some(first) = seen.insert(id, index) {
+        return Err(CyberError::InvalidArgument(format!(
+            "connection id '{id}' is used by connections[{first}] and connections[{index}]; \
+             give each connection its own id"
+        )));
+    }
+    Ok(())
+}
+
 /// Checks one connection: both endpoints exist and differ, the width is
-/// positive, and stairs have a positive step depth.
-fn validate_connection(connection: &Connection, ids: &HashSet<&str>) -> Result<(), CyberError> {
+/// positive, and the kind's own knobs are usable.
+fn validate_connection(
+    connection: &Connection,
+    ids: &HashSet<&str>,
+    rooms: &[Room],
+) -> Result<(), CyberError> {
     let from = connection.from.as_str();
     let to = connection.to.as_str();
     let label = connection
@@ -183,25 +215,83 @@ fn validate_connection(connection: &Connection, ids: &HashSet<&str>) -> Result<(
             "connection '{label}' has width {width}; it must be positive"
         )));
     }
-    validate_kind(connection.kind, &label)
+    validate_kind(connection, rooms, &label)
 }
 
-/// Kind-specific checks: stairs need a positive step depth.
-fn validate_kind(kind: ConnectionKind, label: &str) -> Result<(), CyberError> {
-    match kind {
-        ConnectionKind::Stairs { step_depth, .. } => {
-            if step_depth > 0_i32 {
-                Ok(())
-            } else {
-                Err(CyberError::InvalidArgument(format!(
-                    "connection '{label}' has stairs with step depth {step_depth}; it must be positive"
-                )))
-            }
-        }
-        ConnectionKind::Opening | ConnectionKind::Door { .. } | ConnectionKind::Window { .. } => {
-            Ok(())
-        }
+/// Kind-specific checks: stairs need a positive step depth and a step
+/// height the player can climb; windows non-negative trims that together
+/// leave glass in the opening between the two rooms.
+fn validate_kind(connection: &Connection, rooms: &[Room], label: &str) -> Result<(), CyberError> {
+    match connection.kind {
+        ConnectionKind::Stairs {
+            step_height,
+            step_depth,
+        } => validate_stairs(step_height, step_depth, label),
+        ConnectionKind::Window { .. } => validate_window(connection, rooms, label),
+        ConnectionKind::Opening | ConnectionKind::Door { .. } => Ok(()),
     }
+}
+
+/// One stair run's knobs: a positive step depth and a step height of
+/// `1..=MAX_STEP_HEIGHT` — the player steps up at most that far, so
+/// outside the range the run is refused, not silently clamped.
+fn validate_stairs(step_height: i32, step_depth: i32, label: &str) -> Result<(), CyberError> {
+    if step_depth <= 0_i32 {
+        return Err(CyberError::InvalidArgument(format!(
+            "connection '{label}' has stairs with step depth {step_depth}; it must be positive"
+        )));
+    }
+    let climbable = (1_i32..=MAX_STEP_HEIGHT).contains(&step_height);
+    if climbable {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "connection '{label}' has stairs with step_height {step_height}; one step climbs \
+         between 1 and {MAX_STEP_HEIGHT} map units (the player steps up at most \
+         {MAX_STEP_HEIGHT}; 16 is gentler)"
+    )))
+}
+
+/// One window's trims: `sill` and `lintel` are heights above the floor
+/// and below the ceiling, never negative, and they must together leave
+/// glass in the rooms' opening. The span's own `16`-unit glass floor is
+/// [`plan_connectors`](crate::plan::connectors::plan_connectors)' later
+/// check; this one refuses a window whose trims fill the opening whole.
+fn validate_window(connection: &Connection, rooms: &[Room], label: &str) -> Result<(), CyberError> {
+    let ConnectionKind::Window { sill, lintel } = connection.kind else {
+        return Ok(());
+    };
+    if sill < 0_i32 || lintel < 0_i32 {
+        return Err(CyberError::InvalidArgument(format!(
+            "connection '{label}' has window sill {sill} and lintel {lintel}; both must be \
+             0 or greater (leave them out for the defaults)"
+        )));
+    }
+    let trims = i64::from(sill).saturating_add(i64::from(lintel));
+    let Some(opening) = window_opening(rooms, connection) else {
+        return Ok(());
+    };
+    if trims < opening {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "connection '{label}' has window sill {sill} and lintel {lintel}; the opening \
+         between rooms '{}' and '{}' is {opening} units tall and those trims leave no \
+         glass: lower the sill or the lintel",
+        connection.from, connection.to
+    )))
+}
+
+/// The clear vertical span of the opening between the connection's two
+/// rooms: the lower ceiling minus the higher floor, [`None`] when an
+/// id resolves to nothing — the endpoint checks refuse that first.
+fn window_opening(rooms: &[Room], connection: &Connection) -> Option<i64> {
+    let height_of = |id: &str| rooms.iter().find(|room| room.id == id);
+    let from = height_of(connection.from.as_str())?;
+    let to = height_of(connection.to.as_str())?;
+    let floor = i64::from(from.floor).max(i64::from(to.floor));
+    let ceiling = i64::from(from.ceiling).min(i64::from(to.ceiling));
+    Some(ceiling.saturating_sub(floor))
 }
 
 /// The label a connection answers to when it carries no `id`:

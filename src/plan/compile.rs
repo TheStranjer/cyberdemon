@@ -98,8 +98,9 @@ fn warnings(plan: &Plan, connectors: &[ConnectorGeometry], compiled: &CompiledPl
     notes
 }
 
-/// Warn about every room the connection graph cannot carry you to from
-/// the plan's first room.
+/// Warn about every room the walkable connection graph cannot carry you
+/// to from the plan's first room; the note says windows are no way
+/// through, so a room joined only by glass reports.
 fn unreachable_rooms(plan: &Plan, connectors: &[ConnectorGeometry], notes: &mut Vec<String>) {
     let reached = reachable_from_first(plan, connectors);
     let Some(root) = plan.rooms.first() else {
@@ -108,7 +109,8 @@ fn unreachable_rooms(plan: &Plan, connectors: &[ConnectorGeometry], notes: &mut 
     for (index, room) in plan.rooms.iter().enumerate() {
         if !reached.get(index).copied().unwrap_or(false) {
             notes.push(format!(
-                "room '{}' cannot be reached from room '{}' through the plan's connections; connect it or drop it",
+                "room '{}' cannot be reached from room '{}' through the plan's connections \
+                 (a window does not let a player through); connect it or drop it",
                 room.id, root.id
             ));
         }
@@ -116,7 +118,7 @@ fn unreachable_rooms(plan: &Plan, connectors: &[ConnectorGeometry], notes: &mut 
 }
 
 /// The rooms reachable from room `0` over the placed connectors'
-/// undirected room pairs.
+/// walkable undirected room pairs; window bands stay out of the graph.
 fn reachable_from_first(plan: &Plan, connectors: &[ConnectorGeometry]) -> Vec<bool> {
     let adjacency = adjacency(plan, connectors);
     let mut reached = vec![false; plan.rooms.len()];
@@ -144,10 +146,12 @@ fn visit_room(neighbour: usize, reached: &mut [bool], queue: &mut VecDeque<usize
     }
 }
 
-/// The undirected room-pair adjacency of the placed connectors.
+/// The undirected room-pair adjacency of the placed connectors, minus
+/// the window bands: [`ConnectionKind::Window`] is a raised blocking
+/// strip you see through, not a way a player walks.
 fn adjacency(plan: &Plan, connectors: &[ConnectorGeometry]) -> Vec<Vec<usize>> {
     let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); plan.rooms.len()];
-    for connector in connectors {
+    for connector in connectors.iter().filter(|connector| !is_window(connector)) {
         if let Some(from) = neighbours.get_mut(connector.to) {
             from.push(connector.from);
         }
@@ -156,6 +160,11 @@ fn adjacency(plan: &Plan, connectors: &[ConnectorGeometry]) -> Vec<Vec<usize>> {
         }
     }
     neighbours
+}
+
+/// Whether the placed connector is a window band.
+const fn is_window(connector: &ConnectorGeometry) -> bool {
+    matches!(connector.kind, ConnectionKind::Window { .. })
 }
 
 /// Warn about every room a later room painted over completely: its

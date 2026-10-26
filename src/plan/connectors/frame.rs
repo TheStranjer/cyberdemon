@@ -31,9 +31,10 @@ pub(super) struct StairPlan {
     pub(super) step_floors: Vec<i32>,
 }
 
-/// Work out one stair run. `step_height` clamps to `1..=24`: `0` and
-/// negative ask for one-unit steps, taller for [`MAX_STEP_HEIGHT`]; the
-/// last step's floor never passes the higher room's floor.
+/// Work out one stair run. [`Plan::validate`](crate::plan::model::Plan::validate)
+/// refuses a `step_height` outside `1..=24` before the compiler gets
+/// here; the clamp stays as the fallback for a direct caller. The last
+/// step's floor never passes the higher room's floor.
 pub(super) fn plan_stairs(
     target: &Target<'_>,
     step_height: i32,

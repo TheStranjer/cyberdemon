@@ -87,7 +87,9 @@ fills and no further, so no wall stands where the rooms really have no
 shared edge; where two shared runs meet at a corner the rectangles reach
 half a thickness past it and overlap, leaving no unwalled gap.
 
-**The connections**: each joins two distinct existing rooms. `kind`
+**The connections**: each joins two distinct existing rooms and an `id`,
+when given, must be unique (a duplicate is `invalid_argument` naming
+both `connections[i]` indices). `kind`
 (case-insensitive) picks the intervention; `at: [x, y]` places it on
 the shared boundary nearest that point (default: centred on it) and
 `width` (default `64`) is its clear width, which must fit the
@@ -98,8 +100,8 @@ the connection and saying they *do not touch*.
 |------------|--------------|------------|
 | `opening`  | —            | A plain gap: the band sector spans `max(floor)` to `min(ceiling)`. A `width` that spans the *whole* shared edge takes the wall down along that run instead: the rooms join on their own boundary line, own no band sector (`sectors: []`) and no jamb walls stand at the ends. |
 | `door`     | `style?`     | A **closed** band: floor equals ceiling. `style` is `normal` (default), `fast`, `stay_open`, `locked_red`, `locked_blue`, `locked_yellow` or `remote` — it picks the door's action and dressing. |
-| `window`   | `sill?` = 32, `lintel?` = 24 | A glass band: `sill` lifts its floor, `lintel` drops its ceiling; under 16 units of glass left is `invalid_argument`. |
-| `stairs`   | `step_height?` = 16, `step_depth?` = 24 | A stepped run from the lower room's floor to the higher one's, one sector per step (`step_depth` must be positive). |
+| `window`   | `sill?` = 32, `lintel?` = 24 | A glass band: `sill` lifts its floor, `lintel` drops its ceiling. Both trims must be `0` or greater and together must leave the rooms' opening partly clear — a negative trim or one that fills the opening is `invalid_argument`, and so is under 16 units of glass left. A window blocks the way: a room joined only by windows warns it cannot be reached. |
+| `stairs`   | `step_height?` = 16, `step_depth?` = 24 | A stepped run from the lower room's floor to the higher one's, one sector per step (`step_depth` must be positive, and `step_height` must be `1..=24` — outside that the plan is refused, not clamped). |
 
 > **Bands wear the rooms' flats.** A `door` band's floor and ceiling take
 > the theme's `door_floor`; every other band's two surfaces take the flat
@@ -196,7 +198,10 @@ the accepted names.
 > row warns `"the map has no exit"`; and every `remote` door no
 > `switch` row names warns `"remote door at {connection id} is opened
 > by no switch: add a switch feature whose opens is {connection id}"`,
-> again in connection order. The keys are what the map actually holds,
+> again in connection order — an *unnamed* remote door, which no `opens`
+> can reference, warns `"remote door at {from}->{to} is opened by no
+> switch: give the connection an id and reference it in a switch
+> feature's opens"` instead. The keys are what the map actually holds,
 > so a card pinned by `type` counts like one named. Stand a key for
 > every lock, set an exit somewhere, and switch every remote, and these
 > three notes stay silent.
@@ -404,7 +409,9 @@ without node data, as before.
 
 **Errors name the plan path.** Structural refusals from the compiler
 (bad rectangle edges, polygons with too few points, duplicate room
-ids, unknown or self-joined rooms, non-positive widths, too-short
+ids, duplicate connection ids, unknown or self-joined rooms,
+non-positive widths, out-of-range stair `step_height`, window trims
+that fill the opening, too-short
 boundaries…) already name the offending id; the tool prefixes them
 with the wire index — `rooms[0]: room 'a' has a 0x64 rectangle; both
 edges must be positive`. Feature rows name `features[i]`
@@ -444,7 +451,9 @@ left out). `things_placed` counts the
 and the player start included (a teleporter's own type-14 destination
 things ride along in the block beside them). `bounds` is the vertex box
 `{x1, y1, x2, y2}`. `warnings` carries the compiler's advisories —
-rooms unreachable from the first, rooms painted over, floor gaps taller
+rooms unreachable from the first through the walkable connections (a
+room joined only by windows counts as unreachable: glass is not a way
+through), rooms painted over, floor gaps taller
 than 24 units through an opening/door/window ("use stairs"), rooms that
 fit fewer things than asked — plus the theme notes, the feature steps'
 notes (a plan lift dropping under 64 units, the Boom secret-bit

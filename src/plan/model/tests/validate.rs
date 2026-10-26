@@ -79,6 +79,42 @@ fn negative_wall_thickness_is_refused() {
 }
 
 #[test]
+fn duplicate_connection_ids_are_refused_with_both_indices() {
+    let mut first = opening("a", "b");
+    first.id = Some("d1".to_owned());
+    let mut second = opening("a", "b");
+    second.id = Some("d1".to_owned());
+    let plan = plan(
+        vec![square_room("a"), square_room("b")],
+        vec![first, second],
+    );
+    assert_invalid(&plan, "connections[0] and connections[1]");
+}
+
+#[test]
+fn unnamed_connections_may_share_their_derived_label() {
+    let plan = plan(
+        vec![square_room("a"), square_room("b")],
+        vec![opening("a", "b"), opening("a", "b")],
+    );
+    plan.validate()
+        .expect("only carried ids key the run's lookups");
+}
+
+#[test]
+fn distinct_connection_ids_validate() {
+    let mut first = opening("a", "b");
+    first.id = Some("d1".to_owned());
+    let mut second = opening("a", "b");
+    second.id = Some("d2".to_owned());
+    let plan = plan(
+        vec![square_room("a"), square_room("b")],
+        vec![first, second],
+    );
+    plan.validate().expect("two ids, two connections");
+}
+
+#[test]
 fn stairs_must_have_a_positive_step_depth() {
     let mut steep = opening("a", "b");
     steep.id = Some("s1".to_owned());
@@ -88,6 +124,69 @@ fn stairs_must_have_a_positive_step_depth() {
     };
     let plan = plan(vec![square_room("a"), square_room("b")], vec![steep]);
     assert_invalid(&plan, "s1");
+}
+
+#[test]
+fn stairs_step_heights_outside_one_to_twenty_four_are_refused() {
+    for step_height in [-8_i32, 0_i32, 25_i32, 512_i32] {
+        let mut climb = opening("a", "b");
+        climb.id = Some("s1".to_owned());
+        climb.kind = ConnectionKind::Stairs {
+            step_height,
+            step_depth: 24_i32,
+        };
+        let plan = plan(vec![square_room("a"), square_room("b")], vec![climb]);
+        assert_invalid(&plan, "step_height");
+    }
+}
+
+#[test]
+fn stairs_step_heights_at_the_bounds_validate() {
+    for step_height in [1_i32, 16_i32, 24_i32] {
+        let mut climb = opening("a", "b");
+        climb.id = Some("s1".to_owned());
+        climb.kind = ConnectionKind::Stairs {
+            step_height,
+            step_depth: 24_i32,
+        };
+        let plan = plan(vec![square_room("a"), square_room("b")], vec![climb]);
+        plan.validate().expect("in-bounds step heights climb");
+    }
+}
+
+#[test]
+fn negative_window_trims_are_refused() {
+    for (sill, lintel) in [(-1_i32, 24_i32), (32_i32, -1_i32), (-16_i32, -16_i32)] {
+        let mut view = opening("a", "b");
+        view.id = Some("w1".to_owned());
+        view.kind = ConnectionKind::Window { sill, lintel };
+        let plan = plan(vec![square_room("a"), square_room("b")], vec![view]);
+        assert_invalid(&plan, "0 or greater");
+    }
+}
+
+#[test]
+fn window_trims_that_fill_the_rooms_opening_are_refused() {
+    for (sill, lintel) in [(48_i32, 80_i32), (128_i32, 0_i32), (200_i32, 200_i32)] {
+        let mut view = opening("a", "b");
+        view.id = Some("w1".to_owned());
+        view.kind = ConnectionKind::Window { sill, lintel };
+        let plan = plan(vec![square_room("a"), square_room("b")], vec![view]);
+        assert_invalid(&plan, "leave no glass");
+    }
+}
+
+#[test]
+fn window_trims_that_leave_an_opening_validate() {
+    let mut view = opening("a", "b");
+    view.id = Some("w1".to_owned());
+    view.kind = ConnectionKind::Window {
+        sill: 48_i32,
+        lintel: 79_i32,
+    };
+    let plan = plan(vec![square_room("a"), square_room("b")], vec![view]);
+    plan.validate()
+        .expect("127 of the 128-unit opening trimmed still leaves a sliver to the model");
 }
 
 #[test]

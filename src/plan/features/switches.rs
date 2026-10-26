@@ -42,14 +42,20 @@ pub(super) fn switches(
     dress: &FeatureDress,
     run: &mut FeatureRun,
 ) -> Result<(), CyberError> {
-    for feature in plan.features.clone() {
+    for feature in &plan.features {
+        if !matches!(feature, Feature::Switch { .. }) {
+            continue;
+        }
+        // A `&Feature` cannot be destructured with bindings under this
+        // crate's denied `pattern_type_mismatch` and `ref_patterns`, so
+        // only the matching row is cloned, never the whole vector.
         let Feature::Switch {
             room,
             opens,
             wall,
             repeatable,
             at,
-        } = feature
+        } = feature.clone()
         else {
             continue;
         };
@@ -190,14 +196,20 @@ pub(super) fn exits(
     dress: &FeatureDress,
     run: &mut FeatureRun,
 ) -> Result<(), CyberError> {
-    for feature in plan.features.clone() {
+    for feature in &plan.features {
+        if !matches!(feature, Feature::Exit { .. }) {
+            continue;
+        }
+        // A `&Feature` cannot be destructured with bindings under this
+        // crate's denied `pattern_type_mismatch` and `ref_patterns`, so
+        // only the matching row is cloned, never the whole vector.
         let Feature::Exit {
             room,
             style,
             secret,
             wall,
             at,
-        } = feature
+        } = feature.clone()
         else {
             continue;
         };

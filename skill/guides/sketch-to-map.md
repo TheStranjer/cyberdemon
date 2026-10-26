@@ -159,7 +159,8 @@ Start from `plan_rooms`: keep each room's `points` as they are, rename the
   - a plain wide break → `{"kind": "opening"}`.
   Add `stairs` where two rooms' floors differ by more than 24 — even where
   the sketch shows no steps; 24 is the player's maximum step-up. Add
-  `window` where glass is drawn.
+  `window` where glass is drawn — glass is not a way through, so a room
+  joined only by windows warns it cannot be reached.
 - **Things.** Convert marks through the legend into `things` rows:
   `{"name": "imp", "room": "great_hall", "count": 2}`,
   `{"name": "shotgun", "x": 40, "y": 88}`, `{"name": "medikit", ...}`.

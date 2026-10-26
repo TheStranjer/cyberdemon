@@ -81,14 +81,16 @@ pub(super) fn blocks(texts: &[&str]) -> Vec<Lump> {
 /// A session whose only layer is an IWAD of `lumps`.
 pub(super) fn base_session(lumps: Vec<Lump>) -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps,
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

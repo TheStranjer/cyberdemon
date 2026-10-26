@@ -259,16 +259,18 @@ mod tests {
     #[test]
     fn copy_map_block_copies_the_winners_of_the_merged_view() {
         let mut session = Session::default();
-        session.set_iwad(base());
-        session.add_resource(Layer::new(
-            PathBuf::from("fix.wad"),
-            LayerRole::Resource,
-            pwad(vec![
-                marker("MAP02"),
-                carrying("THINGS", "from-resource"),
-                carrying("SECTORS", "sectors"),
-            ]),
-        ));
+        session.set_iwad(base()).expect("no batch is open");
+        session
+            .add_resource(Layer::new(
+                PathBuf::from("fix.wad"),
+                LayerRole::Resource,
+                pwad(vec![
+                    marker("MAP02"),
+                    carrying("THINGS", "from-resource"),
+                    carrying("SECTORS", "sectors"),
+                ]),
+            ))
+            .expect("no batch is open");
         session
             .edit("start a map", |wad| {
                 wad.lumps.push(marker("MAP01"));

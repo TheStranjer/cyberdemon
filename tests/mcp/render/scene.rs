@@ -31,11 +31,13 @@ fn fixture_session(file: &Path, drop: &[&str], extra: Vec<Lump>) -> cyberdemon::
         .retain(|lump| !drop.contains(&lump.name.to_string().as_str()));
     wad.lumps.extend(extra);
     let mut session = cyberdemon::session::Session::default();
-    session.set_iwad(cyberdemon::session::Layer::new(
-        file.to_path_buf(),
-        cyberdemon::session::LayerRole::Iwad,
-        wad,
-    ));
+    session
+        .set_iwad(cyberdemon::session::Layer::new(
+            file.to_path_buf(),
+            cyberdemon::session::LayerRole::Iwad,
+            wad,
+        ))
+        .expect("no batch is open");
     session
 }
 

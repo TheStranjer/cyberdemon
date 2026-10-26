@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::session::history::batch_open_conflict;
 use crate::session::merge::{MergeCounts, merge_counts, merge_into};
 use crate::session::{Layer, LayerRole, Session};
 use crate::state::AppState;
@@ -215,7 +216,7 @@ fn merge_layer_report(
     let lumps = wad.len();
     state.with_session(|session| {
         let layer_index = session.layers().len();
-        session.add_resource(Layer::new(path, LayerRole::Resource, wad.clone()));
+        session.add_resource(Layer::new(path, LayerRole::Resource, wad.clone()))?;
         Ok(MergeReport::Layer {
             mode: MergeMode::Layer,
             layer_index,
@@ -363,6 +364,11 @@ pub(super) fn save_wad_report(
     let wanted_mode = parse_save_mode(args.mode.as_deref())?;
     let wanted_kind = parse_kind(args.kind.as_deref())?;
     let (target, wad) = state.with_session(|session| {
+        if wanted_mode == SaveMode::Pwad && session.batch_open() {
+            // Refuse before anything is written: a save the batch might
+            // roll back would leave the file ahead of the session.
+            return Err(batch_open_conflict("saving the working archive"));
+        }
         let target = resolve_target(session, args.path.as_deref())?;
         ensure_not_layer_file(session, &target)?;
         let wad = match wanted_mode {
@@ -400,7 +406,7 @@ pub(super) fn save_wad_report(
 fn record_saved(state: &AppState, mode: SaveMode, target: &Path) -> Result<bool, CyberError> {
     state.with_session(|session| {
         if mode == SaveMode::Pwad {
-            session.mark_saved(target.to_path_buf());
+            session.mark_saved(target.to_path_buf())?;
         }
         Ok(session.is_dirty())
     })

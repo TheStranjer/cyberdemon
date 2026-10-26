@@ -540,22 +540,24 @@ fn a_twin_placed_after_the_precheck_refuses_the_add_land() {
 /// a `PNAMES` entry, for the replacement lands.
 fn layer_patch_session() -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        "base.wad".into(),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                Lump::marker(name("P_START")),
-                Lump::new(name("MYART"), tiny_patch()),
-                Lump::marker(name("P_END")),
-                Lump::new(
-                    name("PNAMES"),
-                    write_pnames(&["MYART".to_owned()]).expect("test names store"),
-                ),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            "base.wad".into(),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::marker(name("P_START")),
+                    Lump::new(name("MYART"), tiny_patch()),
+                    Lump::marker(name("P_END")),
+                    Lump::new(
+                        name("PNAMES"),
+                        write_pnames(&["MYART".to_owned()]).expect("test names store"),
+                    ),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

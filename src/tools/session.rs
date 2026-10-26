@@ -6,19 +6,18 @@
 //! editable working archive and [`Cyberdemon::new_wad`] stands up an empty
 //! one. [`Cyberdemon::merge_wad`] brings another file in as a resource layer
 //! or folds it into the working archive, [`Cyberdemon::save_wad`] writes the
-//! working archive or the whole merged view back to a file,
+//! working archive or the whole merged view back to a file, and
 //! [`Cyberdemon::get_session_info`] and [`Cyberdemon::get_wad_info`]
-//! describe the session and the view an engine would load, and
-//! [`Cyberdemon::undo`] and [`Cyberdemon::redo`] step over the working
-//! archive's edit history.
+//! describe the session and the view an engine would load.
 //!
 //! The group is split by tool family into the private modules [`mod@open`]
 //! (the three load tools' parameters, reports and runs),
 //! [`mod@merge_save`] (`merge_wad` and `save_wad`, their modes and the
 //! target and overwrite rules), [`mod@info`] (the two description tools'
-//! report shapes and builders) and [`mod@undo`] (`undo` and `redo`; named
-//! for the tool, apart from [`crate::session::history`], which is the stack
-//! itself). This root keeps what the four families share:
+//! report shapes and builders) and [`mod@undo`] (`undo` and `redo`, serving
+//! their own `history_router` apart from this group's; named for the tool,
+//! apart from [`crate::session::history`], which is the stack itself). This
+//! root keeps what the four families share:
 //! [`UNSAVED_WORKING`], the helpers they read paths, archives, the session
 //! and the result channel through ([`path_text`], [`read_archive`],
 //! [`read_archive_at`], [`ensure_clean`] and [`chronological`]) and
@@ -47,7 +46,6 @@ use crate::tools::session::merge_save::{
 use crate::tools::session::open::{
     NewWadParams, OpenIwadParams, OpenWadParams, new_wad_report, open_iwad_report, open_wad_report,
 };
-use crate::tools::session::undo::{RedoParams, UndoParams, parse_steps, redo_run, undo_run};
 use crate::wad::archive::Wad;
 
 /// The placeholder the `pwads` list shows for an unsaved working archive.
@@ -131,7 +129,7 @@ fn chronological(labels: Vec<&str>) -> Vec<String> {
 impl Cyberdemon {
     /// Loads a file as the session's base game (`IWAD`) layer.
     #[tool(
-        description = "Reads the WAD at an absolute path and makes it the session's read-only base game layer, replacing any previous IWAD while keeping the resource layers; the game is detected from the archive. Call it first: palettes, flats, definitions and maps all come from the game data. undo does not step over an archive swap."
+        description = "Reads the WAD at an absolute path and makes it the session's read-only base game layer, replacing any previous IWAD while keeping the resource layers; the game is detected from the archive. Call it first: palettes, flats, definitions and maps all come from the game data. undo does not step over an archive swap, and a running run_batch refuses the swap."
     )]
     fn open_iwad(
         &self,
@@ -142,7 +140,7 @@ impl Cyberdemon {
 
     /// Opens a file as the editable working archive.
     #[tool(
-        description = "Reads the WAD at an absolute path and adopts it as the editable working archive, forgetting the previous archive's undo history. Refuses with conflict while the current working archive is dirty unless discard_changes: true. Use it to continue work on an existing mod; merge_wad stacks extra read-only layers instead."
+        description = "Reads the WAD at an absolute path and adopts it as the editable working archive, forgetting the previous archive's undo history. Refuses with conflict while the current working archive is dirty unless discard_changes: true, or while a run_batch is open. Use it to continue work on an existing mod; merge_wad stacks extra read-only layers instead."
     )]
     fn open_wad(
         &self,
@@ -157,7 +155,7 @@ impl Cyberdemon {
 
     /// Starts a fresh empty working archive.
     #[tool(
-        description = "Replaces the working archive with an empty PWAD that has no file behind it yet (save_wad gives it one). Refuses with conflict while unsaved edits exist unless discard_changes: true, and clears the undo history and active map. Use it to start a fresh mod once open_iwad has loaded the game data."
+        description = "Replaces the working archive with an empty PWAD that has no file behind it yet (save_wad gives it one). Refuses with conflict while unsaved edits exist unless discard_changes: true, or while a run_batch is open; clears the undo history and active map. Use it to start a fresh mod once open_iwad has loaded the game data."
     )]
     fn new_wad(
         &self,
@@ -168,7 +166,7 @@ impl Cyberdemon {
 
     /// Merges a file in as a resource layer or into the working archive.
     #[tool(
-        description = "Reads the WAD at an absolute path and folds it into the session: mode layer (default) stacks it as a read-only resource layer below the working archive, mode working adopts its content into the working archive under vanilla override rules. Use it to add a texture or sound pack; get_session_info shows the layer stack."
+        description = "Reads the WAD at an absolute path and folds it into the session: mode layer (default) stacks it as a read-only resource layer below the working archive, refusing while a run_batch is open; mode working folds its content into the working archive as one undoable edit under vanilla override rules. Use it to add a texture or sound pack; get_session_info shows the layer stack."
     )]
     fn merge_wad(
         &self,
@@ -183,7 +181,7 @@ impl Cyberdemon {
 
     /// Writes the working archive or the whole merged view to a file.
     #[tool(
-        description = "Saves the session to a file: mode pwad (default) writes the working archive to path (or the path it was opened from), mode full flattens the IWAD, resource layers and working overrides into one archive. Paths must be absolute and the write is atomic. Reports path and bytes; undo history survives a pwad save."
+        description = "Saves the session to a file: mode pwad (default) writes the working archive to path (or the path it was opened from) and marks it saved, refusing while a run_batch is open; mode full flattens the IWAD, resource layers and working overrides into one archive and runs inside a batch. Paths must be absolute and the write is atomic. Reports path and bytes; undo history survives a pwad save."
     )]
     fn save_wad(
         &self,
@@ -212,30 +210,6 @@ impl Cyberdemon {
             .state()
             .with_session(|session| Ok(describe_wad(session)));
         reply(report)
-    }
-
-    /// Steps back over recent edits of the working archive.
-    #[tool(
-        description = "Undoes the most recent edits to the working archive: steps back over up to steps entries of the undo stack (default 1, 1..=100; open_wad and new_wad clear the history). An empty stack fails not_found \"nothing to undo\". Only the working archive changes: layers, the active map and render settings stay. Returns what was undone."
-    )]
-    fn undo(&self, Parameters(args): Parameters<UndoParams>) -> Result<CallToolResult, ErrorData> {
-        let outcome = parse_steps(args.steps).and_then(|steps| {
-            self.state()
-                .with_session(|session| undo_run(session, steps))
-        });
-        reply(outcome)
-    }
-
-    /// Replays recently undone edits onto the working archive.
-    #[tool(
-        description = "Re-applies edits that undo stepped back over: replays up to steps entries of the redo stack (default 1, 1..=100); an empty stack fails not_found \"nothing to redo\", and a new edit after an undo drops the redo branch. Mirrors undo: only the working archive changes. Returns what was replayed."
-    )]
-    fn redo(&self, Parameters(args): Parameters<RedoParams>) -> Result<CallToolResult, ErrorData> {
-        let outcome = parse_steps(args.steps).and_then(|steps| {
-            self.state()
-                .with_session(|session| redo_run(session, steps))
-        });
-        reply(outcome)
     }
 }
 

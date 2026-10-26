@@ -25,7 +25,12 @@ edits only ever touch the working archive, and each edit lands on a
 labelled undo stack that keeps the newest **100** edits (older ones fall
 off); `open_wad` and `new_wad` replace the working archive and **clear the
 history** — undo never reaches back past them. `undo` and `redo` walk that
-stack; `get_session_info` reports where every archive currently is.
+stack; `get_session_info` reports where every archive currently is. While
+a `run_batch` holds an open batch scope, edits fold into that scope's one
+entry, and the state a fold cannot carry — an `open_iwad` or `merge_wad`
+layer swap, an `open_wad` or `new_wad` archive replacement, a `save_wad`
+pwad save mark, `undo` or `redo` — is refused with `conflict` until the
+batch ends (`reference/batch.md`).
 
 ## `open_iwad`
 
@@ -39,7 +44,8 @@ stack; `get_session_info` reports where every archive currently is.
   — `game` is the detected title (`"doom"`, `"doom2"`, `"heretic"`,
   `"hexen"`, `"strife"` or `"unknown"`).
 - Errors: `invalid_argument` (relative path), `not_found` (no file there),
-  `io_error` (cannot read it), `format_error` (not a WAD).
+  `io_error` (cannot read it), `format_error` (not a WAD), `conflict`
+  while a `run_batch` scope is open (a base swap cannot fold into it).
 
 ## `open_wad`
 
@@ -50,8 +56,9 @@ stack; `get_session_info` reports where every archive currently is.
 - Returns: like `open_iwad` plus `"dirty": false` (a fresh open is saved
   state).
 - Errors: `conflict` while the working archive is dirty and
-  `discard_changes` was not passed — `save_wad` first or pass the flag;
-  plus the same path errors as `open_iwad`.
+  `discard_changes` was not passed — `save_wad` first or pass the flag —
+  or while a `run_batch` scope is open (a whole-archive swap cannot fold
+  into it); plus the same path errors as `open_iwad`.
 
 ## `new_wad`
 
@@ -61,7 +68,8 @@ stack; `get_session_info` reports where every archive currently is.
 - Arguments: `discard_changes` (bool, default `false`), same guard as
   `open_wad`.
 - Returns: `{"kind": "PWAD", "lumps": 0}`.
-- Errors: `conflict` on unsaved changes without `discard_changes`.
+- Errors: `conflict` on unsaved changes without `discard_changes`, or
+  while a `run_batch` scope is open.
 
 ## `merge_wad`
 
@@ -83,7 +91,9 @@ stack; `get_session_info` reports where every archive currently is.
   one). This marks the working archive dirty.
 - Errors: `invalid_argument` for an unknown `mode` (the message names both
   accepted forms) or a relative path; `not_found` / `io_error` /
-  `format_error` as for `open_iwad`.
+  `format_error` as for `open_iwad`; `conflict` while a `run_batch` scope
+  is open in `layer` mode (a stacked layer cannot fold into it, so the
+  whole call refuses; `working` mode is one undoable edit and runs).
 
 ## `save_wad`
 
@@ -117,8 +127,10 @@ stack; `get_session_info` reports where every archive currently is.
 - Errors: `invalid_argument` (relative path, no path to fall back on, bad
   `mode` or `kind`), `not_found` (parent directory missing), `conflict`
   (the target is the file of a loaded IWAD or resource layer, compared by
-  canonical path), `io_error` (the write failed), `limit_exceeded` (the
-  archive does not fit the WAD format).
+  canonical path, or `pwad` mode is called while a `run_batch` scope is
+  open — the file is then not written; `full` mode exports inside a batch
+  fine), `io_error` (the write failed), `limit_exceeded` (the archive does
+  not fit the WAD format).
 
 ## `undo`
 
@@ -135,7 +147,8 @@ stack; `get_session_info` reports where every archive currently is.
   — `dirty` is the working archive's state after the steps; undoing back
   to the revision the archive was saved at makes it `false` again.
 - Errors: `invalid_argument` (`steps` is `0` or above `100`), `not_found`
-  with `"nothing to undo"` when the undo stack is empty.
+  with `"nothing to undo"` when the undo stack is empty, `conflict` while a
+  `run_batch` scope is open (and a batch step cannot name it at all).
 
 ## `redo`
 
@@ -148,7 +161,8 @@ stack; `get_session_info` reports where every archive currently is.
   `{"redone": [labels, in the order replayed], "remaining_redo": n, "undo_available": n, "dirty": bool, "active_map_cleared": bool}`
   — `redone` starts with the oldest undone edit, the first one replayed.
 - Errors: `invalid_argument` (`steps` out of range), `not_found` with
-  `"nothing to redo"` when the redo stack is empty.
+  `"nothing to redo"` when the redo stack is empty, `conflict` while a
+  `run_batch` scope is open (and a batch step cannot name it at all).
 
 ## `get_session_info`
 

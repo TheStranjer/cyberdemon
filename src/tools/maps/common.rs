@@ -248,7 +248,7 @@ mod tests {
     /// A session over a base layer of `lumps`.
     fn session_over(lumps: Vec<Lump>) -> Session {
         let mut session = Session::default();
-        session.set_iwad(base(lumps));
+        session.set_iwad(base(lumps)).expect("no batch is open");
         session
     }
 
@@ -372,7 +372,9 @@ mod tests {
         let state = AppState::default();
         state
             .with_session(|session| {
-                session.set_iwad(base(doom_block("MAP01")));
+                session
+                    .set_iwad(base(doom_block("MAP01")))
+                    .expect("no batch is open");
                 Ok(())
             })
             .expect("seeding the base layer");

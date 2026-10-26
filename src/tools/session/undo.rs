@@ -1,5 +1,5 @@
-//! The history side of the session group: `undo` steps back over the
-//! working archive's edits, `redo` replays them.
+//! The history side of the session: `undo` steps back over the working
+//! archive's edits, `redo` replays them.
 //!
 //! [`undo_run`] and [`redo_run`] drive the same walk in opposite directions:
 //! [`walk_history`] applies [`HistoryStep`] (`Session::undo` or
@@ -10,15 +10,26 @@
 //! merged view ([`merged_holds_map`] asks [`crate::wad::classify`] over it);
 //! layers cannot be undone, so a layered map always survives.
 //!
+//! The family serves its own `history_router`, merged into the composed
+//! router by [`crate::server`] and named there as a group a batch may not
+//! run: the open batch owns the history until it ends, so the session
+//! refuses these walks (see [`crate::session::history`]) and the plan-time
+//! refusal needs no hand-kept name list.
+//!
 //! Named for the tool, not for [`crate::session::history`], which is the
 //! stack itself.
 
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CallToolResult;
+use rmcp::{ErrorData, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::session::history::HISTORY_LIMIT;
+use crate::tools::reply;
 use crate::wad::classify::analyze;
 use crate::wad::{Lump, LumpName};
 
@@ -170,4 +181,35 @@ pub(super) fn redo_run(session: &mut Session, steps: usize) -> Result<RedoReport
         dirty: session.is_dirty(),
         active_map_cleared,
     })
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "rmcp's documented multi-group layout needs one #[tool_router] impl block per group"
+)]
+#[tool_router(router = history_router, vis = "pub(crate)")]
+impl Cyberdemon {
+    /// Steps back over recent edits of the working archive.
+    #[tool(
+        description = "Undoes the most recent edits to the working archive: steps back over up to steps entries of the undo stack (default 1, 1..=100; open_wad and new_wad clear the history). An empty stack fails not_found \"nothing to undo\", and a running run_batch owns the history until it ends. Only the working archive changes: layers, the active map and render settings stay. Returns what was undone."
+    )]
+    fn undo(&self, Parameters(args): Parameters<UndoParams>) -> Result<CallToolResult, ErrorData> {
+        let outcome = parse_steps(args.steps).and_then(|steps| {
+            self.state()
+                .with_session(|session| undo_run(session, steps))
+        });
+        reply(outcome)
+    }
+
+    /// Re-applies the most recently undone edits onto the working archive.
+    #[tool(
+        description = "Re-applies edits that undo stepped back over: replays up to steps entries of the redo stack (default 1, 1..=100); an empty stack fails not_found \"nothing to redo\", a new edit after an undo drops the redo branch, and a running run_batch owns the history until it ends. Mirrors undo: only the working archive changes. Returns what was replayed."
+    )]
+    fn redo(&self, Parameters(args): Parameters<RedoParams>) -> Result<CallToolResult, ErrorData> {
+        let outcome = parse_steps(args.steps).and_then(|steps| {
+            self.state()
+                .with_session(|session| redo_run(session, steps))
+        });
+        reply(outcome)
+    }
 }

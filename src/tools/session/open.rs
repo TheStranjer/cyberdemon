@@ -123,7 +123,7 @@ pub(super) fn open_iwad_report(state: &AppState, text: &str) -> Result<IwadRepor
     let (path, wad) = read_archive(text)?;
     let summary = ArchiveSummary::of(&path, &wad);
     state.with_session(|session| {
-        session.set_iwad(Layer::new(path, LayerRole::Iwad, wad));
+        session.set_iwad(Layer::new(path, LayerRole::Iwad, wad))?;
         Ok(IwadReport {
             path: summary.path,
             kind: summary.kind,
@@ -144,7 +144,7 @@ pub(super) fn open_wad_report(
     let summary = ArchiveSummary::of(&path, &wad);
     state.with_session(|session| {
         ensure_clean(session, discard_changes)?;
-        session.replace_working(wad, Some(path));
+        session.replace_working(wad, Some(path))?;
         Ok(OpenWadReport {
             path: summary.path,
             kind: summary.kind,
@@ -163,7 +163,7 @@ pub(super) fn new_wad_report(
 ) -> Result<NewWadReport, CyberError> {
     state.with_session(|session| {
         ensure_clean(session, discard_changes)?;
-        session.replace_working(Wad::default(), None);
+        session.replace_working(Wad::default(), None)?;
         Ok(NewWadReport {
             kind: session.working().kind,
             lumps: session.working().len(),

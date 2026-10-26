@@ -324,14 +324,16 @@ fn edit_run_reports_a_one_line_insert_as_one_added() {
 /// A session whose `IWAD` layer holds a `DEHACKED` global as raw bytes.
 fn holding(raw: Vec<u8>) -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("legacy.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![Lump::new(name("DEHACKED"), raw)],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("legacy.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![Lump::new(name("DEHACKED"), raw)],
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

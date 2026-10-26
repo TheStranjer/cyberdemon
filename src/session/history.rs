@@ -7,6 +7,16 @@
 //! edit reusing a number. Dirty is then simply "the current revision is not
 //! the saved one": undoing back to the saved state makes a session clean
 //! again, and editing after an undo makes it dirty.
+//!
+//! A batch is one open scope: [`History::begin_batch`] hands out a
+//! [`BatchToken`] and, while the scope stands, [`History::record`] folds
+//! every edit into the single entry [`History::end_batch`] leaves on the
+//! stack (commit) or drops (rollback), so the invariant "a batch is
+//! exactly one history entry" is structural rather than a post-hoc squash.
+//! While the scope is open the history walkers ([`History::undo`] /
+//! [`History::redo`]) refuse, and so does
+//! [`Session`](crate::session) for the whole-archive and saved-state swaps
+//! a fold cannot carry.
 
 use core::mem;
 
@@ -15,6 +25,45 @@ use crate::wad::archive::Wad;
 
 /// How many undo entries a session keeps before the oldest is dropped.
 pub const HISTORY_LIMIT: usize = 100;
+
+/// The handle to one open [`History::begin_batch`] scope, presented back to
+/// [`History::end_batch`]. Opaque: a session runs one batch at a time and
+/// only the holder of the open batch's token may close it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BatchToken(u64);
+
+/// How [`History::end_batch`] closes an open batch scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchOutcome {
+    /// Keep the batch's edits as the one labelled undo entry.
+    Commit,
+    /// Restore the exact pre-batch working archive and revision and keep no
+    /// entry: the batch is not redoable.
+    Rollback,
+}
+
+/// The bookkeeping of the one batch scope a [`History`] may hold open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpenBatch {
+    /// The handle that closes this scope.
+    token: BatchToken,
+    /// The label of the single entry a committed batch leaves behind.
+    label: String,
+    /// The working archive as the batch found it.
+    before: Wad,
+    /// The revision as the batch found it.
+    revision: u64,
+    /// Whether any edit has folded in since the scope opened.
+    edited: bool,
+}
+
+/// The `conflict` refusal an operation takes because a batch scope owns the
+/// session until it ends. `what` names the operation in the message.
+pub(crate) fn batch_open_conflict(what: &str) -> CyberError {
+    CyberError::Conflict(format!("{what} cannot run while a batch is open")).with_hint(
+        "the open run_batch owns the session's history until it ends; run this after the batch",
+    )
+}
 
 /// One point on the undo or the redo stack.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +90,10 @@ pub struct History {
     saved_revision: u64,
     /// The counter every fresh revision comes from; never rewound.
     counter: u64,
+    /// The one open batch scope, folding every edit into one entry.
+    batch: Option<OpenBatch>,
+    /// The counter batch tokens come from; never reused.
+    batch_counter: u64,
 }
 
 impl History {
@@ -56,18 +109,126 @@ impl History {
     /// so a later [`History::undo`] restores it, and the redo stack is
     /// dropped: a new edit after an undo starts a new branch. The oldest
     /// entry is dropped past [`HISTORY_LIMIT`] steps.
+    ///
+    /// While a batch scope is open no entry is pushed: the edit folds into
+    /// the single entry [`History::end_batch`] will settle, whose label is
+    /// the batch's own, not `label`. Every other bookkeeping — the dropped
+    /// redo branch, the fresh revision — happens exactly as for a plain
+    /// record.
     #[inline]
     pub fn record(&mut self, label: &str, working: &mut Wad, edited: Wad) {
         let previous = mem::replace(working, edited);
-        self.undo.push(Entry {
-            label: label.to_owned(),
-            wad: previous,
-            revision: self.revision,
-        });
+        match self.batch.as_mut() {
+            Some(batch) => batch.edited = true,
+            None => self.undo.push(Entry {
+                label: label.to_owned(),
+                wad: previous,
+                revision: self.revision,
+            }),
+        }
         self.redo.clear();
         self.revision = self.next_revision();
         while self.undo.len() > HISTORY_LIMIT {
             self.undo.remove(0);
+        }
+    }
+
+    /// Opens a batch scope: every [`History::record`] from here until
+    /// [`History::end_batch`] folds into one entry labelled `label`, whose
+    /// snapshot is the `working` archive as it stands now (which the scope
+    /// takes) at the revision it stands at now.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] when a batch is already open: a session
+    /// runs one batch at a time and nesting would fold two owners' edits
+    /// into one entry.
+    #[inline]
+    pub fn begin_batch(&mut self, label: &str, working: &Wad) -> Result<BatchToken, CyberError> {
+        if self.batch.is_some() {
+            return Err(batch_open_conflict("opening a second batch"));
+        }
+        self.batch_counter = self.batch_counter.saturating_add(1);
+        let token = BatchToken(self.batch_counter);
+        self.batch = Some(OpenBatch {
+            token,
+            label: label.to_owned(),
+            before: working.clone(),
+            revision: self.revision,
+            edited: false,
+        });
+        Ok(token)
+    }
+
+    /// Whether a batch scope currently owns this history.
+    #[must_use]
+    #[inline]
+    pub const fn batch_open(&self) -> bool {
+        self.batch.is_some()
+    }
+
+    /// Closes the batch scope `token` opened, applying `outcome` to the
+    /// `working` archive: a commit leaves (at most) the one entry labelled
+    /// with the batch's label, a rollback restores the exact pre-batch
+    /// archive and revision and leaves no entry. Returns whether the batch
+    /// left an undo entry, so a scope whose steps recorded no edits is
+    /// invisible in the history.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] when no batch is open or `token` is not the
+    /// open batch's handle; the scope (if any) stays open.
+    #[inline]
+    pub fn end_batch(
+        &mut self,
+        working: &mut Wad,
+        token: BatchToken,
+        outcome: BatchOutcome,
+    ) -> Result<bool, CyberError> {
+        let batch = self.take_batch(token)?;
+        if !batch.edited {
+            return Ok(false);
+        }
+        match outcome {
+            BatchOutcome::Commit => {
+                self.settle_batch(batch);
+                Ok(true)
+            }
+            BatchOutcome::Rollback => {
+                *working = batch.before;
+                self.revision = batch.revision;
+                Ok(false)
+            }
+        }
+    }
+
+    /// Leaves the open batch's single entry on the undo stack: the folded
+    /// edits undo (and redo) as one step under the batch's label.
+    fn settle_batch(&mut self, batch: OpenBatch) {
+        self.undo.push(Entry {
+            label: batch.label,
+            wad: batch.before,
+            revision: batch.revision,
+        });
+        while self.undo.len() > HISTORY_LIMIT {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Takes the open batch out, refusing when `token` does not name it.
+    /// A refusal puts the scope back: only its own holder may close it.
+    fn take_batch(&mut self, token: BatchToken) -> Result<OpenBatch, CyberError> {
+        match self.batch.take() {
+            Some(batch) if batch.token == token => Ok(batch),
+            Some(batch) => {
+                self.batch = Some(batch);
+                Err(
+                    CyberError::Conflict("this handle does not name the open batch".to_owned())
+                        .with_hint("end the batch with the token its begin_batch returned"),
+                )
+            }
+            None => Err(CyberError::Conflict("no batch is open".to_owned())
+                .with_hint("begin_batch first; end_batch closes the scope it opened")),
         }
     }
 
@@ -76,9 +237,12 @@ impl History {
     /// # Errors
     ///
     /// [`CyberError::NotFound`] with `"nothing to undo"` when the undo stack
-    /// is empty.
+    /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn undo(&mut self, working: &mut Wad) -> Result<String, CyberError> {
+        if self.batch_open() {
+            return Err(batch_open_conflict("undo"));
+        }
         let entry = self
             .undo
             .pop()
@@ -99,9 +263,12 @@ impl History {
     /// # Errors
     ///
     /// [`CyberError::NotFound`] with `"nothing to redo"` when the redo stack
-    /// is empty.
+    /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn redo(&mut self, working: &mut Wad) -> Result<String, CyberError> {
+        if self.batch_open() {
+            return Err(batch_open_conflict("redo"));
+        }
         let entry = self
             .redo
             .pop()
@@ -119,65 +286,13 @@ impl History {
 
     /// How many undo entries the stack currently holds.
     ///
-    /// A batch runner captures this before its first step and later passes
-    /// it back to [`History::rollback_to`] or [`History::squash_since`]; as
-    /// long as no step drops entries at the [`HISTORY_LIMIT`] bottom, the
-    /// entries above the mark are exactly the ones the batch recorded.
+    /// The batch tool reads this before opening its scope to refuse a batch
+    /// whose steps would not fit under [`HISTORY_LIMIT`] at all; a folded
+    /// batch itself only ever adds the one entry on commit.
     #[must_use]
     #[inline]
     pub fn undo_depth(&self) -> usize {
         self.undo.len()
-    }
-
-    /// Undoes the newest entry into `working` without leaving a redo trail.
-    ///
-    /// Unlike [`History::undo`], the state being stepped away from is
-    /// dropped rather than pushed onto redo: a rolled-back batch must not
-    /// be replayable. Returns whether an entry was there to take.
-    fn undo_one(&mut self, working: &mut Wad) -> bool {
-        let Some(entry) = self.undo.pop() else {
-            return false;
-        };
-        *working = entry.wad;
-        self.revision = entry.revision;
-        true
-    }
-
-    /// Steps back over every undo entry above `depth`, restoring the
-    /// working archive, and discards those entries: the states the rollback
-    /// steps through are never redoable. Redo entries made before the
-    /// rollback stay on the redo stack, and a `depth` at or past the
-    /// stack's length rolls nothing. Returns the number of entries undone.
-    #[inline]
-    pub fn rollback_to(&mut self, working: &mut Wad, depth: usize) -> usize {
-        let mut undone = 0_usize;
-        while self.undo.len() > depth {
-            // The length test guarantees `undo_one` finds an entry and the
-            // pop shrinks the stack, so the loop always advances.
-            undone = undone.saturating_add(usize::from(self.undo_one(working)));
-        }
-        undone
-    }
-
-    /// Replaces every undo entry above `depth` with one entry whose
-    /// snapshot is the state before the first of them and whose label is
-    /// `label`: the whole stretch undoes (and redoes) in a single step. A
-    /// no-op when nothing stands above `depth`, so a batch that recorded
-    /// nothing stays invisible in the history. Returns whether an entry was
-    /// replaced.
-    #[inline]
-    pub fn squash_since(&mut self, depth: usize, label: &str) -> bool {
-        let Some(anchor) = self.undo.get(depth) else {
-            return false;
-        };
-        let squashed = Entry {
-            label: label.to_owned(),
-            wad: anchor.wad.clone(),
-            revision: anchor.revision,
-        };
-        self.undo.truncate(depth);
-        self.undo.push(squashed);
-        true
     }
 
     /// The labels of the recorded edits, newest first.
@@ -208,7 +323,8 @@ impl History {
     }
 
     /// Drops both stacks and starts a fresh revision for a working archive
-    /// replaced wholesale, which is clean from the first moment.
+    /// replaced wholesale, which is clean from the first moment. The
+    /// session's guard keeps this out of reach while a batch scope is open.
     #[inline]
     pub fn reset(&mut self) {
         self.undo.clear();
@@ -267,6 +383,7 @@ mod tests {
     fn a_fresh_history_is_clean_and_empty() {
         let history = History::default();
         assert!(!history.is_dirty(), "nothing has changed yet");
+        assert!(!history.batch_open(), "no batch scope owns it");
         assert!(history.undo_labels().is_empty(), "nothing to undo");
         assert!(history.redo_labels().is_empty(), "nothing to redo");
     }
@@ -439,26 +556,30 @@ mod tests {
     }
 
     #[test]
-    fn rollback_to_undoes_above_depth_and_discards_the_redo_it_makes() {
+    fn rollback_is_replaced_by_the_batch_scope_which_keeps_older_redo_entries() {
         let mut working = wad("START");
         let mut history = History::default();
-        edits(&mut history, &mut working, 5);
-        history.mark_saved();
-        let undone = history.rollback_to(&mut working, 2);
-        assert_eq!(undone, 3, "entries three, four and five rolled back");
-        assert_eq!(only(&working), "LUMP2", "the state after edit-2 is back");
+        edits(&mut history, &mut working, 3);
+        history.undo(&mut working).expect("undo edit-3");
+        assert_eq!(history.redo_labels(), vec!["edit-3"], "a branch to replay");
+        let token = history
+            .begin_batch("batch", &working)
+            .expect("no batch is open yet");
+        history.record("inner", &mut working, wad("BATCHED"));
+        let rolled = history
+            .end_batch(&mut working, token, super::BatchOutcome::Rollback)
+            .expect("the token names the open batch");
+        assert!(!rolled, "a rolled-back batch leaves no entry");
+        assert_eq!(only(&working), "LUMP2", "the pre-batch state is back");
         assert_eq!(
             history.undo_labels(),
             vec!["edit-2", "edit-1"],
-            "only the entries below the mark remain"
+            "only the entries below the batch remain"
         );
         assert!(
             history.redo_labels().is_empty(),
-            "a rollback is not redoable"
+            "the folded edit cleared the branch, and a rollback is not redoable"
         );
-        history
-            .redo(&mut working)
-            .expect_err("the rolled-back states cannot be replayed");
         assert!(
             history.is_dirty(),
             "rollback is not a new revision: the saved state was the one it left"
@@ -466,97 +587,158 @@ mod tests {
     }
 
     #[test]
-    fn rollback_to_keeps_older_redo_entries_and_rolls_nothing_past_the_stack() {
-        let mut working = wad("START");
-        let mut history = History::default();
-        edits(&mut history, &mut working, 3);
-        history.undo(&mut working).expect("undo edit-3");
-        assert_eq!(history.redo_labels(), vec!["edit-3"], "a branch to replay");
-        let undone = history.rollback_to(&mut working, 1);
-        assert_eq!(undone, 1, "only edit-2's entry stood above the mark");
-        assert_eq!(only(&working), "LUMP1", "the state after edit-1 is back");
-        assert_eq!(
-            history.redo_labels(),
-            vec!["edit-3"],
-            "the redo entry made before the rollback survives"
-        );
-        let past = history.undo_depth().checked_add(9).expect("a deep mark");
-        assert_eq!(
-            history.rollback_to(&mut working, past),
-            0,
-            "a depth past the stack rolls nothing"
-        );
-        assert_eq!(only(&working), "LUMP1", "and changes nothing");
-    }
-
-    #[test]
-    fn squash_since_replaces_the_entries_above_depth_with_one() {
+    fn a_committed_batch_folds_every_edit_into_one_undo_and_redo_step() {
         let mut working = wad("START");
         let mut history = History::default();
         edits(&mut history, &mut working, 2);
         history.mark_saved();
+        let token = history
+            .begin_batch("batch: three steps", &working)
+            .expect("no batch is open yet");
+        assert!(history.batch_open(), "the scope owns the history now");
         for step in 3_usize..=5_usize {
-            let label = format!("edit-{step}");
             let state = wad(&format!("LUMP{step}"));
-            history.record(label.as_str(), &mut working, state);
+            history.record(&format!("edit-{step}"), &mut working, state);
         }
-        assert!(
-            history.squash_since(2, "batch: edit-3, edit-4, edit-5"),
-            "three entries stand above the mark"
-        );
         assert_eq!(
             history.undo_labels(),
-            vec!["batch: edit-3, edit-4, edit-5", "edit-2", "edit-1"],
-            "three entries became one above the older two"
+            vec!["edit-2", "edit-1"],
+            "mid-batch no inner entries stand on the stack"
         );
-        assert!(history.is_dirty(), "the squashed stretch is unsaved work");
-        let label = history.undo(&mut working).expect("undo the squash");
-        assert_eq!(label, "batch: edit-3, edit-4, edit-5", "the given label");
+        let left = history
+            .end_batch(&mut working, token, super::BatchOutcome::Commit)
+            .expect("the token names the open batch");
+        assert!(left, "the batch's edits stand as one entry");
+        assert_eq!(
+            history.undo_labels(),
+            vec!["batch: three steps", "edit-2", "edit-1"],
+            "three inner labels folded into the batch's one"
+        );
+        assert!(history.is_dirty(), "the folded stretch is unsaved work");
+        let label = history.undo(&mut working).expect("undo the batch");
+        assert_eq!(label, "batch: three steps", "the batch label is reported");
         assert_eq!(
             only(&working),
             "LUMP2",
-            "the state before the first squashed edit",
+            "the state before the first folded edit",
         );
         assert!(!history.is_dirty(), "one undo reached the saved revision");
         assert_eq!(
             history.redo_labels(),
-            vec!["batch: edit-3, edit-4, edit-5"],
-            "the whole squashed stretch redoes at once"
+            vec!["batch: three steps"],
+            "the whole folded stretch redoes at once"
         );
-        history.redo(&mut working).expect("redo the squash");
-        assert_eq!(
-            only(&working),
-            "LUMP5",
-            "and lands back on the batch's result"
-        );
+        history.redo(&mut working).expect("redo the batch");
+        assert_eq!(only(&working), "LUMP5", "and lands on the batch's result");
     }
 
     #[test]
-    fn squash_since_is_a_noop_when_nothing_stands_above_depth() {
+    fn a_batch_that_recorded_nothing_leaves_no_entry_either_way() {
         let mut working = wad("START");
         let mut history = History::default();
-        assert!(
-            !history.squash_since(0, "empty batch"),
-            "nothing recorded, nothing squashed"
-        );
         edits(&mut history, &mut working, 3);
-        assert!(
-            !history.squash_since(3, "no steps"),
-            "a depth at the newest entry squashes nothing"
-        );
-        assert!(
-            !history.squash_since(10, "past the stack"),
-            "a depth past the stack squashes nothing"
-        );
+        let quiet = history
+            .begin_batch("empty batch", &working)
+            .expect("no batch is open yet");
+        let left = history
+            .end_batch(&mut working, quiet, super::BatchOutcome::Commit)
+            .expect("the token names the open batch");
+        assert!(!left, "nothing recorded, nothing squashed");
         assert_eq!(
             history.undo_labels(),
             vec!["edit-3", "edit-2", "edit-1"],
-            "a no-op squash changes nothing"
+            "the stack stands as it was"
+        );
+        let also_quiet = history
+            .begin_batch("empty batch", &working)
+            .expect("the scope closed and may reopen");
+        let also_left = history
+            .end_batch(&mut working, also_quiet, super::BatchOutcome::Rollback)
+            .expect("the token names the open batch");
+        assert!(!also_left, "a rollback with nothing to undo leaves nothing");
+        assert_eq!(only(&working), "LUMP3", "and changes nothing");
+    }
+
+    #[test]
+    fn the_batch_scope_refuses_a_second_begin_and_a_stale_end() {
+        let mut working = wad("START");
+        let mut history = History::default();
+        let open = history
+            .begin_batch("first", &working)
+            .expect("a fresh history holds no batch");
+        let nested = history
+            .begin_batch("second", &working)
+            .expect_err("a session runs one batch at a time");
+        assert_eq!(nested.code(), "conflict", "nested begin code");
+        assert!(
+            nested.to_string().contains("batch is open"),
+            "the message says why: {nested}"
+        );
+        assert!(
+            history.batch_open(),
+            "the refusal left the first batch open"
+        );
+        history
+            .end_batch(&mut working, open, super::BatchOutcome::Commit)
+            .expect("the holder's own token closes it");
+        let later = history
+            .begin_batch("second run", &working)
+            .expect("a closed scope frees the history");
+        let stale = history
+            .end_batch(&mut working, open, super::BatchOutcome::Commit)
+            .expect_err("a used token does not name the open batch");
+        assert_eq!(stale.code(), "conflict", "stale token code");
+        assert!(
+            stale.to_string().contains("does not name"),
+            "the message says why: {stale}"
+        );
+        assert!(history.batch_open(), "the refusal keeps the new scope open");
+        let left = history
+            .end_batch(&mut working, later, super::BatchOutcome::Commit)
+            .expect("the current token closes it");
+        assert!(!left, "nothing was recorded");
+        let absent = history
+            .end_batch(&mut working, later, super::BatchOutcome::Rollback)
+            .expect_err("the scope is already closed");
+        assert_eq!(absent.code(), "conflict", "no-batch end code");
+        assert!(
+            absent.to_string().contains("no batch is open"),
+            "the message says why: {absent}"
         );
     }
 
     #[test]
-    fn rollback_and_squash_hold_at_the_history_limit() {
+    fn undo_and_redo_refuse_while_a_batch_is_open() {
+        let mut working = wad("START");
+        let mut history = History::default();
+        edits(&mut history, &mut working, 2);
+        let token = history
+            .begin_batch("batch", &working)
+            .expect("no batch is open yet");
+        let undo = history
+            .undo(&mut working)
+            .expect_err("the batch owns the stack");
+        assert_eq!(undo.code(), "conflict", "undo inside a batch code");
+        assert!(
+            undo.to_string().contains("undo"),
+            "the message names the operation: {undo}"
+        );
+        let redo = history
+            .redo(&mut working)
+            .expect_err("and the same for redo");
+        assert!(
+            redo.to_string().contains("redo"),
+            "the message names the operation: {redo}"
+        );
+        assert_eq!(only(&working), "LUMP2", "the refusals changed nothing");
+        history
+            .end_batch(&mut working, token, super::BatchOutcome::Commit)
+            .expect("close the scope");
+        assert_eq!(history.undo(&mut working).expect("now it walks"), "edit-2");
+    }
+
+    #[test]
+    fn the_history_limit_holds_at_the_batch_scope() {
         let mut working = wad("START");
         let mut history = History::default();
         let total = HISTORY_LIMIT
@@ -564,25 +746,37 @@ mod tests {
             .expect("a count past the limit");
         edits(&mut history, &mut working, total);
         assert_eq!(history.undo_depth(), HISTORY_LIMIT, "the stack is capped");
-        let top = HISTORY_LIMIT
-            .checked_sub(5)
-            .expect("a depth inside the capped stack");
-        let undone = history.rollback_to(&mut working, top);
-        assert_eq!(undone, 5, "exactly the newest entries roll back");
-        assert_eq!(history.undo_depth(), top, "the mark holds");
-        assert!(
-            history.squash_since(0, "the whole kept history"),
-            "the capped stack has entries above the origin"
+        let token = history
+            .begin_batch("capped batch", &working)
+            .expect("no batch is open yet");
+        history.record("inner", &mut working, wad("FINAL"));
+        history
+            .end_batch(&mut working, token, super::BatchOutcome::Commit)
+            .expect("close the scope");
+        assert_eq!(
+            history.undo_depth(),
+            HISTORY_LIMIT,
+            "committing the folded entry holds the cap"
         );
-        assert_eq!(history.undo_depth(), 1, "the capped stack squashes to one");
-        let label = history
-            .undo(&mut working)
-            .expect("undo the squashed history");
-        assert_eq!(label, "the whole kept history", "under the given label");
+        assert_eq!(
+            history.undo_labels().first().copied(),
+            Some("capped batch"),
+            "the batch entry is the newest"
+        );
+        let undone = history.undo(&mut working).expect("undo the batch");
+        assert_eq!(undone, "capped batch", "one step back over the fold");
         assert_eq!(
             only(&working),
-            "LUMP5",
-            "the oldest snapshot the limit left behind",
+            format!("LUMP{total}"),
+            "the snapshot the batch took at its start",
+        );
+        let rolled = HISTORY_LIMIT
+            .checked_sub(1)
+            .expect("a depth inside the capped stack");
+        assert_eq!(
+            history.undo_depth(),
+            rolled,
+            "the batch entry went with the undo"
         );
     }
 }

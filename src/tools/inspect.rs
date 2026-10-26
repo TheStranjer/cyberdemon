@@ -502,29 +502,33 @@ mod tests {
         server
             .state()
             .with_session(|session| {
-                session.set_iwad(Layer::new(
-                    PathBuf::from("doom.wad"),
-                    LayerRole::Iwad,
-                    Wad {
-                        kind: WadKind::Iwad,
-                        lumps: vec![carrying("PLAYPAL", "base bytes")],
-                    },
-                ));
-                session.replace_working(
-                    Wad {
-                        kind: WadKind::Pwad,
-                        lumps: vec![
-                            carrying("PLAYPAL", "base bytes"),
-                            carrying("NOTE", "first"),
-                            carrying("NOTE", "last"),
-                            carrying("DECORATE", "a"),
-                            carrying("DECORATE", "b"),
-                            marker("F_START"),
-                            marker("F_END"),
-                        ],
-                    },
-                    None,
-                );
+                session
+                    .set_iwad(Layer::new(
+                        PathBuf::from("doom.wad"),
+                        LayerRole::Iwad,
+                        Wad {
+                            kind: WadKind::Iwad,
+                            lumps: vec![carrying("PLAYPAL", "base bytes")],
+                        },
+                    ))
+                    .expect("no batch is open");
+                session
+                    .replace_working(
+                        Wad {
+                            kind: WadKind::Pwad,
+                            lumps: vec![
+                                carrying("PLAYPAL", "base bytes"),
+                                carrying("NOTE", "first"),
+                                carrying("NOTE", "last"),
+                                carrying("DECORATE", "a"),
+                                carrying("DECORATE", "b"),
+                                marker("F_START"),
+                                marker("F_END"),
+                            ],
+                        },
+                        None,
+                    )
+                    .expect("no batch is open");
                 Ok(())
             })
             .expect("seeding the session works");

@@ -5,13 +5,19 @@
 //! twenty calls. A batch makes that sequence all-or-nothing: every step runs
 //! through this server's own [`ToolRouter`] with the incoming
 //! [`RequestContext`], so any tool — including ones added later — is
-//! dispatchable without batch-specific code. The steps' history entries are
-//! collapsed into one labelled [`Session::squash_since`] step (or, after a
-//! failure with `atomic: true`, undone by one [`Session::rollback_to`]).
+//! dispatchable without batch-specific code. The whole run happens inside
+//! one [`Session::begin_batch`] scope: every inner edit folds into the
+//! batch's single history entry as it lands, and [`Session::end_batch`]
+//! commits that entry or rolls the batch back to its exact pre-batch
+//! archive and revision. The session refuses, as a typed conflict, every
+//! operation the fold cannot carry (whole-archive and saved-state swaps);
+//! only the steps of the non-nestable tool groups (the batch and history
+//! routers, composed by `Cyberdemon::non_nestable_router`) are refused
+//! before anything runs.
 //!
 //! [`RequestContext`]: rmcp::service::RequestContext
-//! [`Session::rollback_to`]: crate::session::Session::rollback_to
-//! [`Session::squash_since`]: crate::session::Session::squash_since
+//! [`Session::begin_batch`]: crate::session::Session::begin_batch
+//! [`Session::end_batch`]: crate::session::Session::end_batch
 //! [`ToolRouter`]: rmcp::handler::server::router::tool::ToolRouter
 
 use core::mem;
@@ -28,7 +34,7 @@ use serde_json::{Map as JsonMap, Value, json};
 
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::history::HISTORY_LIMIT;
+use crate::session::history::{BatchOutcome, BatchToken, HISTORY_LIMIT};
 use crate::tools::reply;
 
 /// The largest number of steps one batch may hold.
@@ -41,20 +47,6 @@ const ERROR_KEY: &str = "error";
 /// The error code reported for a step whose result carried no structured
 /// domain error (a protocol-level or shape failure, not a tool's `fail`).
 const TOOL_ERROR: &str = "tool_error";
-
-/// The tools that must never run inside a batch: batching itself, the
-/// history walkers that fight the batch's own undo bookkeeping, and the
-/// archive replacers whose state the undo history cannot restore.
-const FORBIDDEN: [&str; 8] = [
-    "run_batch",
-    "undo",
-    "redo",
-    "open_iwad",
-    "open_wad",
-    "new_wad",
-    "merge_wad",
-    "save_wad",
-];
 
 /// One step of a [`Cyberdemon::run_batch`] call.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -200,8 +192,9 @@ struct BatchReport {
 }
 
 /// Refuses a batch before anything runs: the step count, then every step's
-/// forbidden tool, unknown name and non-object arguments, each naming the
-/// offending step.
+/// non-nestable group, unknown name and non-object arguments, each naming
+/// the offending step. The whole-archive and saved-state tools are not
+/// refused here: the session itself refuses them while the batch is open.
 ///
 /// # Errors
 ///
@@ -213,14 +206,15 @@ fn precheck(steps: &[BatchStep], router: &ToolRouter<Cyberdemon>) -> Result<(), 
             steps.len(),
         )));
     }
+    let blocked = Cyberdemon::non_nestable_router();
     for (index, step) in steps.iter().enumerate() {
-        check_step(index, step, router)?;
+        check_step(index, step, router, &blocked)?;
     }
     Ok(())
 }
 
-/// Refuses one bad step: forbidden tool, unknown name, or arguments that are
-/// neither absent, `null`, nor an object.
+/// Refuses one bad step: a tool of a non-nestable group, an unknown name,
+/// or arguments that are neither absent, `null`, nor an object.
 ///
 /// # Errors
 ///
@@ -229,10 +223,12 @@ fn check_step(
     index: usize,
     step: &BatchStep,
     router: &ToolRouter<Cyberdemon>,
+    blocked: &ToolRouter<Cyberdemon>,
 ) -> Result<(), CyberError> {
-    if FORBIDDEN.contains(&step.tool.as_str()) {
+    if blocked.has_route(&step.tool) {
         return Err(CyberError::InvalidArgument(format!(
-            "step {index} calls {}, which cannot run inside a batch; run it between batches",
+            "step {index} calls {}, whose tool group cannot run inside a batch; run it between \
+             batches",
             step.tool,
         )));
     }
@@ -256,8 +252,11 @@ fn check_step(
 }
 
 /// Refuses a batch whose steps could push the undo stack past
-/// [`HISTORY_LIMIT`], where the oldest of the batch's own entries would
-/// fall off and no rollback or squash could reach the batch's start.
+/// [`HISTORY_LIMIT`]. The open batch folds its edits into the one entry it
+/// commits, so its own bookkeeping cannot overflow; this plan-time guard
+/// still refuses a batch whose every step could not have stood as its own
+/// undo entry, keeping the documented depth budget the caller plans
+/// against.
 ///
 /// # Errors
 ///
@@ -399,7 +398,7 @@ fn follow_segment<'value>(value: &'value Value, segment: &str) -> Option<&'value
 }
 
 /// One running batch: the steps, the results recorded for `$ref`s and the
-/// undo mark taken before the first step.
+/// session's open batch scope the steps edit inside.
 struct Runner<'server> {
     /// The server whose router runs the steps.
     server: &'server Cyberdemon,
@@ -409,8 +408,8 @@ struct Runner<'server> {
     steps: Vec<BatchStep>,
     /// Whether a failing step rolls the batch back.
     atomic: bool,
-    /// The undo depth before the first step.
-    depth: usize,
+    /// The session's open batch scope every step edits inside.
+    token: BatchToken,
     /// Each executed step's structured result, `None` when it failed.
     results: Vec<Option<Value>>,
     /// Each executed step's report entry.
@@ -418,9 +417,9 @@ struct Runner<'server> {
 }
 
 impl Runner<'_> {
-    /// Runs the steps under the batch's atomicity rule and finishes it: an
-    /// atomic failure rolls back, any other ending squashes the batch's
-    /// entries into one undo step labelled `label`.
+    /// Runs the steps under the batch's atomicity rule and closes the
+    /// scope: an atomic failure rolls back, any other ending commits the
+    /// batch's one folded entry under `label`.
     async fn run(&mut self, label: &str) -> Result<BatchReport, CyberError> {
         let planned = self.steps.len();
         let mut queue = mem::take(&mut self.steps).into_iter();
@@ -488,33 +487,29 @@ impl Runner<'_> {
         self.server.tool_router().call(context).await
     }
 
-    /// Rolls back or squashes, then reports: the batch is `ok` only when
-    /// every planned step ran and succeeded.
+    /// Closes the session's batch scope — rolling back or committing the
+    /// single folded entry — and reports: the batch is `ok` only when every
+    /// planned step ran and succeeded, and `undo_label` names the entry the
+    /// commit left, `None` for a rollback or a scope whose steps recorded no
+    /// edits at all.
     fn finish(&mut self, label: &str, planned: usize) -> Result<BatchReport, CyberError> {
         let all_ok = self.outcomes.len() == planned && self.outcomes.iter().all(|step| step.ok);
-        let depth = self.depth;
-        if !all_ok && self.atomic {
-            self.server
-                .state()
-                .with_session(move |session| Ok(session.rollback_to(depth)))?;
-            return Ok(BatchReport {
-                ok: false,
-                rolled_back: true,
-                steps: mem::take(&mut self.outcomes),
-                undo_label: None,
-            });
-        }
-        let undo_label = label.to_owned();
-        let squashed = undo_label.clone();
-        let replaced = self
+        let rolled_back = !all_ok && self.atomic;
+        let outcome = if rolled_back {
+            BatchOutcome::Rollback
+        } else {
+            BatchOutcome::Commit
+        };
+        let token = self.token;
+        let recorded = self
             .server
             .state()
-            .with_session(move |session| Ok(session.squash_since(depth, squashed.as_str())))?;
+            .with_session(move |session| session.end_batch(token, outcome))?;
         Ok(BatchReport {
             ok: all_ok,
-            rolled_back: false,
+            rolled_back,
             steps: mem::take(&mut self.outcomes),
-            undo_label: replaced.then_some(undo_label),
+            undo_label: recorded.then(|| label.to_owned()),
         })
     }
 }
@@ -527,7 +522,7 @@ impl Runner<'_> {
 impl Cyberdemon {
     /// Runs several tool calls as one atomic, single-undo batch.
     #[tool(
-        description = "Runs up to 50 tool calls in order as ONE undoable step: each step is {tool, arguments?}, an argument {\"$ref\": \"<step>/<json-pointer>\"} takes that earlier step's result value, and atomic (default true) stops at the first failure and rolls every recorded edit back. run_batch, undo, redo and the archive tools cannot nest inside. Returns {ok, rolled_back, steps, undo_label}."
+        description = "Runs up to 50 tool calls in order as ONE undoable step: each step is {tool, arguments?}, an argument {\"$ref\": \"<step>/<json-pointer>\"} takes that earlier step's result value, and atomic (default true) stops at the first failure and rolls every recorded edit back. run_batch, undo and redo are refused as steps, and while a batch runs the session itself refuses the whole-archive and saved-state tools (open_iwad, open_wad, new_wad, merge_wad layer mode, save_wad pwad mode). Returns {ok, rolled_back, steps, undo_label}."
     )]
     async fn run_batch(
         &self,
@@ -538,9 +533,11 @@ impl Cyberdemon {
     }
 }
 
-/// The batch's work: precheck the whole plan, mark the undo depth, run
-/// the steps and report. Nothing runs before every refusal has been
-/// checked, so a refused call leaves the session untouched.
+/// The batch's work: precheck the whole plan, check the undo stack has
+/// room for the steps, open the session's batch scope, run the steps
+/// inside it and close the scope. Nothing runs, and no scope opens, before
+/// every refusal has been checked, so a refused call leaves the session
+/// untouched.
 async fn batch_run(
     server: &Cyberdemon,
     args: RunBatchParams,
@@ -552,12 +549,15 @@ async fn batch_run(
         .with_session(|session| Ok(session.undo_depth()))?;
     check_history_room(depth, args.steps.len())?;
     let label = batch_label(args.label.as_deref(), &args.steps);
+    let token = server
+        .state()
+        .with_session(|session| session.begin_batch(label.as_str()))?;
     let mut runner = Runner {
         server,
         request,
         steps: args.steps,
         atomic: args.atomic,
-        depth,
+        token,
         results: Vec::new(),
         outcomes: Vec::new(),
     };
@@ -569,8 +569,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        BatchStep, LABEL_LIMIT, MAX_STEPS, batch_label, check_history_room, follow_pointer,
-        lookup_ref, ref_marker, resolve_refs,
+        BatchStep, LABEL_LIMIT, MAX_STEPS, batch_label, check_history_room, check_step,
+        follow_pointer, lookup_ref, ref_marker, resolve_refs,
     };
     use crate::error::CyberError;
     use crate::server::Cyberdemon;
@@ -798,18 +798,76 @@ mod tests {
     }
 
     #[test]
-    fn the_forbidden_tools_are_the_documented_eight() {
-        assert_eq!(super::FORBIDDEN.len(), 8, "the documented set");
-        for name in ["run_batch", "undo", "redo", "save_wad"] {
+    fn the_non_nestable_groups_are_the_batch_and_the_history() {
+        let blocked = Cyberdemon::non_nestable_router();
+        for name in ["run_batch", "undo", "redo"] {
             assert!(
-                super::FORBIDDEN.contains(&name),
-                "{name} stays forbidden in batches"
+                blocked.has_route(name),
+                "{name} belongs to a group a batch may not dispatch"
             );
         }
-        let router = Cyberdemon::batch_router();
+        for name in [
+            "open_iwad",
+            "open_wad",
+            "new_wad",
+            "merge_wad",
+            "save_wad",
+            "get_session_info",
+        ] {
+            assert!(
+                !blocked.has_route(name),
+                "{name} is refused at run time by the session, not by a group list"
+            );
+        }
+    }
+
+    #[test]
+    fn check_step_refuses_the_group_tools_unknown_names_and_bad_arguments() {
+        let server = Cyberdemon::new();
+        let router = server.tool_router();
+        let blocked = Cyberdemon::non_nestable_router();
+        let refusal = |tool: &str, arguments: Option<Value>| {
+            let step = BatchStep {
+                tool: tool.to_owned(),
+                arguments,
+            };
+            check_step(1, &step, router, &blocked).expect_err("the step is refused")
+        };
+        let nested = refusal("undo", None);
+        assert_eq!(nested.code(), "invalid_argument", "group refusal code");
         assert!(
-            router.has_route("run_batch"),
-            "run_batch itself is served, it is only refused inside a batch"
+            nested.to_string().contains("step 1") && nested.to_string().contains("undo"),
+            "the refusal names the step and tool: {nested}"
         );
+        assert!(
+            refusal("run_batch", None).to_string().contains("run_batch"),
+            "a batch cannot nest inside itself"
+        );
+        let unknown = refusal("no_such_tool", None);
+        assert_eq!(unknown.code(), "invalid_argument", "unknown refusal code");
+        assert!(
+            unknown.to_string().contains("no_such_tool"),
+            "the refusal names the tool: {unknown}"
+        );
+        let bad_args = refusal("edit_sector", Some(json!(3_i64)));
+        assert_eq!(
+            bad_args.code(),
+            "invalid_argument",
+            "arguments refusal code"
+        );
+        assert!(
+            bad_args.to_string().contains("not an object"),
+            "the refusal says what to fix: {bad_args}"
+        );
+        let archive_swap = step("open_wad");
+        check_step(0, &archive_swap, router, &blocked)
+            .expect("archive swaps plan fine; the session refuses them while a batch is open");
+        let plain_edit = BatchStep {
+            tool: "edit_sector".to_owned(),
+            arguments: Some(json!({"index": 0_i64})),
+        };
+        check_step(0, &plain_edit, router, &blocked).expect("a plain edit step plans");
+        check_step(0, &step("get_session_info"), router, &blocked)
+            .expect("a read step plans and sends no arguments");
     }
 }

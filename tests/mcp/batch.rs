@@ -2,8 +2,10 @@
 //! sequence applied by `run_batch` and reverted by one `undo` (and replayed
 //! by one `redo`), the atomic rollback of a failing step, the non-atomic
 //! run that keeps the successful steps, `$ref` chaining between steps, the
-//! batch-level refusals that run nothing, and the check that every listed
-//! tool except the forbidden ones dispatches through the batch.
+//! batch-level refusals that run nothing, the session's runtime refusals of
+//! the whole-archive and saved-state tools while a batch is open, and the
+//! check that every listed tool except the refused groups dispatches
+//! through the batch.
 
 #[cfg(test)]
 mod tests {
@@ -497,5 +499,261 @@ mod tests {
         );
         let info = call(&client, "get_session_info", json!(null)).await;
         assert_eq!(info["undo"], json!([]), "the history is untouched");
+    }
+
+    /// Writes the merged view to a file outside any batch and returns its
+    /// `{"path": ...}` arguments.
+    async fn saved_view(client: &Client, dir: &Path, file: &str) -> Value {
+        let path = dir.join(file);
+        call(
+            client,
+            "save_wad",
+            json!({"path": path.display().to_string(), "mode": "full"}),
+        )
+        .await;
+        json!({"path": path.display().to_string()})
+    }
+
+    #[tokio::test]
+    async fn the_working_archive_swap_is_refused_while_the_batch_runs() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let snapshot = dir.path().join("snapshot.wad");
+        call(
+            &client,
+            "save_wad",
+            json!({"path": snapshot.display().to_string()}),
+        )
+        .await;
+        let report = call(
+            &client,
+            "run_batch",
+            steps(&[
+                step("edit_sector", json!({"index": 0_i32, "light": 64_i32})),
+                step(
+                    "open_wad",
+                    json!({
+                        "path": snapshot.display().to_string(),
+                        "discard_changes": true,
+                    }),
+                ),
+            ]),
+        )
+        .await;
+        assert_eq!(report["ok"], json!(false), "the swap refused: {report}");
+        assert_eq!(
+            report["rolled_back"],
+            json!(true),
+            "the atomic batch rolled the edit back"
+        );
+        assert_eq!(
+            report["steps"][1]["error"]["error"],
+            json!("conflict"),
+            "the session refuses it: {}",
+            report["steps"][1]["error"]
+        );
+        assert_eq!(
+            sector(&client, 0, "merged").await["light"],
+            json!(160_i32),
+            "the refused swap and the rolled-back fold left the layers' map alone"
+        );
+        let info = call(&client, "get_session_info", json!(null)).await;
+        assert_eq!(info["undo"], json!([]), "the fold left no entry");
+        let alone = call(
+            &client,
+            "open_wad",
+            json!({
+                "path": snapshot.display().to_string(),
+                "discard_changes": true,
+            }),
+        )
+        .await;
+        assert_eq!(
+            alone["path"],
+            json!(snapshot.display().to_string()),
+            "between batches the same call runs"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pwad_save_step_is_refused_before_the_write_and_a_full_export_runs() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let saved = dir.path().join("mid-batch.wad");
+        let report = call(
+            &client,
+            "run_batch",
+            steps(&[
+                step("edit_sector", json!({"index": 0_i32, "light": 64_i32})),
+                step("save_wad", json!({"path": saved.display().to_string()})),
+            ]),
+        )
+        .await;
+        assert_eq!(report["rolled_back"], json!(true), "the save refused");
+        assert_eq!(
+            report["steps"][1]["error"]["error"],
+            json!("conflict"),
+            "the session refuses the save mark: {}",
+            report["steps"][1]["error"]
+        );
+        assert!(
+            !saved.try_exists().expect("a testable path"),
+            "the refusal comes before the write"
+        );
+        let packed = dir.path().join("packed.wad");
+        let exported = call(
+            &client,
+            "run_batch",
+            steps(&[
+                step("edit_sector", json!({"index": 0_i32, "light": 96_i32})),
+                step(
+                    "save_wad",
+                    json!({"path": packed.display().to_string(), "mode": "full"}),
+                ),
+            ]),
+        )
+        .await;
+        assert_eq!(exported["ok"], json!(true), "the export ran: {exported}");
+        assert!(
+            packed.try_exists().expect("a testable path"),
+            "mode full writes while the batch runs"
+        );
+        let info = call(&client, "get_session_info", json!(null)).await;
+        assert_eq!(
+            info["undo"].as_array().expect("undo").len(),
+            1,
+            "the export recorded nothing; the edit folded into one entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_working_merge_step_folds_into_the_batch_entry() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let view = saved_view(&client, dir.path(), "packed.wad").await;
+        let mut merge_args = view.clone();
+        merge_args["mode"] = json!("working");
+        let report = call(
+            &client,
+            "run_batch",
+            steps(&[
+                step("edit_sector", json!({"index": 0_i32, "light": 64_i32})),
+                step("merge_wad", &merge_args),
+            ]),
+        )
+        .await;
+        assert_eq!(report["ok"], json!(true), "both steps ran: {report}");
+        assert_eq!(
+            report["steps"][1]["result"]["mode"],
+            json!("working"),
+            "the merge folded"
+        );
+        let label = report["undo_label"].clone();
+        let info = call(&client, "get_session_info", json!(null)).await;
+        assert_eq!(
+            info["undo"],
+            json!([label]),
+            "the merge edit stands inside the batch's one entry"
+        );
+        let undone = call(&client, "undo", json!({})).await;
+        assert_eq!(undone["undone"], json!([label]), "one undo takes both");
+        assert!(
+            working_names(&client).await.is_empty(),
+            "the fold's pre-batch archive is back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_layer_merge_step_is_refused_and_rolls_the_batch_back() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let view = saved_view(&client, dir.path(), "extras.wad").await;
+        let mut layer_args = view.clone();
+        layer_args["mode"] = json!("layer");
+        let report = call(
+            &client,
+            "run_batch",
+            steps(&[
+                step("edit_sector", json!({"index": 0_i32, "light": 64_i32})),
+                step("merge_wad", &layer_args),
+            ]),
+        )
+        .await;
+        assert_eq!(report["rolled_back"], json!(true), "the layer refused");
+        assert_eq!(
+            report["steps"][1]["error"]["error"],
+            json!("conflict"),
+            "the session refuses the stack: {}",
+            report["steps"][1]["error"]
+        );
+        let info = call(&client, "get_session_info", json!(null)).await;
+        assert_eq!(
+            info["layers"].as_array().expect("layers").len(),
+            1,
+            "no layer was stacked"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_nested_run_batch_step_is_refused_by_the_plan() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let (code, message, _) = call_err(
+            &client,
+            "run_batch",
+            steps(&[
+                step("add_lump", json!({"name": "SHOULD_NOT_EXIST"})),
+                step(
+                    "run_batch",
+                    steps(&[step("add_lump", json!({"name": "NESTED"}))]),
+                ),
+            ]),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "a nested batch refuses");
+        assert!(
+            message.contains("step 1") && message.contains("run_batch"),
+            "the refusal names the step and tool: {message}"
+        );
+        assert!(
+            working_names(&client).await.is_empty(),
+            "the refused plan ran nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_inner_edit_folds_nothing_into_the_entry() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let mut args = steps(&[
+            step("edit_sector", json!({"index": 0_i32, "light": 64_i32})),
+            step("edit_sector", json!({"index": 999_i32, "light": 1_i32})),
+        ]);
+        args["atomic"] = json!(false);
+        args["label"] = json!("partial");
+        let report = call(&client, "run_batch", args).await;
+        assert_eq!(report["ok"], json!(false), "one step failed");
+        assert_eq!(
+            report["rolled_back"],
+            json!(false),
+            "a non-atomic batch keeps the good edit"
+        );
+        assert_eq!(report["undo_label"], json!("partial"), "one entry");
+        let info = call(&client, "get_session_info", json!(null)).await;
+        assert_eq!(
+            info["undo"],
+            json!(["partial"]),
+            "the failed edit left nothing beside the fold"
+        );
+        assert_eq!(
+            sector(&client, 0, "working").await["light"],
+            json!(64_i32),
+            "the good edit stands"
+        );
+        call(&client, "undo", json!({})).await;
+        assert!(
+            working_names(&client).await.is_empty(),
+            "one undo reverts the fold to the pre-batch archive"
+        );
     }
 }

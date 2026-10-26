@@ -45,14 +45,16 @@ fn save_wad_report_dedupes_only_when_asked_and_reports_the_saving() {
     let state = AppState::default();
     state
         .with_session(|session| {
-            session.replace_working(
-                pwad(vec![
-                    carrying("FIRST", "same-bytes"),
-                    carrying("SECOND", "same-bytes"),
-                    marker("NOTE"),
-                ]),
-                None,
-            );
+            session
+                .replace_working(
+                    pwad(vec![
+                        carrying("FIRST", "same-bytes"),
+                        carrying("SECOND", "same-bytes"),
+                        marker("NOTE"),
+                    ]),
+                    None,
+                )
+                .expect("no batch is open");
             Ok(())
         })
         .expect("seeding the session works");
@@ -153,7 +155,9 @@ fn parse_steps_refuses_zero_and_counts_past_the_limit() {
 fn undo_run_steps_back_over_the_stack_and_reports_it() {
     let mut session = Session::default();
     add_markers(&mut session, &["A", "B", "C"]);
-    session.mark_saved(PathBuf::from("out.wad"));
+    session
+        .mark_saved(PathBuf::from("out.wad"))
+        .expect("no batch is open");
     let report = undo_run(&mut session, 5).expect("three steps are available");
     assert_eq!(
         report.undone,
@@ -178,7 +182,9 @@ fn undo_run_on_an_empty_stack_reports_not_found() {
 fn redo_run_replays_the_undone_steps_in_order() {
     let mut session = Session::default();
     add_markers(&mut session, &["A", "B", "C"]);
-    session.mark_saved(PathBuf::from("out.wad"));
+    session
+        .mark_saved(PathBuf::from("out.wad"))
+        .expect("no batch is open");
     undo_run(&mut session, 3).expect("undo all three");
     let report = redo_run(&mut session, 2).expect("two steps are available");
     assert_eq!(
@@ -213,11 +219,13 @@ fn undo_run_clears_an_active_map_the_history_removed() {
 #[test]
 fn undo_run_keeps_an_active_map_a_layer_still_provides() {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("doom.wad"),
-        LayerRole::Iwad,
-        pwad(vec![marker("MAP01"), marker("THINGS")]),
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("doom.wad"),
+            LayerRole::Iwad,
+            pwad(vec![marker("MAP01"), marker("THINGS")]),
+        ))
+        .expect("no batch is open");
     session.set_active_map(Some(name("MAP01")));
     add_markers(&mut session, &["NOTE"]);
     let report = undo_run(&mut session, 1).expect("undo the note");

@@ -151,9 +151,15 @@ fn layers_are_the_iwad_then_the_resources_in_load_order() {
 #[test]
 fn layer_roles_are_normalised_to_their_position() {
     let mut session = Session::default();
-    session.set_iwad(layer(LayerRole::Resource, "doom", vec![lump("PLAYPAL")]));
-    session.add_resource(layer(LayerRole::Iwad, "one", vec![]));
-    session.add_resource(layer(LayerRole::Resource, "two", vec![]));
+    session
+        .set_iwad(layer(LayerRole::Resource, "doom", vec![lump("PLAYPAL")]))
+        .expect("no batch is open");
+    session
+        .add_resource(layer(LayerRole::Iwad, "one", vec![]))
+        .expect("no batch is open");
+    session
+        .add_resource(layer(LayerRole::Resource, "two", vec![]))
+        .expect("no batch is open");
     assert_eq!(
         session.iwad().expect("base").role,
         LayerRole::Iwad,
@@ -174,8 +180,12 @@ fn layer_roles_are_normalised_to_their_position() {
 #[test]
 fn setting_the_iwad_twice_keeps_one_base_layer() {
     let mut session = Session::default();
-    session.set_iwad(layer(LayerRole::Iwad, "doom", vec![lump("PLAYPAL")]));
-    session.set_iwad(layer(LayerRole::Iwad, "plutonia", vec![lump("PLAYPAL")]));
+    session
+        .set_iwad(layer(LayerRole::Iwad, "doom", vec![lump("PLAYPAL")]))
+        .expect("no batch is open");
+    session
+        .set_iwad(layer(LayerRole::Iwad, "plutonia", vec![lump("PLAYPAL")]))
+        .expect("no batch is open");
     assert_eq!(
         session.layers().len(),
         1,
@@ -275,7 +285,9 @@ fn find_global_answers_the_winning_lump_whatever_region_it_sits_in() {
 #[test]
 fn find_reports_the_working_copy_once_it_overrides() {
     let mut session = loaded();
-    session.replace_working(pwad(vec![lump("GAMEINFO")]), None);
+    session
+        .replace_working(pwad(vec![lump("GAMEINFO")]), None)
+        .expect("no batch is open");
     session
         .edit("bring a flat", |wad| {
             wad.lumps.push(lump("FLOOR_1"));

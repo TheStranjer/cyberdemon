@@ -72,21 +72,23 @@ fn a_layer_patch_name_clashes_with_a_hint() {
 /// optionally with a working flats-region lump of the patch's own name.
 fn region_iwad_session(working_flat: bool) -> Session {
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps: vec![
-                Lump::new(name("PLAYPAL"), playpal()),
-                pnames_lump(),
-                texture1_lump(),
-                Lump::marker(name("P_START")),
-                Lump::new(name("WALLP1"), vec![b'P']),
-                Lump::marker(name("P_END")),
-            ],
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::new(name("PLAYPAL"), playpal()),
+                    pnames_lump(),
+                    texture1_lump(),
+                    Lump::marker(name("P_START")),
+                    Lump::new(name("WALLP1"), vec![b'P']),
+                    Lump::marker(name("P_END")),
+                ],
+            },
+        ))
+        .expect("no batch is open");
     if working_flat {
         session
             .edit("seed-flat", |wad| {

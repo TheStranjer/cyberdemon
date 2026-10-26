@@ -52,14 +52,16 @@ fn session_with(palettes: usize, with_colormap: bool) -> Session {
         lumps.push(Lump::new(name("COLORMAP"), vec![0_u8; colormap::MIN_BYTES]));
     }
     let mut session = Session::default();
-    session.set_iwad(Layer::new(
-        PathBuf::from("base.wad"),
-        LayerRole::Iwad,
-        Wad {
-            kind: WadKind::Iwad,
-            lumps,
-        },
-    ));
+    session
+        .set_iwad(Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        ))
+        .expect("no batch is open");
     session
 }
 

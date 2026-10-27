@@ -37,6 +37,7 @@ use crate::wad::map::features::{
     WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines, door_rect, door_wall,
     outward_depth, window_record,
 };
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, Paint, WallTextures};
 use crate::wad::map::{Map, Sector};
@@ -182,7 +183,7 @@ fn place_window(map: &Map, chosen: &Chosen, spec: &WindowSpec) -> Result<Vec<Poi
     let depth = outward_depth(map, wall.linedef, wall.point, MAX_DEPTH)
         .map_or_else(|| Err(no_room()), |hit| Ok(hit.0))?;
     let rect = door_rect(&wall, normal, depth, false);
-    require_landing(map, &rect)?;
+    require_landing(&SectorIndex::new(map), &rect)?;
     Ok(rect)
 }
 

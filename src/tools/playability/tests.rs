@@ -140,6 +140,7 @@ fn stuck_hint_for(kind: i32, reason: StuckReason) -> String {
     let defs = definitions_for(Game::Doom2).expect("the embedded Doom II table is valid");
     let a = Analysis {
         map: &map,
+        geometry: crate::wad::map::geometry::SectorIndex::new(&map),
         defs: &defs,
         family: FlagFamily::Doom,
         skill: Skill::Medium,

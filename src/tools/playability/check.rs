@@ -26,6 +26,7 @@ use crate::state::AppState;
 use crate::tools::render::{OverviewMarks, playability_overview};
 use crate::wad::map::Map;
 use crate::wad::map::flags::{FlagFamily, Skill};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::playability::{
     self, Blocker, LockInfo, Playability, Stuck, StuckReason, analyze_playability, blockers,
     stuck_things,
@@ -75,6 +76,9 @@ pub(super) fn parse_skill(text: Option<&str>) -> Result<Skill, CyberError> {
 pub(super) struct Analysis<'ctx> {
     /// The map that was walked.
     pub(super) map: &'ctx Map,
+    /// The map's per-sector geometry, indexed once for the report: the
+    /// unreachable rows answer every thing's home sector from it.
+    pub(super) geometry: SectorIndex,
     /// The session's definitions the body tests read.
     pub(super) defs: &'ctx Definitions,
     /// The flag family the map's lines are stored in.
@@ -420,6 +424,7 @@ pub(super) async fn check_run(
     let start = playability::start_thing(&prepared.map, family, skill);
     let analysis = Analysis {
         map: &prepared.map,
+        geometry: SectorIndex::new(&prepared.map),
         defs: &prepared.defs,
         family,
         skill,

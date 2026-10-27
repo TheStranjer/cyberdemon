@@ -18,9 +18,8 @@ use crate::fixed::{midpoint, narrow_i32};
 use crate::geom::Pt;
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{Feature, Plan};
-use crate::wad::map::Map;
 use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportSpec, build_teleporter};
-use crate::wad::map::geometry::{point_in_sector, sector_bbox};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::ops::Point;
 
 use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, room_sectors_of};
@@ -136,19 +135,18 @@ struct TeleporterRow<'plan> {
 }
 
 /// The centre of `square`: the wire's point, else the centre of the
-/// room sectors' merged bounding box.
+/// room sectors' merged bounding box, the boxes read from `geometry`.
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for a wire point past the map
 /// coordinate range, [`CyberError::Internal`] for a room the compiled
 /// map bounds nowhere.
-fn square_centre(map: &Map, square: &TeleportSquare<'_>) -> Result<Point, CyberError> {
-    let given = match square.given {
-        Some(point) => map_point(point, square.role)?,
-        None => merged_centre(map, &square.sectors).ok_or_else(|| unbounded_room(square))?,
-    };
-    Ok(given)
+fn square_centre(geometry: &SectorIndex, square: &TeleportSquare<'_>) -> Result<Point, CyberError> {
+    square.given.map_or_else(
+        || merged_centre(geometry, &square.sectors).ok_or_else(|| unbounded_room(square)),
+        |point| map_point(point, square.role),
+    )
 }
 
 /// The `Internal` refusal for a room whose sectors bound nothing.
@@ -161,15 +159,17 @@ fn unbounded_room(square: &TeleportSquare<'_>) -> CyberError {
 }
 
 /// Require every [`TELEPORT_CLEARANCE`]-inset corner of the 64-unit
-/// square at `centre` to resolve through [`point_in_sector`] into one
-/// of the square's room sectors.
+/// square at `centre` to resolve through [`SectorIndex::point_in_sector`]
+/// into one of the square's room sectors, `geometry` being the pass's
+/// one index of the map the square stands in.
 fn assert_square_fits(
-    map: &Map,
+    geometry: &SectorIndex,
     centre: Point,
     square: &TeleportSquare<'_>,
 ) -> Result<(), CyberError> {
     for (x, y) in square_corners(centre) {
-        let inside = point_in_sector(map, i64::from(x), i64::from(y))
+        let inside = geometry
+            .point_in_sector(i64::from(x), i64::from(y))
             .is_some_and(|sector| square.sectors.contains(&sector));
         if !inside {
             return Err(square_too_big(square, x, y));
@@ -178,9 +178,10 @@ fn assert_square_fits(
     Ok(())
 }
 
-/// The [`TeleportSpec`] behind one row: both centres resolved and
-/// fitted, the fixed [`DEFAULT_PAD_SIZE`] side, the rooms' own floor
-/// flats and the theme's `wall` for bare new edges.
+/// The [`TeleportSpec`] behind one row: both centres resolved and fitted
+/// against one [`SectorIndex`] of the map as it stands before this row's
+/// squares are painted, the fixed [`DEFAULT_PAD_SIZE`] side, the rooms'
+/// own floor flats and the theme's `wall` for bare new edges.
 ///
 /// # Errors
 ///
@@ -191,11 +192,11 @@ fn teleport_spec(
     dress: &FeatureDress,
     row: &TeleporterRow<'_>,
 ) -> Result<TeleportSpec, CyberError> {
-    let map = &compiled.map;
-    let pad = square_centre(map, &row.pad)?;
-    assert_square_fits(map, pad, &row.pad)?;
-    let destination = square_centre(map, &row.destination)?;
-    assert_square_fits(map, destination, &row.destination)?;
+    let geometry = SectorIndex::new(&compiled.map);
+    let pad = square_centre(&geometry, &row.pad)?;
+    assert_square_fits(&geometry, pad, &row.pad)?;
+    let destination = square_centre(&geometry, &row.destination)?;
+    assert_square_fits(&geometry, destination, &row.destination)?;
     Ok(TeleportSpec {
         pad,
         destination,
@@ -228,10 +229,11 @@ const fn square_corners(centre: Point) -> [(i32, i32); 4] {
     ]
 }
 
-/// The centre of the merged bounding box of `sectors`, or `None` when
-/// no one of them bounds a resolvable vertex.
-fn merged_centre(map: &Map, sectors: &[usize]) -> Option<Point> {
-    let (min_x, min_y, max_x, max_y) = merged_bbox(map, sectors)?;
+/// The centre of the merged bounding box of `sectors`, the boxes read
+/// from `geometry`, or `None` when no one of them bounds a resolvable
+/// vertex.
+fn merged_centre(geometry: &SectorIndex, sectors: &[usize]) -> Option<Point> {
+    let (min_x, min_y, max_x, max_y) = merged_bbox(geometry, sectors)?;
     Some(Point {
         x: mid_axis(min_x, max_x),
         y: mid_axis(min_y, max_y),
@@ -240,10 +242,10 @@ fn merged_centre(map: &Map, sectors: &[usize]) -> Option<Point> {
 
 /// The box covering `sectors`, or `None` when no one of them bounds a
 /// resolvable vertex.
-fn merged_bbox(map: &Map, sectors: &[usize]) -> Option<(i32, i32, i32, i32)> {
+fn merged_bbox(geometry: &SectorIndex, sectors: &[usize]) -> Option<(i32, i32, i32, i32)> {
     sectors
         .iter()
-        .filter_map(|&index| sector_bbox(map, index))
+        .filter_map(|&index| geometry.bbox(index))
         .reduce(|(a1, b1, a2, b2), (c1, d1, c2, d2)| {
             (a1.min(c1), b1.min(d1), a2.max(c2), b2.max(d2))
         })

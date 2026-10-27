@@ -23,6 +23,7 @@ use crate::gfx::palette::Palette;
 use crate::render::canvas::Canvas;
 use crate::render::view::{Fraction, MaskedMiddle, ONE_16, Projection, ViewCamera};
 use crate::render::{Lighting, RenderSettings, Scene, WallDir};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::{Map, MapFormat};
 use crate::wad::name::LumpName;
 
@@ -79,11 +80,14 @@ pub(super) fn lit(index: u8) -> [u8; 4] {
 /// texture the tests share. Its map, flats and sky are never read:
 /// sprite items carry their own patches.
 pub(super) fn fixture_scene() -> Scene {
+    let map = Map::new_empty(
+        LumpName::parse("MAP01").expect("test names are valid"),
+        MapFormat::Doom,
+    );
+    let geometry = SectorIndex::new(&map);
     Scene {
-        map: Map::new_empty(
-            LumpName::parse("MAP01").expect("test names are valid"),
-            MapFormat::Doom,
-        ),
+        map,
+        geometry,
         palette: fixture_palette(),
         colormaps: vec![identity()],
         textures: BTreeMap::from([("TESTBAR".to_owned(), solid(100, 128, 64))]),

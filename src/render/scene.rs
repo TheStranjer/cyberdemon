@@ -29,7 +29,7 @@ use crate::wad::game::{Game, sky_flat};
 use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::consts::{is_sky_flat, normalized_picture};
-use crate::wad::map::geometry;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::name::LumpName;
 
 /// The `PLAYPAL` entry the scene shades with.
@@ -70,6 +70,10 @@ fn sky_table(game: Game) -> &'static [u32] {
 pub struct Scene {
     /// The map's decoded lumps, as the merged view holds them.
     pub map: Map,
+    /// The map's per-sector geometry, indexed once when the scene was
+    /// built: the camera helper and the view's sprite pass answer their
+    /// containment reads from this stored index.
+    pub geometry: SectorIndex,
     /// `PLAYPAL` entry 0, the colours the indices refer to.
     pub palette: Palette,
     /// The 34 lighting tables: maps of [`TABLE_BYTES`] palette indices,
@@ -117,6 +121,7 @@ pub fn build_scene(
     settings: &RenderSettings,
 ) -> Result<Scene, CyberError> {
     let model = load_map(session, map, Scope::Merged)?;
+    let geometry = SectorIndex::new(&model);
     let palette = load_palette(session, PALETTE_NORMAL)?;
     let mut problems = Vec::new();
     let lighting = scene_colormaps(session, &palette, &mut problems);
@@ -127,6 +132,7 @@ pub fn build_scene(
     let sky = sky_image(session, &model, &fallback, &mut problems);
     Ok(Scene {
         map: model,
+        geometry,
         palette,
         colormaps: lighting,
         textures,
@@ -139,11 +145,12 @@ pub fn build_scene(
 }
 
 /// The sector containing the camera position `x`/`y`, `None` outside the
-/// map.
+/// map. Answered from the scene's stored [`SectorIndex`], the one pass
+/// every containment read of the render shares.
 #[must_use]
 #[inline]
 pub fn camera_sector(scene: &Scene, x: i64, y: i64) -> Option<usize> {
-    geometry::point_in_sector(&scene.map, x, y)
+    scene.geometry.point_in_sector(x, y)
 }
 
 /// The default eye height in sector `sector`: its floor plus `Doom`'s
@@ -406,8 +413,9 @@ mod tests {
     use alloc::collections::BTreeMap;
 
     use super::{
-        FALLBACK_CELL, FALLBACK_CELLS, FALLBACK_SIDE, Scene, camera_sector, default_eye_z,
-        extreme_index, fallback_image, flat_names, shows_sky, sky_name, texture_names,
+        FALLBACK_CELL, FALLBACK_CELLS, FALLBACK_SIDE, Scene, SectorIndex, camera_sector,
+        default_eye_z, extreme_index, fallback_image, flat_names, shows_sky, sky_name,
+        texture_names,
     };
     use crate::gfx::image::IndexedImage;
     use crate::gfx::palette::Palette;
@@ -512,8 +520,10 @@ mod tests {
 
     /// A scene over `map` with everything else empty.
     fn scene_with(map: Map) -> Scene {
+        let geometry = SectorIndex::new(&map);
         Scene {
             map,
+            geometry,
             palette: fixture_palette(),
             colormaps: Vec::new(),
             textures: BTreeMap::new(),

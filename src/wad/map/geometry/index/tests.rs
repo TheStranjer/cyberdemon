@@ -3,6 +3,7 @@
 //! adds (degrees, candidates) and the point primitives it owns.
 
 mod fixtures;
+mod perf;
 mod reference;
 
 use super::{SectorIndex, bbox_area, crosses_ray, point_on_segment};

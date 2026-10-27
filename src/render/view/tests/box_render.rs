@@ -12,6 +12,7 @@ use crate::gfx::image::IndexedImage;
 use crate::render::scene::Scene;
 use crate::render::settings::{Lighting, RenderSettings, Switch};
 use crate::render::view::{ViewCamera, render_view};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Vertex};
 use crate::wad::name::LumpName;
 
@@ -71,8 +72,11 @@ pub(super) fn box_scene() -> Scene {
     let mut flats = BTreeMap::new();
     flats.insert("FLOOR1".to_owned(), solid(64, 64, 1));
     flats.insert("CEIL3".to_owned(), solid(64, 64, 200));
+    let map = box_map();
+    let geometry = SectorIndex::new(&map);
     Scene {
-        map: box_map(),
+        map,
+        geometry,
         palette: fixture_palette(),
         colormaps: vec![identity_table()],
         textures,

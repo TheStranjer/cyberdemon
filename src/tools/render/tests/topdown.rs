@@ -9,6 +9,7 @@ use crate::render::{
     Canvas, RenderSettings, Rgba, Switch, TopdownStyle, category_color, scale_down, thing_visual,
 };
 use crate::wad::game::Game;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::{Linedef, Map};
 
 use crate::tools::render::frame::{Plane, bounds_plane, fit, height_span, iso_plane};
@@ -31,6 +32,7 @@ fn automap_colour(map: &Map, index: usize, with: Option<&Linedef>) -> Option<Rgb
     let view = fit(&bounds_plane(&bounds), 64, 64);
     let scene = Scene {
         map,
+        geometry: SectorIndex::new(map),
         defs: &defs,
         view,
         canvas: Canvas::new(8, 8, [0_u8, 0, 0, 255]),

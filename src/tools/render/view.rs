@@ -27,7 +27,7 @@ use crate::state::AppState;
 use crate::tools::graphics::resolve::load_sprite_cached;
 use crate::tools::maps::common;
 use crate::wad::LumpName;
-use crate::wad::map::geometry;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::{Map, Thing};
 
 use super::PNG_MIME;
@@ -136,6 +136,9 @@ impl SpriteSpot {
 pub(super) struct SpriteWiring<'defs> {
     /// The session's thing definitions.
     pub(super) defs: &'defs Definitions,
+    /// The map's per-sector geometry, indexed once for the render: every
+    /// thing's home sector reads the stored answer.
+    pub(super) geometry: &'defs SectorIndex,
     /// Camera `x`, in map units.
     pub(super) cam_x: i64,
     /// Camera `y`, in map units.
@@ -155,12 +158,18 @@ pub(super) struct SpriteWiring<'defs> {
 }
 
 impl<'defs> SpriteWiring<'defs> {
-    /// The wiring for `camera`: `defs` dress the map's things, and the
-    /// camera's position and facing project and rotate them.
-    pub(super) fn new(defs: &'defs Definitions, camera: &ViewCamera) -> Self {
+    /// The wiring for `camera`: `defs` dress the map's things, `geometry`
+    /// answers their home sectors, and the camera's position and facing
+    /// project and rotate them.
+    pub(super) fn new(
+        defs: &'defs Definitions,
+        camera: &ViewCamera,
+        geometry: &'defs SectorIndex,
+    ) -> Self {
         let facing = Angle::from_degrees(i64::from(camera.angle));
         Self {
             defs,
+            geometry,
             cam_x: i64::from(camera.x),
             cam_y: i64::from(camera.y),
             forward_x: i128::from(facing.cos().0),
@@ -242,7 +251,7 @@ impl<'defs> SpriteWiring<'defs> {
         if depth16 < SPRITE_MIN_TZ16 {
             return;
         }
-        let Some(sector) = geometry::point_in_sector(map, spot.x, spot.y) else {
+        let Some(sector) = self.geometry.point_in_sector(spot.x, spot.y) else {
             return;
         };
         let Some(row) = map.sectors.get(sector) else {
@@ -281,7 +290,7 @@ fn view_sprites(
     defs: &Definitions,
     camera: &ViewCamera,
 ) -> (Vec<SpriteItem>, Vec<String>) {
-    let mut wiring = SpriteWiring::new(defs, camera);
+    let mut wiring = SpriteWiring::new(defs, camera, &scene.geometry);
     for mark in &scene.map.things {
         wiring.add(session, &scene.map, mark);
     }

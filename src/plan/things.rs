@@ -13,9 +13,11 @@
 //! sector deterministically: row-major on a grid spaced by twice the
 //! thing's clearance, starting at the sector bounding box's minimum
 //! corner raised by the clearance, keeping every point at least that
-//! clearance inside the sector through the shared
-//! [`crate::wad::map::placement`] primitives ([`fits`] and friends) that
-//! the `place_things` tool distributes with too. [`presence_flags`]
+//! clearance inside the sector through the same containment and boundary
+//! rules [`crate::wad::map::placement`] gives the `place_things` tool's
+//! distribution — but read from one [`SectorIndex`] a [`place`] run
+//! builds once for the compiled map, so a fill of a thousand grid points
+//! never rescans the linedefs. [`presence_flags`]
 //! folds the `skills` and `multiplayer_only` parameters into the `Thing`
 //! flag bits of the map's flag family, reading the tables in
 //! [`crate::wad::map::flags`]. Nothing here touches archives, sessions
@@ -32,8 +34,8 @@ use crate::plan::units::{Units, range_error};
 /// own [`Skill`], re-exported where the plan writers read it.
 pub use crate::wad::map::flags::Skill;
 use crate::wad::map::flags::{FlagFamily, FlagKind, names as flag_names};
-use crate::wad::map::geometry::sector_bbox;
-use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points, fits};
+use crate::wad::map::geometry::SectorIndex;
+use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points};
 use crate::wad::map::{Map, Thing};
 
 /// The thing type of the player 1 start, shared from
@@ -183,7 +185,7 @@ pub fn presence_flags(family: FlagFamily, skills: Option<&[Skill]>, multiplayer_
 }
 
 /// Turn resolved rows into [`Thing`] records for `context`'s compiled
-/// map.
+/// map. The whole run reads the map through one [`SectorIndex`].
 ///
 /// # Errors
 ///
@@ -196,32 +198,151 @@ pub fn place(
     context: &PlacementContext<'_>,
     specs: &[PlannedThing],
 ) -> Result<Placement, CyberError> {
-    let mut placement = Placement::default();
-    for spec in specs {
-        place_row(context, spec, &mut placement)?;
-    }
-    Ok(placement)
+    let mut pass = Pass::new(context);
+    pass.run(specs)?;
+    Ok(pass.out)
 }
 
-/// Place one resolved row: its pinned point, its room fill or the room
-/// centre, appending records and warnings.
-fn place_row(
-    context: &PlacementContext<'_>,
-    spec: &PlannedThing,
-    out: &mut Placement,
-) -> Result<(), CyberError> {
-    match spec.spot.clone() {
-        ThingSpot::Point(point) => {
-            let mapped = transform_point(context, spec, point)?;
-            out.things.push(thing_row(spec, mapped)?);
-            Ok(())
+/// The shared state of one [`place`] run: the caller's context, the
+/// compiled map indexed once for the whole pass, and the rows gathered
+/// so far. Every box, containment and boundary read of the pass answers
+/// from that stored [`SectorIndex`], never a fresh scan per point.
+struct Pass<'ctx> {
+    /// The compiled map and reference tables the rows are read against.
+    context: &'ctx PlacementContext<'ctx>,
+    /// The compiled map's per-sector geometry, built once for the run.
+    geometry: SectorIndex,
+    /// The rows and notes accumulated so far.
+    out: Placement,
+}
+
+impl<'ctx> Pass<'ctx> {
+    /// Index the context's map once and open an empty placement.
+    fn new(context: &'ctx PlacementContext<'ctx>) -> Self {
+        Self {
+            context,
+            geometry: SectorIndex::new(context.map),
+            out: Placement::default(),
         }
-        ThingSpot::Room { id } => place_room_fill(context, spec, &id, out),
-        ThingSpot::RoomCentre { id } => {
-            let centre = room_centre(context, spec, &id)?;
-            out.things.push(thing_row(spec, centre)?);
-            Ok(())
+    }
+
+    /// Place every resolved row, in order; the first refusal stops the
+    /// run with its rows and notes dropped.
+    fn run(&mut self, specs: &[PlannedThing]) -> Result<(), CyberError> {
+        for spec in specs {
+            self.place_row(spec)?;
         }
+        Ok(())
+    }
+
+    /// Place one resolved row: its pinned point, its room fill or the
+    /// room centre, appending records and warnings.
+    fn place_row(&mut self, spec: &PlannedThing) -> Result<(), CyberError> {
+        match spec.spot.clone() {
+            ThingSpot::Point(point) => {
+                let mapped = transform_point(self.context, spec, point)?;
+                self.out.things.push(thing_row(spec, mapped)?);
+                Ok(())
+            }
+            ThingSpot::Room { id } => self.room_fill(spec, &id),
+            ThingSpot::RoomCentre { id } => {
+                let centre = self.room_centre(spec, &id)?;
+                self.out.things.push(thing_row(spec, centre)?);
+                Ok(())
+            }
+        }
+    }
+
+    /// The first sector the plan room `id` owns, refused with the row's
+    /// `path` when the compiled plan holds nothing for it.
+    fn room_sector(&self, path: &str, id: &str) -> Result<usize, CyberError> {
+        self.context
+            .room_sectors
+            .get(id)
+            .and_then(|sectors| sectors.first().copied())
+            .ok_or_else(|| {
+                CyberError::InvalidArgument(format!(
+                    "{path}: room '{id}' is not a room of the compiled plan (or it was painted \
+                     over entirely); check the rooms list"
+                ))
+            })
+    }
+
+    /// The bounding-box centre of the room's sector, map units, the box
+    /// read from the run's index.
+    fn room_centre(&self, spec: &PlannedThing, id: &str) -> Result<Pt, CyberError> {
+        let path = format!("{}.room", spec.path);
+        let sector = self.room_sector(&path, id)?;
+        let bbox = self.geometry.bbox(sector).ok_or_else(|| {
+            CyberError::InvalidArgument(format!(
+                "{path}: room '{id}' bounds nothing, so it has no centre to place at"
+            ))
+        })?;
+        let (min_x, min_y, max_x, max_y) = bbox;
+        Ok((
+            midpoint(i64::from(min_x), i64::from(max_x)),
+            midpoint(i64::from(min_y), i64::from(max_y)),
+        ))
+    }
+
+    /// Fill one room row-major, append what fits and note what did not.
+    fn room_fill(&mut self, spec: &PlannedThing, id: &str) -> Result<(), CyberError> {
+        let path = format!("{}.room", spec.path);
+        let sector = self.room_sector(&path, id)?;
+        let clearance = thing_clearance(self.context.definitions, spec.kind);
+        let wanted = usize::try_from(spec.count).unwrap_or(usize::MAX);
+        let slots = self.slots(sector, clearance, wanted);
+        if slots.len() < wanted {
+            self.out.warnings.push(format!(
+                "room '{id}' fits only {} of {} things",
+                slots.len(),
+                spec.count
+            ));
+        }
+        for point in slots {
+            self.out.things.push(thing_row(spec, point)?);
+        }
+        Ok(())
+    }
+
+    /// The first `wanted` grid points that [`Self::fits`]: row-major
+    /// (the `x` axis runs fastest), from the sector bounding box's
+    /// minimum corner raised by `clearance`, twice the clearance apart.
+    /// The box comes from the run's index.
+    fn slots(&self, sector: usize, clearance: i64, wanted: usize) -> Vec<Pt> {
+        let Some(bbox) = self.geometry.bbox(sector) else {
+            return Vec::new();
+        };
+        let (min_x, min_y, max_x, max_y) = bbox;
+        let step = clearance.saturating_mul(2_i64);
+        let rows = axis_points(
+            i64::from(min_y).saturating_add(clearance),
+            i64::from(max_y),
+            step,
+        );
+        let columns = axis_points(
+            i64::from(min_x).saturating_add(clearance),
+            i64::from(max_x),
+            step,
+        );
+        rows.iter()
+            .flat_map(|&y| columns.iter().map(move |&x| (x, y)))
+            .filter(|at| self.fits(sector, *at, clearance))
+            .take(wanted)
+            .collect()
+    }
+
+    /// [`placement::fits`]' answer read from the run's one index: the
+    /// same containment winner and the same boundary rows the single
+    /// helper folds for its one point, shared across the whole fill.
+    fn fits(&self, sector: usize, at: Pt, clearance: i64) -> bool {
+        let (x, y) = at;
+        self.geometry.point_in_sector(x, y) == Some(sector)
+            && self
+                .geometry
+                .boundary(sector)
+                .iter()
+                .all(|&(line, _)| placement::line_clear(self.context.map, line, at, clearance))
     }
 }
 
@@ -238,97 +359,11 @@ fn transform_point(
         .ok_or_else(|| range_error(&format!("{}: x/y", spec.path)))
 }
 
-/// The first sector the plan room `id` owns, refused with the row's
-/// `path` when the compiled plan holds nothing for it.
-fn room_sector(context: &PlacementContext<'_>, path: &str, id: &str) -> Result<usize, CyberError> {
-    context
-        .room_sectors
-        .get(id)
-        .and_then(|sectors| sectors.first().copied())
-        .ok_or_else(|| {
-            CyberError::InvalidArgument(format!(
-                "{path}: room '{id}' is not a room of the compiled plan (or it was painted over \
-                 entirely); check the rooms list"
-            ))
-        })
-}
-
-/// The bounding-box centre of the room's sector, map units.
-fn room_centre(
-    context: &PlacementContext<'_>,
-    spec: &PlannedThing,
-    id: &str,
-) -> Result<Pt, CyberError> {
-    let path = format!("{}.room", spec.path);
-    let sector = room_sector(context, &path, id)?;
-    let bbox = sector_bbox(context.map, sector).ok_or_else(|| {
-        CyberError::InvalidArgument(format!(
-            "{path}: room '{id}' bounds nothing, so it has no centre to place at"
-        ))
-    })?;
-    let (min_x, min_y, max_x, max_y) = bbox;
-    Ok((
-        midpoint(i64::from(min_x), i64::from(max_x)),
-        midpoint(i64::from(min_y), i64::from(max_y)),
-    ))
-}
-
-/// Fill one room row-major, append what fits and note what did not.
-fn place_room_fill(
-    context: &PlacementContext<'_>,
-    spec: &PlannedThing,
-    id: &str,
-    out: &mut Placement,
-) -> Result<(), CyberError> {
-    let path = format!("{}.room", spec.path);
-    let sector = room_sector(context, &path, id)?;
-    let clearance = thing_clearance(context.definitions, spec.kind);
-    let wanted = usize::try_from(spec.count).unwrap_or(usize::MAX);
-    let slots = room_slots(context.map, sector, clearance, wanted);
-    if slots.len() < wanted {
-        out.warnings.push(format!(
-            "room '{id}' fits only {} of {} things",
-            slots.len(),
-            spec.count
-        ));
-    }
-    for point in slots {
-        out.things.push(thing_row(spec, point)?);
-    }
-    Ok(())
-}
-
 /// The wall clearance of thing type `kind`: its definition's blocking
 /// radius (or [`DEFAULT_RADIUS`] when the definitions do not list the
 /// type) plus the shared clearance margin.
 fn thing_clearance(definitions: &Definitions, kind: u32) -> i64 {
     placement::thing_clearance(definitions, kind, DEFAULT_RADIUS)
-}
-
-/// The first `wanted` grid points that [`fits`]: row-major (the `x`
-/// axis runs fastest), from the sector bounding box's minimum corner
-/// raised by `clearance`, twice the clearance apart.
-fn room_slots(map: &Map, sector: usize, clearance: i64, wanted: usize) -> Vec<Pt> {
-    let Some(bbox) = sector_bbox(map, sector) else {
-        return Vec::new();
-    };
-    let (min_x, min_y, max_x, max_y) = bbox;
-    let step = clearance.saturating_mul(2_i64);
-    let rows = axis_points(
-        i64::from(min_y).saturating_add(clearance),
-        i64::from(max_y),
-        step,
-    );
-    let columns = axis_points(
-        i64::from(min_x).saturating_add(clearance),
-        i64::from(max_x),
-        step,
-    );
-    rows.iter()
-        .flat_map(|&y| columns.iter().map(move |&x| (x, y)))
-        .filter(|at| fits(map, sector, *at, clearance))
-        .take(wanted)
-        .collect()
 }
 
 /// The [`Thing`] record for one copy of `spec` standing at map `point`.
@@ -370,12 +405,13 @@ mod tests {
     use alloc::collections::BTreeMap;
 
     use super::{
-        PLAYER_ONE_START, PlacementContext, PlannedThing, Skill, ThingSpot, candidate_names, place,
-        presence_flags, resolve_thing_kind, room_slots, substring_matches, thing_clearance,
+        PLAYER_ONE_START, Pass, PlacementContext, PlannedThing, Skill, ThingSpot, candidate_names,
+        place, presence_flags, resolve_thing_kind, substring_matches, thing_clearance,
     };
     use crate::defs::registry::DefinitionTables;
     use crate::defs::table::ThingDef;
     use crate::defs::{Category, Definitions, definitions_for};
+    use crate::geom::Pt;
     use crate::plan::Units;
     use crate::wad::game::Game;
     use crate::wad::map::flags::{FlagFamily, FlagKind, to_names};
@@ -486,6 +522,15 @@ mod tests {
             units: Units::default(),
             grid: 1_i64,
         }
+    }
+
+    /// [`Pass::slots`] over a throwaway context: the grid reads only the
+    /// map and the pass's one index.
+    fn slots(map: &Map, sector: usize, clearance: i64, wanted: usize) -> Vec<Pt> {
+        let definitions = doom_definitions();
+        let rooms: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let context = context(map, &rooms, &definitions);
+        Pass::new(&context).slots(sector, clearance, wanted)
     }
 
     #[test]
@@ -612,7 +657,7 @@ mod tests {
     fn the_room_grid_runs_row_major_from_the_raised_minimum_corner() {
         let map = square_rooms(&[(0_i32, 100_i32)]);
         assert_eq!(
-            room_slots(&map, 0_usize, 20_i64, 10_usize),
+            slots(&map, 0_usize, 20_i64, 10_usize),
             vec![
                 (20_i64, 20_i64),
                 (60_i64, 20_i64),
@@ -622,12 +667,12 @@ mod tests {
             "step 40 from (20, 20); the 100-line is inside every clearance"
         );
         assert_eq!(
-            room_slots(&map, 0_usize, 20_i64, 2_usize),
+            slots(&map, 0_usize, 20_i64, 2_usize),
             vec![(20_i64, 20_i64), (60_i64, 20_i64)],
             "the fill stops at the requested count"
         );
         assert!(
-            room_slots(&map, 0_usize, 200_i64, 4_usize).is_empty(),
+            slots(&map, 0_usize, 200_i64, 4_usize).is_empty(),
             "nothing clears 200 units in a 100x100 room"
         );
     }

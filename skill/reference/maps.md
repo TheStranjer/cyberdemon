@@ -57,9 +57,10 @@ all share one contract, and each result carries the fragment
   linedef ends at, a linedef's `(v1, v2, front, back)` references, a
   sidedef's sector or the sector count, the generated node data is
   dropped: `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` are
-  emptied but kept in place, `ZNODES` is removed, trailing vertices no
-  linedef references (the split points a `build_nodes` appended) are
-  stripped, and the map's `GL_` node run is deleted. The result says
+  emptied but kept in place, `ZNODES` is removed, the split points a
+  `build_nodes` appended are shed (only the trailing vertices that run's
+  own `SEGS` records named — every other vertex stays, wired or not), and
+  the map's `GL_` node run is deleted. The result says
   `nodes_invalidated: true`; run
   `build_nodes` before playing the map in vanilla `Doom` —
   `ZDoom`-family ports rebuild missing node data themselves and play

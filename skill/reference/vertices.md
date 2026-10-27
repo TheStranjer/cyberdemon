@@ -18,16 +18,20 @@ so orphans show up as `"linedefs": []`.
 
 An edit changes geometry — reports `nodes_invalidated: true` and empties
 the generated `SEGS`/`SSECTORS`/`NODES`/`REJECT`/`BLOCKMAP` (and drops the
-map's `GL` run) — only when it touches a vertex a linedef ends at or a
-linedef itself; run `build_nodes` before playing such a map in vanilla
-`Doom`. Such an invalidating edit also strips trailing vertices no linedef
-references, which cleans up the split points an earlier `build_nodes`
-appended (`reference/nodes.md`). The two cases that change no buildable
-geometry: `add_vertex` **reusing** a point that already exists (nothing is
-written at all: `nodes_invalidated: false`, `copied_to_working: false`,
-and **no undo entry**), and editing vertices that sit unreferenced past
-the last one a line ends at (e.g. a fresh append or a leftover split
-point), which keeps the nodes trusted.
+map's `GL` run) — when it touches a vertex a linedef ends at, a linedef, a
+sidedef's sector or the sector count (so an `add_sector` is one); run
+`build_nodes` before playing such a map in vanilla `Doom`. Such an
+invalidating edit also sheds the split points an earlier `build_nodes`
+appended (`reference/nodes.md`) — and **only** those: the shed reaches
+exactly the trailing vertices that run's own `SEGS` records named, so a
+point you appended yourself and no line ends at survives every edit,
+whatever the nodes do. Hand-building a map — append the corners, add the
+sector, then run lines between the points — never loses a vertex. The two
+cases that change no buildable geometry: `add_vertex` **reusing** a point
+that already exists (nothing is written at all: `nodes_invalidated: false`,
+`copied_to_working: false`, and **no undo entry**), and editing vertices
+that sit unreferenced past the last one a line ends at (e.g. a fresh append
+or a leftover split point), which keeps the nodes trusted.
 
 Every call is one undoable step (a list of vertices moves as one step),
 and editing a layer-owned map copies the block into the working archive
@@ -121,8 +125,9 @@ the removal flipped (`flipped_linedefs`) or closed into one side
   `prune_sidedefs` (default `true`) also drops sidedefs no surviving
   linedef references and `prune_vertices` (default `true`) also drops
   vertices no surviving linedef references, so a cascade leaves no orphans
-  unless you switch a pruning off (and even then, trailing orphans go: the
-  geometry change invalidates the nodes, which strips them).
+  unless you switch a pruning off (and then they stay: the geometry change
+  invalidates the nodes, which sheds only the split points that node run
+  named).
 
 ```json
 call remove_vertex {"index": 4}

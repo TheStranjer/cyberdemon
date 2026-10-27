@@ -569,11 +569,13 @@ impl Session {
     /// 3. when `f` changed geometry (a referenced vertex, a linedef's
     ///    `(v1, v2, front, back)`, a sidedef's sector or the sector count
     ///    — trailing vertices no linedef references, the split points
-    ///    `build_nodes` appends, are invisible to the node builder and
-    ///    stay out of this comparison), empties `SEGS`, `SSECTORS`,
-    ///    `NODES`, `REJECT` and `BLOCKMAP` in place, strips those trailing
-    ///    vertices, drops `ZNODES` and removes the block's `GL` node run
-    ///    from the working archive, reporting `nodes_invalidated`;
+    ///    `build_nodes` appends and the fresh points of an `add_vertex`
+    ///    alike, are invisible to the node builder and stay out of this
+    ///    comparison), drops the trailing vertices the block's own `SEGS`
+    ///    run named (its split points, and nothing the run did not name),
+    ///    empties `SEGS`, `SSECTORS`, `NODES`, `REJECT` and `BLOCKMAP` in
+    ///    place, drops `ZNODES` and removes the block's `GL` node run from
+    ///    the working archive, reporting `nodes_invalidated`;
     /// 4. writes the map back with [`crate::wad::map::write_map`] and
     ///    splices the new lumps over the old block range, at the same
     ///    directory position.

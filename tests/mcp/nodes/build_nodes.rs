@@ -1,10 +1,11 @@
 //! `build_nodes` writing the whole tree either as the classic run (its split
-//! vertices appended to `VERTEXES` by the build and stripped again by the
-//! next geometry edit, with `undo` bringing them back) or as one `ZDoom`
-//! extended lump in `NODES`/`ZNODES` with the splits kept inside the lump and
-//! `compress` choosing between the `ZNOD` and `XNOD` magics, beside the
-//! unknown-variant, unknown-map and empty-geometry refusals and the rule that
-//! `UDMF` maps only take extended nodes.
+//! vertices appended to `VERTEXES` by the build and shed again by the next
+//! geometry edit, with `undo` bringing them back, while a vertex the caller
+//! appended after the build holds both itself and the split behind it) or as
+//! one `ZDoom` extended lump in `NODES`/`ZNODES` with the splits kept inside
+//! the lump and `compress` choosing between the `ZNOD` and `XNOD` magics,
+//! beside the unknown-variant, unknown-map and empty-geometry refusals and
+//! the rule that `UDMF` maps only take extended nodes.
 //!
 //! The fresh extended lump is confirmed with [`crate::nodes::read`]'s
 //! `assert_extended_read`; every other helper comes from [`crate::nodes`].
@@ -125,6 +126,55 @@ async fn a_geometry_edit_strips_split_vertices_and_undo_restores_them() {
     let nodes = call(&client, "get_nodes", json!({ "map": "MAP01" })).await;
     assert_eq!(nodes["format"], json!("vanilla"), "the undone build reads");
     assert_eq!(nodes["segs"], json!(7_u64), "with the cut segs");
+}
+
+#[tokio::test]
+async fn a_vertex_appended_after_a_build_survives_the_next_geometry_edit() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = l_room_loaded(dir.path()).await;
+    call(&client, "build_nodes", json!({})).await;
+    let added = call(
+        &client,
+        "add_vertex",
+        json!({"map": "MAP01", "x": 64_i32, "y": 192_i32}),
+    )
+    .await;
+    assert_eq!(
+        added["index"],
+        json!(7_i64),
+        "the point lands past the build's split vertex"
+    );
+    let moved = call(
+        &client,
+        "move_vertex",
+        json!({"map": "MAP01", "index": 0_i64, "dx": 16_i64}),
+    )
+    .await;
+    assert_eq!(
+        moved["nodes_invalidated"],
+        json!(true),
+        "moving a used vertex is geometry"
+    );
+    let after = call(&client, "get_map_summary", json!({"map": "MAP01"})).await;
+    assert_eq!(
+        after["counts"]["vertices"],
+        json!(8_i64),
+        "the shed stops at the caller's own point: nothing is renumbered under it"
+    );
+    let line = call(
+        &client,
+        "add_linedef",
+        json!({
+            "map": "MAP01", "v1": 7_i64, "v2": 4_i64,
+            "front_side": {"sector": 0_i64},
+        }),
+    )
+    .await;
+    assert_eq!(
+        line["index"],
+        json!(6_i64),
+        "and the kept point takes a line at the index it was given"
+    );
 }
 
 #[tokio::test]

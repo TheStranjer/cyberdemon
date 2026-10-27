@@ -199,9 +199,12 @@ records written; `warnings` holds one note per subsector that spans
 several sectors (not a failure — vanilla maps carry such leaves).
 Classic split vertices are invisible to every other tool (no linedef
 ends at them, so `reference/vertices.md`'s orphan rules apply) and are
-stripped automatically by the next geometry edit, which invalidates
-this node run anyway. Building nodes is a generated product, not
-geometry, so `nodes_invalidated` is `false` here even though a classic
+shed automatically by the next geometry edit, which invalidates this
+node run anyway. The shed reaches only the points that run's `SEGS`
+records named, so a vertex appended after the build keeps itself (and the
+split point behind it) instead of having its index moved under it.
+Building nodes is a generated product, not geometry, so
+`nodes_invalidated` is `false` here even though a classic
 build grew the vertex list — run `get_nodes` afterwards to see the
 tree. Undo takes the whole build (the lumps, the appended vertices)
 back as one step.

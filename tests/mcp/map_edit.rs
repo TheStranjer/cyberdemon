@@ -1,8 +1,10 @@
 //! The map-editing infrastructure as seen from outside the crate:
 //! [`cyberdemon::session::Session::edit_map`] run over archives read from
 //! fixture files — copy-on-write into the working archive, node lump
-//! invalidation, undo and a serialize round trip — plus the shared editing
-//! parameter helpers in [`cyberdemon::tools::maps::params`].
+//! invalidation, undo and a serialize round trip — the same step as a client
+//! hands-builds a map, where an invalidating `add_sector` must shed none of
+//! the vertices it has not wired yet, plus the shared editing parameter
+//! helpers in [`cyberdemon::tools::maps::params`].
 
 #[cfg(test)]
 mod tests {
@@ -18,7 +20,14 @@ mod tests {
     use cyberdemon::wad::classify::MapFormat;
     use cyberdemon::wad::map::{FlagFamily, FlagKind, Map, read_map};
     use cyberdemon::wad::{LumpName, Wad, analyze};
-    use serde_json::{json, to_value};
+    use rmcp::RoleClient;
+    use rmcp::service::RunningService;
+    use serde_json::{Value, json, to_value};
+
+    use crate::support::{call, connect};
+
+    /// A connected client for one test.
+    type Client = RunningService<RoleClient, ()>;
 
     /// A valid parsed name.
     fn name(text: &str) -> LumpName {
@@ -200,6 +209,87 @@ mod tests {
         assert_eq!(
             validate_texture_name("step1", MapFormat::Doom).expect("a vanilla name"),
             "STEP1"
+        );
+    }
+
+    /// Appends one vertex at `x`/`y` and requires the tool to store it.
+    async fn add_point(client: &Client, x: i32, y: i32) {
+        let added = call(
+            client,
+            "add_vertex",
+            json!({"map": "MAP01", "x": x, "y": y}),
+        )
+        .await;
+        assert_eq!(
+            added["reused"],
+            json!(false),
+            "the point at {x}, {y} was appended, not matched"
+        );
+    }
+
+    /// The five element counts of the working `MAP01`, as `get_map_summary`
+    /// reports them.
+    async fn working_counts(client: &Client) -> Value {
+        let summary = call(
+            client,
+            "get_map_summary",
+            json!({"map": "MAP01", "scope": "working"}),
+        )
+        .await;
+        summary["counts"].clone()
+    }
+
+    #[tokio::test]
+    async fn hand_building_a_map_keeps_the_vertices_an_edit_has_not_wired() {
+        let client = connect().await;
+        call(&client, "new_wad", json!({})).await;
+        call(&client, "create_map", json!({"name": "MAP01"})).await;
+        add_point(&client, 0_i32, 0_i32).await;
+        add_point(&client, 128_i32, 0_i32).await;
+        add_point(&client, 128_i32, 96_i32).await;
+        assert_eq!(
+            working_counts(&client).await,
+            json!({
+                "things": 0_i64, "vertices": 3_i64, "linedefs": 0_i64,
+                "sidedefs": 0_i64, "sectors": 0_i64,
+            }),
+            "the three points stand on their own, referenced by no line"
+        );
+        let sector = call(&client, "add_sector", json!({"map": "MAP01"})).await;
+        assert_eq!(
+            sector["nodes_invalidated"],
+            json!(true),
+            "the sector count sizes REJECT, so the block's node data stops being trusted"
+        );
+        assert_eq!(
+            working_counts(&client).await,
+            json!({
+                "things": 0_i64, "vertices": 3_i64, "linedefs": 0_i64,
+                "sidedefs": 0_i64, "sectors": 1_i64,
+            }),
+            "and the invalidation shed no vertex: the block built none to shed"
+        );
+        let line = call(
+            &client,
+            "add_linedef",
+            json!({
+                "map": "MAP01", "v1": 0_i64, "v2": 1_i64,
+                "front_side": {"sector": 0_i64},
+            }),
+        )
+        .await;
+        assert_eq!(
+            line["index"],
+            json!(0_i64),
+            "a linedef can end at the points the sector edit kept"
+        );
+        assert_eq!(
+            working_counts(&client).await,
+            json!({
+                "things": 0_i64, "vertices": 3_i64, "linedefs": 1_i64,
+                "sidedefs": 1_i64, "sectors": 1_i64,
+            }),
+            "wiring two of them leaves the third in place too"
         );
     }
 }

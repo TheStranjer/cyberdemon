@@ -11,9 +11,10 @@
 //! [`parse_vanilla_nodes`] and [`parse_extended_nodes`] both produce a
 //! [`NodeSet`]; [`lump_format`] is the one sniffer of what magic a node lump
 //! starts with, answering a [`NodeMagic`] that covers the `GL` variants this
-//! module reports but never parses.
-//! The writers that rebuild these lumps join here later. Nothing in this
-//! module knows about sessions or MCP.
+//! module reports but never parses; [`seg_vertex_indices`] lists the map
+//! vertices a `SEGS` payload points at, the record layout's one question the
+//! map editors ask. The writers that rebuild these lumps join here later.
+//! Nothing in this module knows about sessions or MCP.
 //!
 //! The two readers are implementation details of those entry points: the
 //! vanilla record walker lives in the private `vanilla` module, the
@@ -31,7 +32,7 @@ use crate::error::CyberError;
 use crate::fixed::Fixed;
 
 pub use extended::parse_extended_nodes;
-pub use vanilla::parse_vanilla_nodes;
+pub use vanilla::{parse_vanilla_nodes, seg_vertex_indices};
 
 /// Bytes in one vanilla `SEGS` record.
 const SEG_LEN: usize = 12;

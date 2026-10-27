@@ -4,10 +4,12 @@
 
 use super::{
     BoundingBox, Child, Node, NodeMagic, Seg, Subsector, extended::extended_child, lump_format,
-    lump_head, parse_extended_nodes, parse_vanilla_nodes, vanilla::vanilla_child,
+    lump_head, parse_extended_nodes, parse_vanilla_nodes, seg_vertex_indices,
+    vanilla::vanilla_child,
 };
 use crate::fixed::Fixed;
 use crate::wad::bytes::Writer;
+use alloc::collections::BTreeSet;
 
 /// One node magic with the letters it is stored as and the name it reports.
 type MagicRow = (NodeMagic, &'static [u8; 4], &'static str);
@@ -508,6 +510,38 @@ fn child_words_split_the_flag_from_the_index() {
         extended_child(7),
         Child::Node(7),
         "plain extended node index"
+    );
+}
+
+#[test]
+fn seg_vertex_indices_lists_every_endpoint_of_a_whole_run() {
+    let (segs, _, _) = vanilla_lumps();
+    let named = seg_vertex_indices(&segs, 8, 4).expect("the fixture is a whole run");
+    assert_eq!(
+        named,
+        BTreeSet::from([0_usize, 1, 2]),
+        "the two records span vertices 0, 1 and 2"
+    );
+}
+
+#[test]
+fn seg_vertex_indices_stays_quiet_when_the_run_cannot_answer() {
+    let (segs, _, _) = vanilla_lumps();
+    assert!(
+        seg_vertex_indices(b"", 8, 4).is_none(),
+        "an empty SEGS lump names no vertex"
+    );
+    assert!(
+        seg_vertex_indices(b"12345", 8, 4).is_none(),
+        "five bytes are no 12-byte record"
+    );
+    assert!(
+        seg_vertex_indices(&segs, 2, 4).is_none(),
+        "a run naming vertex 2 is from before the map held two"
+    );
+    assert!(
+        seg_vertex_indices(&segs, 8, 1).is_none(),
+        "a run naming linedef 1 is from before the map held one"
     );
 }
 

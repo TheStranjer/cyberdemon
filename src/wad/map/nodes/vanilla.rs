@@ -4,8 +4,13 @@
 //! [`parse_vanilla_nodes`] walks the `SEGS`, `SSECTORS` and `NODES` byte
 //! strings record by record — each lump's size must be a whole number of
 //! its records — and hands the decoded blocks to [`NodeSet`]'s
-//! cross-reference checks. The extended lump's node records reuse
-//! [`read_box`]; every other reader here is vanilla-only.
+//! cross-reference checks. [`seg_vertex_indices`] is the same walk reduced
+//! to the question "which map vertices does this run point at", and stays
+//! quiet instead of refusing when the payload cannot answer it. The
+//! extended lump's node records reuse [`read_box`]; every other reader here
+//! is vanilla-only.
+
+use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
 use crate::wad::bytes::Reader;
@@ -40,6 +45,44 @@ pub fn parse_vanilla_nodes(
     };
     set.validate()?;
     Ok(set)
+}
+
+/// The map-vertex indices a whole vanilla `SEGS` run references: both
+/// endpoints of every record.
+///
+/// The forgiving read behind cleaning up after a discarded node run: it
+/// answers which points the run holds up and never explains why it cannot.
+/// `None` covers every payload that says nothing usable — no records at
+/// all, a trailing partial record (which the strict [`parse_vanilla_nodes`]
+/// refuses), a short field, or a record naming a vertex outside `vertices`
+/// or a linedef outside `linedefs`, which is a run from before the map was
+/// renumbered.
+#[must_use]
+#[inline]
+pub fn seg_vertex_indices(
+    segs: &[u8],
+    vertices: usize,
+    linedefs: usize,
+) -> Option<BTreeSet<usize>> {
+    let Ok(run) = read_segs(segs) else {
+        return None;
+    };
+    let mut referenced = BTreeSet::new();
+    for seg in &run {
+        let (Ok(start), Ok(end), Ok(line)) = (
+            usize::try_from(seg.v1),
+            usize::try_from(seg.v2),
+            usize::try_from(seg.linedef),
+        ) else {
+            return None;
+        };
+        if start >= vertices || end >= vertices || line >= linedefs {
+            return None;
+        }
+        referenced.insert(start);
+        referenced.insert(end);
+    }
+    (!referenced.is_empty()).then_some(referenced)
 }
 
 /// The vanilla `SEGS` records.

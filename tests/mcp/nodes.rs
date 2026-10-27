@@ -16,7 +16,7 @@
 //! refusals and the `JSON` assets the `full` detail publishes; the
 //! `BLOCKMAP` and `REJECT` builders whose written lumps the inspection tools
 //! then read back; `build_nodes` writing the whole tree either as the vanilla
-//! run (its split vertices appended to `VERTEXES` and stripped again by the
+//! run (its split vertices appended to `VERTEXES` and shed again by the
 //! next geometry edit) or as one `ZDoom` extended lump in `NODES`/`ZNODES`
 //! with the splits kept inside the lump; the same tool's `glBSP` v2 `GL_*`
 //! block (classic run plus miniseg-closed subsectors) attached right after

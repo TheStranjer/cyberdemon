@@ -29,13 +29,14 @@
 //! reports: nothing is written, no undo entry is made.
 //!
 //! The geometry rule: deleting any vertex, line, side or sector changes
-//! geometry, so the generated node lumps are emptied (and the trailing
-//! unreferenced ones, split points a `build_nodes` left behind, are
-//! stripped with them), the block's `GL` run is dropped and the result
-//! reports `nodes_invalidated: true`. Run `build_nodes` before playing such
-//! a map in vanilla `Doom`; `ZDoom`-family ports rebuild the missing node
-//! data themselves. A selection of things alone changes no buildable
-//! geometry and keeps the nodes.
+//! geometry, so the generated node lumps are emptied, the block's `GL` run
+//! is dropped and the result reports `nodes_invalidated: true`. The
+//! invalidation sheds the split points the shed run named in its `SEGS`
+//! records — the ones a `build_nodes` appended — and keeps every other
+//! point, wired or not. Run `build_nodes` before playing such a map in
+//! vanilla `Doom`; `ZDoom`-family ports rebuild the missing node data
+//! themselves. A selection of things alone changes no buildable geometry and
+//! keeps the nodes.
 //!
 //! [`Removal`]: crate::wad::map::remove::Removal
 //! [`expand_cascade`]: crate::wad::map::remove::expand_cascade

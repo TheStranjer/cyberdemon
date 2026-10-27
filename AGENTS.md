@@ -415,8 +415,14 @@ src/
                   invalidation on geometry change, in-place block rewrite)
                   and its format-rewriting sibling `Session::convert_map`
                   (`rewrite_in_place`: the same step, always dropping the
-                  block's node data and `GL` run), with the session's own
-                  tests in `session/tests.rs` (the fixtures the topics share)
+                  block's node data and `GL` run), on
+                  `session/map_edit/vertices.rs` (the geometry `Signature` an
+                  edit is compared against, the `built_vertices` read of the
+                  block's own `SEGS` run and the `strip_split_vertices` that
+                  sheds exactly the points that run appended) with that
+                  module's tests in `session/map_edit/tests.rs`, with the
+                  session's own tests in `session/tests.rs` (the fixtures the
+                  topics share)
                   plus `session/tests/layers.rs` (the scope names and wire
                   forms, the layer stack, the merged view, `find` and the
                   `Scope` reads), `session/tests/history.rs` (labels, undo,
@@ -1126,11 +1132,13 @@ src/
                   `Seg`, `Subsector`, `Node`, `Child`, `NodeMagic` with the
                   `lump_format` and `lump_head` magic sniffers, the
                   record sizes and child-word masks both layouts share, and
-                  its two `pub use` entry points) on `nodes/vanilla.rs` (the
-                  vanilla record walker, whose `read_box` the node records of
-                  both layouts reuse) and `nodes/extended.rs` (the extended
-                  lump's magic, `zlib` cap and four sections), with the two
-                  layouts' tests in `nodes/tests.rs`,
+                  its three `pub use` entry points, the third being the
+                  forgiving `seg_vertex_indices` endpoint read) on
+                  `nodes/vanilla.rs` (the vanilla record walker, whose
+                  `read_box` the node records of both layouts reuse) and
+                  `nodes/extended.rs` (the extended lump's magic, `zlib` cap
+                  and four sections), with the two layouts' tests in
+                  `nodes/tests.rs`,
                   `map/reject.rs` the REJECT visibility bit-matrix,
                   `map/blockmap.rs` the BLOCKMAP grid (offset table,
                   blocklist validation and the `to_bytes` serializers),

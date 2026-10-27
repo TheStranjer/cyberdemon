@@ -1,25 +1,25 @@
-//! The special tables the playability walk reads, and the features, exits,
-//! locks and keys folded out of a map by them.
+//! The feature inventory the playability walk reads: the features, exits,
+//! locks and keys folded out of a map, and the shared state of one read.
 //!
-//! Every number here is written out on purpose. The `Doom` family's door,
-//! lift, teleport and exit specials, the `Hexen` family's scripted actions,
-//! argument slots and lock codes, and the thing types that carry a key are
-//! the engine's own, not a definition table's: no `DeHackEd` rename and no
-//! custom `DECORATE` title can move what this analysis believes the game
-//! does. Anything the tables do not carry is counted, never guessed at.
+//! The special numbers themselves and their family-aware classification are
+//! [`crate::wad::map::specials`]' - the one tables every door detection,
+//! action walk and exit reading goes through. This module is the playability
+//! consumer of those tables: it turns the rows a line matches into
+//! [`Plan`]s, resolves each plan's tag or `TID` against the map's sectors
+//! and destination things, and files what comes out as a [`Feature`], an
+//! [`ExitLine`], a [`LockLine`] or a counted warning. Anything the tables
+//! do not carry is counted, never guessed at.
 //!
 //! One line is one feature. Two lines sharing a tag - the pair of room-facing
 //! lines of a plan-built door, say - are two features acting on the same
 //! sectors, which is how the engine treats them too: reaching either one
 //! opens the door.
 //!
-//! The rows themselves are the private `tables` module and the one pass that
-//! folds a map through them, with the state it carries, is the private
-//! `reader` module. This file is what both share: the constants, the result
-//! types the walk reads and the three entry points it calls.
+//! The one pass that folds a map through the tables is the private `reader`
+//! module. This file is what both share: the constants, the result types the
+//! walk reads and the three entry points it calls.
 
 mod reader;
-mod tables;
 
 #[cfg(test)]
 mod tests;
@@ -31,13 +31,10 @@ use alloc::vec::Vec;
 
 use super::KeyColor;
 use crate::wad::map::consts::PLAYER1_START;
-use crate::wad::map::flags::{
-    ACTIVATION_MASK, ACTIVATION_SHIFT, FlagFamily, PLAYER_USE, Skill, THING_DOOM_NOT_SINGLE,
-    THING_HEXEN_SINGLE,
-};
+use crate::wad::map::flags::{FlagFamily, Skill, THING_DOOM_NOT_SINGLE, THING_HEXEN_SINGLE};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Linedef, Map};
-use tables::{KEY_THINGS, RowEffect, Trigger};
+use crate::wad::map::specials::tables::{KEY_THINGS, RowEffect, Trigger};
 
 /// The `Doom` family's teleport destination thing.
 const TELEPORT_DEST: i32 = 14_i32;
@@ -56,6 +53,18 @@ pub(super) enum Effect {
     Lift,
     /// It moves the player from its trigger sectors to its destination.
     Teleport,
+}
+
+/// The walk's effect of one table row's effect, `None` for a door shutter
+/// ([`RowEffect::CloseDoor`]): a player works a closing door into nothing,
+/// so the inventory read knows the row and files no feature for it.
+const fn openable(effect: RowEffect) -> Option<Effect> {
+    match effect {
+        RowEffect::ManualDoor | RowEffect::TaggedDoor => Some(Effect::Door),
+        RowEffect::Lift => Some(Effect::Lift),
+        RowEffect::Teleport => Some(Effect::Teleport),
+        RowEffect::CloseDoor => None,
+    }
 }
 
 /// One feature of the map a player can work.
@@ -203,29 +212,6 @@ pub(super) fn spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
 /// The `args` slot `slot` of `line`, or `0` past the end.
 fn argument(line: &Linedef, slot: usize) -> i32 {
     line.args.get(slot).copied().unwrap_or(0_i32)
-}
-
-/// How a `Hexen` family line is worked: only `playeruse` needs the player on
-/// a particular side, every other activation reaches from either side.
-fn hexen_trigger(flags: u32) -> Trigger {
-    let field = (flags & ACTIVATION_MASK)
-        .checked_shr(ACTIVATION_SHIFT)
-        .unwrap_or(0_u32);
-    if field == PLAYER_USE {
-        return Trigger::Use;
-    }
-    Trigger::Walk
-}
-
-/// The colour a `Hexen` lock code answers for, `None` for a code beyond the
-/// six vanilla keys and the three any-colour numbers.
-const fn lock_color(code: i32) -> Option<KeyColor> {
-    match code {
-        1_i32 | 4_i32 | 129_i32 => Some(KeyColor::Red),
-        2_i32 | 5_i32 | 130_i32 => Some(KeyColor::Blue),
-        3_i32 | 6_i32 | 131_i32 => Some(KeyColor::Yellow),
-        _ => None,
-    }
 }
 
 /// The colour of key the thing type `kind` carries.

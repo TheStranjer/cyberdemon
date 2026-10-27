@@ -1376,21 +1376,28 @@ src/
                   `validate/specials.rs`, `validate/geometry.rs`,
                   `validate/resources.rs` and `validate/node_lumps.rs`, one
                   per check group, each returning `Vec<Issue>`), and
-                  `map/playability.rs` + `map/playability/` the pure
-                  can-the-player-finish-this-map analysis:
-                  `map/playability/specials.rs` +
-                  `playability/specials/` the hand-written door/lift/
-                  teleport/exit/lock/key tables read into a map's feature
-                  inventory: `specials.rs` the constants, the `Effect`,
-                  `Feature`, `ExitLine`, `LockLine`, `KeyThing` and
-                  `Inventory` results, the shared `Reading` and `Plan`,
-                  the `Reader` struct and the `spawns`, `start_thing`,
-                  `start_sector` and `read_inventory` entry points, on
+                  `map/specials.rs` + `map/specials/` the one family-aware
+                  line-special classification every door, lift, teleport and
+                  exit reading goes through: `specials.rs` the `SpecialClass`
+                  (`Door`/`Lift`/`Teleport`/`Exit{secret,trigger}`) result,
+                  the `special_class`, `is_door_action` (the `Doom` family's
+                  `Boom` generalized doors included), `exit_for` and
+                  `hexen_trigger` entry points, on
                   `specials/tables.rs` (the row types and the `DOOM_ROWS`,
-                  `DOOM_EXITS`, `HEXEN_ROWS`, `HEXEN_IGNORED`,
-                  `HEXEN_EXITS` and `KEY_THINGS` tables) and
-                  `specials/reader.rs` (the whole `impl Reader` pass),
-                  with that group's tests in `specials/tests.rs`,
+                  `DOOM_EXITS`, `HEXEN_ROWS`, `HEXEN_EXITS` and `KEY_THINGS`
+                  tables) and that module's tests in `specials/tests.rs`;
+                  `map/playability.rs` + `map/playability/` the pure
+                  can-the-player-finish-this-map analysis, reading its
+                  features through the `map/specials` classification:
+                  `map/playability/inventory.rs` +
+                  `playability/inventory/` the fold of those tables into a
+                  map's feature inventory: `inventory.rs` the constants, the
+                  `Effect`, `Feature`, `ExitLine`, `LockLine`, `KeyThing` and
+                  `Inventory` results, the shared `Reading`, `Plan` and
+                  `openable`, the `Reader` struct and the `spawns`,
+                  `start_thing`, `start_sector` and `read_inventory` entry
+                  points, on `inventory/reader.rs` (the whole `impl Reader`
+                  pass), with that group's tests in `inventory/tests.rs`,
                   `playability/graph.rs` the sector movement
                   graph and the player-shaped step/gap/width passability
                   tests, `playability/reach.rs` the fixpoint that
@@ -1709,6 +1716,13 @@ tests/
                     helper names are defined only in `defs/tsv.rs` and the
                     editor category path words only in `defs/table.rs`'s
                     `Category::parse`, nowhere else in production `src/`;
+                    specials_tables.rs: the guard that the family-aware
+                    line-special tables and their `special_class`/
+                    `is_door_action`/`exit_for`/`hexen_trigger`/`lock_color`
+                    classification are defined only in `wad/map/specials.rs`
+                    and `wad/map/specials/tables.rs`, the door write table
+                    `door_specials` only in `wad/map/features/doors.rs`, and
+                    the old `DOOM_WALK_EXITS` copy nowhere;
                     imports_shared.rs: the guard that the imports group's
                     shared role, extra-ops and working-archive-write helpers
                     are defined only in `tools/imports.rs` (their landing

@@ -1,28 +1,31 @@
 //! The reader that folds a map's lines and things into an [`Inventory`].
 //!
 //! One pass over the linedefs, then one over the things: each line is looked
-//! up in the family's table in [`super::tables`], the row's tag or `TID` is
-//! resolved against the map's sectors and its destination things, and what
-//! comes out is filed as a feature, an exit, a lock or a counted warning.
-//! The state the pass carries — the map, the tables it consults and the
-//! accumulators it fills — is [`Reader`], and [`Reader::finish`] is the last
-//! word: it turns the accumulated counts into the trailing notes.
+//! up in the family's table in [`crate::wad::map::specials::tables`], the
+//! row's tag or `TID` is resolved against the map's sectors and its
+//! destination things, and what comes out is filed as a feature, an exit, a
+//! lock or a counted warning. The state the pass carries — the map, the
+//! tables it consults and the accumulators it fills — is [`Reader`], and
+//! [`Reader::finish`] is the last word: it turns the accumulated counts into
+//! the trailing notes.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::vec::Vec;
 
-use super::tables::{
-    DOOM_EXITS, DOOM_ROWS, ExitRow, HEXEN_EXITS, HEXEN_IGNORED, HEXEN_ROWS, RowEffect, Trigger,
-};
 use super::{
     Effect, ExitLine, Feature, HEXEN_DESTINATIONS, Inventory, KeyColor, KeyThing, LockLine, Plan,
-    Reader, Reading, SECTOR_TAG_ARG, TELEPORT_DEST, argument, hexen_trigger, key_color, lock_color,
-    sectors_by_tag, spawns,
+    Reader, Reading, SECTOR_TAG_ARG, TELEPORT_DEST, argument, key_color, openable, sectors_by_tag,
+    spawns,
 };
 use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::model::{Linedef, Map, Thing};
+use crate::wad::map::specials::exit_for;
+use crate::wad::map::specials::hexen_trigger;
+use crate::wad::map::specials::lock_color;
+use crate::wad::map::specials::tables::{DOOM_ROWS, HEXEN_ROWS, RowEffect, Trigger};
+
 impl<'map> Reader<'map> {
     /// A reader over `map` for flag family `family` at `skill`.
     pub(super) fn new(map: &'map Map, family: FlagFamily, skill: Skill) -> Self {
@@ -63,7 +66,7 @@ impl<'map> Reader<'map> {
         if line.special == 0_i32 {
             return;
         }
-        if let Some(exit) = self.exit_rule(line) {
+        if let Some(exit) = exit_for(self.family, line) {
             let triggers = self.trigger_sectors(line, exit.trigger);
             self.exits.push(ExitLine {
                 line: index,
@@ -82,25 +85,6 @@ impl<'map> Reader<'map> {
                     .and_modify(|count| *count = count.saturating_add(1))
                     .or_insert(1_usize);
             }
-        }
-    }
-
-    /// The exit row `line` carries, if its special ends the level. The
-    /// `Hexen` portals take their side from the line's own activation.
-    fn exit_rule(&self, line: &Linedef) -> Option<ExitRow> {
-        match self.family {
-            FlagFamily::Doom => DOOM_EXITS
-                .iter()
-                .copied()
-                .find(|row| row.special == line.special),
-            FlagFamily::Hexen => HEXEN_EXITS
-                .iter()
-                .find(|entry| entry.0 == line.special)
-                .map(|entry| ExitRow {
-                    special: entry.0,
-                    secret: entry.1,
-                    trigger: hexen_trigger(line.flags),
-                }),
         }
     }
 
@@ -130,9 +114,6 @@ impl<'map> Reader<'map> {
     /// lock both ride in the row's argument slots, and the activation field
     /// decides which side of the line works it.
     fn hexen_feature(&mut self, index: usize, line: &Linedef) -> Reading {
-        if HEXEN_IGNORED.contains(&line.special) {
-            return Reading::Ignored;
-        }
         let Some(row) = HEXEN_ROWS
             .iter()
             .find(|entry| entry.special == line.special)
@@ -165,16 +146,16 @@ impl<'map> Reader<'map> {
     /// Turns one planned action into the feature it describes for `line`, or
     /// into the warning the line deserves when it addresses nothing.
     ///
+    /// A door shutter ([`RowEffect::CloseDoor`]) is a door action a player
+    /// never works to get through, so it is filed as known and ignored.
     /// A teleport line that lands the player nowhere is still kept as a
     /// feature, with [`Feature::destination`] `None`: it moves no sector and
     /// jumps no player, so the walk is unchanged by it, and
     /// [`feature_targets`](crate::wad::map::playability::feature_targets)
     /// can still name the pad whose destination thing is missing.
     fn build(&mut self, index: usize, line: &Linedef, plan: &Plan) -> Reading {
-        let effect = match plan.effect {
-            RowEffect::ManualDoor | RowEffect::TaggedDoor => Effect::Door,
-            RowEffect::Lift => Effect::Lift,
-            RowEffect::Teleport => Effect::Teleport,
+        let Some(effect) = openable(plan.effect) else {
+            return Reading::Ignored;
         };
         let destination = self.destination_for(line, plan, effect);
         if effect == Effect::Teleport && destination.is_none() {

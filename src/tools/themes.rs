@@ -23,7 +23,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
-use crate::defs::{Category, decode_generalized_linedef, definitions_for, is_generalized};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::map_edit::MapEditReport;
@@ -42,7 +41,7 @@ use crate::wad::classify::{LumpKind, MapFormat, Namespace};
 use crate::wad::game::Game;
 use crate::wad::map::Map;
 use crate::wad::map::consts::{NO_TEXTURE, SKY_FLAT};
-use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::specials::is_door_action;
 use crate::wad::name::LumpName;
 
 /// The `auto_texture` step label prefix.
@@ -502,50 +501,17 @@ fn paint_set(session: &Session) -> Result<ThemeTextures, CyberError> {
     })
 }
 
-/// The linedefs of `map` carrying a door action of the session's game.
-///
-/// # Errors
-///
-/// [`definitions_for`]' [`CyberError::Internal`] for a broken embedded
-/// specials table.
-fn door_lines(session: &Session, map: &Map) -> Result<BTreeSet<usize>, CyberError> {
-    let specials = door_specials(session.game())?;
-    Ok(map
-        .linedefs
+/// The linedefs of `map` carrying a door action of the map's flag family:
+/// a row of the shared specials table (open, raise, locked raise or
+/// close) or, in the `Doom` family, a `Boom` generalized door.
+fn door_lines(map: &Map) -> BTreeSet<usize> {
+    let family = map.flag_family();
+    map.linedefs
         .iter()
         .enumerate()
-        .filter(|&(_index, line)| is_door_action(line.special, map.flag_family(), &specials))
+        .filter(|&(_index, line)| is_door_action(line.special, family))
         .map(|(index, _line)| index)
-        .collect())
-}
-
-/// The special numbers the game's tables group under doors.
-fn door_specials(game: Game) -> Result<BTreeSet<u32>, CyberError> {
-    let defs = definitions_for(game)?;
-    Ok(defs
-        .specials
-        .iter()
-        .filter(|row| row.group == Category::Doors)
-        .map(|row| row.number)
-        .collect())
-}
-
-/// Whether `special` moves a door: a table row, or (in the `Doom` family)
-/// a Boom generalized door.
-fn is_door_action(special: i32, family: FlagFamily, table: &BTreeSet<u32>) -> bool {
-    let Ok(value) = u32::try_from(special) else {
-        return false;
-    };
-    if value == 0 {
-        return false;
-    }
-    if table.contains(&value) {
-        return true;
-    }
-    family == FlagFamily::Doom
-        && is_generalized(value)
-        && decode_generalized_linedef(value)
-            .is_some_and(|row| row.kind == "Door" || row.kind == "Locked Door")
+        .collect()
 }
 
 /// `auto_texture`'s work: resolve, plan, run one undoable edit.
@@ -564,7 +530,7 @@ fn auto_run(session: &mut Session, args: &AutoTextureParams) -> Result<AutoRepor
         mode,
         include_flats: args.include_flats.unwrap_or(true),
         selected: selected_sectors(&loaded, args.sectors.as_deref())?,
-        door_lines: door_lines(session, &loaded)?,
+        door_lines: door_lines(&loaded),
         textures: paint_set(session)?,
         available: &stock.available,
     };
@@ -760,18 +726,12 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AlignTexturesParams, AutoTextureParams, SetThemeParams, is_door_action, mode_label,
-        parse_mode, push_tx_name, role_texture, surfaces, theme_roles, theme_wall,
+        AlignTexturesParams, AutoTextureParams, SetThemeParams, mode_label, parse_mode,
+        push_tx_name, role_texture, surfaces, theme_roles, theme_wall,
     };
     use crate::session::Session;
     use crate::themes::auto::AutoMode;
     use crate::themes::{Role, table};
-    use crate::wad::map::FlagFamily;
-
-    /// The plain `Doom` door specials for the action checks.
-    fn specials() -> BTreeSet<u32> {
-        [1_u32, 26, 27, 28].into_iter().collect()
-    }
 
     #[test]
     fn modes_parse_case_insensitively_and_default_to_fill() {
@@ -791,27 +751,6 @@ mod tests {
             mode_label(AutoMode::FillMissing),
             "fill_missing",
             "wire name"
-        );
-    }
-
-    #[test]
-    fn door_actions_cover_table_rows_and_generalized_doors() {
-        assert!(is_door_action(1, FlagFamily::Doom, &specials()), "DR Door");
-        assert!(
-            is_door_action(0x3C00_i32 + 16, FlagFamily::Doom, &specials()),
-            "a generalized door bit pattern"
-        );
-        assert!(
-            !is_door_action(18, FlagFamily::Doom, &specials()),
-            "a pillar build is not a door"
-        );
-        assert!(
-            !is_door_action(0, FlagFamily::Doom, &specials()),
-            "no special, no action"
-        );
-        assert!(
-            !is_door_action(0x3C00 + 16, FlagFamily::Hexen, &specials()),
-            "the generalized layout belongs to the Doom family"
         );
     }
 

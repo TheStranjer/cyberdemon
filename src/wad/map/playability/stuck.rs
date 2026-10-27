@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use super::PLAYER_HEIGHT;
-use super::specials::spawns;
+use super::inventory::spawns;
 use crate::defs::{Category, Definitions, ThingDef};
 use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
 use crate::wad::map::flags::{FlagFamily, Skill, blocks_players};

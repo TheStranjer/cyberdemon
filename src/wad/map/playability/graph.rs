@@ -10,14 +10,14 @@
 //! question the walk asks, and it answers it in one direction at a time,
 //! because a step up is not a step down.
 //!
-//! Nothing here reads a special number or a key: [`super::specials`] has
+//! Nothing here reads a special number or a key: [`super::inventory`] has
 //! already said which sectors are doors and which are platforms.
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
+use super::inventory::Inventory;
 use super::reach::Run;
-use super::specials::Inventory;
 use super::{CLOSED_DOOR_TOLERANCE, DOOR_HEADROOM, MAX_STEP_UP, PLAYER_HEIGHT};
 use crate::wad::map::flags::{FlagFamily, blocks_players};
 use crate::wad::map::geometry::linedef_length;
@@ -400,8 +400,8 @@ mod tests {
         BLOCKING, FlagFamily, HEXEN_BLOCK_EVERYTHING, HEXEN_BLOCK_PLAYERS, Skill,
     };
     use crate::wad::map::playability::MIN_LINE_WIDTH;
+    use crate::wad::map::playability::inventory::read_inventory;
     use crate::wad::map::playability::reach::Run;
-    use crate::wad::map::playability::specials::read_inventory;
     use crate::wad::map::{Linedef, Map, MapFormat, Sector};
 
     /// A one-sector map whose two linedefs are `front`-and-`back` sided: the

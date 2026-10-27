@@ -5,8 +5,8 @@
 //! ([`AutoMode::FillMissing`]) or repaints everything in the theme
 //! ([`AutoMode::Retexture`]). It never reads a theme table or a session:
 //! the tool in [`crate::tools::themes`] resolves the roles once, computes
-//! which linedefs carry a door special (only the game tables can tell) and
-//! hands the verdict to this module.
+//! which linedefs carry a door special (only the map's own flag family's
+//! tables can tell) and hands the verdict to this module.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 

@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 
 use super::KeyColor;
 use super::graph::{Opened, Pass, World};
-use super::specials::{Effect, Feature, Inventory};
+use super::inventory::{Effect, Feature, Inventory};
 
 /// One fixpoint's answer.
 #[derive(Clone, Debug, Default)]
@@ -206,7 +206,7 @@ mod tests {
     use crate::wad::map::common::fixtures::{name, spawn, vertex};
     use crate::wad::map::flags::{FlagFamily, Skill};
     use crate::wad::map::playability::graph::World;
-    use crate::wad::map::playability::specials::{
+    use crate::wad::map::playability::inventory::{
         Effect, Feature, Inventory, KeyThing, read_inventory,
     };
     use crate::wad::map::playability::{KeyColor, MIN_LINE_WIDTH};

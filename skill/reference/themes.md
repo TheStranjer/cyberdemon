@@ -113,7 +113,11 @@ default theme filling a role the theme omits.
     and take the `door` texture, their plain two-sided middle-textured
     neighbours (the jambs) take `door_track`, other special-carrying lines
     keep their textures, and every floor/ceiling becomes the theme flat —
-    `F_SKY1` is kept.
+    `F_SKY1` is kept. A door action is read in the map's own special
+    family, not the session's game: the `Doom` family's table rows (open,
+    raise, locked or closing doors) plus its `Boom` generalized doors, or
+    the `Hexen` family's `Door_*` actions on a `Hexen`-format or
+    `zdoom`-namespace `UDMF` map.
 - Arguments:
   - `map` (string, optional): defaults to the active map (then the merged
     view's only map).

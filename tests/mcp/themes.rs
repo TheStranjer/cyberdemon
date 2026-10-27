@@ -3,7 +3,9 @@
 //! set, `build_texture` names being preferred once they exist,
 //! `set_texture_theme` switching themes and validating overrides,
 //! `auto_texture` filling the fixture's lower gap and repairing a broken
-//! flat, `align_textures` running the fixture's hall wall as one chain,
+//! flat, `auto_texture` retexture following the `Hexen`-format fixture's
+//! own special family rather than the session game's Doom rows,
+//! `align_textures` running the fixture's hall wall as one chain,
 //! and every error shape along the way.
 
 #[cfg(test)]
@@ -14,7 +16,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::{iwad, iwad_heretic};
+    use crate::fixtures::{iwad, iwad_features, iwad_heretic, pwad_map_formats};
     use crate::support::{call, call_err, connect};
 
     /// A connected MCP client.
@@ -379,6 +381,111 @@ mod tests {
         )
         .await;
         assert_eq!(sector0["changed_sidedefs"], json!(0_u64), "already themed");
+    }
+
+    /// Build the `Hexen`-format door scene on the map-format fixture's
+    /// `MAP04`, loaded over the features `IWAD`: its two-sided step line
+    /// (index 2) becomes a `Door_Raise` (special 12) whose moving face
+    /// wears a `DOOR1` middle, a fresh plain two-sided line (index 7,
+    /// sidedefs 8/9) sharing that line's start vertex stands in as the
+    /// jamb, and one-sided line 0 carries special 1 (`Polyobj_StartLine`
+    /// for the `Hexen` family, a `DR` door for the `Doom` one). The
+    /// session is a `DOOM II` one, so the old game-table read would see
+    /// none of that correctly.
+    async fn hexen_door_scene(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad_features(dir);
+        call(
+            &client,
+            "open_iwad",
+            json!({"path": base.display().to_string()}),
+        )
+        .await;
+        let extra = pwad_map_formats(dir);
+        call(
+            &client,
+            "open_wad",
+            json!({"path": extra.display().to_string()}),
+        )
+        .await;
+        call(
+            &client,
+            "edit_linedef",
+            json!({"map": "MAP04", "index": 2_i64, "special": 12_i32}),
+        )
+        .await;
+        call(
+            &client,
+            "edit_sidedef",
+            json!({"map": "MAP04", "index": 2_i64, "middle": "DOOR1"}),
+        )
+        .await;
+        call(
+            &client,
+            "add_linedef",
+            json!({
+                "map": "MAP04", "v1": 1_usize, "v2": 3_usize,
+                "front_side": {"sector": 1_usize, "middle": "WALL1"},
+                "back_side": {"sector": 0_usize, "middle": "WALL1"},
+            }),
+        )
+        .await;
+        call(
+            &client,
+            "edit_linedef",
+            json!({"map": "MAP04", "index": 0_i64, "special": 1_i32}),
+        )
+        .await;
+        // Distinct theme answers for the three roles the pass paints with.
+        build(&client, "STARTAN3").await;
+        build(&client, "NEWDOOR").await;
+        build(&client, "NEWTACK").await;
+        call(
+            &client,
+            "set_texture_theme",
+            json!({"overrides": {"wall": "STARTAN3", "door": "NEWDOOR",
+                                 "door_track": "NEWTACK"}}),
+        )
+        .await;
+        client
+    }
+
+    #[tokio::test]
+    async fn auto_texture_retexture_follows_the_maps_special_family() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = hexen_door_scene(dir.path()).await;
+        let report = call(
+            &client,
+            "auto_texture",
+            json!({"map": "MAP04", "mode": "retexture", "include_flats": false}),
+        )
+        .await;
+        assert_eq!(report["mode"], json!("retexture"));
+        assert_eq!(report["map"], json!("MAP04"));
+        assert_eq!(
+            report["changed_sidedefs"],
+            json!(8_u64),
+            "the door face, the two jamb sides and five plain walls"
+        );
+        let sides = working_sidedefs(&client, "MAP04").await;
+        assert_eq!(
+            sides[2]["middle"],
+            json!("NEWDOOR"),
+            "the Door_Raise line's face takes the door role, not the Doom table's silence"
+        );
+        assert_eq!(sides[8]["middle"], json!("NEWTACK"), "the jamb tracks");
+        assert_eq!(sides[9]["middle"], json!("NEWTACK"), "on either side");
+        assert_eq!(
+            sides[0]["middle"],
+            json!("WALL1"),
+            "special 1 is a Hexen polyobject, not a Doom door: the line keeps its look"
+        );
+        assert_eq!(
+            sides[1]["middle"],
+            json!("STARTAN3"),
+            "plain one-sided walls repaint"
+        );
+        assert_eq!(sides[3]["middle"], json!("-"), "the clear side stays clear");
     }
 
     #[tokio::test]

@@ -14,11 +14,17 @@
 //! [`next_free_tag`] stamped onto it when it carries none — and
 //! [`dress_switch`] writes the [`switch_special`] row onto the line and
 //! the panel texture onto its front middle. [`build_walk_over_exit`] is
-//! the floor-side twin of the level end: every two-sided boundary of a
-//! sector takes the family's walk-over special from
+//! the floor-side twin of the level end: every *plain* two-sided
+//! boundary of a sector takes the family's walk-over special from
 //! [`walk_over_special`], existing tags kept — in the `Doom` family a
 //! `W1` `52`/`124` reads the line's tag as the destination map number,
-//! so a plain `0` ends the game. The tools parse their wire parameters;
+//! so a plain `0` ends the game. A boundary line already carrying
+//! another feature's action — a door, a lift trigger, a teleporter pad
+//! border — is left alone, reported in [`WalkOverExit::skipped_lines`]
+//! and warned about; only [`is_level_end`] specials, an exit's own, are
+//! re-dressed so an exit can move between its normal and secret forms.
+//! A sector whose every boundary line is busy is refused. The tools
+//! parse their wire parameters;
 //! like the rest of [`crate::wad`] this is pure model arithmetic and
 //! table lookup: no sessions, no archives, no `MCP`.
 //!
@@ -431,7 +437,8 @@ pub fn build_switch(map: &mut Map, spec: &SwitchSpec) -> Result<PlacedSwitch, Cy
 
 /// The walk-over exit special flag family `family` installs for a
 /// normal or `secret` level end: the `Doom` family's `W1` 52/124, the
-/// `Hexen` family's portal 243/244.
+/// `Hexen` family's portal 243/244. [`is_level_end`] recognises all
+/// four.
 #[must_use]
 #[inline]
 pub const fn walk_over_special(family: FlagFamily, secret: bool) -> i32 {
@@ -460,13 +467,124 @@ fn sector_boundary(map: &Map, line: &Linedef, sector: usize) -> bool {
     front.is_some() && back.is_some() && (front == Some(sector) || back == Some(sector))
 }
 
-/// The lines [`build_walk_over_exit`] dressed and the special they carry.
+/// The [`Map::linedefs`] index and current [`Linedef::special`] of every
+/// two-sided boundary line of `sector`, in linedef order.
+///
+/// [`Linedef::special`]: crate::wad::map::Linedef::special
+fn boundary_with_specials(map: &Map, sector: usize) -> Vec<(usize, i32)> {
+    map.linedefs
+        .iter()
+        .enumerate()
+        .filter(|&(_, line)| sector_boundary(map, line, sector))
+        .map(|(index, line)| (index, line.special))
+        .collect()
+}
+
+/// Whether `special` is one of the two walk-over level ends flag family
+/// `family` installs, read off [`walk_over_special`] itself.
+///
+/// An exit may be re-dressed (the same threshold turned from the normal
+/// to the secret form, or set again from the sector on the other side),
+/// while any other action belongs to a feature the exit must leave
+/// working.
+#[must_use]
+#[inline]
+pub const fn is_level_end(family: FlagFamily, special: i32) -> bool {
+    special == walk_over_special(family, false) || special == walk_over_special(family, true)
+}
+
+/// One boundary line a walk-over exit left alone because it already
+/// carries an action of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SkippedLine {
+    /// Index in [`Map::linedefs`] of the line that keeps its action.
+    pub line: usize,
+    /// The [`Linedef::special`] it carries.
+    ///
+    /// [`Linedef::special`]: crate::wad::map::Linedef::special
+    pub special: i32,
+}
+
+/// The `line N (special S)` rows of `skipped`, comma-joined: the wording
+/// both the refusal and the advisory note name them with.
+fn named_lines(skipped: &[SkippedLine]) -> String {
+    skipped
+        .iter()
+        .map(|skip| format!("line {} (special {})", skip.line, skip.special))
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// `carries` for one skipped line, `carry` for several: the verb of both
+/// messages that name them.
+const fn carry_verb(count: usize) -> &'static str {
+    if count == 1_usize { "carries" } else { "carry" }
+}
+
+/// The plain lines a walk-over exit dresses and the busy ones it leaves
+/// to their own actions: a boundary line stands aside only when it
+/// carries a special that is neither zero nor one of `family`'s own
+/// level ends.
+fn split_boundary(
+    boundary: Vec<(usize, i32)>,
+    family: FlagFamily,
+) -> (Vec<usize>, Vec<SkippedLine>) {
+    let mut lines: Vec<usize> = Vec::new();
+    let mut skipped_lines: Vec<SkippedLine> = Vec::new();
+    for (line, special) in boundary {
+        if special == 0_i32 || is_level_end(family, special) {
+            lines.push(line);
+        } else {
+            skipped_lines.push(SkippedLine { line, special });
+        }
+    }
+    (lines, skipped_lines)
+}
+
+/// The lines [`build_walk_over_exit`] dressed, the ones it left alone
+/// and the special the dressed ones carry.
 #[derive(Debug)]
 pub struct WalkOverExit {
-    /// The level-end special installed on every boundary line.
+    /// The level-end special installed on every dressed line.
     pub special: i32,
-    /// Indices of the two-sided lines that now end the level.
+    /// Indices of the plain two-sided lines that now end the level.
     pub lines: Vec<usize>,
+    /// The boundary lines that kept the action they already carried,
+    /// in linedef order: a door's use lines, a lift trigger, a
+    /// teleporter pad border. Overwriting one would leave its feature
+    /// dead — a door that never opens, a pad that never teleports — so
+    /// the exit steps over it and says so.
+    pub skipped_lines: Vec<SkippedLine>,
+}
+
+impl WalkOverExit {
+    /// The advisory note for [`skipped_lines`](Self::skipped_lines),
+    /// `None` when every boundary line took the level end. Callers
+    /// (the `features` tool and the `plan` pipeline) report it as their
+    /// own result's warning.
+    #[must_use]
+    #[inline]
+    pub fn warning(&self) -> Option<String> {
+        skipped_note(&self.skipped_lines)
+    }
+}
+
+/// The note naming the boundary lines a walk-over exit left alone, the
+/// action each of them carries and the fact that they do not end the
+/// level; `None` when there is nothing to say.
+fn skipped_note(skipped: &[SkippedLine]) -> Option<String> {
+    let list = named_lines(skipped);
+    match skipped.len() {
+        0 => None,
+        1 => Some(format!(
+            "walk_over exit left one boundary line alone: {list}; it already carries an \
+             action and does not end the level"
+        )),
+        many => Some(format!(
+            "walk_over exit left {many} boundary lines alone: {list}; they already carry \
+             an action and do not end the level"
+        )),
+    }
 }
 
 /// Set one boundary line's level-end special; in the `Hexen` family
@@ -481,17 +599,49 @@ fn mark_walk_over(map: &mut Map, index: usize, special: i32, hexen: bool) {
     }
 }
 
-/// Dress every two-sided boundary of `sector` with the family's
-/// walk-over level end.
+/// The refusal for a sector with no two-sided boundary at all.
+fn no_boundary(sector: usize) -> CyberError {
+    CyberError::invalid(&format!(
+        "sector {sector} has no two-sided boundary to walk over: draw a shared wall \
+         to the next sector (add_door, or create_sector_from_loop overlapping it) or \
+         trigger the exit with kind \"switch\" instead"
+    ))
+}
+
+/// The refusal for a sector whose every two-sided boundary line already
+/// carries another feature's action: it names those lines and their
+/// specials, because overwriting any of them would break the feature.
+fn busy_boundary(sector: usize, skipped: &[SkippedLine]) -> CyberError {
+    CyberError::invalid(&format!(
+        "sector {sector} has no plain two-sided boundary to walk over: {} already {} an \
+         action, and a walk_over exit leaves those lines to the feature that owns them; \
+         mount the level end on a wall with add_exit kind \"switch\", or draw a plain \
+         boundary line (an opening, or a remote door) for the player to cross",
+        named_lines(skipped),
+        carry_verb(skipped.len())
+    ))
+}
+
+/// Dress every plain two-sided boundary of `sector` with the family's
+/// walk-over level end, leaving the boundary lines another feature owns
+/// to their own actions.
 ///
 /// The `Doom` family's `W1` 52/124 read the line's tag as the
 /// destination map number, so existing tags stay as they are (a plain
-/// 0 ends the game, or the secret level on 124).
+/// 0 ends the game, or the secret level on 124). A line already carrying
+/// one of the family's own level ends is dressed again — that is the
+/// same threshold moving between its normal and secret form — while a
+/// line carrying anything else (a door's use line, a lift trigger, a
+/// teleporter pad border) keeps it and is reported in
+/// [`WalkOverExit::skipped_lines`], which the caller turns into a
+/// warning.
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] when `sector` is past the map's
-/// sectors or the sector has no two-sided boundary to walk over.
+/// [`CyberError::InvalidArgument`] when `sector` has no two-sided
+/// boundary, or when every one of them carries another feature's action;
+/// both refusals name what to draw instead or point at
+/// `add_exit kind "switch"`.
 #[inline]
 pub fn build_walk_over_exit(
     map: &mut Map,
@@ -499,26 +649,25 @@ pub fn build_walk_over_exit(
     secret: bool,
 ) -> Result<WalkOverExit, CyberError> {
     check_index(ElementKind::Sectors, sector, map.sectors.len())?;
-    let special = walk_over_special(map.flag_family(), secret);
-    let hexen = map.flag_family() == FlagFamily::Hexen;
-    let lines: Vec<usize> = map
-        .linedefs
-        .iter()
-        .enumerate()
-        .filter(|&(_, line)| sector_boundary(map, line, sector))
-        .map(|(index, _line)| index)
-        .collect();
+    let family = map.flag_family();
+    let special = walk_over_special(family, secret);
+    let hexen = family == FlagFamily::Hexen;
+    let (lines, skipped_lines) = split_boundary(boundary_with_specials(map, sector), family);
     if lines.is_empty() {
-        return Err(CyberError::invalid(&format!(
-            "sector {sector} has no two-sided boundary to walk over: draw a shared wall \
-             to the next sector (add_door, or create_sector_from_loop overlapping it) or \
-             trigger the exit with kind \"switch\" instead"
-        )));
+        return Err(if skipped_lines.is_empty() {
+            no_boundary(sector)
+        } else {
+            busy_boundary(sector, &skipped_lines)
+        });
     }
     for index in &lines {
         mark_walk_over(map, *index, special, hexen);
     }
-    Ok(WalkOverExit { special, lines })
+    Ok(WalkOverExit {
+        special,
+        lines,
+        skipped_lines,
+    })
 }
 
 #[cfg(test)]

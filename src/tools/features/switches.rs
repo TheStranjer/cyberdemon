@@ -6,7 +6,11 @@
 //! [`crate::wad::map::features::switches`] fits the panel chunk to the
 //! wall, isolates it as its own linedef, resolves the tag its target
 //! sector answers with and dresses the line from the
-//! [`crate::wad::map::features::switch_special`] table.
+//! [`crate::wad::map::features::switch_special`] table. `add_exit`'s
+//! `walk_over` kind runs
+//! [`crate::wad::map::features::build_walk_over_exit`] over a sector's
+//! plain boundaries and hands back the lines it left to the feature
+//! that owns them as `skipped_lines`, with the matching `warnings` note.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,8 +23,8 @@ use crate::tools::maps::common;
 use crate::tools::maps::params::{edit_result_fragment, validate_texture_name};
 use crate::tools::themes::theme_texture;
 use crate::wad::map::features::{
-    DEFAULT_SWITCH_WIDTH, PlacedSwitch, SwitchAction, SwitchSpec, action_name, build_switch,
-    build_walk_over_exit,
+    DEFAULT_SWITCH_WIDTH, PlacedSwitch, SkippedLine, SwitchAction, SwitchSpec, action_name,
+    build_switch, build_walk_over_exit,
 };
 
 use super::door::point_of;
@@ -67,7 +71,9 @@ pub(super) struct AddExitParams {
     #[serde(default)]
     pub(super) map: Option<String>,
     /// How the level ends: `switch` (an exit switch on `linedef`) or
-    /// `walk_over` (every two-sided boundary of `sector`).
+    /// `walk_over` (every plain two-sided boundary of `sector`; a
+    /// boundary line that already carries another feature's action keeps
+    /// it and is reported in `skipped_lines`).
     pub(super) kind: String,
     /// Whether this is the map's secret exit (default false).
     #[serde(default)]
@@ -207,6 +213,15 @@ pub(super) struct ExitReport {
     special: i32,
     /// Whether this is the map's secret exit.
     secret: bool,
+    /// The `walk_over` boundary lines that kept the action they already
+    /// carry, each with that special: a door's use lines, a lift
+    /// trigger, a teleporter pad border. Empty for the `switch` kind and
+    /// for a room whose every boundary line was plain.
+    skipped_lines: Vec<SkippedLine>,
+    /// The advisory notes: the one naming [`skipped_lines`] when the
+    /// `walk_over` kind found any, empty otherwise. Nothing here is an
+    /// error — the dressed lines still end the level.
+    warnings: Vec<String>,
     /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -241,21 +256,24 @@ fn exit_via_switch(session: &mut Session, args: &AddExitParams) -> Result<ExitRe
         lines: vec![placed.linedef],
         special: placed.special,
         secret: args.secret,
+        skipped_lines: Vec::new(),
+        warnings: Vec::new(),
         edit,
     })
 }
 
 /// The `walk_over` kind: one [`build_walk_over_exit`] edit step over
-/// the sector's boundaries.
+/// the sector's plain boundaries, reporting the lines that kept the
+/// action they already carry.
 fn exit_via_walkover(
     session: &mut Session,
     args: &AddExitParams,
 ) -> Result<ExitReport, CyberError> {
     let Some(sector) = args.sector else {
         return Err(invalid(
-            "kind \"walk_over\" requires sector: the index of the sector whose two-sided \
-             boundaries the player crosses to end the level (get_map_summary lists the \
-             sectors)",
+            "kind \"walk_over\" requires sector: the index of the sector whose plain \
+             two-sided boundaries the player crosses to end the level (get_map_summary \
+             lists the sectors)",
         ));
     };
     let name = common::resolve_map_name(session, args.map.as_deref())?;
@@ -267,8 +285,11 @@ fn exit_via_walkover(
     let secret = args.secret;
     let (built, report) =
         session.edit_map(name, label, |map| build_walk_over_exit(map, sector, secret))?;
+    let warnings = built.warning().into_iter().collect();
     Ok(ExitReport {
         kind: kind_name(ExitKind::WalkOver),
+        skipped_lines: built.skipped_lines,
+        warnings,
         lines: built.lines,
         special: built.special,
         secret,

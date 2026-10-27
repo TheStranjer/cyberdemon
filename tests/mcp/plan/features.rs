@@ -5,15 +5,17 @@
 //! `light_effect` ending lit and hidden with the Boom warning passed through, a
 //! `switch` row mounting its panel on the chosen wall and firing the remote
 //! door's own tag, both `exit` styles ending the level where the room stands, a
-//! switch on a plain door refused as not remote, and rows naming an unknown
+//! `walk_over` exit beside a plain door leaving that door wired and
+//! warning about it, a switch on a plain door refused as not remote, and
+//! rows naming an unknown
 //! room or an `opens` id no connection carries refusing by plan path.
 
 use serde_json::{Value, json};
 
 use crate::plan::{
-    Client, assert_line_actions, assert_walk_lines, features_loaded, first_line, line_row,
-    plan_for, refuse_with, row_line_indices, things_of_kind, working_lines, working_sector,
-    working_things,
+    Client, assert_line_actions, assert_walk_lines, expect_row, features_loaded, first_line,
+    line_row, plan_for, refuse_with, row_line_indices, things_of_kind, working_lines,
+    working_sector, working_things,
 };
 use crate::support::{call, call_err};
 
@@ -296,6 +298,55 @@ async fn the_two_exit_styles_end_the_level_where_the_room_stands() {
         secret["front"]["middle"],
         json!("SW1EXIT"),
         "the theme's exit panel"
+    );
+}
+
+/// A `walk_over` exit in a room the plan also joins by a plain door: the
+/// door's own boundary lines keep their action, the exit dresses the
+/// opening's, the build warns about what it skipped, and the finished
+/// map still plays through the door to the level end.
+#[tokio::test]
+async fn a_walk_over_exit_beside_a_door_keeps_the_door_and_plays() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let mut request = plan_for("MAP05");
+    request["features"] = json!([{"kind": "exit", "room": "b", "style": "walk_over"}]);
+    let result = call(&client, "build_map_from_plan", request).await;
+    let rows = result["features"].as_array().expect("a feature list");
+    let door = expect_row(rows, 0, "door", None);
+    let exit = expect_row(rows, 1, "exit", Some("b"));
+    let lines = working_lines(&client, "MAP05").await;
+    let door_lines = row_line_indices(door);
+    assert_line_actions(&lines, &door_lines, 1_i64, 1_i64);
+    let exit_lines = row_line_indices(exit);
+    assert!(!exit_lines.is_empty(), "the opening's lines end the level");
+    for index in &exit_lines {
+        assert!(
+            !door_lines.contains(index),
+            "line {index} is an exit and a door at once"
+        );
+    }
+    assert_walk_lines(&lines, &exit_lines);
+    let notes = result["warnings"].as_array().expect("a warning list");
+    assert_eq!(notes.len(), 1, "the skip is the only note: {notes:?}");
+    let note = notes
+        .first()
+        .expect("one note")
+        .as_str()
+        .expect("a text note");
+    assert!(note.contains("walk_over exit left"), "{note}");
+    assert!(note.contains("(special 1)"), "{note}");
+    let plays = call(
+        &client,
+        "check_playability",
+        json!({"map": "MAP05", "render": false}),
+    )
+    .await;
+    assert_eq!(plays["ok"], json!(true), "the map finishes: {plays}");
+    assert_eq!(
+        plays["blockers"],
+        json!([]),
+        "the door the exit stepped over still opens: {plays}"
     );
 }
 

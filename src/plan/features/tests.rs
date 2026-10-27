@@ -210,6 +210,19 @@ pub(super) fn opening(id: &str, from: &str, to: &str) -> Connection {
     }
 }
 
+/// A named plain opening between the two rooms of [`two_rooms`],
+/// centred on the plan point `at`.
+pub(super) fn opening_at(id: &str, at: (i64, i64)) -> Connection {
+    Connection {
+        id: Some(id.to_owned()),
+        from: "a".to_owned(),
+        to: "b".to_owned(),
+        kind: ConnectionKind::Opening,
+        at: Some(at),
+        width: 48_i64,
+    }
+}
+
 /// Compile `plan` and require the feature run to refuse.
 #[track_caller]
 pub(super) fn refuse_features(plan: &Plan) -> crate::error::CyberError {

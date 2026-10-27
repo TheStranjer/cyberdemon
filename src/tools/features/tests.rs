@@ -4,8 +4,9 @@
 //! stairs/lift/teleporter movers in [`movers`] and the `place_things`
 //! parsing and distribution in [`place`].
 //!
-//! [`two_rooms`], [`one_room`] and [`room_and_hall`] build the fixture
-//! maps, [`vertex`], [`side`], [`solid_line`], [`open_line`] and
+//! [`two_rooms`], [`one_room`], [`room_and_hall`] and
+//! [`hall_and_two_rooms`] build the fixture maps, [`vertex`], [`side`],
+//! [`solid_line`], [`open_line`] and
 //! [`room`] the records they are wound from, [`code`] and [`refuse`]
 //! read the refusals.
 
@@ -193,6 +194,56 @@ pub(super) fn room_and_hall() -> Map {
             side(1),
         ],
         sectors: vec![room(0, 128, 0), room(0, 128, 0)],
+        ..Default::default()
+    }
+}
+
+/// The hall-and-two-rooms test map: a hall (sector 0, `x 128..384`)
+/// between room A (sector 1, west of it) and room B (sector 2, east of
+/// it). The hall owns two two-sided boundaries — line 2 with room A and
+/// line 6 with room B — so a test can dress one of them with another
+/// feature's action and leave the other plain.
+pub(super) fn hall_and_two_rooms() -> Map {
+    Map {
+        name: LumpName::parse("MAP01").expect("a valid name"),
+        format: MapFormat::Doom,
+        vertices: vec![
+            vertex(0, 0),
+            vertex(128, 0),
+            vertex(384, 0),
+            vertex(512, 0),
+            vertex(512, 256),
+            vertex(384, 256),
+            vertex(128, 256),
+            vertex(0, 256),
+        ],
+        linedefs: vec![
+            solid_line(0, 7, 0),
+            solid_line(7, 6, 1),
+            open_line(6, 1, 2, 3),
+            solid_line(1, 0, 4),
+            solid_line(2, 1, 5),
+            solid_line(6, 5, 6),
+            open_line(2, 5, 7, 8),
+            solid_line(3, 2, 9),
+            solid_line(5, 4, 10),
+            solid_line(4, 3, 11),
+        ],
+        sidedefs: vec![
+            side(1),
+            side(1),
+            side(1),
+            side(0),
+            side(1),
+            side(0),
+            side(0),
+            side(2),
+            side(0),
+            side(2),
+            side(2),
+            side(2),
+        ],
+        sectors: vec![room(0, 128, 0), room(0, 128, 1), room(0, 128, 2)],
         ..Default::default()
     }
 }

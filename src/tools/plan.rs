@@ -28,7 +28,9 @@
 //! room's own sector as a tagged platform whose lower-facing edges carry
 //! the ride,
 //! `teleporter` rows stand the pad and destination squares (with their
-//! own type-14 things), `exit` rows end the level, and the room
+//! own type-14 things), `exit` rows end the level — a `walk_over` row
+//! dresses only the room's plain boundary lines, warning about the ones
+//! it leaves to a door, a lift or a teleporter — and the room
 //! `light_effect` and `secret` flags paint the family's sector
 //! specials — lights before secrets, so a lit secret keeps both. Every
 //! installed feature is reported as a `features` row, each line it names

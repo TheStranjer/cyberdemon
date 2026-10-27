@@ -2,7 +2,8 @@
 //! tag reuse and dressing, the (secret) level ends, the refusal wording
 //! for plain-door, untagged-remote and painted-over rooms, the fit and
 //! hint of a panel that cannot mount, the reported line endpoints and
-//! the walk-over boundary. Wall *choosing* lives in [`wall`].
+//! the walk-over boundary — its plain lines dressed and a door's own
+//! left wired. Wall *choosing* lives in [`wall`].
 //!
 //! [`wall`]: wall
 
@@ -10,8 +11,8 @@ use super::super::FeatureRun;
 use super::super::checks::remote_door;
 use super::super::{FeatureDress, FeatureRow, report_line_ends};
 use super::{
-    BAND, TAG_ONE, door, dress, opening, rect_room, refuse_features, two_rooms, wired,
-    wired_dressed,
+    BAND, TAG_ONE, door, dress, line_at, opening, opening_at, rect_room, refuse_features,
+    two_rooms, wired, wired_dressed,
 };
 use crate::geom::Pt;
 use crate::plan::model::{
@@ -412,4 +413,80 @@ fn boundary_of(map: &Map, line: &Linedef, sector: usize) -> bool {
         return false;
     };
     front == sector || back == sector
+}
+
+/// The two-room plan a `style` door and a plain opening both join: the
+/// door band low on the shared wall, the opening high on it.
+fn door_and_gap(style: DoorStyle) -> Plan {
+    two_rooms(vec![
+        door("d1", style, (128_i64, 32_i64)),
+        opening_at("o1", (128_i64, 96_i64)),
+    ])
+}
+
+#[test]
+fn a_walk_over_exit_next_to_a_door_leaves_the_door_wired() {
+    let mut plan = door_and_gap(DoorStyle::Normal);
+    plan.features = vec![exit_feature("b", ExitStyle::WalkOver, false, None)];
+    let (compiled, rows) = wired(&plan);
+    let map = &compiled.map;
+    let door_row = rows.iter().find(|r| r.kind == "door").expect("a door row");
+    let exit_row = rows.iter().find(|r| r.kind == "exit").expect("an exit row");
+    assert!(
+        !exit_row.lines.is_empty(),
+        "the opening's boundary ends the level"
+    );
+    assert!(
+        !door_row.lines.is_empty(),
+        "the door wires both rooms' sides"
+    );
+    for &line in &door_row.lines {
+        assert_eq!(
+            line_at(map, line).special,
+            1_i32,
+            "line {line} still opens the door"
+        );
+        assert!(
+            !exit_row.lines.contains(&line),
+            "no door line ends the level"
+        );
+    }
+    for &line in &exit_row.lines {
+        assert_eq!(line_at(map, line).special, 52_i32, "the W1 on line {line}");
+    }
+    let notes = &compiled.warnings;
+    assert_eq!(
+        notes.len(),
+        1,
+        "the skipped door line is the only note: {notes:?}"
+    );
+    assert!(
+        notes
+            .first()
+            .expect("one note")
+            .contains("walk_over exit left"),
+        "the note says what was skipped: {notes:?}"
+    );
+    assert!(
+        notes.first().expect("one note").contains("special 1"),
+        "and names the action it kept: {notes:?}"
+    );
+}
+
+#[test]
+fn a_walk_over_exit_behind_a_lone_door_names_the_door_and_the_way_out() {
+    let mut plan = door_and_gap(DoorStyle::Normal);
+    plan.connections
+        .retain(|band| band.id.as_deref() != Some("o1"));
+    plan.features = vec![exit_feature("b", ExitStyle::WalkOver, false, None)];
+    let message = refuse_features(&plan).to_string();
+    assert!(
+        message.contains("has no plain two-sided boundary to walk over"),
+        "{message}"
+    );
+    assert!(
+        message.contains("special 1"),
+        "the door is named: {message}"
+    );
+    assert!(message.contains("switch"), "and the way out: {message}");
 }

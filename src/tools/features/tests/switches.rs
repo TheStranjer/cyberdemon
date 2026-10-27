@@ -14,13 +14,13 @@ use crate::wad::map::Map;
 use crate::wad::map::features::SwitchAction;
 use crate::wad::map::features::switch_special;
 use crate::wad::map::features::{
-    SwitchSpec, action_name, build_switch, build_walk_over_exit, dress_switch, isolate_chunk,
-    switch_cut, switch_span, switch_tag, walk_over_special,
+    SkippedLine, SwitchSpec, action_name, build_switch, build_walk_over_exit, dress_switch,
+    is_level_end, isolate_chunk, switch_cut, switch_span, switch_tag, walk_over_special,
 };
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::ops::Point;
 
-use super::{missing, one_room, refuse, two_rooms};
+use super::{hall_and_two_rooms, missing, one_room, refuse, two_rooms};
 
 /// A `add_switch` request parsed from `json`.
 fn switch_args(json: &str) -> AddSwitchParams {
@@ -456,4 +456,175 @@ fn one_sided_lines_never_take_the_walk_over_action() {
         "the hall-facing step line only, not room 1's own walls"
     );
     assert_eq!(map.linedefs.get(solid).expect("a wall").special, 0_i32);
+}
+
+/// Give linedef `index` the action `special` answering `tag`: how a door,
+/// a lift or a teleporter line looks to the exit step.
+fn dress_with_action(map: &mut Map, index: usize, special: i32, tag: i32) {
+    if let Some(line) = map.linedefs.get_mut(index) {
+        line.special = special;
+        line.tag = tag;
+    }
+}
+
+/// The special, tag and activation of linedef `index`.
+fn line_action(map: &Map, index: usize) -> (i32, i32, u32) {
+    let line = map.linedefs.get(index).expect("the linedef");
+    (line.special, line.tag, line.flags)
+}
+
+#[test]
+fn is_level_end_reads_the_familys_own_walk_over_ends() {
+    for special in [52_i32, 124_i32] {
+        assert!(
+            is_level_end(FlagFamily::Doom, special),
+            "the Doom {special}"
+        );
+        assert!(
+            !is_level_end(FlagFamily::Hexen, special),
+            "{special} is the other family's"
+        );
+    }
+    for special in [243_i32, 244_i32] {
+        assert!(
+            is_level_end(FlagFamily::Hexen, special),
+            "the Hexen {special}"
+        );
+        assert!(
+            !is_level_end(FlagFamily::Doom, special),
+            "{special} is the other family's"
+        );
+    }
+    for special in [0_i32, 1_i32, 26_i32, 62_i32, 97_i32, 103_i32] {
+        assert!(
+            !is_level_end(FlagFamily::Doom, special),
+            "{special} is another feature's"
+        );
+        assert!(
+            !is_level_end(FlagFamily::Hexen, special),
+            "{special} is another feature's"
+        );
+    }
+}
+
+#[test]
+fn a_walk_over_exit_leaves_a_door_line_its_action() {
+    let mut map = hall_and_two_rooms();
+    dress_with_action(&mut map, 2_usize, 1_i32, 1_i32);
+    let built = build_walk_over_exit(&mut map, 0_usize, false).expect("the hall's plain side");
+    assert_eq!(
+        built.lines,
+        vec![6_usize],
+        "only the plain boundary ends the level"
+    );
+    assert_eq!(built.special, 52_i32, "the W1 exit");
+    assert_eq!(
+        built.skipped_lines,
+        vec![SkippedLine {
+            line: 2_usize,
+            special: 1_i32
+        }],
+        "the door line is reported with the action it kept"
+    );
+    assert_eq!(
+        line_action(&map, 2),
+        (1_i32, 1_i32, 4_u32),
+        "the door still opens on its own tag"
+    );
+    assert_eq!(
+        line_action(&map, 6).0,
+        52_i32,
+        "the plain line took the exit"
+    );
+    let note = built.warning().expect("skipped lines are warned about");
+    assert!(note.contains("one boundary line"), "{note}");
+    assert!(note.contains("line 2 (special 1)"), "{note}");
+    assert!(note.contains("does not end the level"), "{note}");
+}
+
+#[test]
+fn a_walk_over_exit_warns_only_when_it_skipped_something() {
+    let mut plain = hall_and_two_rooms();
+    let dressed = build_walk_over_exit(&mut plain, 0_usize, false).expect("both lines are plain");
+    assert_eq!(dressed.lines, vec![2_usize, 6_usize], "both boundaries");
+    assert!(dressed.skipped_lines.is_empty(), "nothing stood aside");
+    assert_eq!(dressed.warning(), None, "so there is nothing to say");
+    let mut busy = hall_and_two_rooms();
+    dress_with_action(&mut busy, 2_usize, 26_i32, 1_i32);
+    dress_with_action(&mut busy, 6_usize, 62_i32, 2_i32);
+    let one = build_walk_over_exit(&mut busy, 0_usize, false);
+    assert!(
+        one.is_err(),
+        "a hall of only busy lines ends the level nowhere"
+    );
+}
+
+#[test]
+fn an_exit_redresses_the_line_that_already_ends_the_level() {
+    let mut map = hall_and_two_rooms();
+    dress_with_action(&mut map, 2_usize, 1_i32, 1_i32);
+    let hall = build_walk_over_exit(&mut map, 0_usize, false).expect("the plain side stands");
+    assert_eq!(hall.lines, vec![6_usize]);
+    let from_b = build_walk_over_exit(&mut map, 2_usize, true).expect("room 2 shares line 6");
+    assert_eq!(
+        from_b.lines,
+        vec![6_usize],
+        "an exit already on the line is the exit's own to move"
+    );
+    assert!(
+        from_b.skipped_lines.is_empty(),
+        "the level end it carries is no reason to skip"
+    );
+    assert_eq!(from_b.special, 124_i32, "the same threshold, now secret");
+    assert_eq!(line_action(&map, 6), (124_i32, 0_i32, 4_u32), "re-dressed");
+}
+
+#[test]
+fn a_sector_of_only_busy_boundaries_is_refused_by_name() {
+    let mut map = hall_and_two_rooms();
+    dress_with_action(&mut map, 2_usize, 26_i32, 1_i32);
+    let message = refuse(&build_walk_over_exit(&mut map, 1_usize, false).unwrap_err());
+    assert!(
+        message.contains("sector 1 has no plain two-sided boundary"),
+        "{message}"
+    );
+    assert!(message.contains("line 2 (special 26)"), "{message}");
+    assert!(message.contains("switch"), "{message}");
+    assert_eq!(
+        line_action(&map, 2),
+        (26_i32, 1_i32, 4_u32),
+        "the locked door the refusal refused to touch"
+    );
+    assert_eq!(
+        map.linedefs.get(6).expect("the other line").special,
+        0_i32,
+        "and nothing else was written"
+    );
+}
+
+#[test]
+fn a_hexen_walk_over_exit_leaves_a_scripted_line_alone() {
+    let mut map = hall_and_two_rooms();
+    map.format = MapFormat::Hexen;
+    dress_with_action(&mut map, 2_usize, 12_i32, 0_i32);
+    if let Some(line) = map.linedefs.get_mut(6) {
+        line.flags = 4_u32 | 0x400_u32;
+    }
+    let built = build_walk_over_exit(&mut map, 0_usize, false).expect("the plain side stands");
+    assert_eq!(built.special, 243_i32, "the Portal exit");
+    assert_eq!(built.lines, vec![6_usize]);
+    assert_eq!(
+        built.skipped_lines,
+        vec![SkippedLine {
+            line: 2_usize,
+            special: 12_i32
+        }],
+        "Door_Raise keeps its line"
+    );
+    assert_eq!(line_action(&map, 2), (12_i32, 0_i32, 4_u32));
+    assert_eq!(
+        line_action(&map, 6),
+        (243_i32, 0_i32, 4_u32),
+        "the dressed line clears to playercross"
+    );
 }

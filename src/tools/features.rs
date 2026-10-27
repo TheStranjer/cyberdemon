@@ -251,7 +251,7 @@ impl Cyberdemon {
 
     /// Ends the level from a wall switch or a walk-over line in one undoable edit.
     #[tool(
-        description = "Places a level end in one undoable edit. kind switch mounts an exit panel on linedef (the add_switch mount with the exit action, the theme's exit_switch texture); kind walk_over ends the level on every two-sided boundary of sector. secret: true picks the secret-exit action. Returns the dressed lines. Use it to finish a map you built; check_playability then proves a player can reach it."
+        description = "Places a level end in one undoable edit. kind switch mounts an exit panel on linedef (the add_switch mount with the exit action, the theme's exit_switch texture); kind walk_over ends the level on every plain two-sided boundary of sector, leaving a boundary line that already carries another feature's action (a door, a lift, a teleporter) to that feature and reporting it. secret: true picks the secret-exit action. Returns the dressed lines and its warnings. Use it to finish a map you built; check_playability then proves a player can reach it."
     )]
     fn add_exit(
         &self,

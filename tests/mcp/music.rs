@@ -361,8 +361,12 @@ mod tests {
         let midi = write_midi(dir.path(), "runnin", &ONE_NOTE);
         let mut format = source_arg(&midi);
         format["format"] = json!("zdoom");
-        let (format_code, _, _) = call_err(&client, "import_music", format).await;
+        let (format_code, format_message, _) = call_err(&client, "import_music", format).await;
         assert_eq!(format_code, "invalid_argument", "not a storage format");
+        assert!(
+            format_message.contains("\"mus\"") && format_message.contains("\"passthrough\""),
+            "the message names both formats: {format_message}"
+        );
         let mut long_name = source_arg(&midi);
         long_name["name"] = json!("NINECHARS");
         let (name_code, _, _) = call_err(&client, "import_music", long_name).await;

@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use crate::defs::Definitions;
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::plan::things::resolve_thing_kind;
 use crate::wad::map::flags::{self, FlagFamily, FlagKind, Skill};
 use crate::wad::map::placement::{Area, Facing, snap_angle};
@@ -372,14 +373,7 @@ fn place_skills(texts: &[String]) -> Result<Vec<Skill>, CyberError> {
     }
     texts
         .iter()
-        .map(|text| {
-            Skill::parse(text).ok_or_else(|| {
-                CyberError::invalid(&format!(
-                    "skill {text:?} is not a skill: pass easy, medium or hard, or leave skills \
-                     out for every skill"
-                ))
-            })
-        })
+        .map(|text| parse_named::<Skill>("skill", text))
         .collect()
 }
 

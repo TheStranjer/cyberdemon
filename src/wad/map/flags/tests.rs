@@ -12,6 +12,7 @@ use super::{
     check_flag, from_names, names, to_names,
 };
 use crate::error::CyberError;
+use crate::named::Named as _;
 
 /// The table names, for building full-table requests.
 fn all_names(kind: FlagKind, family: FlagFamily) -> Vec<String> {

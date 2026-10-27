@@ -137,7 +137,7 @@ const fn hexen_secret(special: i32, secret: bool) -> SecretEdit {
 
 /// The light effects [`light_special`] installs, as the tool names them.
 ///
-/// The serde names are the `snake_case` [`LightEffect::name`]s, so a plan
+/// The serde names are the `snake_case` [`crate::named::Named::name`]s, so a plan
 /// or a tool payload spells an effect exactly as the tools do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -172,20 +172,6 @@ impl LightEffect {
         ]
     }
 
-    /// The canonical wire name of this effect.
-    #[must_use]
-    #[inline]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Flicker => "flicker",
-            Self::StrobeFast => "strobe_fast",
-            Self::StrobeSlow => "strobe_slow",
-            Self::Glow => "glow",
-            Self::RandomOff => "random_off",
-        }
-    }
-
     /// This effect's basic sector type number in flag family `family`: the
     /// vanilla `Doom` table number, and that number `64` higher in the
     /// `Hexen` family, whose `Doom`-equivalent specials start at `64`
@@ -204,6 +190,23 @@ impl LightEffect {
         match family {
             FlagFamily::Doom => doom,
             FlagFamily::Hexen => hexen,
+        }
+    }
+}
+
+impl crate::named::Named for LightEffect {
+    const ALL: &'static [Self] = &Self::all();
+
+    /// The canonical wire name of this effect.
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Flicker => "flicker",
+            Self::StrobeFast => "strobe_fast",
+            Self::StrobeSlow => "strobe_slow",
+            Self::Glow => "glow",
+            Self::RandomOff => "random_off",
         }
     }
 }
@@ -253,6 +256,7 @@ mod tests {
         HEXEN_SECRET_BIT, HEXEN_TYPE_MASK, LightEffect, SecretEdit, boom_note, light_special,
         secret_edit,
     };
+    use crate::named::Named as _;
     use crate::wad::map::flags::FlagFamily;
 
     /// The `Doom` secret answer with `special` and the given Boom warning.

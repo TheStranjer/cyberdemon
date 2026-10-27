@@ -4,6 +4,7 @@
 //! offender.
 
 use crate::error::CyberError;
+use crate::named::Named as _;
 use crate::wad::map::query::{ElementKind, check_index, check_indices, missing_index};
 use crate::wad::map::{Map, Vertex};
 
@@ -54,7 +55,7 @@ fn the_vertex_plural_is_spelled_never_appended() {
 
 #[test]
 fn an_empty_block_refuses_with_the_no_rows_wording() {
-    for kind in ElementKind::ALL {
+    for kind in ElementKind::ALL.iter().copied() {
         let error = check_index(kind, 0, 0).expect_err("nothing to index into");
         assert_eq!(
             error.message(),
@@ -70,7 +71,7 @@ fn an_empty_block_refuses_with_the_no_rows_wording() {
 
 #[test]
 fn missing_index_answers_the_error_check_index_refuses_with() {
-    for kind in ElementKind::ALL {
+    for kind in ElementKind::ALL.iter().copied() {
         let built = missing_index(kind, 9, 4);
         let refused = check_index(kind, 9, 4).expect_err("9 is past 4");
         assert_eq!(built.code(), refused.code(), "same code for {kind:?}");
@@ -131,7 +132,7 @@ fn check_indices_passes_an_empty_list_and_names_the_first_offender() {
 #[test]
 fn check_indices_reads_the_kind_count_straight_off_the_map() {
     let empty = Map::default();
-    for kind in ElementKind::ALL {
+    for kind in ElementKind::ALL.iter().copied() {
         let error =
             check_indices(kind, &[0_usize], &empty).expect_err("the empty map holds nothing");
         assert_eq!(

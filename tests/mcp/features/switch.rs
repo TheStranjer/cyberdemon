@@ -259,7 +259,7 @@ async fn switch_arguments_are_validated() {
     refuse_switch(
         &client,
         json!({"linedef": 0_i32, "action": "press"}),
-        "open_door, exit, secret_exit, raise_floor, lower_floor",
+        "\"open_door\", \"exit\", \"secret_exit\", \"raise_floor\", \"lower_floor\"",
     )
     .await;
     refuse_missing_switch(

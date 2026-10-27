@@ -2,12 +2,12 @@
 //! split and panel dressing of [`build_switch`], the tag minting and
 //! the walk-over boundary sweep of [`build_walk_over_exit`].
 
+use crate::named::Named as _;
 use serde_json::from_str;
 
 use crate::themes::Role;
 use crate::tools::features::switches::{
-    AddExitParams, AddSwitchParams, ExitKind, action_names, action_of, kind_name, kind_of,
-    switch_role,
+    AddExitParams, AddSwitchParams, ExitKind, action_of, kind_name, kind_of, switch_role,
 };
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
@@ -74,11 +74,12 @@ fn switch_actions_round_trip_and_refuse_unknown_names() {
     }
     let message = refuse(&action_of("press").unwrap_err());
     assert!(
-        message.contains("open_door, exit, secret_exit, raise_floor, lower_floor"),
+        message
+            .contains("\"open_door\", \"exit\", \"secret_exit\", \"raise_floor\", \"lower_floor\""),
         "the refusal lists every name: {message}"
     );
     assert_eq!(
-        action_names().len(),
+        SwitchAction::names().len(),
         SwitchAction::all().len(),
         "one name each"
     );

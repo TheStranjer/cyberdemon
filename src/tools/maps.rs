@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session, Source};
 use crate::state::AppState;
@@ -188,13 +189,10 @@ const MAX_NAMESPACE_LEN: usize = 32;
 ///
 /// [`CyberError::InvalidArgument`] listing the accepted names.
 pub(crate) fn parse_format(text: Option<&str>) -> Result<MapFormat, CyberError> {
-    text.map_or(Ok(MapFormat::Doom), |raw| {
-        MapFormat::parse(raw).ok_or_else(|| {
-            CyberError::InvalidArgument(format!(
-                "unknown map format {raw:?}: use \"doom\", \"hexen\" or \"udmf\""
-            ))
-        })
-    })
+    let Some(raw) = text else {
+        return Ok(MapFormat::Doom);
+    };
+    parse_named("map format", raw)
 }
 
 /// Whether `text` is an acceptable `UDMF` namespace: 1 to

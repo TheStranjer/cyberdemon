@@ -42,6 +42,7 @@
 //! [`Map::flag_family`]: crate::wad::map::Map::flag_family
 
 use crate::error::CyberError;
+use crate::named::Named;
 
 /// Mask covering the `Hexen` linedef activation field.
 pub(crate) const ACTIVATION_MASK: u32 = 0x1C00;
@@ -248,9 +249,6 @@ pub enum Skill {
 }
 
 impl Skill {
-    /// Every skill, in flag-table order.
-    pub const ALL: [Self; 3] = [Self::Easy, Self::Medium, Self::Hard];
-
     /// The name of this skill's bit in both families' thing flag tables.
     #[must_use]
     #[inline]
@@ -266,10 +264,7 @@ impl Skill {
     #[must_use]
     #[inline]
     pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|skill| skill.as_str().eq_ignore_ascii_case(text))
+        Self::by_name(text)
     }
 
     /// The bit this skill holds in `family`'s thing flag table, `0` when
@@ -281,6 +276,16 @@ impl Skill {
             .iter()
             .find(|entry| entry.0 == self.as_str())
             .map_or(0_u32, |entry| entry.1)
+    }
+}
+
+impl Named for Skill {
+    /// Every skill, in flag-table order.
+    const ALL: &'static [Self] = &[Self::Easy, Self::Medium, Self::Hard];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 

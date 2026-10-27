@@ -26,6 +26,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::server::Cyberdemon;
 use crate::session::{MergedLump, Scope, Session};
 use crate::state::AppState;
@@ -341,13 +342,7 @@ fn parse_operations(list: Option<&[String]>) -> Result<Vec<Operation>, CyberErro
     };
     let mut chosen = BTreeSet::new();
     for text in requested {
-        let Some(operation) = Operation::parse(text) else {
-            return Err(CyberError::InvalidArgument(format!(
-                "unknown operation {text:?}: choose from {}, or leave operations out for the \
-                 safe default",
-                Operation::names(&Operation::ALL)
-            )));
-        };
+        let operation = parse_named::<Operation>("operation", text)?;
         chosen.insert(operation);
     }
     Ok(chosen.into_iter().collect())

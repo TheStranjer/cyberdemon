@@ -7,7 +7,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{DEFAULT_COUNT, default_count, invalid_at};
+use super::{DEFAULT_COUNT, default_count, invalid_at, named_at};
 use crate::error::CyberError;
 use crate::plan::things::{Skill, ThingSpot};
 
@@ -219,17 +219,7 @@ fn parse_skills(wanted: Option<&[String]>, path: &str) -> Result<Option<Vec<Skil
     let skills_path = format!("{path}.skills");
     texts
         .iter()
-        .map(|text| {
-            Skill::parse(text).ok_or_else(|| {
-                invalid_at(
-                    &skills_path,
-                    &format!(
-                        "skill {text:?} is not a skill: pass easy, medium or hard, or leave \
-                         skills out for every skill"
-                    ),
-                )
-            })
-        })
+        .map(|text| named_at::<Skill>(&skills_path, "skills", text))
         .collect::<Result<Vec<Skill>, CyberError>>()
         .map(Some)
 }

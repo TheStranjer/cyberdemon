@@ -228,7 +228,7 @@ async fn the_two_special_tools_validate_their_arguments() {
     refuse_light(
         &client,
         json!({"sectors": [0_i32], "effect": "pulsate"}),
-        "none, flicker, strobe_fast, strobe_slow, glow, random_off",
+        "\"none\", \"flicker\", \"strobe_fast\", \"strobe_slow\", \"glow\", \"random_off\"",
     )
     .await;
     refuse_light(

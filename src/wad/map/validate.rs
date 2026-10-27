@@ -66,6 +66,19 @@ impl Severity {
     }
 }
 
+impl crate::named::Named for Severity {
+    const ALL: &'static [Self] = &[Self::Error, Self::Warning, Self::Info];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+        }
+    }
+}
+
 /// One finding of one check: what was found, where, and how bad it is.
 ///
 /// Empty index lists and absent coordinates do not serialize, so an issue

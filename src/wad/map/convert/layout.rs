@@ -16,6 +16,7 @@
 use alloc::collections::BTreeMap;
 
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::wad::classify::MapFormat;
 use crate::wad::lumps;
 use crate::wad::map::flags::FlagFamily;
@@ -277,15 +278,7 @@ fn is_decimal(text: &str) -> bool {
 ///
 /// [`CyberError::InvalidArgument`] listing the three accepted spellings.
 pub(super) fn parse_format(to: &str) -> Result<MapFormat, CyberError> {
-    match to.to_ascii_lowercase().as_str() {
-        "doom" => Ok(MapFormat::Doom),
-        "hexen" => Ok(MapFormat::Hexen),
-        "udmf" => Ok(MapFormat::Udmf),
-        _ => Err(CyberError::InvalidArgument(format!(
-            "unknown target format {to:?}: convert_map_format writes \"doom\", \"hexen\" or \
-             \"udmf\""
-        ))),
-    }
+    parse_named("target format", to)
 }
 
 /// The lowercased namespace, or a refusal when it is no `UDMF` namespace

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
@@ -82,24 +83,10 @@ pub(super) struct AddExitParams {
     pub(super) sector: Option<usize>,
 }
 
-/// Every action name, in [`SwitchAction::all`] order.
-pub(super) fn action_names() -> Vec<&'static str> {
-    SwitchAction::all().map(action_name).to_vec()
-}
-
 /// The [`SwitchAction`] `text` names (case-insensitive), or the refusal
 /// listing every valid name.
 pub(super) fn action_of(text: &str) -> Result<SwitchAction, CyberError> {
-    let wanted = text.to_ascii_lowercase();
-    SwitchAction::all()
-        .into_iter()
-        .find(|action| action_name(*action) == wanted)
-        .ok_or_else(|| {
-            CyberError::invalid(&format!(
-                "action {text:?} is not a switch action: pass one of {}",
-                action_names().join(", ")
-            ))
-        })
+    parse_named("action", text)
 }
 
 /// The texture theme role the switch panel wears: the exit switch for

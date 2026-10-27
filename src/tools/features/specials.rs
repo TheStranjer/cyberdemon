@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
+use crate::named::{Named as _, parse_named};
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{ElementKind, edit_result_fragment};
@@ -100,21 +101,7 @@ pub(super) fn check_light_level(level: i32) -> Result<(), CyberError> {
 /// The [`LightEffect`] `text` names (case-insensitive), or the refusal
 /// listing every valid name.
 pub(super) fn effect_of(text: &str) -> Result<LightEffect, CyberError> {
-    let wanted = text.to_ascii_lowercase();
-    LightEffect::all()
-        .into_iter()
-        .find(|effect| effect.name() == wanted)
-        .ok_or_else(|| {
-            CyberError::invalid(&format!(
-                "effect {text:?} is not a light effect: pass one of {}",
-                effect_names().join(", ")
-            ))
-        })
-}
-
-/// Every effect name, in [`LightEffect::all`] order.
-pub(super) fn effect_names() -> Vec<&'static str> {
-    LightEffect::all().map(LightEffect::name).to_vec()
+    parse_named("effect", text)
 }
 
 /// Everything [`mark_secrets`] needs once the wire parameters resolved.

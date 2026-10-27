@@ -446,7 +446,7 @@ async fn plan_paths_name_every_refused_element() {
     refuse_with(&client, portal, "connections[0]").await;
     let mut slide = plan_for("MAP05");
     slide["connections"][0]["style"] = json!("slide");
-    refuse_with(&client, slide, "normal, fast, stay_open").await;
+    refuse_with(&client, slide, "\"normal\", \"fast\", \"stay_open\"").await;
     let maps = call(&client, "list_maps", json!({"scope": "working"})).await;
     assert_eq!(maps["maps"], json!([]), "no refusal wrote anything");
 }

@@ -2,11 +2,12 @@
 //! per flag family, the untouched-bits promises and the refusals that
 //! name the sector the map does not hold.
 
+use crate::named::Named as _;
 use serde_json::from_str;
 
 use crate::tools::features::specials::{
     LIGHT_MAX, LIGHT_MIN, LightSpec, MarkSecretParams, SecretSpec, SetLightParams,
-    check_light_level, effect_names, effect_of, mark_secrets, sector_selection, set_lights,
+    check_light_level, effect_of, mark_secrets, sector_selection, set_lights,
 };
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
@@ -109,11 +110,13 @@ fn light_effects_round_trip_and_refuse_unknown_names() {
     }
     let message = refuse(&effect_of("pulsate").unwrap_err());
     assert!(
-        message.contains("none, flicker, strobe_fast, strobe_slow, glow, random_off"),
+        message.contains(
+            "\"none\", \"flicker\", \"strobe_fast\", \"strobe_slow\", \"glow\", \"random_off\""
+        ),
         "the refusal lists every name: {message}"
     );
     assert_eq!(
-        effect_names().len(),
+        LightEffect::names().len(),
         LightEffect::all().len(),
         "one name each"
     );

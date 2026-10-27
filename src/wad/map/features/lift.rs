@@ -80,6 +80,18 @@ impl LiftStyle {
     }
 }
 
+impl crate::named::Named for LiftStyle {
+    const ALL: &'static [Self] = &Self::all();
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::UseWall => "use_wall",
+            Self::WalkTrigger => "walk_trigger",
+        }
+    }
+}
+
 /// The [`DoorLineSetup`] a lift of `style` installs in flag family
 /// `family`, triggered `repeatable` times or once, answering with the
 /// platform's `tag`.

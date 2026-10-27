@@ -9,6 +9,7 @@ use crate::error::CyberError;
 use crate::gfx::codec::decode_image;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::parse_hex_colour;
+use crate::named::parse_named;
 use crate::plan::Units;
 use crate::render::{RenderSettings, Rgba, Switch};
 use crate::state::AppState;
@@ -56,17 +57,7 @@ pub(super) fn parse_projection(text: Option<&str>) -> Result<Projection, CyberEr
     let Some(name) = text else {
         return Ok(Projection::Topdown);
     };
-    let lowered = name.to_ascii_lowercase();
-    if lowered == "topdown" {
-        return Ok(Projection::Topdown);
-    }
-    if lowered == "isometric" {
-        return Ok(Projection::Isometric);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown projection {name:?}: use \"topdown\" for the flat north-up overview or \
-         \"isometric\" for the 2:1 wireframe"
-    )))
+    parse_named("projection", name)
 }
 
 /// The rectangle to frame: the validated `requested` bounds; else the

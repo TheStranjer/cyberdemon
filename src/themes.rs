@@ -28,6 +28,7 @@ use alloc::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::wad::game::Game;
 use crate::wad::name::glob_match;
 
@@ -83,30 +84,6 @@ pub enum Role {
 }
 
 impl Role {
-    /// Every role, in theme-table order.
-    pub const ALL: [Self; 20] = [
-        Self::Wall,
-        Self::WallAlt,
-        Self::Floor,
-        Self::Ceiling,
-        Self::LightCeiling,
-        Self::OutdoorCeiling,
-        Self::Door,
-        Self::DoorTrack,
-        Self::DoorTrackRed,
-        Self::DoorTrackBlue,
-        Self::DoorTrackYellow,
-        Self::DoorFloor,
-        Self::Switch,
-        Self::ExitSwitch,
-        Self::Step,
-        Self::LiftSide,
-        Self::LiftFloor,
-        Self::WindowSill,
-        Self::TeleportFloor,
-        Self::LiquidFloor,
-    ];
-
     /// The wire name of this role, as the tables and JSON spell it.
     #[must_use]
     #[inline]
@@ -143,11 +120,7 @@ impl Role {
     /// names none of them.
     #[inline]
     pub fn parse(text: &str) -> Result<Self, CyberError> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|role| role.as_str().eq_ignore_ascii_case(text))
-            .ok_or_else(|| unknown_role(text))
+        parse_named("role", text)
     }
 
     /// Whether this role wants a flat rather than a wall texture.
@@ -177,12 +150,36 @@ impl Role {
             Self::Ceiling | Self::LightCeiling | Self::OutdoorCeiling
         )
     }
+}
 
-    /// Every role name, for error messages.
-    #[must_use]
+impl Named for Role {
+    /// Every role, in theme-table order.
+    const ALL: &'static [Self] = &[
+        Self::Wall,
+        Self::WallAlt,
+        Self::Floor,
+        Self::Ceiling,
+        Self::LightCeiling,
+        Self::OutdoorCeiling,
+        Self::Door,
+        Self::DoorTrack,
+        Self::DoorTrackRed,
+        Self::DoorTrackBlue,
+        Self::DoorTrackYellow,
+        Self::DoorFloor,
+        Self::Switch,
+        Self::ExitSwitch,
+        Self::Step,
+        Self::LiftSide,
+        Self::LiftFloor,
+        Self::WindowSill,
+        Self::TeleportFloor,
+        Self::LiquidFloor,
+    ];
+
     #[inline]
-    pub fn names() -> Vec<&'static str> {
-        Self::ALL.iter().copied().map(Self::as_str).collect()
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -191,14 +188,6 @@ impl Display for Role {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// The refusal naming the roles a parameter accepts.
-fn unknown_role(text: &str) -> CyberError {
-    CyberError::InvalidArgument(format!(
-        "unknown texture role {text:?}: expected one of {}",
-        Role::names().join(", ")
-    ))
 }
 
 /// How a resolved texture name was found.

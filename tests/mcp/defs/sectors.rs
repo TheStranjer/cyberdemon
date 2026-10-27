@@ -147,7 +147,7 @@ async fn sectors_refuse_an_unknown_game() {
         call_err(&client, "get_sector_specials", json!({ "game": "zdaemon" })).await;
     assert_eq!(code, "invalid_argument", "unknown game code");
     assert!(
-        message.contains("game out"),
-        "the message says how to fix it: {message}"
+        message.contains("\"doom\"") && message.contains("\"hexen\""),
+        "the message names the accepted games: {message}"
     );
 }

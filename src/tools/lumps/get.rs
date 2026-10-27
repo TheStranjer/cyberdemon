@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::lumps::rows::LumpRow;
@@ -64,6 +65,21 @@ pub(super) enum Requested {
     Hex,
     /// Publish the raw bytes as an asset.
     Url,
+}
+
+impl Named for Requested {
+    const ALL: &'static [Self] = &[Self::Auto, Self::Info, Self::Text, Self::Hex, Self::Url];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Info => "info",
+            Self::Text => "text",
+            Self::Hex => "hex",
+            Self::Url => "url",
+        }
+    }
 }
 
 /// The `get_lump` format that actually ran, after resolving `auto`.
@@ -234,17 +250,7 @@ pub(super) fn parse_format(text: Option<&str>) -> Result<Requested, CyberError> 
     let Some(raw) = text else {
         return Ok(Requested::Auto);
     };
-    match raw.to_ascii_lowercase().as_str() {
-        "auto" => Ok(Requested::Auto),
-        "info" => Ok(Requested::Info),
-        "text" => Ok(Requested::Text),
-        "hex" => Ok(Requested::Hex),
-        "url" => Ok(Requested::Url),
-        other => Err(CyberError::InvalidArgument(format!(
-            "unknown format {other:?}: use \"info\", \"text\", \"hex\" or \"url\", or \"auto\" \
-             to let the lump's kind pick"
-        ))),
-    }
+    parse_named("format", raw)
 }
 
 /// The `hex` window length, the default being [`DEFAULT_HEX_LENGTH`].

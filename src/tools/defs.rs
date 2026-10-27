@@ -17,6 +17,7 @@ use crate::defs::{
     session_definitions,
 };
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::server::Cyberdemon;
 use crate::state::AppState;
 use crate::tools::reply;
@@ -290,30 +291,32 @@ struct SectorSpecialsReport {
 }
 
 /// The game named by the `game` parameter, matched case-insensitively;
-/// anything outside the four supported names is refused with a hint.
+/// anything outside the four supported names is refused.
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] naming the accepted values and the
-/// session-default escape.
+/// [`CyberError::InvalidArgument`] listing the accepted games.
 fn parse_game(text: &str) -> Result<Game, CyberError> {
-    let lowered = text.to_ascii_lowercase();
-    if lowered == "doom" {
-        return Ok(Game::Doom);
+    parse_named("game", text)
+}
+
+impl Named for Game {
+    /// The four games whose definition tables the server ships: `Strife`
+    /// and the undetected marker never answer a `game` parameter, so they
+    /// carry names but stay out of the parsed set.
+    const ALL: &'static [Self] = &[Self::Doom, Self::Doom2, Self::Heretic, Self::Hexen];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Doom => "doom",
+            Self::Doom2 => "doom2",
+            Self::Heretic => "heretic",
+            Self::Hexen => "hexen",
+            Self::Strife => "strife",
+            Self::Unknown => "unknown",
+        }
     }
-    if lowered == "doom2" {
-        return Ok(Game::Doom2);
-    }
-    if lowered == "heretic" {
-        return Ok(Game::Heretic);
-    }
-    if lowered == "hexen" {
-        return Ok(Game::Hexen);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown game {text:?}: pass \"doom\", \"doom2\", \"heretic\" or \"hexen\", or leave \
-         game out to use the game detected from the session"
-    )))
 }
 
 /// The game to default to: the session's detected game, with an

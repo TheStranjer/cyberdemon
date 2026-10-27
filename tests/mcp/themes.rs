@@ -492,13 +492,13 @@ mod tests {
     async fn auto_texture_refuses_bad_modes_and_missing_sectors() {
         let dir = tempfile::tempdir().expect("a scratch directory");
         let client = doom_loaded(dir.path()).await;
-        refuse(
-            &client,
-            "auto_texture",
-            json!({"mode": "repaint"}),
-            "invalid_argument",
-        )
-        .await;
+        let (mode_code, mode_message, _) =
+            call_err(&client, "auto_texture", json!({"mode": "repaint"})).await;
+        assert_eq!(mode_code, "invalid_argument", "not a mode");
+        assert!(
+            mode_message.contains("\"fill_missing\"") && mode_message.contains("\"retexture\""),
+            "the message names both modes: {mode_message}"
+        );
         refuse(
             &client,
             "auto_texture",

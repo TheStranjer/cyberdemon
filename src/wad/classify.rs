@@ -28,6 +28,7 @@ pub mod namespaces;
 
 use serde::Serialize;
 
+use crate::named::Named;
 use crate::wad::archive::Lump;
 use crate::wad::classify::kinds::classify;
 use crate::wad::classify::maps::{find_maps, map_owners};
@@ -71,18 +72,6 @@ pub enum Namespace {
 }
 
 impl Namespace {
-    /// Every namespace, in documentation order.
-    pub const ALL: [Self; 8] = [
-        Self::Sprites,
-        Self::Flats,
-        Self::Patches,
-        Self::Colormaps,
-        Self::Acs,
-        Self::Voices,
-        Self::Hires,
-        Self::Textures,
-    ];
-
     /// The snake-case name of this namespace.
     #[must_use]
     #[inline]
@@ -136,10 +125,26 @@ impl Namespace {
     #[must_use]
     #[inline]
     pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|namespace| namespace.as_str().eq_ignore_ascii_case(text))
+        Self::by_name(text)
+    }
+}
+
+impl Named for Namespace {
+    /// Every namespace, in documentation order.
+    const ALL: &'static [Self] = &[
+        Self::Sprites,
+        Self::Flats,
+        Self::Patches,
+        Self::Colormaps,
+        Self::Acs,
+        Self::Voices,
+        Self::Hires,
+        Self::Textures,
+    ];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -172,9 +177,16 @@ impl MapFormat {
     #[must_use]
     #[inline]
     pub fn parse(text: &str) -> Option<Self> {
-        [Self::Doom, Self::Hexen, Self::Udmf]
-            .into_iter()
-            .find(|format| format.as_str().eq_ignore_ascii_case(text))
+        Self::by_name(text)
+    }
+}
+
+impl Named for MapFormat {
+    const ALL: &'static [Self] = &[Self::Doom, Self::Hexen, Self::Udmf];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -245,40 +257,6 @@ pub enum LumpKind {
 }
 
 impl LumpKind {
-    /// Every kind, in documentation order.
-    pub const ALL: [Self; 30] = [
-        Self::Marker,
-        Self::MapMarker,
-        Self::MapData,
-        Self::Palette,
-        Self::Colormap,
-        Self::Pnames,
-        Self::TextureDefs,
-        Self::Endoom,
-        Self::Demo,
-        Self::Dehacked,
-        Self::Decorate,
-        Self::Zscript,
-        Self::Mapinfo,
-        Self::Png,
-        Self::Jpeg,
-        Self::Gif,
-        Self::Mus,
-        Self::Midi,
-        Self::Wav,
-        Self::Ogg,
-        Self::Flac,
-        Self::Mp3,
-        Self::DoomSound,
-        Self::PcSpeaker,
-        Self::Flat,
-        Self::Sprite,
-        Self::Patch,
-        Self::Text,
-        Self::Empty,
-        Self::Unknown,
-    ];
-
     /// The snake-case name of this kind, exactly what `Serialize` writes.
     #[must_use]
     #[inline]
@@ -322,10 +300,48 @@ impl LumpKind {
     #[must_use]
     #[inline]
     pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|kind| kind.as_str().eq_ignore_ascii_case(text))
+        Self::by_name(text)
+    }
+}
+
+impl Named for LumpKind {
+    /// Every kind, in documentation order.
+    const ALL: &'static [Self] = &[
+        Self::Marker,
+        Self::MapMarker,
+        Self::MapData,
+        Self::Palette,
+        Self::Colormap,
+        Self::Pnames,
+        Self::TextureDefs,
+        Self::Endoom,
+        Self::Demo,
+        Self::Dehacked,
+        Self::Decorate,
+        Self::Zscript,
+        Self::Mapinfo,
+        Self::Png,
+        Self::Jpeg,
+        Self::Gif,
+        Self::Mus,
+        Self::Midi,
+        Self::Wav,
+        Self::Ogg,
+        Self::Flac,
+        Self::Mp3,
+        Self::DoomSound,
+        Self::PcSpeaker,
+        Self::Flat,
+        Self::Sprite,
+        Self::Patch,
+        Self::Text,
+        Self::Empty,
+        Self::Unknown,
+    ];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 

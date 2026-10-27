@@ -27,6 +27,7 @@ use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::fixed::midpoint;
 use crate::geom::Pt;
+use crate::named::Named as _;
 use crate::plan::units::{Units, range_error};
 /// A difficulty skill a planned thing can be limited to: the flag tables'
 /// own [`Skill`], re-exported where the plan writers read it.
@@ -169,7 +170,7 @@ fn thing_bit(family: FlagFamily, wanted: &str) -> u32 {
 #[must_use]
 #[inline]
 pub fn presence_flags(family: FlagFamily, skills: Option<&[Skill]>, multiplayer_only: bool) -> u32 {
-    let wanted = skills.unwrap_or(Skill::ALL.as_slice());
+    let wanted = skills.unwrap_or(Skill::ALL);
     let mut bits = wanted
         .iter()
         .fold(0_u32, |acc, skill| acc | skill.bit(family));

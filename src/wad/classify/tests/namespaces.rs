@@ -4,6 +4,7 @@
 //! inner markers, the unclosed start and stray end warnings, a later start
 //! closing the earlier one and markers winning over content rules.
 
+use crate::named::Named as _;
 use serde_json::json;
 
 use super::{junk, kind_at, lump, marker, namespace_at};
@@ -54,7 +55,7 @@ fn namespace_helpers_and_serialization() {
 #[test]
 fn lump_kind_names_mirror_serialization_and_parse() {
     assert_eq!(LumpKind::ALL.len(), 30, "the documented kind count");
-    for kind in LumpKind::ALL {
+    for kind in LumpKind::ALL.iter().copied() {
         let serialized = serde_json::to_value(kind).expect("kinds serialize");
         let text = serialized
             .as_str()
@@ -72,7 +73,7 @@ fn lump_kind_names_mirror_serialization_and_parse() {
 
 #[test]
 fn every_namespace_pair_delimits_its_region() {
-    for namespace in Namespace::ALL {
+    for namespace in Namespace::ALL.iter().copied() {
         let lumps = vec![
             marker(namespace.start_marker()),
             lump("XMEMBER", &junk()),

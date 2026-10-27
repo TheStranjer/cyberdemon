@@ -18,6 +18,7 @@ use serde::ser::SerializeMap as _;
 use crate::error::CyberError;
 use crate::gfx::Rgba;
 use crate::gfx::ops::parse_hex_colour;
+use crate::named::{Named, parse_named};
 
 /// Smallest edge, in pixels, a render resolution accepts.
 pub const MIN_DIMENSION: u32 = 16;
@@ -63,6 +64,19 @@ pub enum Lighting {
     Fullbright,
 }
 
+impl Named for Lighting {
+    const ALL: &'static [Self] = &[Self::Doom, Self::Flat, Self::Fullbright];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Doom => "doom",
+            Self::Flat => "flat",
+            Self::Fullbright => "fullbright",
+        }
+    }
+}
+
 /// How a top-down render draws the map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -72,6 +86,18 @@ pub enum TopdownStyle {
     Editor,
     /// Automap look: the in-game red-on-black line map.
     Automap,
+}
+
+impl Named for TopdownStyle {
+    const ALL: &'static [Self] = &[Self::Editor, Self::Automap];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Editor => "editor",
+            Self::Automap => "automap",
+        }
+    }
 }
 
 /// A render switch: on draws what it controls, off does not.
@@ -330,21 +356,9 @@ fn check_gamma(level: u8) -> Result<(), CyberError> {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] listing the three models.
+#[inline]
 fn parse_lighting(name: &str) -> Result<Lighting, CyberError> {
-    let lowered = name.to_ascii_lowercase();
-    if lowered == "doom" {
-        return Ok(Lighting::Doom);
-    }
-    if lowered == "flat" {
-        return Ok(Lighting::Flat);
-    }
-    if lowered == "fullbright" {
-        return Ok(Lighting::Fullbright);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown lighting {name:?}: use \"doom\" for sector light plus the COLORMAP distance \
-         fade, \"flat\" for sector light only, or \"fullbright\" to light everything fully"
-    )))
+    parse_named("lighting", name)
 }
 
 /// The top-down style `name` says, case-insensitively.
@@ -352,18 +366,9 @@ fn parse_lighting(name: &str) -> Result<Lighting, CyberError> {
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] listing the two styles.
+#[inline]
 fn parse_topdown_style(name: &str) -> Result<TopdownStyle, CyberError> {
-    let lowered = name.to_ascii_lowercase();
-    if lowered == "editor" {
-        return Ok(TopdownStyle::Editor);
-    }
-    if lowered == "automap" {
-        return Ok(TopdownStyle::Automap);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown topdown_style {name:?}: use \"editor\" for the editor look or \"automap\" for \
-         the in-game red-on-black line map"
-    )))
+    parse_named("topdown_style", name)
 }
 
 #[cfg(test)]

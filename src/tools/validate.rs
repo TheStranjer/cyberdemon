@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::defs::{Definitions, definitions_for};
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
@@ -137,18 +138,9 @@ pub(in crate::tools) fn resource_index(session: &Session) -> Result<ResourceInde
 ///
 /// [`CyberError::InvalidArgument`] naming the three accepted values.
 fn parse_min_severity(text: Option<&str>) -> Result<Severity, CyberError> {
-    let lowered = match text {
-        None => return Ok(Severity::Info),
-        Some(given) => given.to_ascii_lowercase(),
-    };
-    match lowered.as_str() {
-        "" | "info" => Ok(Severity::Info),
-        "warning" => Ok(Severity::Warning),
-        "error" => Ok(Severity::Error),
-        other => Err(CyberError::InvalidArgument(format!(
-            "min_severity {other:?} is not a severity: pass \"error\", \"warning\" or \
-             \"info\", or leave the parameter out to keep every issue"
-        ))),
+    match text {
+        None | Some("") => Ok(Severity::Info),
+        Some(given) => parse_named("min_severity", given),
     }
 }
 

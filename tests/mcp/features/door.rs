@@ -279,7 +279,7 @@ async fn bad_indices_and_styles_are_refused() {
     refuse_with(
         &client,
         json!({"between": [0_i32, 1_i32], "style": "sliding"}),
-        "normal, fast, stay_open, locked_red, locked_blue, locked_yellow, remote",
+        "\"normal\", \"fast\", \"stay_open\", \"locked_red\", \"locked_blue\", \"locked_yellow\", \"remote\"",
     )
     .await;
     refuse_with(

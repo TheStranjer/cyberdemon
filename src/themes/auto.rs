@@ -25,6 +25,18 @@ pub enum AutoMode {
     Retexture,
 }
 
+impl crate::named::Named for AutoMode {
+    const ALL: &'static [Self] = &[Self::FillMissing, Self::Retexture];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::FillMissing => "fill_missing",
+            Self::Retexture => "retexture",
+        }
+    }
+}
+
 /// The theme textures the engine paints with, already resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThemeTextures {

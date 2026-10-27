@@ -42,6 +42,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::plan::Units;
 use crate::plan::model::{Connection, Feature, Plan, Room};
 pub(in crate::tools::plan) use features::FeatureParam;
@@ -241,6 +242,17 @@ const fn default_count() -> u32 {
 /// The `invalid_argument` naming the plan path `at`.
 fn invalid_at(at: &str, problem: &str) -> CyberError {
     CyberError::InvalidArgument(format!("{at}: {problem}"))
+}
+
+/// The [`Named`] value a plan row's `field` names, its refusal attributed
+/// to the row path `at` so the caller can see which row asked.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`]: `{at}: ` + [`parse_named`]'s uniform
+/// refusal listing the accepted names.
+fn named_at<T: Named>(at: &str, field: &str, text: &str) -> Result<T, CyberError> {
+    parse_named::<T>(field, text).map_err(|error| invalid_at(at, &error.message()))
 }
 
 impl BuildPlanParams {

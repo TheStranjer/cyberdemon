@@ -418,7 +418,7 @@ async fn lift_requests_name_their_fix() {
     refuse_lift(
         &client,
         json!({"sector": 1_i32, "style": "slide"}),
-        "use_wall, walk_trigger",
+        "\"use_wall\", \"walk_trigger\"",
     )
     .await;
     refuse_lift(

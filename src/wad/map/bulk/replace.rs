@@ -16,11 +16,11 @@
 //! position, height, facing, flags, tid, special and args of every
 //! thing it touches come out byte-identical.
 
-use alloc::format;
 use alloc::string::String;
 
 use super::super::model::{Map, Sector, Sidedef};
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::wad::name::glob_match;
 
 /// One [`Sidedef`] texture face a replacement can target.
@@ -35,9 +35,6 @@ pub enum Face {
 }
 
 impl Face {
-    /// Every face, in the order the `SIDEDEFS` record stores them.
-    pub const ALL: [Self; 3] = [Self::Upper, Self::Middle, Self::Lower];
-
     /// Parses a face name: `"upper"`, `"middle"` or `"lower"`,
     /// case-insensitively.
     ///
@@ -46,15 +43,7 @@ impl Face {
     /// [`CyberError::InvalidArgument`] naming the three accepted values.
     #[inline]
     pub fn parse(text: &str) -> Result<Self, CyberError> {
-        match text.to_ascii_lowercase().as_str() {
-            "upper" => Ok(Self::Upper),
-            "middle" => Ok(Self::Middle),
-            "lower" => Ok(Self::Lower),
-            other => Err(CyberError::InvalidArgument(format!(
-                "texture face {other:?} is neither \"upper\", \"middle\" nor \"lower\"; \
-                 pass one of those three"
-            ))),
-        }
+        parse_named("face", text)
     }
 
     /// The name this face of `side` stores.
@@ -76,6 +65,19 @@ impl Face {
     }
 }
 
+impl Named for Face {
+    const ALL: &'static [Self] = &[Self::Upper, Self::Middle, Self::Lower];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Upper => "upper",
+            Self::Middle => "middle",
+            Self::Lower => "lower",
+        }
+    }
+}
+
 /// One [`Sector`] flat surface a replacement can target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
@@ -86,9 +88,6 @@ pub enum Surface {
 }
 
 impl Surface {
-    /// Both surfaces.
-    pub const ALL: [Self; 2] = [Self::Floor, Self::Ceiling];
-
     /// Parses a surface name: `"floor"` or `"ceiling"`,
     /// case-insensitively.
     ///
@@ -97,14 +96,7 @@ impl Surface {
     /// [`CyberError::InvalidArgument`] naming the two accepted values.
     #[inline]
     pub fn parse(text: &str) -> Result<Self, CyberError> {
-        match text.to_ascii_lowercase().as_str() {
-            "floor" => Ok(Self::Floor),
-            "ceiling" => Ok(Self::Ceiling),
-            other => Err(CyberError::InvalidArgument(format!(
-                "flat surface {other:?} is neither \"floor\" nor \"ceiling\"; \
-                 pass one of those two"
-            ))),
-        }
+        parse_named("surface", text)
     }
 
     /// The name this surface of `sector` stores.
@@ -120,6 +112,18 @@ impl Surface {
         match self {
             Self::Floor => sector.floor_flat = name,
             Self::Ceiling => sector.ceiling_flat = name,
+        }
+    }
+}
+
+impl Named for Surface {
+    const ALL: &'static [Self] = &[Self::Floor, Self::Ceiling];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Floor => "floor",
+            Self::Ceiling => "ceiling",
         }
     }
 }
@@ -164,7 +168,7 @@ fn sector_changes(sector: &mut Sector, wanted: &[Surface], from: &str, to: &str)
 #[must_use]
 #[inline]
 pub fn replace_textures(map: &mut Map, from: &str, to: &str, parts: &[Face]) -> usize {
-    let wanted: &[Face] = if parts.is_empty() { &Face::ALL } else { parts };
+    let wanted: &[Face] = if parts.is_empty() { Face::ALL } else { parts };
     let count_side = |side: &mut Sidedef| side_changes(side, wanted, from, to);
     map.sidedefs.iter_mut().map(count_side).sum()
 }
@@ -179,7 +183,7 @@ pub fn replace_textures(map: &mut Map, from: &str, to: &str, parts: &[Face]) -> 
 #[inline]
 pub fn replace_flats(map: &mut Map, from: &str, to: &str, surfaces: &[Surface]) -> usize {
     let wanted: &[Surface] = if surfaces.is_empty() {
-        &Surface::ALL
+        Surface::ALL
     } else {
         surfaces
     };

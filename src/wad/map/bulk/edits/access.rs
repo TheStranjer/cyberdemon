@@ -7,9 +7,14 @@
 //! [`wrong_family`] and [`wrong_family_error`] gate the linedef fields the
 //! other flag family stores, and [`number_of`] and [`text_value`] read
 //! one request value for its field. The rest are the readers and writers
-//! the [`KindPlan`](super::tables::KindPlan) tables point at: one pair per
-//! field type per element block, keyed by the exact table field name,
-//! each answering `None` for a row or a field the block does not hold.
+//! the [`KindPlan`](super::tables::KindPlan) tables run under:
+//! [`read_num`], [`read_text`], [`write_num`] and [`write_text`] dispatch
+//! a [`Field`] onto its block's accessor, and each block's accessor
+//! matches its own field enum arm by arm — every table-listed field
+//! reaches the column it names, and no name can answer `None` or write
+//! nothing without the match saying so. [`read_flags`] and
+//! [`write_flags`] are the same story for the two kinds' `flags` column,
+//! keyed by the plan's [`FlagKind`].
 
 use alloc::format;
 use alloc::string::String;
@@ -18,9 +23,10 @@ use serde_json::Value;
 
 use crate::error::CyberError;
 use crate::wad::classify::MapFormat;
-use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::flags::{FlagFamily, FlagKind};
 use crate::wad::map::model::{Linedef, Map};
 
+use super::fields::{Field, LinedefField, SectorField, SidedefField, ThingField, VertexField};
 use super::job::Job;
 use super::{
     ANGLE_MAX, ANGLE_MIN, I16_MAX, I16_MIN, I32_MAX, I32_MIN, LIGHT_MAX, LIGHT_MIN, NumRange,
@@ -63,11 +69,20 @@ const fn line_special_bounds(format: MapFormat) -> (i64, i64) {
     }
 }
 
-/// Whether `key` names a linedef field only the other flag family stores.
-pub(super) fn wrong_family(family: FlagFamily, key: &str) -> bool {
+/// Whether `field` is a linedef field only the other flag family stores.
+pub(super) const fn wrong_family(family: FlagFamily, field: Field) -> bool {
     match family {
-        FlagFamily::Doom => matches!(key, "arg0" | "arg1" | "arg2" | "arg3" | "arg4"),
-        FlagFamily::Hexen => key == "tag",
+        FlagFamily::Doom => matches!(
+            field,
+            Field::Linedef(
+                LinedefField::Arg0
+                    | LinedefField::Arg1
+                    | LinedefField::Arg2
+                    | LinedefField::Arg3
+                    | LinedefField::Arg4,
+            )
+        ),
+        FlagFamily::Hexen => matches!(field, Field::Linedef(LinedefField::Tag)),
     }
 }
 
@@ -106,245 +121,258 @@ pub(super) fn text_value(job: &Job<'_>, field: &str, value: &Value) -> Result<St
     })
 }
 
-/// Reads the numeric sector field `field` of `map`'s row `index`.
-pub(super) fn sector_num(map: &Map, index: usize, field: &str) -> Option<i32> {
-    let row = map.sectors.get(index)?;
-    match field {
-        "ceiling" => Some(row.ceiling_height),
-        "floor" => Some(row.floor_height),
-        "light" => Some(row.light),
-        "special" => Some(row.special),
-        "tag" => Some(row.tag),
-        _ => None,
+/// Reads the stored integer of one numeric field, `None` for a row past
+/// the block and for a field the block holds as a name.
+pub(super) fn read_num(map: &Map, index: usize, key: Field) -> Option<i32> {
+    match key {
+        Field::Sector(field) => sector_num(map, index, field),
+        Field::Sidedef(field) => side_num(map, index, field),
+        Field::Vertex(field) => vertex_num(map, index, field),
+        Field::Linedef(field) => line_num(map, index, field),
+        Field::Thing(field) => thing_num(map, index, field),
     }
 }
 
-/// Reads the text sector field `field` of `map`'s row `index`.
-pub(super) fn sector_text(map: &Map, index: usize, field: &str) -> Option<String> {
+/// Writes one planned integer onto the field's column.
+pub(super) fn write_num(map: &mut Map, index: usize, key: Field, number: i32) {
+    match key {
+        Field::Sector(field) => write_sector_num(map, index, field, number),
+        Field::Sidedef(field) => write_side_num(map, index, field, number),
+        Field::Vertex(field) => write_vertex_num(map, index, field, number),
+        Field::Linedef(field) => write_line_num(map, index, field, number),
+        Field::Thing(field) => write_thing_num(map, index, field, number),
+    }
+}
+
+/// Reads the stored name of one text field, `None` for a row past the
+/// block and for every field of a block that stores no names.
+pub(super) fn read_text(map: &Map, index: usize, key: Field) -> Option<String> {
+    match key {
+        Field::Sector(field) => sector_text(map, index, field),
+        Field::Sidedef(field) => side_text(map, index, field),
+        Field::Vertex(..) | Field::Linedef(..) | Field::Thing(..) => None,
+    }
+}
+
+/// Writes one planned name onto the field's column.
+pub(super) fn write_text(map: &mut Map, index: usize, key: Field, name: &str) {
+    match key {
+        Field::Sector(field) => write_sector_text(map, index, field, name),
+        Field::Sidedef(field) => write_side_text(map, index, field, name),
+        Field::Vertex(..) | Field::Linedef(..) | Field::Thing(..) => {}
+    }
+}
+
+/// Reads the flag bits of the row the plan's flag kind points at.
+pub(super) fn read_flags(kind: FlagKind, map: &Map, index: usize) -> Option<u32> {
+    match kind {
+        FlagKind::Linedef => map.linedefs.get(index).map(|row| row.flags),
+        FlagKind::Thing => map.things.get(index).map(|row| row.flags),
+    }
+}
+
+/// Writes planned flag bits onto the row the flag kind points at.
+pub(super) fn write_flags(kind: FlagKind, map: &mut Map, index: usize, bits: u32) {
+    match kind {
+        FlagKind::Linedef => {
+            if let Some(row) = map.linedefs.get_mut(index) {
+                row.flags = bits;
+            }
+        }
+        FlagKind::Thing => {
+            if let Some(row) = map.things.get_mut(index) {
+                row.flags = bits;
+            }
+        }
+    }
+}
+
+/// Reads one sector row's numeric field.
+fn sector_num(map: &Map, index: usize, field: SectorField) -> Option<i32> {
     let row = map.sectors.get(index)?;
     match field {
-        "ceiling_flat" => Some(row.ceiling_flat.clone()),
-        "floor_flat" => Some(row.floor_flat.clone()),
-        _ => None,
+        SectorField::Ceiling => Some(row.ceiling_height),
+        SectorField::CeilingFlat | SectorField::FloorFlat => None,
+        SectorField::Floor => Some(row.floor_height),
+        SectorField::Light => Some(row.light),
+        SectorField::Special => Some(row.special),
+        SectorField::Tag => Some(row.tag),
     }
 }
 
 /// Writes one planned integer onto a sector row.
-pub(super) fn write_sector_num(map: &mut Map, index: usize, field: &str, number: i32) {
+fn write_sector_num(map: &mut Map, index: usize, field: SectorField, number: i32) {
     let Some(row) = map.sectors.get_mut(index) else {
         return;
     };
     match field {
-        "ceiling" => row.ceiling_height = number,
-        "floor" => row.floor_height = number,
-        "light" => row.light = number,
-        "special" => row.special = number,
-        "tag" => row.tag = number,
-        _ => {}
+        SectorField::Ceiling => row.ceiling_height = number,
+        SectorField::CeilingFlat | SectorField::FloorFlat => {}
+        SectorField::Floor => row.floor_height = number,
+        SectorField::Light => row.light = number,
+        SectorField::Special => row.special = number,
+        SectorField::Tag => row.tag = number,
+    }
+}
+
+/// Reads one sector row's text field.
+fn sector_text(map: &Map, index: usize, field: SectorField) -> Option<String> {
+    let row = map.sectors.get(index)?;
+    match field {
+        SectorField::Ceiling
+        | SectorField::Floor
+        | SectorField::Light
+        | SectorField::Special
+        | SectorField::Tag => None,
+        SectorField::CeilingFlat => Some(row.ceiling_flat.clone()),
+        SectorField::FloorFlat => Some(row.floor_flat.clone()),
     }
 }
 
 /// Writes one planned name onto a sector row.
-pub(super) fn write_sector_text(map: &mut Map, index: usize, field: &str, name: &str) {
+fn write_sector_text(map: &mut Map, index: usize, field: SectorField, name: &str) {
     let Some(row) = map.sectors.get_mut(index) else {
         return;
     };
     match field {
-        "ceiling_flat" => name.clone_into(&mut row.ceiling_flat),
-        "floor_flat" => name.clone_into(&mut row.floor_flat),
-        _ => {}
+        SectorField::Ceiling
+        | SectorField::Floor
+        | SectorField::Light
+        | SectorField::Special
+        | SectorField::Tag => {}
+        SectorField::CeilingFlat => name.clone_into(&mut row.ceiling_flat),
+        SectorField::FloorFlat => name.clone_into(&mut row.floor_flat),
     }
 }
 
-/// Reads the numeric sidedef field `field` of `map`'s row `index`.
-pub(super) fn side_num(map: &Map, index: usize, field: &str) -> Option<i32> {
+/// Reads one sidedef row's numeric field.
+fn side_num(map: &Map, index: usize, field: SidedefField) -> Option<i32> {
     let row = map.sidedefs.get(index)?;
     match field {
-        "x_offset" => Some(row.x_offset),
-        "y_offset" => Some(row.y_offset),
-        _ => None,
-    }
-}
-
-/// Reads the text sidedef field `field` of `map`'s row `index`.
-pub(super) fn side_text(map: &Map, index: usize, field: &str) -> Option<String> {
-    let row = map.sidedefs.get(index)?;
-    match field {
-        "lower" => Some(row.lower.clone()),
-        "middle" => Some(row.middle.clone()),
-        "upper" => Some(row.upper.clone()),
-        _ => None,
+        SidedefField::Lower | SidedefField::Middle | SidedefField::Upper => None,
+        SidedefField::XOffset => Some(row.x_offset),
+        SidedefField::YOffset => Some(row.y_offset),
     }
 }
 
 /// Writes one planned integer onto a sidedef row.
-pub(super) fn write_side_num(map: &mut Map, index: usize, field: &str, number: i32) {
+fn write_side_num(map: &mut Map, index: usize, field: SidedefField, number: i32) {
     let Some(row) = map.sidedefs.get_mut(index) else {
         return;
     };
     match field {
-        "x_offset" => row.x_offset = number,
-        "y_offset" => row.y_offset = number,
-        _ => {}
+        SidedefField::Lower | SidedefField::Middle | SidedefField::Upper => {}
+        SidedefField::XOffset => row.x_offset = number,
+        SidedefField::YOffset => row.y_offset = number,
     }
 }
 
-/// Writes one planned name onto a sidedef row.
-pub(super) fn write_side_text(map: &mut Map, index: usize, field: &str, name: &str) {
+/// Reads one sidedef row's texture face.
+fn side_text(map: &Map, index: usize, field: SidedefField) -> Option<String> {
+    let row = map.sidedefs.get(index)?;
+    match field {
+        SidedefField::Lower => Some(row.lower.clone()),
+        SidedefField::Middle => Some(row.middle.clone()),
+        SidedefField::Upper => Some(row.upper.clone()),
+        SidedefField::XOffset | SidedefField::YOffset => None,
+    }
+}
+
+/// Writes one planned name onto a sidedef row's texture face.
+fn write_side_text(map: &mut Map, index: usize, field: SidedefField, name: &str) {
     let Some(row) = map.sidedefs.get_mut(index) else {
         return;
     };
     match field {
-        "lower" => name.clone_into(&mut row.lower),
-        "middle" => name.clone_into(&mut row.middle),
-        "upper" => name.clone_into(&mut row.upper),
-        _ => {}
+        SidedefField::Lower => name.clone_into(&mut row.lower),
+        SidedefField::Middle => name.clone_into(&mut row.middle),
+        SidedefField::Upper => name.clone_into(&mut row.upper),
+        SidedefField::XOffset | SidedefField::YOffset => {}
     }
 }
 
-/// Reads the numeric vertex field `field` of `map`'s row `index`.
-pub(super) fn vertex_num(map: &Map, index: usize, field: &str) -> Option<i32> {
+/// Reads one vertex row's coordinate.
+fn vertex_num(map: &Map, index: usize, field: VertexField) -> Option<i32> {
     let row = map.vertices.get(index)?;
     match field {
-        "x" => Some(row.x),
-        "y" => Some(row.y),
-        _ => None,
+        VertexField::X => Some(row.x),
+        VertexField::Y => Some(row.y),
     }
-}
-
-/// Vertices store no text fields, so this reads none.
-pub(super) const fn vertex_text(_map: &Map, _index: usize, _field: &str) -> Option<String> {
-    None
 }
 
 /// Writes one planned integer onto a vertex row.
-pub(super) fn write_vertex_num(map: &mut Map, index: usize, field: &str, number: i32) {
+fn write_vertex_num(map: &mut Map, index: usize, field: VertexField, number: i32) {
     let Some(row) = map.vertices.get_mut(index) else {
         return;
     };
     match field {
-        "x" => row.x = number,
-        "y" => row.y = number,
-        _ => {}
+        VertexField::X => row.x = number,
+        VertexField::Y => row.y = number,
     }
 }
 
-/// Vertices store no text fields, so this writes nothing.
-pub(super) const fn write_vertex_text(_map: &mut Map, _index: usize, _field: &str, _name: &str) {}
-
-/// Reads the numeric linedef field `field` of `map`'s row `index`.
-pub(super) fn line_num(map: &Map, index: usize, field: &str) -> Option<i32> {
+/// Reads one linedef row's action, tag or script argument.
+fn line_num(map: &Map, index: usize, field: LinedefField) -> Option<i32> {
     let row = map.linedefs.get(index)?;
     match field {
-        "special" => Some(row.special),
-        "tag" => Some(row.tag),
-        other => arg_slot(other).and_then(|slot| row.args.get(slot).copied()),
+        LinedefField::Arg0 => arg_of(row, 0_usize),
+        LinedefField::Arg1 => arg_of(row, 1_usize),
+        LinedefField::Arg2 => arg_of(row, 2_usize),
+        LinedefField::Arg3 => arg_of(row, 3_usize),
+        LinedefField::Arg4 => arg_of(row, 4_usize),
+        LinedefField::Special => Some(row.special),
+        LinedefField::Tag => Some(row.tag),
     }
-}
-
-/// Linedefs store no text fields, so this reads none.
-pub(super) const fn line_text(_map: &Map, _index: usize, _field: &str) -> Option<String> {
-    None
 }
 
 /// Writes one planned integer onto a linedef row.
-pub(super) fn write_line_num(map: &mut Map, index: usize, field: &str, number: i32) {
+fn write_line_num(map: &mut Map, index: usize, field: LinedefField, number: i32) {
     let Some(row) = map.linedefs.get_mut(index) else {
         return;
     };
     match field {
-        "special" => row.special = number,
-        "tag" => row.tag = number,
-        other => write_arg(row, other, number),
+        LinedefField::Arg0 => put_arg(row, 0_usize, number),
+        LinedefField::Arg1 => put_arg(row, 1_usize, number),
+        LinedefField::Arg2 => put_arg(row, 2_usize, number),
+        LinedefField::Arg3 => put_arg(row, 3_usize, number),
+        LinedefField::Arg4 => put_arg(row, 4_usize, number),
+        LinedefField::Special => row.special = number,
+        LinedefField::Tag => row.tag = number,
     }
 }
 
-/// Linedefs store no text fields, so this writes nothing.
-pub(super) const fn write_line_text(_map: &mut Map, _index: usize, _field: &str, _name: &str) {}
-
-/// The `arg0..arg4` slot one field name reads, `None` for any other name.
-fn arg_slot(field: &str) -> Option<usize> {
-    match field {
-        "arg0" => Some(0_usize),
-        "arg1" => Some(1_usize),
-        "arg2" => Some(2_usize),
-        "arg3" => Some(3_usize),
-        "arg4" => Some(4_usize),
-        _ => None,
-    }
+/// The `args` cell at `slot`, `None` past the five.
+fn arg_of(row: &Linedef, slot: usize) -> Option<i32> {
+    row.args.get(slot).copied()
 }
 
-/// Writes one planned integer onto the argument slot `field` names.
-fn write_arg(row: &mut Linedef, field: &str, number: i32) {
-    if let Some(cell) = arg_slot(field).and_then(|slot| row.args.get_mut(slot)) {
+/// Writes one planned integer onto the `args` cell at `slot`.
+fn put_arg(row: &mut Linedef, slot: usize, number: i32) {
+    if let Some(cell) = row.args.get_mut(slot) {
         *cell = number;
     }
 }
 
-/// Reads the numeric thing field `field` of `map`'s row `index`.
-pub(super) fn thing_num(map: &Map, index: usize, field: &str) -> Option<i32> {
+/// Reads one thing row's doomednum, facing or position.
+fn thing_num(map: &Map, index: usize, field: ThingField) -> Option<i32> {
     let row = map.things.get(index)?;
     match field {
-        "angle" => Some(row.angle),
-        "type" => Some(row.kind),
-        "x" => Some(row.x),
-        "y" => Some(row.y),
-        _ => None,
+        ThingField::Angle => Some(row.angle),
+        ThingField::Type => Some(row.kind),
+        ThingField::X => Some(row.x),
+        ThingField::Y => Some(row.y),
     }
 }
 
-/// Things store no text fields, so this reads none.
-pub(super) const fn thing_text(_map: &Map, _index: usize, _field: &str) -> Option<String> {
-    None
-}
-
 /// Writes one planned integer onto a thing row.
-pub(super) fn write_thing_num(map: &mut Map, index: usize, field: &str, number: i32) {
+fn write_thing_num(map: &mut Map, index: usize, field: ThingField, number: i32) {
     let Some(row) = map.things.get_mut(index) else {
         return;
     };
     match field {
-        "angle" => row.angle = number,
-        "type" => row.kind = number,
-        "x" => row.x = number,
-        "y" => row.y = number,
-        _ => {}
+        ThingField::Angle => row.angle = number,
+        ThingField::Type => row.kind = number,
+        ThingField::X => row.x = number,
+        ThingField::Y => row.y = number,
     }
 }
-
-/// Things store no text fields, so this writes nothing.
-pub(super) const fn write_thing_text(_map: &mut Map, _index: usize, _field: &str, _name: &str) {}
-
-/// Reads the flag bits of `map`'s linedef row `index`.
-pub(super) fn line_flags(map: &Map, index: usize) -> Option<u32> {
-    let row = map.linedefs.get(index)?;
-    Some(row.flags)
-}
-
-/// Writes planned flag bits onto `map`'s linedef row `index`.
-pub(super) fn write_line_flags(map: &mut Map, index: usize, bits: u32) {
-    if let Some(row) = map.linedefs.get_mut(index) {
-        row.flags = bits;
-    }
-}
-
-/// Reads the flag bits of `map`'s thing row `index`.
-pub(super) fn thing_flags(map: &Map, index: usize) -> Option<u32> {
-    let row = map.things.get(index)?;
-    Some(row.flags)
-}
-
-/// Writes planned flag bits onto `map`'s thing row `index`.
-pub(super) fn write_thing_flags(map: &mut Map, index: usize, bits: u32) {
-    if let Some(row) = map.things.get_mut(index) {
-        row.flags = bits;
-    }
-}
-
-/// The kinds without a `flags` column read no bits.
-pub(super) const fn no_flags(_map: &Map, _index: usize) -> Option<u32> {
-    None
-}
-
-/// The kinds without a `flags` column write no bits.
-pub(super) const fn write_no_flags(_map: &mut Map, _index: usize, _bits: u32) {}

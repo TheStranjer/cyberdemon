@@ -82,7 +82,7 @@ use rmcp::{ErrorData, tool, tool_router};
 
 use crate::error::CyberError;
 use crate::plan::features::FeatureDress;
-use crate::plan::model::ConnectionKind;
+use crate::plan::model::Connection;
 use crate::plan::textures::{TextureRole, TextureRoles};
 use crate::server::Cyberdemon;
 use crate::session::Session;
@@ -243,22 +243,12 @@ fn resolved_name(resolved: &BTreeMap<Role, String>, role: Role) -> String {
         .unwrap_or_else(|| NO_TEXTURE.to_owned())
 }
 
-/// The wire string naming `kind`'s class, as the result reports it.
-const fn kind_name(kind: ConnectionKind) -> &'static str {
-    match kind {
-        ConnectionKind::Opening => "opening",
-        ConnectionKind::Door { .. } => "door",
-        ConnectionKind::Window { .. } => "window",
-        ConnectionKind::Stairs { .. } => "stairs",
-    }
-}
-
-/// The label the compiler gives an unnamed connection: `from->to`.
+/// The label a wire connection row answers to: its `id`, or the
+/// derived `from->to` when it carries none. One formatting rule, owned
+/// by [`crate::plan::model::Connection`], shared by the model's own
+/// messages and the plan tool's `connections[i]` paths.
 fn connection_label(connection: &ConnectionParam) -> String {
-    connection
-        .id
-        .clone()
-        .unwrap_or_else(|| format!("{}->{}", connection.from, connection.to))
+    Connection::label_for(connection.id.as_deref(), &connection.from, &connection.to)
 }
 
 /// The ids a wire feature row names: its room, its teleporter rooms

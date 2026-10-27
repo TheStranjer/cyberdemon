@@ -114,12 +114,21 @@ fn applying_a_removal_with_live_references_fails_untouched() {
         vertex_error.to_string().contains("vertex 4"),
         "the message names the target: {vertex_error}"
     );
+    assert!(
+        vertex_error.to_string().contains("linedef"),
+        "and the holder, both spelled from the element-kind enum: {vertex_error}"
+    );
     let sector_error = apply_removal(&mut map, &sector_removal(1))
         .expect_err("surviving sides still reference sector 1");
     assert_eq!(
         sector_error.code(),
         "internal",
         "the dangling side is caught"
+    );
+    let sector_text = sector_error.to_string();
+    assert!(
+        sector_text.contains("sidedef") && sector_text.contains("sector 1"),
+        "the holder and target both carry their enum's singular names: {sector_text}"
     );
     assert_eq!(map, fixture, "the map is untouched after refusals");
 }

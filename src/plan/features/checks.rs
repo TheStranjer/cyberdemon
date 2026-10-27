@@ -21,7 +21,6 @@ use crate::wad::map::Map;
 use crate::wad::map::model::Thing;
 
 use super::FeatureRun;
-use super::lifts::connection_name;
 
 /// The lower-case colour word the key check finds in a key definition's
 /// name; skull keys carry the same word, so they count alike.
@@ -77,7 +76,7 @@ fn missing_keys(plan: &Plan, map: &Map, definitions: &Definitions) -> Vec<String
         let word = color_word(color);
         notes.push(format!(
             "{word} door at {} but no {word} key in the plan",
-            connection_name(connection)
+            connection.label()
         ));
     }
     notes
@@ -144,7 +143,7 @@ fn unswitched_remotes(plan: &Plan) -> Vec<String> {
         ) {
             continue;
         }
-        let label = connection_name(connection);
+        let label = connection.label();
         if !switched.contains(label.as_str()) {
             notes.push(remote_hint(connection, &label));
         }

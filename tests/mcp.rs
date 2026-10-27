@@ -73,8 +73,9 @@
 //! the plan-group shared helpers in `plan` with its `plan/basics`,
 //! `plan/units`, `plan/things`, `plan/finalize`, `plan/features`,
 //! `plan/panels` and `plan/six_room` topic tests, the
-//! playability-group tests in `playability`, the query-group shared
-//! helpers in `query` with its
+//! playability-group tests in `playability`, the map-unit point,
+//! connection-label and thing-bit single-owner guard in
+//! `point_labels`, the query-group shared helpers in `query` with its
 //! `query/find`, `query/replace_surfaces`, `query/replace_things` and
 //! `query/bulk` topic tests, the sketch-group shared helpers in
 //! `sketch` with its `sketch/noise`, `sketch/trace`, `sketch/params` and
@@ -218,6 +219,9 @@ mod plan;
 #[cfg(test)]
 #[path = "mcp/playability.rs"]
 mod playability;
+#[cfg(test)]
+#[path = "mcp/point_labels.rs"]
+mod point_labels;
 #[cfg(test)]
 #[path = "mcp/query.rs"]
 mod query;

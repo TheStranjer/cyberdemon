@@ -95,7 +95,7 @@ fn queue_text(
 
 /// Plans every `add` amount onto the row's current value.
 pub(super) fn plan_add(job: &Job<'_>, map: &Map, pending: &mut Pending) -> Result<(), CyberError> {
-    let label = job.plan.thing;
+    let label = job.kind.singular();
     for &(spec, delta) in &job.adds {
         let field = spec.field;
         let Some(current) = read_num(map, pending.index, field) else {

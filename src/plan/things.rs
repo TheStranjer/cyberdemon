@@ -32,7 +32,7 @@ use crate::plan::units::{Units, range_error};
 /// A difficulty skill a planned thing can be limited to: the flag tables'
 /// own [`Skill`], re-exported where the plan writers read it.
 pub use crate::wad::map::flags::Skill;
-use crate::wad::map::flags::{FlagFamily, FlagKind, names as flag_names};
+use crate::wad::map::flags::{FlagFamily, thing_bit};
 use crate::wad::map::geometry::sector_bbox;
 use crate::wad::map::placement::{self, DEFAULT_RADIUS, axis_points, fits};
 use crate::wad::map::{Map, Thing};
@@ -148,15 +148,6 @@ fn candidate_names(matched: &[(String, u32)]) -> String {
     let mut texts: Vec<&str> = matched.iter().map(|entry| entry.0.as_str()).collect();
     texts.sort_unstable();
     texts.join(", ")
-}
-
-/// The bit `wanted` holds in the family's `Thing` flag table, `0` when
-/// the table carries no such name.
-fn thing_bit(family: FlagFamily, wanted: &str) -> u32 {
-    flag_names(FlagKind::Thing, family)
-        .iter()
-        .find(|entry| entry.0 == wanted)
-        .map_or(0_u32, |entry| entry.1)
 }
 
 /// The presence flag bits of a planned thing: the named `skills`, all

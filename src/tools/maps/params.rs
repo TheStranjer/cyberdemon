@@ -122,10 +122,11 @@ pub struct PointParam {
 }
 
 impl PointParam {
-    /// The point as wide integers, for the math that runs in `i64`.
+    /// The point as the shared wide [`geom::Pt`](crate::geom::Pt) grid,
+    /// for the math that runs in `i64`.
     #[must_use]
     #[inline]
-    pub fn to_wide(self) -> (i64, i64) {
+    pub fn to_wide(self) -> crate::geom::Pt {
         (i64::from(self.x), i64::from(self.y))
     }
 }

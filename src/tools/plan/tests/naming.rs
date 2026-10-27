@@ -5,6 +5,7 @@
 use alloc::collections::BTreeMap;
 
 use crate::error::{CyberError, PlanRef};
+use crate::named::Named as _;
 use crate::plan::features::FeatureDress;
 use crate::plan::model::ConnectionKind;
 use crate::plan::textures::{TextureRole, TextureRoles as _};
@@ -12,7 +13,7 @@ use crate::themes::Role;
 use crate::tools::plan::PlanTheme;
 use crate::tools::plan::build::{bounds_of, plan_path, with_plan_path};
 use crate::tools::plan::{
-    FEATURE_ROLES, THEME_ROLES, connection_label, feature_dress, kind_name, with_theme_path,
+    FEATURE_ROLES, THEME_ROLES, connection_label, feature_dress, with_theme_path,
 };
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
@@ -23,26 +24,29 @@ use super::{feature_plan, plan_args};
 #[test]
 fn connector_kinds_carry_their_wire_names() {
     use crate::plan::model::DoorStyle;
-    assert_eq!(kind_name(ConnectionKind::Opening), "opening");
+    assert_eq!(ConnectionKind::Opening.name(), "opening");
     assert_eq!(
-        kind_name(ConnectionKind::Door {
+        ConnectionKind::Door {
             style: DoorStyle::Remote
-        }),
+        }
+        .name(),
         "door",
         "the style does not change the class name"
     );
     assert_eq!(
-        kind_name(ConnectionKind::Window {
+        ConnectionKind::Window {
             sill: 32_i32,
             lintel: 24_i32
-        }),
+        }
+        .name(),
         "window"
     );
     assert_eq!(
-        kind_name(ConnectionKind::Stairs {
+        ConnectionKind::Stairs {
             step_height: 16_i32,
             step_depth: 24_i32
-        }),
+        }
+        .name(),
         "stairs"
     );
 }

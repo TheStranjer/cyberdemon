@@ -272,10 +272,7 @@ impl Skill {
     #[must_use]
     #[inline]
     pub fn bit(self, family: FlagFamily) -> u32 {
-        names(FlagKind::Thing, family)
-            .iter()
-            .find(|entry| entry.0 == self.as_str())
-            .map_or(0_u32, |entry| entry.1)
+        thing_bit(family, self.as_str())
     }
 }
 
@@ -287,6 +284,24 @@ impl Named for Skill {
     fn name(self) -> &'static str {
         self.as_str()
     }
+}
+
+/// The bit `wanted` holds in the family's `Thing` flag table, `0` when
+/// the table carries no such name.
+///
+/// The one name-to-bit read of the thing table: [`Skill::bit`] runs the
+/// skill names through it, the plan's [`presence_flags`] folds its
+/// multiplayer bits, and the `place_things` tool's ambush bit reads it
+/// here, so no caller walks [`names`] itself.
+///
+/// [`presence_flags`]: crate::plan::things::presence_flags
+#[must_use]
+#[inline]
+pub fn thing_bit(family: FlagFamily, wanted: &str) -> u32 {
+    names(FlagKind::Thing, family)
+        .iter()
+        .find(|entry| entry.0 == wanted)
+        .map_or(0_u32, |entry| entry.1)
 }
 
 /// The element whose `flags` column is being named.

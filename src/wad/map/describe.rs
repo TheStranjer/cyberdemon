@@ -87,6 +87,7 @@ use super::model::Map;
 use super::playability::{ExitInfo, FeatureTargets, KeyInfo, LockInfo, Playability, Teleporter};
 use super::stats::ElementCounts;
 use crate::defs::Definitions;
+use crate::geom::Pt;
 use crate::wad::classify::MapFormat;
 
 /// The role and `via` name a door sector answers with.
@@ -132,11 +133,8 @@ pub const ROLE_NAMES: [&str; 9] = [
     NAME_SKY,
 ];
 
-/// One world-space map point, coordinates widened to `i64`.
-type Point = (i64, i64);
-
-/// One directed boundary edge: a `(from, to)` pair of [`Point`]s.
-type Edge = (Point, Point);
+/// One directed boundary edge: a `(from, to)` pair of [`Pt`]s.
+type Edge = (Pt, Pt);
 
 /// The number of a sector effect and the name the game's table gives it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -189,7 +187,7 @@ pub struct SectorFacts {
     pub bbox: Option<[i32; 4]>,
     /// A world point the even-odd scan places inside the sector, `None`
     /// with no boundary.
-    pub center: Option<[i64; 2]>,
+    pub center: Option<Pt>,
     /// The floor height in map units.
     pub floor: i32,
     /// The ceiling height in map units.

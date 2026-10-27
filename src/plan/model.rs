@@ -176,10 +176,30 @@ pub struct Connection {
     /// What kind of opening it is.
     pub kind: ConnectionKind,
     /// Where to place the opening; `None` centres it on the shared wall.
-    pub at: Option<(i64, i64)>,
+    pub at: Option<Pt>,
     /// Clear width of the opening, map units. Default `64`.
     #[serde(default = "default_width")]
     pub width: i64,
+}
+
+impl Connection {
+    /// The label this connection answers to in messages and lookups: its
+    /// own `id`, or `from->to` when it carries none.
+    #[must_use]
+    #[inline]
+    pub fn label(&self) -> String {
+        Self::label_for(self.id.as_deref(), &self.from, &self.to)
+    }
+
+    /// The label one connection row answers to: `id` when it carries one,
+    /// else `from->to`. [`Connection::label`] is this same rule read off
+    /// a row, and the plan tool's wire rows run through it here too, so
+    /// the arrow spelling lives in exactly one place.
+    #[must_use]
+    #[inline]
+    pub fn label_for(id: Option<&str>, from: &str, to: &str) -> String {
+        id.map_or_else(|| format!("{from}->{to}"), str::to_owned)
+    }
 }
 
 /// How two rooms are joined.
@@ -363,10 +383,10 @@ pub enum Feature {
         /// Id of the room the destination stands in.
         to_room: String,
         /// Plan point for the pad's centre; the room centre by default.
-        pad: Option<(i64, i64)>,
+        pad: Option<Pt>,
         /// Plan point for the destination's centre; the room centre by
         /// default.
-        destination: Option<(i64, i64)>,
+        destination: Option<Pt>,
         /// Facing of the arrival, degrees. Default `0`.
         #[serde(default)]
         angle: i32,

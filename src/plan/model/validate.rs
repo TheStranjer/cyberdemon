@@ -106,7 +106,7 @@ impl Plan {
     fn validate_connections(&self, ids: &HashSet<&str>) -> Result<(), CyberError> {
         let mut seen: HashMap<&str, usize> = HashMap::with_capacity(self.connections.len());
         for (index, connection) in self.connections.iter().enumerate() {
-            let named = PlanRef::connection(&connection_label(connection));
+            let named = PlanRef::connection(&connection.label());
             collect_connection_id(&mut seen, connection, index)
                 .and_then(|()| validate_connection(connection, ids, &self.rooms))
                 .map_err(|problem| problem.at_plan(named.clone()))?;
@@ -200,7 +200,7 @@ fn validate_connection(
 ) -> Result<(), CyberError> {
     let from = connection.from.as_str();
     let to = connection.to.as_str();
-    let label = connection_label(connection);
+    let label = connection.label();
     if !ids.contains(from) {
         return Err(CyberError::InvalidArgument(format!(
             "connection '{label}' starts from unknown room '{from}'"
@@ -301,21 +301,6 @@ fn window_opening(rooms: &[Room], connection: &Connection) -> Option<i64> {
     Some(ceiling.saturating_sub(floor))
 }
 
-/// The label a connection answers to in messages and lookups: its own
-/// `id`, or `from->to` when it carries none.
-fn connection_label(connection: &Connection) -> String {
-    connection
-        .id
-        .clone()
-        .unwrap_or_else(|| derived_label(connection))
-}
-
-/// The label a connection answers to when it carries no `id`:
-/// `from->to`.
-fn derived_label(connection: &Connection) -> String {
-    format!("{}->{}", connection.from, connection.to)
-}
-
 /// Checks one feature: every room it names exists and, for a switch,
 /// its `opens` names a connection that carries an `id`. Whether that
 /// connection is a *remote* door needs compilation and is a later
@@ -366,7 +351,7 @@ fn validate_opens(opens: &str, connections: &[Connection]) -> Result<(), CyberEr
     }
     let idless = connections
         .iter()
-        .any(|connection| connection.id.is_none() && derived_label(connection) == opens);
+        .any(|connection| connection.id.is_none() && connection.label() == opens);
     if idless {
         return Err(CyberError::InvalidArgument(format!(
             "switch feature opens connection '{opens}', which carries no id; give the \

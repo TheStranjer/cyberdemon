@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 
 use crate::defs::boom::{SectorFamily, SectorFlag, decode_sector_special};
 use crate::fixed::midpoint;
+use crate::geom::Pt;
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::geometry::sector_boundary;
 use crate::wad::map::model::{Linedef, Map};
@@ -26,7 +27,7 @@ use crate::wad::map::specials::tables::Trigger;
 
 use super::{
     Edge, NAME_DAMAGING, NAME_LIGHT_EFFECT, NAME_OPENING, NAME_SECRET, NAME_STEP_DOWN,
-    NAME_STEP_UP, Neighbour, Point,
+    NAME_STEP_UP, Neighbour,
 };
 
 /// The largest footprint of a stair-step sector, square map units:
@@ -136,7 +137,7 @@ pub(super) fn walk_over_exit(family: FlagFamily, line: &Linedef) -> bool {
 
 /// The world-space middle of `line`'s span, `None` when either vertex
 /// fails to resolve.
-pub(super) fn line_midpoint(map: &Map, line: &Linedef) -> Option<Point> {
+pub(super) fn line_midpoint(map: &Map, line: &Linedef) -> Option<Pt> {
     let ((sx, sy), (ex, ey)) = map.line_endpoints(line)?;
     Some((
         midpoint(i64::from(sx), i64::from(ex)),

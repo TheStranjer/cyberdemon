@@ -9,7 +9,7 @@
 //! and — identical to the renderer's top-down labels by construction —
 //! no second copy of any of the row-scan arithmetic.
 
-use crate::geom::ring;
+use crate::geom::{Pt, ring};
 
 use super::Edge;
 
@@ -30,6 +30,6 @@ pub(super) fn shoelace_area(edges: &[Edge]) -> u64 {
 /// even-odd interior anchor scan, so the described centre and the
 /// renderer's sector label land on the very same map unit. No edges, no
 /// centre.
-pub(super) fn label_point(edges: &[Edge]) -> Option<[i64; 2]> {
-    ring::label_point(edges).map(<[i64; 2]>::from)
+pub(super) fn label_point(edges: &[Edge]) -> Option<Pt> {
+    ring::label_point(edges)
 }

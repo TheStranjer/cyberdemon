@@ -2,10 +2,11 @@
 //! from the shared [`quad`] fixture.
 //!
 //! [`colour`] the hex forms, the integer luminance and the rounding and
-//! clamping helpers; [`dispatch`] runs op lists through [`apply_ops`](crate::gfx::ops::apply_ops) and
-//! the refusals of the dispatchers, the size caps and the parameter errors;
-//! [`json`] the documented `JSON` shapes, their serde defaults and each new
-//! op's road through a dispatcher.
+//! clamping helpers; [`dispatch`] runs op lists through
+//! [`apply_ops`](crate::gfx::ops::apply_ops), every variant reaching its
+//! own module there, the size caps and the parameter errors; [`json`] the
+//! documented `JSON` shapes, their serde defaults and each new op's road
+//! through the dispatch.
 
 mod colour;
 mod dispatch;

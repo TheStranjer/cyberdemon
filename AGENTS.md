@@ -65,11 +65,12 @@ src/
                   `gfx/ops.rs` the image-op framework's root (`ImageOp` with
                   its `FitMode`/`Filter` knobs and serde defaults, the shared
                   re-exports) on `gfx/ops/apply.rs` (`apply_ops`, `OpsReport`
-                  and the three dispatchers), `gfx/ops/colour.rs` (the hex
-                  form, `luminance` and the channel clamp) and
-                  `gfx/ops/checks.rs` (the `ops[i].field` error, the range
-                  guards, the pixel reader and the rounded divisions), with
-                  that framework's tests in `gfx/ops/tests.rs` (the shared
+                  and the one dispatch `match` naming every variant),
+                  `gfx/ops/colour.rs` (the hex form, `luminance` and the
+                  channel clamp) and `gfx/ops/checks.rs` (the `ops[i].field`
+                  error, the range guards, the pixel reader and the rounded
+                  divisions), with that framework's tests in
+                  `gfx/ops/tests.rs` (the shared
                   `quad` picture) plus `gfx/ops/tests/colour.rs`,
                   `gfx/ops/tests/dispatch.rs` and `gfx/ops/tests/json.rs`;
                   with `gfx/ops/geometry.rs`
@@ -509,11 +510,13 @@ src/
                   `create_sprite/tests.rs` plus
                   `create_sprite/tests/request.rs` and
                   `create_sprite/tests/build.rs`, `imports/processed.rs` (the
-                  preview pipeline) and `imports/tests.rs` (that group's
-                  unit tests), `tools/session.rs` (the shared path,
-                  archive-read and dirty-work helpers, `UNSAVED_WORKING` and
-                  the router) with `session/open.rs` (the three load tools'
-                  parameters, reports and runs), `session/merge_save.rs`
+                  preview pipeline with the automatic shape ops and their
+                  runner every create tool shares) and `imports/tests.rs`
+                  (that group's unit tests), `tools/session.rs` (the shared
+                  path, archive-read and dirty-work helpers,
+                  `UNSAVED_WORKING` and the router) with `session/open.rs`
+                  (the three load tools' parameters, reports and runs),
+                  `session/merge_save.rs`
                   (`merge_wad` and `save_wad` with their modes, the target
                   resolution and the layer-overwrite refusal),
                   `session/info.rs` (the session and merged-view reports'

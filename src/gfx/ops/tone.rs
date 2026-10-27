@@ -18,16 +18,6 @@ use crate::gfx::{BYTES_PER_PIXEL, to_pixel};
 /// Largest accepted `clip_percent`.
 const MAX_CLIP_PERCENT: u8 = 10;
 
-/// Parameters of [`crate::gfx::ops::ImageOp::Adjust`].
-pub(crate) struct AdjustSpec {
-    /// Value added after contrast.
-    pub(crate) brightness: i32,
-    /// Contrast percentage about mid grey.
-    pub(crate) contrast: i32,
-    /// Saturation percentage about the pixel's own luminance.
-    pub(crate) saturation: i32,
-}
-
 /// Stretches the `luminance` range of opaque pixels to full scale through a
 /// shared per-channel lookup table.
 pub(crate) fn auto_levels(
@@ -140,30 +130,32 @@ fn report_levels(img: RgbaImage, changed: bool, low: u32, high: u32) -> (RgbaIma
     )
 }
 
-/// Applies brightness, contrast and saturation to the colour channels.
+/// Applies the `(brightness, contrast, saturation)` correction to the
+/// colour channels.
 pub(crate) fn adjust(
     img: RgbaImage,
     index: usize,
-    spec: &AdjustSpec,
+    channels: (i32, i32, i32),
 ) -> Result<(RgbaImage, Value), CyberError> {
-    check_i32_range(index, "brightness", spec.brightness, (-255_i32, 255_i32))?;
-    check_i32_range(index, "contrast", spec.contrast, (0_i32, 400_i32))?;
-    check_i32_range(index, "saturation", spec.saturation, (0_i32, 400_i32))?;
+    let (brightness, contrast, saturation) = channels;
+    check_i32_range(index, "brightness", brightness, (-255_i32, 255_i32))?;
+    check_i32_range(index, "contrast", contrast, (0_i32, 400_i32))?;
+    check_i32_range(index, "saturation", saturation, (0_i32, 400_i32))?;
     let mut out = img;
     for chunk in out.pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
         let [red, green, blue, alpha] = to_pixel(chunk);
         let shifted = [
-            contrast_channel(red, spec.contrast, spec.brightness),
-            contrast_channel(green, spec.contrast, spec.brightness),
-            contrast_channel(blue, spec.contrast, spec.brightness),
+            contrast_channel(red, contrast, brightness),
+            contrast_channel(green, contrast, brightness),
+            contrast_channel(blue, contrast, brightness),
             alpha,
         ];
         let [red2, green2, blue2, alpha2] = shifted;
         let luma = luminance(shifted);
         chunk.copy_from_slice(&[
-            saturate_channel(red2, luma, spec.saturation),
-            saturate_channel(green2, luma, spec.saturation),
-            saturate_channel(blue2, luma, spec.saturation),
+            saturate_channel(red2, luma, saturation),
+            saturate_channel(green2, luma, saturation),
+            saturate_channel(blue2, luma, saturation),
             alpha2,
         ]);
     }
@@ -172,9 +164,9 @@ pub(crate) fn adjust(
         out,
         json!({
             "op": "adjust",
-            "brightness": spec.brightness,
-            "contrast": spec.contrast,
-            "saturation": spec.saturation,
+            "brightness": brightness,
+            "contrast": contrast,
+            "saturation": saturation,
             "width": width,
             "height": height,
         }),
@@ -244,7 +236,7 @@ fn distinct_opaque_colors(img: &RgbaImage) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{AdjustSpec, auto_levels, contrast_channel, grayscale, saturate_channel};
+    use super::{adjust, auto_levels, contrast_channel, grayscale, saturate_channel};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::to_pixel;
@@ -338,12 +330,8 @@ mod tests {
     #[test]
     fn adjust_applies_the_documented_formula() {
         let img = RgbaImage::new(1, 1, vec![100, 150, 200, 255]).expect("1x1 is valid");
-        let spec = AdjustSpec {
-            brightness: 50,
-            contrast: 200,
-            saturation: 50,
-        };
-        let (out, step) = super::adjust(img, 0, &spec).expect("parameters valid");
+        // The (brightness, contrast, saturation) triple the formula is for.
+        let (out, step) = adjust(img, 0, (50_i32, 200_i32, 50_i32)).expect("parameters valid");
         assert_eq!(
             out.get(0, 0),
             Some([159, 208, 225, 255]),
@@ -355,44 +343,20 @@ mod tests {
     #[test]
     fn adjust_defaults_are_the_identity() {
         let img = RgbaImage::new(1, 1, vec![10, 128, 250, 77]).expect("1x1 is valid");
-        let spec = AdjustSpec {
-            brightness: 0,
-            contrast: 100,
-            saturation: 100,
-        };
-        let (out, _step) = super::adjust(img.clone(), 2, &spec).expect("defaults are valid");
+        let (out, _step) =
+            adjust(img.clone(), 2, (0_i32, 100_i32, 100_i32)).expect("defaults are valid");
         assert_eq!(out, img, "0 / 100 / 100 leaves every channel alone");
     }
 
     #[test]
     fn adjust_clamps_at_black_and_white() {
-        let up = AdjustSpec {
-            brightness: 255,
-            contrast: 400,
-            saturation: 400,
-        };
+        // Brightness 255 on top of contrast 400: nothing stays below white.
+        assert_eq!(contrast_channel(255, 400, 255), 255, "white stays white");
+        assert_eq!(contrast_channel(200, 400, 255), 255, "over-bright clamps");
+        // Brightness -255 under the same contrast: nothing stays above black.
+        assert_eq!(contrast_channel(0, 400, -255), 0, "black stays black");
         assert_eq!(
-            contrast_channel(255, up.contrast, up.brightness),
-            255,
-            "white stays white"
-        );
-        assert_eq!(
-            contrast_channel(200, up.contrast, up.brightness),
-            255,
-            "over-bright clamps"
-        );
-        let down = AdjustSpec {
-            brightness: -255,
-            contrast: 400,
-            saturation: 0,
-        };
-        assert_eq!(
-            contrast_channel(0, down.contrast, down.brightness),
-            0,
-            "black stays black"
-        );
-        assert_eq!(
-            saturate_channel(255, 0, down.saturation),
+            saturate_channel(255, 0, 0),
             0,
             "zero saturation falls to the luminance"
         );
@@ -401,12 +365,8 @@ mod tests {
     #[test]
     fn adjust_rejects_out_of_range_parameters() {
         let img = RgbaImage::new(1, 1, vec![0; 4]).expect("1x1 is valid");
-        let spec = AdjustSpec {
-            brightness: 0,
-            contrast: 401,
-            saturation: 100,
-        };
-        let text = failure(super::adjust(img, 0, &spec));
+        // Contrast 401 is one past the documented 0..=400.
+        let text = failure(adjust(img, 0, (0_i32, 401_i32, 100_i32)));
         assert!(
             text.contains("ops[0].contrast") && text.contains("0..=400"),
             "contrast range error: {text}"

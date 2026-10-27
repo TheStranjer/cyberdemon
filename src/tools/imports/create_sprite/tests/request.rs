@@ -9,13 +9,14 @@ use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::{ImageOp, apply_ops};
 use crate::tools::imports::create_sprite::build::{
-    apply_extra, background_ops, choose_height, emptied, fit_step, scaled_width,
+    background_ops, choose_height, emptied, fit_step, scaled_width,
 };
 use crate::tools::imports::create_sprite::{
     CREATE_SPRITE_TOOL_DESCRIPTION, CreateSpriteParams, check_background_color, check_height,
     dedupe, parse_sprite_names,
 };
 use crate::tools::imports::image_pipeline::OffsetMode;
+use crate::tools::imports::processed::apply_extra;
 
 use super::{
     args, by_name, by_sprite, code, names_of, processed, request, request_for_height, step_error,

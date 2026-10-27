@@ -22,26 +22,20 @@ const BUCKET_COUNT: usize = 4_096;
 /// The alpha channel index of a pixel.
 const ALPHA_INDEX: usize = 3;
 
-/// Parameters of [`crate::gfx::ops::ImageOp::RemoveBackground`].
-pub(crate) struct BackgroundSpec<'key> {
-    /// Background colour as text; `None` detects it from the border.
-    pub(crate) color: Option<&'key str>,
-    /// Per-channel match tolerance.
-    pub(crate) tolerance: u8,
-}
-
-/// Clears the border-connected background and reports the colour used.
+/// Clears the border-connected background and reports the colour used:
+/// the `color` text when given, the border's dominant bucket otherwise.
 pub(crate) fn remove_background(
     img: RgbaImage,
     index: usize,
-    spec: &BackgroundSpec<'_>,
+    color: Option<&str>,
+    tolerance: u8,
 ) -> Result<(RgbaImage, Value), CyberError> {
-    let background = match spec.color {
+    let background = match color {
         Some(text) => explicit_color(text, index)?,
         None => dominant_border_color(&img),
     };
     let mut out = img;
-    let removed = flood_clear(&mut out, background, spec.tolerance);
+    let removed = flood_clear(&mut out, background, tolerance);
     let [red, green, blue] = background;
     Ok((
         out,
@@ -308,7 +302,7 @@ fn neighbours(position: usize, width: usize) -> impl Iterator<Item = usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackgroundSpec, bucket_of, remove_background};
+    use super::{bucket_of, remove_background};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
 
@@ -361,18 +355,11 @@ mod tests {
         RgbaImage::new(4, 4, pixels).expect("fixture is valid")
     }
 
-    /// The default spec (detected colour, tolerance `32`).
-    fn detected() -> BackgroundSpec<'static> {
-        BackgroundSpec {
-            color: None,
-            tolerance: 32,
-        }
-    }
-
     #[test]
     fn removes_the_white_surround_and_keeps_the_white_island() {
+        // Detected colour, the documented default tolerance 32.
         let (out, step) =
-            remove_background(island_fixture(7), 0, &detected()).expect("detection cannot fail");
+            remove_background(island_fixture(7), 0, None, 32).expect("detection cannot fail");
         assert_eq!(step["op"], "remove_background", "op name");
         assert_eq!(step["background"], "#FFFFFF", "white surround detected");
         assert_eq!(out.get(0, 0).expect("in bounds")[3], 0, "surround cleared");
@@ -385,7 +372,7 @@ mod tests {
     #[test]
     fn detects_the_average_of_a_noisy_border_bucket() {
         let (out, step) =
-            remove_background(noisy_border(), 1, &detected()).expect("detection cannot fail");
+            remove_background(noisy_border(), 1, None, 32).expect("detection cannot fail");
         assert_eq!(step["background"], "#FCFCFC", "average of 250 and 254");
         assert_eq!(
             out.get(0, 0).expect("in bounds")[3],
@@ -397,11 +384,8 @@ mod tests {
 
     #[test]
     fn explicit_colour_overrides_detection() {
-        let spec = BackgroundSpec {
-            color: Some("#000000"),
-            tolerance: 0,
-        };
-        let (out, step) = remove_background(island_fixture(7), 4, &spec).expect("colour parses");
+        let (out, step) =
+            remove_background(island_fixture(7), 4, Some("#000000"), 0).expect("colour parses");
         assert_eq!(
             step["background"], "#000000",
             "the requested colour is reported"
@@ -433,11 +417,8 @@ mod tests {
         .flatten()
         .collect();
         let strip = RgbaImage::new(3, 1, row).expect("3x1 is valid");
-        let spec = BackgroundSpec {
-            color: Some("#646464"),
-            tolerance: 10,
-        };
-        let (out, step) = remove_background(strip.clone(), 0, &spec).expect("colour parses");
+        let (out, step) =
+            remove_background(strip.clone(), 0, Some("#646464"), 10).expect("colour parses");
         assert_eq!(out.get(1, 0).expect("in bounds")[3], 0, "delta 10 matches");
         assert_eq!(
             out.get(2, 0).expect("in bounds")[3],
@@ -445,11 +426,8 @@ mod tests {
             "delta 11 blocks the fill"
         );
         assert_eq!(step["removed_pixels"], 2_i32, "seed plus reached neighbour");
-        let loose = BackgroundSpec {
-            color: Some("#646464"),
-            tolerance: 11,
-        };
-        let (wide_out, _loose_step) = remove_background(strip, 0, &loose).expect("colour parses");
+        let (wide_out, _loose_step) =
+            remove_background(strip, 0, Some("#646464"), 11).expect("colour parses");
         assert_eq!(
             wide_out.get(2, 0).expect("in bounds")[3],
             0,
@@ -459,11 +437,8 @@ mod tests {
 
     #[test]
     fn a_malformed_colour_names_the_op_and_field() {
-        let spec = BackgroundSpec {
-            color: Some("beige"),
-            tolerance: 8,
-        };
-        let error = remove_background(noisy_border(), 3, &spec).expect_err("beige is not hex");
+        let error =
+            remove_background(noisy_border(), 3, Some("beige"), 8).expect_err("beige is not hex");
         let CyberError::InvalidArgument(text) = error else {
             panic!("expected InvalidArgument");
         };
@@ -492,7 +467,7 @@ mod tests {
             vec![255_u8, 255, 255, 255, 250, 250, 250, 255, 0, 0, 0, 255],
         )
         .expect("1x3 is valid");
-        let (out, step) = remove_background(column, 0, &detected()).expect("detection runs");
+        let (out, step) = remove_background(column, 0, None, 32).expect("detection runs");
         assert_eq!(
             step["background"], "#FDFDFD",
             "rounded mean of the border whites 255 and 250"

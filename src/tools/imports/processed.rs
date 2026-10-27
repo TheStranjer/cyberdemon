@@ -11,6 +11,12 @@
 //! measures it with [`quantize_stats`]. The fetch and the palette read
 //! happen in the calling tool: nothing here touches a session or a file,
 //! so the whole helper is unit-testable.
+//!
+//! The create tools' automatic steps are the shared half of that pipeline
+//! too: [`shape_ops`] builds the `Fit`/`MakeTileable` pair their size rules
+//! settle on, [`apply_extra`] runs such a list over a [`Processed`] picture
+//! with its measurements appended, and [`automatic`] turns a refusal into
+//! the instruction that says which step it was.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -22,7 +28,7 @@ use crate::error::CyberError;
 use crate::gfx::codec::{decode_image, encode_png};
 use crate::gfx::image::{IndexedImage, RgbaImage};
 use crate::gfx::ops::dither::{Dither, quantize_dithered};
-use crate::gfx::ops::{ImageOp, OpsReport, apply_ops};
+use crate::gfx::ops::{Filter, FitMode, ImageOp, OpsReport, apply_ops};
 use crate::gfx::palette::Palette;
 use crate::gfx::quantize::{
     DEFAULT_ALPHA_THRESHOLD, QuantizeOptions, Transparency, nearest_index, quantize_stats,
@@ -133,6 +139,81 @@ pub(in crate::tools) fn process(
     let decoded = decode_image(bytes)?;
     let (rgba, report) = apply_ops(decoded, &params.ops)?;
     Ok(Processed { rgba, report })
+}
+
+/// The `Fit` every create tool's automatic shape step asks for: the target
+/// `width` x `height` through the area filter, with no canvas fill.
+#[must_use]
+pub(in crate::tools) const fn fit_op(width: u32, height: u32, mode: FitMode) -> ImageOp {
+    ImageOp::Fit {
+        width,
+        height,
+        mode,
+        filter: Filter::Area,
+        background: None,
+    }
+}
+
+/// The both-axes `MakeTileable` of an automatic shape step; `band` is the
+/// tool's own blend width, `None` being the quarter-of-the-edge default.
+const fn tile_op(band: Option<u32>) -> ImageOp {
+    ImageOp::MakeTileable {
+        band,
+        horizontal: true,
+        vertical: true,
+    }
+}
+
+/// The automatic shape ops of a create call, in pipeline order: the
+/// [`fit_op`] to `target` when the tool's size rule asked for one (`None`
+/// keeps the picture's own size), then the [`tile_op`] blending both axes
+/// when `tileable`.
+pub(in crate::tools) fn shape_ops(
+    target: Option<(u32, u32)>,
+    mode: FitMode,
+    tileable: bool,
+    band: Option<u32>,
+) -> Vec<ImageOp> {
+    let mut ops: Vec<ImageOp> = Vec::new();
+    if let Some((width, height)) = target {
+        ops.push(fit_op(width, height, mode));
+    }
+    if tileable {
+        ops.push(tile_op(band));
+    }
+    ops
+}
+
+/// Runs one create tool's automatic ops over an already [`process`]ed
+/// picture, appending their measurements to its report; an empty list is
+/// the identity, so a tool whose rule decided nothing changes nothing.
+///
+/// # Errors
+///
+/// [`apply_ops`]' errors for the first failing op, as they stand: a caller
+/// that wants to say *which* automatic step failed widens them with
+/// [`automatic`].
+pub(in crate::tools) fn apply_extra(
+    processed: Processed,
+    ops: &[ImageOp],
+) -> Result<Processed, CyberError> {
+    if ops.is_empty() {
+        return Ok(processed);
+    }
+    let (rgba, second) = apply_ops(processed.rgba, ops)?;
+    let mut steps = processed.report.steps;
+    steps.extend(second.steps);
+    Ok(Processed {
+        rgba,
+        report: OpsReport { steps },
+    })
+}
+
+/// The refusal of an automatic `step`, in the words every create tool
+/// uses: which step failed, what the op said in `error`, and the `hint`
+/// that fixes it.
+pub(in crate::tools) fn automatic(step: &str, hint: &str, error: &CyberError) -> CyberError {
+    CyberError::InvalidArgument(format!("the automatic {step} step failed: {error}: {hint}"))
 }
 
 /// Quantize `processed` to `palette` under `transparency` and `dither`,
@@ -308,12 +389,15 @@ fn preview_stem(filename: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessParams, fill_low_alpha, preview_stem, process, to_indexed};
+    use super::{
+        ProcessParams, apply_extra, automatic, fill_low_alpha, fit_op, preview_stem, process,
+        shape_ops, tile_op, to_indexed,
+    };
     use crate::error::CyberError;
     use crate::gfx::codec::encode_png;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::ops::dither::Dither;
-    use crate::gfx::ops::{ImageOp, apply_ops};
+    use crate::gfx::ops::{Filter, FitMode, ImageOp, apply_ops};
     use crate::gfx::palette::Palette;
     use crate::gfx::quantize::Transparency;
 
@@ -386,8 +470,8 @@ mod tests {
             ImageOp::Fit {
                 width: 4,
                 height: 4,
-                mode: crate::gfx::ops::FitMode::Stretch,
-                filter: crate::gfx::ops::Filter::Nearest,
+                mode: FitMode::Stretch,
+                filter: Filter::Nearest,
                 background: None,
             },
         ];
@@ -413,6 +497,120 @@ mod tests {
         assert!(
             error.to_string().contains("ops[0]"),
             "the message names the op index: {error}"
+        );
+    }
+
+    /// The step kinds of a report, in order.
+    fn kinds(processed: &super::Processed) -> Vec<&str> {
+        processed
+            .report
+            .steps
+            .iter()
+            .map(|step| step["op"].as_str().unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn the_shared_builders_make_the_documented_shape_ops() {
+        assert_eq!(
+            fit_op(64_u32, 32_u32, FitMode::Cover),
+            ImageOp::Fit {
+                width: 64,
+                height: 32,
+                mode: FitMode::Cover,
+                filter: Filter::Area,
+                background: None,
+            },
+            "every create-side Fit resamples by area onto no canvas"
+        );
+        assert_eq!(
+            tile_op(Some(8_u32)),
+            ImageOp::MakeTileable {
+                band: Some(8),
+                horizontal: true,
+                vertical: true,
+            },
+            "the tool's own band blends both axes"
+        );
+        assert_eq!(
+            tile_op(None),
+            ImageOp::MakeTileable {
+                band: None,
+                horizontal: true,
+                vertical: true,
+            },
+            "no band keeps the quarter-of-the-edge default"
+        );
+    }
+
+    #[test]
+    fn shape_ops_follows_the_size_and_tiling_rules() {
+        assert_eq!(
+            shape_ops(Some((64_u32, 32_u32)), FitMode::Cover, true, Some(8_u32)),
+            vec![fit_op(64_u32, 32_u32, FitMode::Cover), tile_op(Some(8_u32)),],
+            "the Fit the size rule asked for, then both axes blended"
+        );
+        assert_eq!(
+            shape_ops(None, FitMode::Stretch, true, None),
+            vec![tile_op(None)],
+            "a picture already at its target size is not fitted again"
+        );
+        assert_eq!(
+            shape_ops(Some((64_u32, 32_u32)), FitMode::Stretch, false, None),
+            vec![fit_op(64_u32, 32_u32, FitMode::Stretch)],
+            "without tiling there is no blend op"
+        );
+        assert!(
+            shape_ops(None, FitMode::Stretch, false, None).is_empty(),
+            "a rule that decided nothing adds nothing"
+        );
+    }
+
+    #[test]
+    fn apply_extra_appends_the_automatic_steps_after_the_user_ones() {
+        let png = encode_png(&grey(8_u32, 8_u32), None).expect("test PNG encodes");
+        let first = process(
+            &png,
+            &params(vec![ImageOp::Crop {
+                x: 1,
+                y: 1,
+                width: 6,
+                height: 6,
+            }]),
+        )
+        .expect("the crop runs");
+        let shaped =
+            apply_extra(first, &[fit_op(4, 4, FitMode::Stretch)]).expect("the automatic fit runs");
+        assert_eq!(
+            (shaped.rgba.width, shaped.rgba.height),
+            (4_u32, 4_u32),
+            "the automatic op sized the picture"
+        );
+        assert_eq!(
+            kinds(&shaped),
+            vec!["crop", "fit"],
+            "the user op measured first"
+        );
+    }
+
+    #[test]
+    fn an_automatic_refusal_names_its_step_and_keeps_the_op_error() {
+        let error = automatic(
+            "height",
+            "pass a smaller height",
+            &CyberError::invalid("ops[0].width is out of range"),
+        );
+        assert_eq!(code(&error), "invalid_argument", "the code stands");
+        let message = error.message();
+        assert!(
+            message.contains("the automatic height step failed")
+                && message.contains("ops[0].width is out of range")
+                && message.contains("pass a smaller height"),
+            "step, refusal and hint are all there: {message}"
+        );
+        assert!(
+            message.find("ops[0].width") < message.find("pass a smaller height"),
+            "the op's own refusal comes before the way out: {message}"
         );
     }
 

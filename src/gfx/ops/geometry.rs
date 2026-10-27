@@ -14,41 +14,19 @@ use crate::gfx::ops::{
 };
 use crate::gfx::{BYTES_PER_PIXEL, MAX_DIMENSION, pixel_index, rgba_byte_count};
 
-/// Parameters of [`crate::gfx::ops::ImageOp::Crop`].
-pub(crate) struct CropSpec {
-    /// Left edge in the source.
-    pub(crate) x: u32,
-    /// Top edge in the source.
-    pub(crate) y: u32,
-    /// Rectangle width in pixels.
-    pub(crate) width: u32,
-    /// Rectangle height in pixels.
-    pub(crate) height: u32,
-}
-
-/// Parameters of [`crate::gfx::ops::ImageOp::Flip`].
-pub(crate) struct FlipSpec {
-    /// Mirror left-to-right.
-    pub(crate) horizontal: bool,
-    /// Mirror top-to-bottom.
-    pub(crate) vertical: bool,
-}
-
-/// Parameters of [`crate::gfx::ops::ImageOp::Fit`].
-pub(crate) struct FitSpec<'fit> {
+/// The size and sampling [`fit`] hands its three modes: the target
+/// rectangle's edges and the filter the size change resamples through.
+struct FitTarget {
     /// Target width in pixels.
-    pub(crate) width: u32,
+    width: u32,
     /// Target height in pixels.
-    pub(crate) height: u32,
-    /// Mapping between source and target rectangle.
-    pub(crate) mode: FitMode,
+    height: u32,
     /// Sampling filter for the size change.
-    pub(crate) filter: Filter,
-    /// `contain` canvas colour text, if given.
-    pub(crate) background: Option<&'fit str>,
+    filter: Filter,
 }
 
-/// Extracts a rectangle that lies fully inside `img`.
+/// Extracts the source rectangle `(x, y, width, height)` that lies fully
+/// inside `img`.
 ///
 /// # Errors
 ///
@@ -57,24 +35,25 @@ pub(crate) struct FitSpec<'fit> {
 pub(crate) fn crop(
     img: &RgbaImage,
     index: usize,
-    spec: &CropSpec,
+    rect: (u32, u32, u32, u32),
 ) -> Result<(RgbaImage, Value), CyberError> {
-    check_op_dimension(index, "width", spec.width)?;
-    check_op_dimension(index, "height", spec.height)?;
-    check_inside(index, "x", (spec.x, spec.width), img.width)?;
-    check_inside(index, "y", (spec.y, spec.height), img.height)?;
-    let mut pixels = Vec::with_capacity(rgba_byte_count(spec.width, spec.height).unwrap_or(0));
-    for row in 0..spec.height {
-        for column in 0..spec.width {
-            let source_x = spec.x.saturating_add(column);
-            let source_y = spec.y.saturating_add(row);
+    let (x, y, width, height) = rect;
+    check_op_dimension(index, "width", width)?;
+    check_op_dimension(index, "height", height)?;
+    check_inside(index, "x", (x, width), img.width)?;
+    check_inside(index, "y", (y, height), img.height)?;
+    let mut pixels = Vec::with_capacity(rgba_byte_count(width, height).unwrap_or(0));
+    for row in 0..height {
+        for column in 0..width {
+            let source_x = x.saturating_add(column);
+            let source_y = y.saturating_add(row);
             let source = pixel_index(img.width, source_x, source_y).unwrap_or(usize::MAX);
             pixels.extend_from_slice(&pixel_at(&img.pixels, source).unwrap_or([0_u8; 4]));
         }
     }
     Ok((
-        RgbaImage::new(spec.width, spec.height, pixels)?,
-        json!({"op": "crop", "width": spec.width, "height": spec.height}),
+        RgbaImage::new(width, height, pixels)?,
+        json!({"op": "crop", "width": width, "height": height}),
     ))
 }
 
@@ -144,21 +123,23 @@ fn rotated_pixel(img: &RgbaImage, turns: u32, dst_x: u32, dst_y: u32) -> [u8; 4]
     pixel_at(&img.pixels, position).unwrap_or([0_u8; 4])
 }
 
-/// Mirrors `img` along the requested axes; a pure permutation.
-pub(crate) fn flip(img: &RgbaImage, spec: &FlipSpec) -> (RgbaImage, Value) {
+/// Mirrors `img` along the `(horizontal, vertical)` axes; a pure
+/// permutation.
+pub(crate) fn flip(img: &RgbaImage, axes: (bool, bool)) -> (RgbaImage, Value) {
+    let (horizontal, vertical) = axes;
     let row_bytes = rgba_byte_count(img.width, 1).unwrap_or(1);
     let mut rows: Vec<&[u8]> = img.pixels.chunks_exact(row_bytes).collect();
-    if spec.vertical {
+    if vertical {
         rows.reverse();
     }
     let mut pixels = Vec::with_capacity(img.pixels.len());
     for row in rows {
-        append_row(&mut pixels, row, spec.horizontal);
+        append_row(&mut pixels, row, horizontal);
     }
     let report = json!({
         "op": "flip",
-        "horizontal": spec.horizontal,
-        "vertical": spec.vertical,
+        "horizontal": horizontal,
+        "vertical": vertical,
         "width": img.width,
         "height": img.height,
     });
@@ -183,7 +164,8 @@ fn append_row(out: &mut Vec<u8>, row: &[u8], mirror: bool) {
     }
 }
 
-/// Resizes `img` to the fitted target rectangle.
+/// Resizes `img` to the fitted target rectangle `(width, height, mode,
+/// filter)`; `background` is the optional `contain` canvas colour text.
 ///
 /// # Errors
 ///
@@ -192,13 +174,15 @@ fn append_row(out: &mut Vec<u8>, row: &[u8], mirror: bool) {
 pub(crate) fn fit(
     img: &RgbaImage,
     index: usize,
-    spec: &FitSpec<'_>,
+    rect: (u32, u32, FitMode, Filter),
+    background: Option<String>,
 ) -> Result<(RgbaImage, Value), CyberError> {
-    check_op_dimension(index, "width", spec.width)?;
-    check_op_dimension(index, "height", spec.height)?;
-    let background = match spec.background {
+    let (width, height, mode, filter) = rect;
+    check_op_dimension(index, "width", width)?;
+    check_op_dimension(index, "height", height)?;
+    let canvas = match background {
         None => [0_u8; 4],
-        Some(text) => match parse_hex_colour(text, true) {
+        Some(text) => match parse_hex_colour(&text, true) {
             Ok(color) => color,
             Err(_) => {
                 return Err(arg_error(
@@ -209,16 +193,21 @@ pub(crate) fn fit(
             }
         },
     };
-    match spec.mode {
-        FitMode::Stretch => Ok(fit_stretch(img, spec)),
-        FitMode::Cover => fit_cover(img, index, spec),
-        FitMode::Contain => Ok(fit_contain(img, spec, background)),
+    let target = FitTarget {
+        width,
+        height,
+        filter,
+    };
+    match mode {
+        FitMode::Stretch => Ok(fit_stretch(img, &target)),
+        FitMode::Cover => fit_cover(img, index, &target),
+        FitMode::Contain => Ok(fit_contain(img, &target, canvas)),
     }
 }
 
 /// Stretch: resample to exactly the target; no crop or padding happens.
-fn fit_stretch(img: &RgbaImage, spec: &FitSpec<'_>) -> (RgbaImage, Value) {
-    let out = resample(img, spec.width, spec.height, spec.filter);
+fn fit_stretch(img: &RgbaImage, target: &FitTarget) -> (RgbaImage, Value) {
+    let out = resample(img, target.width, target.height, target.filter);
     (
         out,
         json!({
@@ -236,29 +225,27 @@ fn fit_stretch(img: &RgbaImage, spec: &FitSpec<'_>) -> (RgbaImage, Value) {
 fn fit_cover(
     img: &RgbaImage,
     index: usize,
-    spec: &FitSpec<'_>,
+    target: &FitTarget,
 ) -> Result<(RgbaImage, Value), CyberError> {
-    let (num, den) = deciding_scale(img, spec, true);
+    let (num, den) = deciding_scale(img, target, true);
     let scaled_w = as_dimension(div_ceil(u64::from(img.width).saturating_mul(num), den));
     let scaled_h = as_dimension(div_ceil(u64::from(img.height).saturating_mul(num), den));
-    let big = resample(img, scaled_w, scaled_h, spec.filter);
+    let big = resample(img, scaled_w, scaled_h, target.filter);
     let offset_x = big
         .width
-        .saturating_sub(spec.width)
+        .saturating_sub(target.width)
         .checked_div(2_u32)
         .unwrap_or(0_u32);
     let offset_y = big
         .height
-        .saturating_sub(spec.height)
+        .saturating_sub(target.height)
         .checked_div(2_u32)
         .unwrap_or(0_u32);
-    let rect = CropSpec {
-        x: offset_x,
-        y: offset_y,
-        width: spec.width,
-        height: spec.height,
-    };
-    let (out, _step) = crop(&big, index, &rect)?;
+    let (out, _step) = crop(
+        &big,
+        index,
+        (offset_x, offset_y, target.width, target.height),
+    )?;
     Ok((
         out,
         json!({
@@ -273,8 +260,8 @@ fn fit_cover(
 }
 
 /// Contain: uniform scale until both edges fit, then centre on the canvas.
-fn fit_contain(img: &RgbaImage, spec: &FitSpec<'_>, background: [u8; 4]) -> (RgbaImage, Value) {
-    let (num, den) = deciding_scale(img, spec, false);
+fn fit_contain(img: &RgbaImage, target: &FitTarget, background: [u8; 4]) -> (RgbaImage, Value) {
+    let (num, den) = deciding_scale(img, target, false);
     let scaled_w = as_dimension(
         u64::from(img.width)
             .saturating_mul(num)
@@ -287,18 +274,18 @@ fn fit_contain(img: &RgbaImage, spec: &FitSpec<'_>, background: [u8; 4]) -> (Rgb
             .checked_div(den)
             .unwrap_or(0),
     );
-    let small = resample(img, scaled_w, scaled_h, spec.filter);
-    let offset_x = spec
+    let small = resample(img, scaled_w, scaled_h, target.filter);
+    let offset_x = target
         .width
         .saturating_sub(small.width)
         .checked_div(2_u32)
         .unwrap_or(0_u32);
-    let offset_y = spec
+    let offset_y = target
         .height
         .saturating_sub(small.height)
         .checked_div(2_u32)
         .unwrap_or(0_u32);
-    let mut canvas = filled_canvas(spec.width, spec.height, background);
+    let mut canvas = filled_canvas(target.width, target.height, background);
     paste(&mut canvas, offset_x, offset_y, &small);
     (
         canvas,
@@ -316,18 +303,18 @@ fn fit_contain(img: &RgbaImage, spec: &FitSpec<'_>, background: [u8; 4]) -> (Rgb
 /// The uniform scale as a `target / source` rational: the axis with the
 /// larger ratio decides `cover`, the smaller decides `contain`. The ratios
 /// are compared by cross-multiplication, so no division happens here.
-fn deciding_scale(img: &RgbaImage, spec: &FitSpec<'_>, cover: bool) -> (u64, u64) {
-    let across = u64::from(spec.width).saturating_mul(u64::from(img.height));
-    let down = u64::from(spec.height).saturating_mul(u64::from(img.width));
+fn deciding_scale(img: &RgbaImage, target: &FitTarget, cover: bool) -> (u64, u64) {
+    let across = u64::from(target.width).saturating_mul(u64::from(img.height));
+    let down = u64::from(target.height).saturating_mul(u64::from(img.width));
     let width_decides = if cover {
         across >= down
     } else {
         across <= down
     };
     if width_decides {
-        (u64::from(spec.width), u64::from(img.width))
+        (u64::from(target.width), u64::from(img.width))
     } else {
-        (u64::from(spec.height), u64::from(img.height))
+        (u64::from(target.height), u64::from(img.height))
     }
 }
 
@@ -382,7 +369,7 @@ fn paste(canvas: &mut RgbaImage, x: u32, y: u32, patch: &RgbaImage) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CropSpec, FlipSpec, crop, flip, rotate};
+    use super::{crop, flip, rotate};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::ops::{Filter, FitMode, ImageOp, apply_ops};
@@ -415,13 +402,8 @@ mod tests {
 
     #[test]
     fn crop_extracts_the_rectangle() {
-        let spec = CropSpec {
-            x: 1,
-            y: 1,
-            width: 1,
-            height: 2,
-        };
-        let (out, step) = crop(&labelled(), 0, &spec).expect("rectangle is inside");
+        // The source rectangle (x, y, width, height) is (1, 1, 1, 2).
+        let (out, step) = crop(&labelled(), 0, (1, 1, 1, 2)).expect("rectangle is inside");
         assert_eq!((out.width, out.height), (1, 2), "cropped shape");
         assert_eq!(value(&out, 0, 0), 4, "first row");
         assert_eq!(value(&out, 0, 1), 6, "second row");
@@ -432,24 +414,14 @@ mod tests {
 
     #[test]
     fn crop_out_of_bounds_names_the_offending_field() {
-        let too_wide = CropSpec {
-            x: 1,
-            y: 0,
-            width: 2,
-            height: 1,
-        };
-        let wide_text = rejection(crop(&labelled(), 3, &too_wide));
+        // A 2-pixel-wide rectangle starting at x 1 of a 2-pixel-wide image.
+        let wide_text = rejection(crop(&labelled(), 3, (1, 0, 2, 1)));
         assert!(
             wide_text.contains("ops[3].x") && wide_text.contains("edge"),
             "x span error: {wide_text}"
         );
-        let zero = CropSpec {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 1,
-        };
-        let zero_text = rejection(crop(&labelled(), 0, &zero));
+        // A degenerate rectangle: no width to crop.
+        let zero_text = rejection(crop(&labelled(), 0, (0, 0, 0, 1)));
         assert!(
             zero_text.contains("ops[0].width") && zero_text.contains("1..=4096"),
             "width range error: {zero_text}"
@@ -504,26 +476,14 @@ mod tests {
 
     #[test]
     fn flip_mirrors_the_requested_axes() {
-        let horizontal = flip(
-            &labelled(),
-            &FlipSpec {
-                horizontal: true,
-                vertical: false,
-            },
-        );
+        let horizontal = flip(&labelled(), (true, false));
         let left_column: Vec<u8> = (0..3).map(|y| value(&horizontal.0, 0, y)).collect();
         assert_eq!(
             left_column,
             vec![2, 4, 6],
             "each row mirrored left-to-right"
         );
-        let vertical = flip(
-            &labelled(),
-            &FlipSpec {
-                horizontal: false,
-                vertical: true,
-            },
-        );
+        let vertical = flip(&labelled(), (false, true));
         let top_row: Vec<u8> = (0..3).map(|y| value(&vertical.0, 0, y)).collect();
         assert_eq!(top_row, vec![5, 3, 1], "rows reversed top-to-bottom");
         assert_eq!(vertical.1["op"], "flip", "report names the op");

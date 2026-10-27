@@ -17,61 +17,42 @@ use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::composite::{Component, compose};
 use crate::gfx::image::IndexedImage;
-use crate::gfx::ops::{FitMode, ImageOp, OpsReport, apply_ops};
+use crate::gfx::ops::FitMode;
 use crate::gfx::palette::Palette;
 use crate::gfx::patch::{Patch, encode_patch};
 use crate::gfx::quantize::Transparency;
 use crate::state::AppState;
-use crate::tools::imports::processed::{Processed, fill_low_alpha, process, to_indexed};
+use crate::tools::imports::processed::{
+    Processed, apply_extra, automatic, fill_low_alpha, process, shape_ops, to_indexed,
+};
 use crate::tools::palette::load_palette;
 
 use super::CreateRequest;
 use super::size::{WallSize, choose_size};
 
 /// The automatic `Fit` (when the size changed) and `MakeTileable` (when
-/// asked) ops, appended to the processed picture and its report.
+/// asked) ops of [`shape_ops`], run through [`apply_extra`] and appended to
+/// the processed picture and its report.
 ///
 /// # Errors
 ///
-/// [`apply_ops`]' [`CyberError::InvalidArgument`] widened to say the
-/// failure came from the automatic step, not the user's ops.
+/// [`apply_extra`]' refusal of the first op that fails, widened by
+/// [`automatic`] to say the automatic step rather than a user op failed.
 pub(super) fn shape_picture(
     processed: Processed,
     size: &WallSize,
     fit: FitMode,
     tileable: bool,
 ) -> Result<Processed, CyberError> {
-    let mut extra: Vec<ImageOp> = Vec::new();
-    if (processed.rgba.width, processed.rgba.height) != (size.width, size.height) {
-        extra.push(ImageOp::Fit {
-            width: size.width,
-            height: size.height,
-            mode: fit,
-            filter: crate::gfx::ops::Filter::Area,
-            background: None,
-        });
-    }
-    if tileable {
-        extra.push(ImageOp::MakeTileable {
-            band: None,
-            horizontal: true,
-            vertical: true,
-        });
-    }
-    if extra.is_empty() {
-        return Ok(processed);
-    }
-    let (rgba, second) = apply_ops(processed.rgba, &extra).map_err(|error| {
-        CyberError::InvalidArgument(format!(
-            "the automatic resize/tiling step failed: {error}: adjust width/height or pass \
-             tileable=false"
-        ))
-    })?;
-    let mut steps = processed.report.steps;
-    steps.extend(second.steps);
-    Ok(Processed {
-        rgba,
-        report: OpsReport { steps },
+    let wanted = (size.width, size.height);
+    let current = (processed.rgba.width, processed.rgba.height);
+    let ops = shape_ops((current != wanted).then_some(wanted), fit, tileable, None);
+    apply_extra(processed, &ops).map_err(|error| {
+        automatic(
+            "resize/tiling",
+            "adjust width/height or pass tileable=false",
+            &error,
+        )
     })
 }
 

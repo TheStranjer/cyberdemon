@@ -1,14 +1,12 @@
-//! The runner: an empty list, the chained report, every op reaching its
-//! own module, the two dispatchers refusing the variants they were not
-//! routed for, the `JSON`-deserialized `PerspectiveCorrect` and the size
-//! and parameter refusals that name `ops[i].field`.
+//! The runner: an empty list, the chained report, every op reaching its own
+//! module through [`apply_ops`], the `JSON`-deserialized
+//! `PerspectiveCorrect` and the size and parameter refusals that name
+//! `ops[i].field`.
 
 use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::perspective::Corner;
 use crate::gfx::ops::{Filter, FitMode, ImageOp, MAX_OP_DIMENSION, OpsReport, apply_ops};
-
-use crate::gfx::ops::apply::{geometry_op, pixel_op, restoration_op};
 
 use super::quad;
 
@@ -106,54 +104,6 @@ fn the_new_ops_reach_their_modules_through_apply_ops() {
     );
 }
 
-#[test]
-fn pixel_op_rejects_geometric_variants_it_was_not_routed_for() {
-    let error = pixel_op(
-        quad(),
-        3,
-        ImageOp::Flip {
-            horizontal: false,
-            vertical: false,
-        },
-    )
-    .expect_err("a flip never belongs to the pixel dispatcher");
-    assert_eq!(error.code(), "internal", "dispatch bugs are internal");
-}
-
-#[test]
-fn restoration_op_rejects_variants_it_was_not_routed_for() {
-    let error = restoration_op(
-        quad(),
-        5,
-        ImageOp::Trim {
-            alpha_threshold: 128,
-            padding: 0,
-        },
-    )
-    .expect_err("a trim never belongs to the restoration dispatcher");
-    let CyberError::Internal(message) = error else {
-        panic!("expected Internal");
-    };
-    assert!(
-        message.contains("ops[5]") && message.contains("wrong pixel dispatcher"),
-        "misdispatch names the op and the fault: {message}"
-    );
-}
-
-#[test]
-fn geometry_op_rejects_pixel_variants_it_was_not_routed_for() {
-    let error = geometry_op(
-        &quad(),
-        1,
-        ImageOp::Threshold {
-            level: Some(128),
-            invert: false,
-        },
-    )
-    .expect_err("a threshold never belongs to the geometric dispatcher");
-    assert_eq!(error.code(), "internal", "dispatch bugs are internal");
-}
-
 /// The perspective warp's own square over the 2x2 test image.
 fn straighten() -> ImageOp {
     ImageOp::PerspectiveCorrect {
@@ -165,6 +115,135 @@ fn straighten() -> ImageOp {
         ],
         width: 2,
         height: 2,
+    }
+}
+
+/// The five variants that change the picture's shape, each with the step
+/// name its module documents.
+fn shape_ops() -> [(&'static str, ImageOp); 5] {
+    [
+        (
+            "crop",
+            ImageOp::Crop {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+        ),
+        (
+            "fit",
+            ImageOp::Fit {
+                width: 1,
+                height: 1,
+                mode: FitMode::Stretch,
+                filter: Filter::Nearest,
+                background: None,
+            },
+        ),
+        ("rotate", ImageOp::Rotate { quarter_turns: 1 }),
+        (
+            "flip",
+            ImageOp::Flip {
+                horizontal: true,
+                vertical: false,
+            },
+        ),
+        ("perspective_correct", straighten()),
+    ]
+}
+
+/// The five tonal and alpha variants, each with the step name its module
+/// documents.
+fn tone_ops() -> [(&'static str, ImageOp); 5] {
+    [
+        ("auto_levels", ImageOp::AutoLevels { clip_percent: 1 }),
+        (
+            "adjust",
+            ImageOp::Adjust {
+                brightness: 0,
+                contrast: 100,
+                saturation: 100,
+            },
+        ),
+        (
+            "color_key",
+            ImageOp::ColorKey {
+                color: "#ff0000".to_owned(),
+                tolerance: 0,
+            },
+        ),
+        (
+            "trim",
+            ImageOp::Trim {
+                alpha_threshold: 128,
+                padding: 0,
+            },
+        ),
+        ("grayscale", ImageOp::Grayscale),
+    ]
+}
+
+/// The six background, tiling, binarizing and blurring variants, each with
+/// the step name its module documents.
+fn cleaning_ops() -> [(&'static str, ImageOp); 6] {
+    [
+        (
+            "remove_background",
+            ImageOp::RemoveBackground {
+                tolerance: 8,
+                color: Some("#0000ff".to_owned()),
+            },
+        ),
+        (
+            "make_tileable",
+            ImageOp::MakeTileable {
+                band: Some(1),
+                horizontal: true,
+                vertical: false,
+            },
+        ),
+        (
+            "threshold",
+            ImageOp::Threshold {
+                level: Some(128),
+                invert: false,
+            },
+        ),
+        (
+            "adaptive_threshold",
+            ImageOp::AdaptiveThreshold {
+                radius: 1,
+                offset: 15,
+                invert: false,
+            },
+        ),
+        ("blur", ImageOp::Blur { radius: 1 }),
+        (
+            "thin_stroke_filter",
+            ImageOp::ThinStrokeFilter {
+                radius: 1,
+                level: Some(128),
+                invert: false,
+            },
+        ),
+    ]
+}
+
+#[test]
+fn every_op_reaches_its_module_through_apply_ops() {
+    let ops: Vec<(&str, ImageOp)> = shape_ops()
+        .into_iter()
+        .chain(tone_ops())
+        .chain(cleaning_ops())
+        .collect();
+    assert_eq!(ops.len(), 16_usize, "one table row per ImageOp variant");
+    for (name, op) in ops {
+        let (out, report) = apply_ops(quad(), &[op])
+            .unwrap_or_else(|error| panic!("the dispatch runs {name}: {error}"));
+        assert_eq!(report.steps.len(), 1_usize, "{name} answers one step");
+        assert_eq!(report.steps[0]["op"], name, "{name} reports its name");
+        assert!(!out.pixels.is_empty(), "{name} leaves a picture");
     }
 }
 
@@ -185,20 +264,6 @@ fn perspective_correct_deserializes_and_runs_through_apply_ops() {
         out.get(1, 0),
         Some([0, 255, 0, 255]),
         "the identity warp keeps pixels"
-    );
-}
-
-#[test]
-fn the_pixel_dispatchers_reject_perspective_correct() {
-    let to_pixel = pixel_op(quad(), 2, straighten())
-        .expect_err("a warp never belongs to the pixel dispatcher");
-    assert_eq!(to_pixel.code(), "internal", "dispatch bugs are internal");
-    let to_restoration = restoration_op(quad(), 3, straighten())
-        .expect_err("a warp never belongs to the restoration dispatcher");
-    assert_eq!(
-        to_restoration.code(),
-        "internal",
-        "dispatch bugs are internal"
     );
 }
 

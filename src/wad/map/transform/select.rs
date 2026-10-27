@@ -4,17 +4,19 @@
 //! The named vertices and things are the seed, every named linedef adds its
 //! two endpoints and every named sector the endpoints of all its boundary
 //! linedefs plus, on request, the things standing in it, all judged on the
-//! untouched map; a reference that dangles contributes nothing. Index lists
-//! are checked against the map's blocks first and an expansion holding
-//! neither a vertex nor a thing is refused, so a call that reaches the
-//! transform always has something to move.
+//! untouched map; a reference that dangles contributes nothing. The sector
+//! boundary and the thing membership answer from one [`SectorIndex`] the
+//! expansion builds for itself: the sector lines and the things never
+//! rescan the linedefs. Index lists are checked against the map's blocks
+//! first and an expansion holding neither a vertex nor a thing is refused,
+//! so a call that reaches the transform always has something to move.
 
 use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
 use crate::wad::map::query::{ElementKind, check_indices};
 
-use super::super::geometry::{point_in_sector, sector_boundary};
+use super::super::geometry::SectorIndex;
 use super::super::model::{Linedef, Map};
 use super::{Selection, SelectionRequest};
 
@@ -23,9 +25,10 @@ use super::{Selection, SelectionRequest};
 /// The rules: `all` selects every vertex and thing; otherwise the named
 /// vertices and things are the seed, every named linedef adds its two
 /// endpoints, every named sector adds the endpoints of all its boundary
-/// linedefs ([`sector_boundary`]) and, when `include_things_in_sectors`,
-/// the things whose [`point_in_sector`] is one of them (judged on the
-/// untouched map). References that dangle simply do not contribute.
+/// linedefs (the [`SectorIndex`]' boundary rows) and, when
+/// `include_things_in_sectors`, the things whose indexed
+/// [`SectorIndex::point_in_sector`] is one of them (judged on the untouched
+/// map). References that dangle simply do not contribute.
 ///
 /// # Errors
 ///
@@ -47,9 +50,10 @@ pub fn expand_selection(map: &Map, request: &SelectionRequest) -> Result<Selecti
     }
     let mut things: BTreeSet<usize> = request.things.iter().copied().collect();
     if !request.sectors.is_empty() {
-        add_sector_boundaries(map, &request.sectors, &mut vertices);
+        let geometry = SectorIndex::new(map);
+        add_sector_boundaries(map, &geometry, &request.sectors, &mut vertices);
         if request.include_things_in_sectors {
-            add_sector_things(map, &request.sectors, &mut things);
+            add_sector_things(map, &geometry, &request.sectors, &mut things);
         }
     }
     refuse_empty(Selection { vertices, things })
@@ -78,20 +82,31 @@ fn add_endpoints(map: &Map, picked: Option<&Linedef>, out: &mut BTreeSet<usize>)
 }
 
 /// Add the endpoints of every boundary linedef of every sector in
-/// `sectors`.
-fn add_sector_boundaries(map: &Map, sectors: &[usize], out: &mut BTreeSet<usize>) {
+/// `sectors`, read from the prepared `geometry`' rows.
+fn add_sector_boundaries(
+    map: &Map,
+    geometry: &SectorIndex,
+    sectors: &[usize],
+    out: &mut BTreeSet<usize>,
+) {
     for sector in sectors {
-        for (linedef, _) in sector_boundary(map, *sector) {
+        for &(linedef, _) in geometry.boundary(*sector) {
             add_endpoints(map, map.linedefs.get(linedef), out);
         }
     }
 }
 
 /// Add every thing standing in one of `sectors`, judged on the map as it
-/// now is (before any transform).
-fn add_sector_things(map: &Map, sectors: &[usize], out: &mut BTreeSet<usize>) {
+/// now is (before any transform): one [`SectorIndex::point_in_sector`]
+/// per thing over the prepared `geometry`, not a free scan.
+fn add_sector_things(
+    map: &Map,
+    geometry: &SectorIndex,
+    sectors: &[usize],
+    out: &mut BTreeSet<usize>,
+) {
     for (index, object) in map.things.iter().enumerate() {
-        let containing = point_in_sector(map, i64::from(object.x), i64::from(object.y));
+        let containing = geometry.point_in_sector(i64::from(object.x), i64::from(object.y));
         if sectors.iter().any(|sector| Some(*sector) == containing) {
             out.insert(index);
         }

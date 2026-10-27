@@ -5,13 +5,15 @@
 //! [`build_lift`] folds these steps into one map edit over the
 //! [`LiftSpec`] and the platform, side and probe shapes the parent
 //! module defines; the refusal and note messages those steps report
-//! live beside them in [`super`].
+//! live beside them in [`super`]. The base-sector probe and the
+//! neighbour read answer from one [`SectorIndex`] built per call, only
+//! re-indexed when a platform paint has rebuilt the map under it.
 
 use crate::error::CyberError;
 use crate::fixed::{div_round, narrow_i64};
 use crate::geom::Pt;
 use crate::wad::map::flags::{BLOCKING, FlagFamily};
-use crate::wad::map::geometry::{neighbors, point_in_sector};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map, Sector};
 use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, apply_overlay};
 
@@ -67,13 +69,15 @@ fn platform_request(map: &Map, polygon: &[Pt], base: usize, side: &str) -> Overl
 }
 
 /// Draw a new platform: the `polygon` folded over the map as a sector
-/// copying the heights of the sector under its centre.
+/// copying the heights of the sector under its centre. The centre probe
+/// reads the `geometry` indexed by the caller before this paint.
 ///
 /// Returns the new sector's index and the paint's notes.
 fn draw_platform(
     map: &mut Map,
     polygon: &[Pt],
     side: &str,
+    geometry: &SectorIndex,
 ) -> Result<(usize, Vec<String>), CyberError> {
     if polygon.len() < MIN_PLATFORM_CORNERS {
         return Err(CyberError::invalid(
@@ -82,7 +86,9 @@ fn draw_platform(
         ));
     }
     let centre = polygon_centre(polygon);
-    let base = point_in_sector(map, centre.0, centre.1).ok_or_else(|| centre_lost(centre))?;
+    let base = geometry
+        .point_in_sector(centre.0, centre.1)
+        .ok_or_else(|| centre_lost(centre))?;
     let drawn = apply_overlay(map, &platform_request(map, polygon, base, side))?;
     let sector = drawn.sector.ok_or_else(paint_lost)?;
     Ok((sector, drawn.notes))
@@ -90,15 +96,27 @@ fn draw_platform(
 
 /// The floor the platform lowers to: the explicit `given` one, else the
 /// lowest neighbouring sector's floor.
-fn resolve_low_floor(map: &Map, sector: usize, given: Option<i32>) -> Result<i32, CyberError> {
-    given.map_or_else(|| lowest_neighbour(map, sector), Ok)
+fn resolve_low_floor(
+    map: &Map,
+    geometry: &SectorIndex,
+    sector: usize,
+    given: Option<i32>,
+) -> Result<i32, CyberError> {
+    given.map_or_else(|| lowest_neighbour(map, geometry, sector), Ok)
 }
 
-/// The lowest floor among `sector`'s neighbouring sectors.
-fn lowest_neighbour(map: &Map, sector: usize) -> Result<i32, CyberError> {
-    neighbors(map, sector)
-        .into_iter()
-        .filter_map(|index| map.sectors.get(index).map(|row| row.floor_height))
+/// The lowest floor among `sector`'s neighbouring sectors, over the
+/// [`SectorIndex`]' stored rows; a sector the index does not have (or
+/// nothing across its two-sided lines) has no neighbour to lower to.
+pub(super) fn lowest_neighbour(
+    map: &Map,
+    geometry: &SectorIndex,
+    sector: usize,
+) -> Result<i32, CyberError> {
+    geometry
+        .neighbours(sector)
+        .iter()
+        .filter_map(|index| map.sectors.get(*index).map(|row| row.floor_height))
         .min()
         .ok_or_else(|| isolated(sector))
 }
@@ -200,11 +218,12 @@ fn dress_edges(map: &mut Map, edges: &[Edge], setup: &DoorLineSetup, side: &str)
 ///
 /// The platform is either the named existing sector or the polygon
 /// painted by [`LiftPlatform::Draw`]; it lowers from its floor to
-/// [`LiftSpec::low_floor`] (default: the lowest neighbouring floor), so
-/// it must stand above that floor and at least one of its two-sided
-/// boundary edges must face a sector below it — those edges carry the
-/// [`lift_specials`] action, front-turned at the lower area. The sector
-/// is stamped with a fresh [`next_free_tag`].
+/// [`LiftSpec::low_floor`] (default: the lowest neighbouring floor, over
+/// the one [`SectorIndex`] this call builds — re-indexed once when a
+/// draw rebuilt the map), so it must stand above that floor and at least
+/// one of its two-sided boundary edges must face a sector below it —
+/// those edges carry the [`lift_specials`] action, front-turned at the
+/// lower area. The sector is stamped with a fresh [`next_free_tag`].
 ///
 /// # Errors
 ///
@@ -222,12 +241,19 @@ fn dress_edges(map: &mut Map, edges: &[Edge], setup: &DoorLineSetup, side: &str)
 /// Never: every map access is checked.
 #[inline]
 pub fn build_lift(map: &mut Map, spec: &LiftSpec) -> Result<LiftBuild, CyberError> {
+    let mut geometry = SectorIndex::new(map);
     let (platform_sector, mut notes) = match spec.platform.clone() {
         LiftPlatform::Existing(index) => {
             check_index(ElementKind::Sectors, index, map.sectors.len())?;
             (index, Vec::new())
         }
-        LiftPlatform::Draw(polygon) => draw_platform(map, &polygon, &spec.side)?,
+        LiftPlatform::Draw(polygon) => {
+            let drawn = draw_platform(map, &polygon, &spec.side, &geometry)?;
+            // The paint rebuilt every row: the platform's neighbours must
+            // be read from the map as it now stands.
+            geometry = SectorIndex::new(&*map);
+            drawn
+        }
     };
     let floor = map
         .sectors
@@ -239,7 +265,7 @@ pub fn build_lift(map: &mut Map, spec: &LiftSpec) -> Result<LiftBuild, CyberErro
                  built (server bug)"
             ))
         })?;
-    let low_floor = resolve_low_floor(map, platform_sector, spec.low_floor)?;
+    let low_floor = resolve_low_floor(map, &geometry, platform_sector, spec.low_floor)?;
     if low_floor >= floor {
         return Err(no_way_down(platform_sector, floor, low_floor));
     }

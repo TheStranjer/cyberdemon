@@ -10,19 +10,22 @@
 //! how many of a total belong to each sector: by bounding-box area,
 //! largest-remainder, ties to the lower sector index. The facings the
 //! picks carry are chosen by the sibling `facing` module; the exact
-//! measuring is done by the primitives in the parent module.
+//! measuring is done by the primitives in the parent module. Every box,
+//! centre and membership test of a run answers from the one
+//! [`SectorIndex`] its [`Read`] carries, so the grid's up-to-65 536
+//! candidates never rescan the linedefs.
 
 use alloc::vec::Vec;
 
 use crate::defs::Definitions;
 use crate::geom::Pt;
-use crate::wad::map::geometry::sector_bbox;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::Map;
 
 use super::facing::{Facing, FacingRun};
 use super::{
-    Area, End, MAX_AXIS_POINTS, Occupant, axis_points, distance_squared, keeps_distance, occupants,
-    wall_segments, wide,
+    Area, End, MAX_AXIS_POINTS, Occupant, Read, axis_points, distance_squared, keeps_distance,
+    occupants, wall_segments, wide,
 };
 
 /// The smallest grid spacing [`distribute`] ever lays, map units.
@@ -71,8 +74,10 @@ pub struct Distribution {
 
 /// The shared state of one [`distribute`] run.
 struct Run<'ctx> {
-    /// The map the areas are read on.
-    map: &'ctx Map,
+    /// The map the areas are read on, with its sector geometry indexed
+    /// once: every area box, centre and membership test of the whole run
+    /// answers from this one index.
+    read: Read<'ctx>,
     /// The distance every candidate keeps from walls and bodies.
     clearance: i64,
     /// The wall segments candidates are measured against.
@@ -88,10 +93,11 @@ struct Run<'ctx> {
 }
 
 impl<'ctx> Run<'ctx> {
-    /// Prepares the run: walls, blockers and facing read off `map`.
+    /// Prepares the run: the index, walls, blockers and facing read off
+    /// `map`.
     fn new(map: &'ctx Map, definitions: &Definitions, spec: &DistributeSpec) -> Self {
         Self {
-            map,
+            read: Read::new(map),
             clearance: spec.clearance,
             walls: wall_segments(map),
             blockers: occupants(map, definitions, spec.unknown_radius),
@@ -106,9 +112,10 @@ impl<'ctx> Run<'ctx> {
         self.clearance.saturating_mul(2_i64).max(MIN_SPACING)
     }
 
-    /// Whether `at` is a usable candidate of `area`.
+    /// Whether `at` is a usable candidate of `area`: membership answers
+    /// from the run's one index, never a fresh scan.
     fn accepts(&self, area: &Area, at: Pt) -> bool {
-        area.contains(self.map, at)
+        area.contains_in(&self.read.index, at)
             && self.wall_clear(at)
             && self.blockers.iter().all(|occupant| {
                 let need = i128::from(self.clearance.saturating_add(occupant.radius));
@@ -126,11 +133,12 @@ impl<'ctx> Run<'ctx> {
 
     /// The usable candidates of `area`, ordered by distance from the area
     /// centre (ties by `y` then `x`); empty when the area bounds nothing.
+    /// The grid spread's box and centre read the run's one index.
     fn candidates(&self, area: &Area) -> Vec<Pt> {
-        let Some((min_x, min_y, max_x, max_y)) = area.bbox(self.map) else {
+        let Some((min_x, min_y, max_x, max_y)) = area.bbox_in(&self.read.index) else {
             return Vec::new();
         };
-        let Some(centre) = area.centre(self.map) else {
+        let Some(centre) = area.centre_in(&self.read.index) else {
             return Vec::new();
         };
         let (rows, columns) = centred_axes((min_x, max_x, min_y, max_y), self.spacing());
@@ -163,7 +171,7 @@ impl<'ctx> Run<'ctx> {
             return;
         }
         let kept = self.candidates(area);
-        let centre = area.centre(self.map).unwrap_or_default();
+        let centre = area.centre_in(&self.read.index).unwrap_or_default();
         let taken = spread(&kept, need);
         if taken.len() < need {
             let label = area.label();
@@ -239,9 +247,11 @@ pub fn distribute(map: &Map, definitions: &Definitions, spec: &DistributeSpec) -
 }
 
 /// The bounding-box area of `sector` in square map units, `0` when the
-/// sector bounds nothing. Exact in `i128`.
-pub(super) fn sector_area(map: &Map, sector: usize) -> i128 {
-    let Some((min_x, min_y, max_x, max_y)) = sector_bbox(map, sector) else {
+/// sector bounds nothing. Exact in `i128`. The box is the [`SectorIndex`]'
+/// stored row: a whole [`split_proportional`] shares the one index it
+/// was built with.
+pub(super) fn sector_area(index: &SectorIndex, sector: usize) -> i128 {
+    let Some((min_x, min_y, max_x, max_y)) = index.bbox(sector) else {
         return 0_i128;
     };
     let width = i128::from(max_x)
@@ -269,13 +279,15 @@ struct Share {
 /// share, then the sectors with the biggest dropped remainders get one
 /// more each, ties going to the lower sector index. Sectors that bound
 /// nothing split the count evenly. The result is parallel to `sectors`.
+/// The boxes come from one [`SectorIndex`] built here.
 #[must_use]
 #[inline]
 pub fn split_proportional(map: &Map, sectors: &[usize], count: usize) -> Vec<usize> {
     let wanted = i128::try_from(count).unwrap_or_default();
+    let index = SectorIndex::new(map);
     let areas: Vec<i128> = sectors
         .iter()
-        .map(|&sector| sector_area(map, sector))
+        .map(|&sector| sector_area(&index, sector))
         .collect();
     let counted = areas
         .iter()

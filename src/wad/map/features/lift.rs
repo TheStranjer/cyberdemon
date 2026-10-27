@@ -9,7 +9,9 @@
 //! from the sector under its
 //! centre) — resolves the floor it lowers to (the explicit
 //! [`LiftSpec::low_floor`], else the lowest neighbouring floor found
-//! through [`neighbors`](crate::wad::map::geometry::neighbors)), stamps the
+//! through
+//! [`SectorIndex::neighbours`](crate::wad::map::geometry::SectorIndex::neighbours)),
+//! stamps the
 //! platform with a fresh [`next_free_tag`](super::doors::next_free_tag), selects
 //! every boundary edge that faces a lower
 //! sector and turns each one so its front looks down at the player who

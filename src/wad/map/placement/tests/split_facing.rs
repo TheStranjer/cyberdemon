@@ -9,6 +9,7 @@ use crate::fixed::midpoint;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::Thing;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::placement::distribute::{distribute, sector_area};
 use crate::wad::map::placement::facing::{bearing, next_u32};
 use crate::wad::map::placement::{
@@ -20,7 +21,7 @@ use super::{angles, doom_definitions, map_name, spec, square_rooms};
 #[test]
 fn proportional_needs_follow_the_bounding_box_areas() {
     let map = square_rooms(&[(0_i32, 100_i32), (200_i32, 400_i32)]);
-    assert_eq!(sector_area(&map, 0), 10_000_i128);
+    assert_eq!(sector_area(&SectorIndex::new(&map), 0), 10_000_i128);
     assert_eq!(
         split_proportional(&map, &[0_usize, 1], 5_usize),
         vec![1_usize, 4_usize],

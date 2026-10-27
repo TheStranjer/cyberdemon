@@ -23,6 +23,13 @@
 //! below; the engine's tests are the private `tests` module, its fixture
 //! builders shared, the clearance cases and the split-and-facing cases one
 //! topic file apiece.
+//!
+//! Every geometry read goes through one [`SectorIndex`] (CD-290a made the
+//! free geometry functions exactly that): the run carries a map with the
+//! index built once for the operation, and a whole run's containment, box
+//! and boundary checks answer from it instead of rescanning the linedefs
+//! per point. The free [`fits`] and [`boundary_clear`] helpers keep their
+//! signatures and index the map for their single answer.
 
 mod distribute;
 mod facing;
@@ -38,7 +45,7 @@ use crate::geom::Pt;
 use crate::geom::segment::distance_point_segment;
 use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{FlagFamily, blocks_players};
-use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map};
 
 /// The blocking radius assumed for a type the definitions do not list,
@@ -106,22 +113,69 @@ pub fn line_clear(map: &Map, linedef: usize, at: Pt, clearance: i64) -> bool {
 /// Whether every boundary line of `sector` keeps at least `clearance`
 /// map units from `at`; lines with unresolvable endpoints never bound
 /// anything and stay clear.
+///
+/// The single-answer helper: it indexes the map for this one check. A
+/// run that measures many points holds one [`SectorIndex`] and reads its
+/// [`SectorIndex::boundary`] once per check.
 #[must_use]
 #[inline]
 pub fn boundary_clear(map: &Map, sector: usize, at: Pt, clearance: i64) -> bool {
-    sector_boundary(map, sector)
-        .iter()
-        .all(|&(index, _)| line_clear(map, index, at, clearance))
+    Read::new(map).boundary_clear(sector, at, clearance)
 }
 
 /// Whether a thing with this `clearance` may stand at `at` in `sector`:
 /// the sector contains the point and every boundary line of the sector
 /// keeps at least `clearance` map units of distance from it.
+///
+/// The single-answer helper: one [`SectorIndex`] built here carries both
+/// reads; a run that measures many points indexes the map once for the
+/// whole operation.
 #[must_use]
 #[inline]
 pub fn fits(map: &Map, sector: usize, at: Pt, clearance: i64) -> bool {
-    let (x, y) = at;
-    point_in_sector(map, x, y) == Some(sector) && boundary_clear(map, sector, at, clearance)
+    Read::new(map).fits(sector, at, clearance)
+}
+
+/// One placement operation's map reads: the map with its sector geometry
+/// indexed once. Every containment, box and boundary check of a whole
+/// run answers from the stored [`SectorIndex`] instead of rescanning the
+/// linedefs per point; the free [`fits`] and [`boundary_clear`] helpers
+/// wrap one [`Read`] for their single answer.
+pub(super) struct Read<'map> {
+    /// The map being read.
+    map: &'map Map,
+    /// Its per-sector geometry, built once for the operation.
+    index: SectorIndex,
+}
+
+impl<'map> Read<'map> {
+    /// Index `map` for one placement operation.
+    pub(super) fn new(map: &'map Map) -> Self {
+        Self {
+            map,
+            index: SectorIndex::new(map),
+        }
+    }
+
+    /// Whether every boundary line of `sector` keeps at least
+    /// `clearance` map units from `at`, over the stored index's
+    /// boundary rows.
+    #[must_use]
+    pub(super) fn boundary_clear(&self, sector: usize, at: Pt, clearance: i64) -> bool {
+        self.index
+            .boundary(sector)
+            .iter()
+            .all(|&(line, _)| line_clear(self.map, line, at, clearance))
+    }
+
+    /// [`fits`]' answer from the stored index: the containment read and
+    /// the boundary read share the one pass over the linedefs.
+    #[must_use]
+    pub(super) fn fits(&self, sector: usize, at: Pt, clearance: i64) -> bool {
+        let (x, y) = at;
+        self.index.point_in_sector(x, y) == Some(sector)
+            && self.boundary_clear(sector, at, clearance)
+    }
 }
 
 /// The grid values from `start` to `last` inclusive, `step` apart,
@@ -170,13 +224,22 @@ impl Area {
     /// The area's bounding box `(min_x, min_y, max_x, max_y)` in map
     /// units, `None` when it bounds nothing (a sector with no resolvable
     /// boundary).
+    ///
+    /// The single-answer helper: a sector's box comes from a
+    /// [`SectorIndex`] built here. A run measures its areas against one
+    /// index, whose stored rows answer every box read.
     #[must_use]
     #[inline]
     pub fn bbox(&self, map: &Map) -> Option<(i64, i64, i64, i64)> {
+        self.bbox_in(&SectorIndex::new(map))
+    }
+
+    /// [`Self::bbox`] over a prepared `index`: a sector answers from its
+    /// stored box, the open shapes from their own coordinates.
+    #[must_use]
+    pub(super) fn bbox_in(&self, index: &SectorIndex) -> Option<(i64, i64, i64, i64)> {
         match *self {
-            Self::Sector(sector) => sector_bbox(map, sector).map(|(x1, y1, x2, y2)| {
-                (i64::from(x1), i64::from(y1), i64::from(x2), i64::from(y2))
-            }),
+            Self::Sector(sector) => index.bbox(sector).map(widen_box),
             Self::Rect {
                 min_x,
                 min_y,
@@ -197,20 +260,39 @@ impl Area {
     #[must_use]
     #[inline]
     pub fn centre(&self, map: &Map) -> Option<Pt> {
+        self.centre_in(&SectorIndex::new(map))
+    }
+
+    /// [`Self::centre`] over a prepared `index`.
+    #[must_use]
+    pub(super) fn centre_in(&self, index: &SectorIndex) -> Option<Pt> {
         match *self {
             Self::Circle { centre, .. } => Some(centre),
-            Self::Sector(_) | Self::Rect { .. } => self.bbox(map).map(box_centre),
+            Self::Sector(_) | Self::Rect { .. } => self.bbox_in(index).map(box_centre),
         }
     }
 
     /// Whether the point lies inside the area. A sector tests its own
     /// containment; the open shapes additionally require the point to sit
     /// in *some* sector of the map, so nothing lands in the void.
+    ///
+    /// The single-answer helper: the containment comes from a
+    /// [`SectorIndex`] built here. A run measures its candidates against
+    /// one index, whose stored rows answer every membership test.
     #[must_use]
     #[inline]
     pub fn contains(&self, map: &Map, at: Pt) -> bool {
+        self.contains_in(&SectorIndex::new(map), at)
+    }
+
+    /// [`Self::contains`] over a prepared `index`: every sector
+    /// containment - the own-sector arm and the open shapes'
+    /// sits-in-some-sector arm alike - hits
+    /// [`SectorIndex::point_in_sector`], never a fresh scan.
+    #[must_use]
+    pub(super) fn contains_in(&self, index: &SectorIndex, at: Pt) -> bool {
         match *self {
-            Self::Sector(sector) => point_in_sector(map, at.0, at.1) == Some(sector),
+            Self::Sector(sector) => index.point_in_sector(at.0, at.1) == Some(sector),
             Self::Rect {
                 min_x,
                 min_y,
@@ -218,10 +300,10 @@ impl Area {
                 max_y,
             } => {
                 let inside = at.0 >= min_x && at.0 <= max_x && at.1 >= min_y && at.1 <= max_y;
-                inside && point_in_sector(map, at.0, at.1).is_some()
+                inside && index.point_in_sector(at.0, at.1).is_some()
             }
             Self::Circle { centre, radius } => {
-                within_circle(centre, radius, at) && point_in_sector(map, at.0, at.1).is_some()
+                within_circle(centre, radius, at) && index.point_in_sector(at.0, at.1).is_some()
             }
         }
     }
@@ -244,6 +326,13 @@ impl Area {
 #[inline]
 fn box_centre((min_x, min_y, max_x, max_y): (i64, i64, i64, i64)) -> Pt {
     (midpoint(min_x, max_x), midpoint(min_y, max_y))
+}
+
+/// A sector's stored `i32` bounding box, widened to the `i64` space the
+/// areas measure in.
+#[must_use]
+fn widen_box((x1, y1, x2, y2): (i32, i32, i32, i32)) -> (i64, i64, i64, i64) {
+    (i64::from(x1), i64::from(y1), i64::from(x2), i64::from(y2))
 }
 
 /// Whether `at` sits within `radius` of `centre`, exact in `i128`.

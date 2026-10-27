@@ -1,5 +1,6 @@
 //! The per-map read: the one `impl` of [`Describe`]. [`Describe::new`]
-//! folds the map's flag family, its [`FeatureTargets`] and its
+//! folds the map's flag family, its [`SectorIndex`], each thing's home
+//! sector resolved through that index, its [`FeatureTargets`] and its
 //! [`Skill::Medium`] [`Playability`] walk once, [`Describe::sector`]
 //! answers one [`SectorFacts`] row from them and [`Describe::summary`] the
 //! whole [`MapOverview`].
@@ -24,7 +25,7 @@ use alloc::vec::Vec;
 use crate::defs::{Category, Definitions};
 use crate::wad::map::consts::is_sky_flat;
 use crate::wad::map::flags::{BLOCKING, Skill};
-use crate::wad::map::geometry::{point_in_sector, sector_bbox};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::playability::{
     analyze_playability, feature_targets, start_thing, stuck_things,
@@ -66,17 +67,23 @@ const ITEM_GROUPS: [Category; 5] = [
 
 impl<'map> Describe<'map> {
     /// Fold `map` for describing against the game definitions `defs` and
-    /// the sky flat `sky_flat`: read its own flag family once, then the
-    /// feature targets and the [`Skill::Medium`] playability walk over it.
+    /// the sky flat `sky_flat`: read its own flag family once, index its
+    /// sector geometry once, resolve every thing's home sector once
+    /// through that index, then the feature targets and the
+    /// [`Skill::Medium`] playability walk over it.
     #[must_use]
     #[inline]
     pub fn new(map: &'map Map, defs: &'map Definitions, sky_flat: &'static str) -> Self {
         let family = map.flag_family();
+        let index = SectorIndex::new(map);
+        let homes = thing_homes(map, &index);
         Self {
             map,
             defs,
             family,
             sky_flat,
+            index,
+            homes,
             targets: feature_targets(map, family),
             play: analyze_playability(map, family, Skill::Medium),
         }
@@ -92,13 +99,13 @@ impl<'map> Describe<'map> {
     #[inline]
     pub fn sector(&self, sector: usize) -> Option<SectorFacts> {
         let row = self.map.sectors.get(sector)?;
-        let edges = boundary_edges(self.map, sector);
+        let edges = boundary_edges(self.map, &self.index, sector);
         let area = shoelace_area(&edges);
         let neighbours = self.build_neighbours(sector, row.floor_height);
         Some(SectorFacts {
             sector,
             area,
-            bbox: sector_bbox(self.map, sector).map(<[i32; 4]>::from),
+            bbox: self.index.bbox(sector).map(<[i32; 4]>::from),
             center: label_point(&edges),
             floor: row.floor_height,
             ceiling: row.ceiling_height,
@@ -109,8 +116,8 @@ impl<'map> Describe<'map> {
             sky: is_sky_flat(&row.ceiling_flat, self.sky_flat),
             special: special_info(row.special, self.defs),
             tag: row.tag,
-            wall_textures: wall_textures(self.map, sector),
-            things: thing_counts(self.map, self.defs, sector),
+            wall_textures: wall_textures(self.map, &self.index, sector),
+            things: thing_counts(self.map, self.defs, &self.homes, sector),
             roles: self.collect_roles(sector, area, &neighbours),
             neighbours,
         })
@@ -120,7 +127,7 @@ impl<'map> Describe<'map> {
     /// lines, in sector order, each with the `via` its boundary and the
     /// sector across it answer with.
     fn build_neighbours(&self, sector: usize, own_floor: i32) -> Vec<Neighbour> {
-        neighbour_groups(self.map, sector)
+        neighbour_groups(self.map, &self.index, sector)
             .into_iter()
             .map(|(other, lines)| {
                 let their_floor = self
@@ -181,7 +188,7 @@ impl<'map> Describe<'map> {
             return false;
         };
         row.ceiling_height.saturating_sub(row.floor_height) <= CLOSED_BAND_HEIGHT
-            && neighbour_groups(self.map, sector).len() >= 2
+            && neighbour_groups(self.map, &self.index, sector).len() >= 2
     }
 
     /// The light across the blocking boundary between `own` and `other`:
@@ -221,7 +228,7 @@ impl<'map> Describe<'map> {
             || self.map.side_sector(line.back) == Some(sector)
             || (walk_over_exit(self.family, line)
                 && line_midpoint(self.map, line)
-                    .is_some_and(|(x, y)| point_in_sector(self.map, x, y) == Some(sector)))
+                    .is_some_and(|(x, y)| self.index.point_in_sector(x, y) == Some(sector)))
     }
 
     /// The sector's role names: lowercase, sorted and deduplicated, as
@@ -278,13 +285,16 @@ impl<'map> Describe<'map> {
     /// area, descending, ties by index.
     fn largest_sectors(&self) -> Vec<usize> {
         let mut sized: Vec<(usize, u64)> = (0..self.map.sectors.len())
-            .map(|index| (index, shoelace_area(&boundary_edges(self.map, index))))
+            .map(|sector| {
+                let edges = boundary_edges(self.map, &self.index, sector);
+                (sector, shoelace_area(&edges))
+            })
             .collect();
         sized.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
         sized
             .into_iter()
             .take(LARGEST_ROWS)
-            .map(|(index, _)| index)
+            .map(|(sector, _)| sector)
             .collect()
     }
 
@@ -319,4 +329,16 @@ impl<'map> Describe<'map> {
             },
         }
     }
+}
+
+/// The sector each of `map`'s things stands in, resolved once through
+/// `index`: the same answer the free [`point_in_sector`] wrapper gives per
+/// thing, `None` for a thing the map's sectors hold nowhere.
+///
+/// [`point_in_sector`]: crate::wad::map::geometry::point_in_sector
+fn thing_homes(map: &Map, index: &SectorIndex) -> Vec<Option<usize>> {
+    map.things
+        .iter()
+        .map(|row| index.point_in_sector(i64::from(row.x), i64::from(row.y)))
+        .collect()
 }

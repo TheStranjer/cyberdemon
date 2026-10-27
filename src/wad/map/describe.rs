@@ -11,10 +11,11 @@
 //! definition name), what it *is* ([`SectorFacts::roles`]) and what lies
 //! next to it ([`SectorFacts::neighbours`]: every sector across its
 //! two-sided boundary lines, with the `via` naming how a player gets
-//! through). The per-map reads those last two fields need —
-//! [`feature_targets`] and [`analyze_playability`] at [`Skill::Medium`] —
-//! happen once per [`Describe`]; [`sector_facts`] is the one-sector
-//! convenience wrapper over it.
+//! through). The per-map reads a row needs — the [`SectorIndex`] geometry
+//! and each thing's home sector, [`feature_targets`], and
+//! [`analyze_playability`] at [`Skill::Medium`] — happen once per
+//! [`Describe`]; [`sector_facts`] is the one-sector convenience wrapper
+//! over it.
 //!
 //! The roles, all lowercase, sorted and deduplicated: `door` (a door
 //! action raises the sector's ceiling, or it is a closed band no more
@@ -83,6 +84,7 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use super::flags::FlagFamily;
+use super::geometry::SectorIndex;
 use super::model::Map;
 use super::playability::{ExitInfo, FeatureTargets, KeyInfo, LockInfo, Playability, Teleporter};
 use super::stats::ElementCounts;
@@ -309,6 +311,9 @@ pub struct MapOverview {
 /// level-end actions work on, so [`Describe::new`] folds the flag family,
 /// [`feature_targets`] and [`analyze_playability`] once and every
 /// [`Describe::sector`] call answers from them; nothing is walked again.
+/// The boundary, box and point reads come from one [`SectorIndex`] folded
+/// in [`Describe::new`] too, alongside each thing's home sector resolved
+/// through it once, so no per-row call rescans the map.
 /// [`Describe::summary`] folds the same reads, plus one stuck-test pass,
 /// into the map-wide [`MapOverview`].
 ///
@@ -325,6 +330,13 @@ pub struct Describe<'map> {
     /// The sky flat of the caller's game ([`crate::wad::game::sky_flat`]):
     /// the ceiling name that reads as the `sky` field and role.
     sky_flat: &'static str,
+    /// The map's per-sector geometry, indexed once: the boundary, box and
+    /// point reads every row answers from.
+    index: SectorIndex,
+    /// Each thing's home sector, resolved once through
+    /// [`SectorIndex::point_in_sector`]: each thing's stored `x`/`y`
+    /// point's holder, `None` for a thing the map holds nowhere.
+    homes: Vec<Option<usize>>,
     /// The sectors and lines the map's door, lift and teleport actions
     /// work on, read once.
     targets: FeatureTargets,
@@ -339,10 +351,10 @@ pub struct Describe<'map> {
 /// things' types through the game definitions `defs` and reading its
 /// ceiling against the sky flat `sky_flat`.
 ///
-/// A thin wrapper over [`Describe`]: the per-map feature and playability
-/// reads are folded for this one answer, so a caller describing a whole
-/// map holds one [`Describe`] instead. `None` when the map holds no
-/// sector with that index.
+/// A thin wrapper over [`Describe`]: the per-map geometry, feature and
+/// playability reads are folded for this one answer, so a caller
+/// describing a whole map holds one [`Describe`] instead. `None` when the
+/// map holds no sector with that index.
 #[must_use]
 #[inline]
 pub fn sector_facts(

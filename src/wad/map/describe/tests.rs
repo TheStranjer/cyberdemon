@@ -5,10 +5,13 @@
 //! every topic asks of a described map.
 //!
 //! [`plans`] adds the plan-built fixtures, [`facts`] the per-sector row,
-//! [`neighbours`] the boundary readings, [`roles`] the role names and
-//! [`overview`] the whole-map summary.
+//! [`neighbours`] the boundary readings, [`roles`] the role names,
+//! [`overview`] the whole-map summary and [`index`] the one stored
+//! [`SectorIndex`](crate::wad::map::geometry::SectorIndex) every row
+//! answers from, checked against the free-function wrappers.
 
 mod facts;
+mod index;
 mod neighbours;
 mod overview;
 mod plans;

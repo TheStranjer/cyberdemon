@@ -4,11 +4,15 @@
 //! [`MapOverview`]'s top rows and the [`exit_reachable`], [`start_stuck`]
 //! and [`overview_summary`] readings of the playable answer — beside the
 //! per-sector folds one [`SectorFacts`] row carries: [`special_info`],
-//! [`wall_textures`] and [`thing_counts`].
+//! [`wall_textures`] and [`thing_counts`]. The per-sector geometry these
+//! folds walk is not measured here: [`wall_textures`] reads its boundary
+//! pairs off the [`SectorIndex`] `Describe` folds once, and
+//! [`thing_counts`] counts off the thing homes resolved once through it.
 //!
-//! Every pass here is a plain fold over a [`Map`] and the passed
-//! [`Definitions`]: it walks stored rows and answers names and counts, and
-//! never measures geometry nor reads the map's actions.
+//! Every pass here is a plain fold over a [`Map`], its folded index or
+//! homes, and the passed [`Definitions`]: it walks stored rows and answers
+//! names and counts, and never measures geometry nor reads the map's
+//! actions.
 //!
 
 use alloc::collections::BTreeMap;
@@ -19,7 +23,7 @@ use alloc::vec::Vec;
 
 use crate::defs::{Category, Definitions, ThingDef};
 use crate::wad::map::consts::{NO_TEXTURE, PLAYER_START_TYPES};
-use crate::wad::map::geometry::{point_in_sector, sector_boundary};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::Map;
 use crate::wad::map::playability::{Playability, Stuck, StuckReason};
 use crate::wad::map::stats::ElementCounts;
@@ -180,14 +184,19 @@ pub(super) fn special_info(value: i32, defs: &Definitions) -> Option<SpecialInfo
 /// The texture tally of the sides opening into `sector`: for every
 /// boundary line, each of its two sides whose own sector resolves to
 /// `sector` contributes its upper, lower and middle names; `"-"` never
-/// counts and a dangling side reference contributes nothing.
-pub(super) fn wall_textures(map: &Map, sector: usize) -> BTreeMap<String, u32> {
+/// counts and a dangling side reference contributes nothing. The boundary
+/// pairs come from `index`, threaded in so the whole map is indexed once.
+pub(super) fn wall_textures(
+    map: &Map,
+    index: &SectorIndex,
+    sector: usize,
+) -> BTreeMap<String, u32> {
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-    for (index, _) in sector_boundary(map, sector) {
-        let Some(line) = map.linedefs.get(index) else {
+    for &(line, _) in index.boundary(sector) {
+        let Some(definition) = map.linedefs.get(line) else {
             continue;
         };
-        for side in [line.front, line.back].into_iter().flatten() {
+        for side in [definition.front, definition.back].into_iter().flatten() {
             count_side(&mut counts, map, side, sector);
         }
     }
@@ -217,12 +226,20 @@ fn thing_name(defs: &Definitions, kind: i32) -> String {
 
 /// Every thing that stands in `sector` - skill-independent, whatever its
 /// presence bits say - counted by definition name and sorted by count
-/// descending, then by name ascending.
-pub(super) fn thing_counts(map: &Map, defs: &Definitions, sector: usize) -> Vec<ThingCount> {
+/// descending, then by name ascending. `homes` is each thing's sector,
+/// resolved once through the read's [`SectorIndex`]: the same answer a
+/// per-thing [`point_in_sector`] call gives.
+///
+/// [`point_in_sector`]: crate::wad::map::geometry::point_in_sector
+pub(super) fn thing_counts(
+    map: &Map,
+    defs: &Definitions,
+    homes: &[Option<usize>],
+    sector: usize,
+) -> Vec<ThingCount> {
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-    for row in &map.things {
-        let at = point_in_sector(map, i64::from(row.x), i64::from(row.y));
-        if at != Some(sector) {
+    for (row, home) in map.things.iter().zip(homes) {
+        if *home != Some(sector) {
             continue;
         }
         bump(&mut counts, &thing_name(defs, row.kind));

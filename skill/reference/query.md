@@ -76,7 +76,7 @@ a one-sided line, a thing in the void) it matches **nothing**, `ne` and
 | field | reads |
 |-------|-------|
 | `index`, `v1`, `v2` | position and endpoint vertex indices |
-| `flags` | with `has`, a name from the map's family table: `blocking`, `blockmonsters`, `twosided`, `secret`, `mapped`, ... and in the `Hexen` family also `playercross`, `playeruse`, `repeatspecial`, ... |
+| `flags` | with `has`, a name from the map's family table: `blocking`, `blockmonsters`, `twosided`, `secret`, `mapped`, ... in the `Doom` family also `passuse`, `blocklandmonsters`, `blockplayers`, and in the `Hexen` family also `playercross`, `playeruse`, `repeatspecial`, ... |
 | `special` | line action number |
 | `tag` (`Doom` family) / `arg0..arg4` (`Hexen` family) | trigger tag / script arguments |
 | `front_sector*` / `back_sector*` | sectors the resolvable sides open into |
@@ -268,9 +268,10 @@ they are `invalid_argument`. The result is the current bits with the
 clear names off and the set names on: **a bit named on both ends ends up
 set**. `Doom`-family linedefs: `blocking`, `blockmonsters`, `twosided`,
 `dontpegtop`, `dontpegbottom`, `secret`, `blocksound`, `dontdraw`,
-`mapped`, `passuse`. `Hexen`-family linedefs keep the shared bits, add
-`repeatspecial`, `monsteractivate`, `blockplayers`, `blockeverything` and
-the six activation names (`playercross`, `playeruse`, `monstercross`,
+`mapped`, `passuse` and `MBF21`'s `blocklandmonsters` (4096) and
+`blockplayers` (8192). `Hexen`-family linedefs keep the shared bits, add
+`repeatspecial`, `monsteractivate`, `blockplayers` (16384), `blockeverything` and the six activation names
+(`playercross`, `playeruse`, `monstercross`,
 `impact`, `playerpush`, `missilecross`), and carry no `passuse`.
 `Doom`-family things: `easy`, `medium`, `hard`, `ambush`, `notsingle`,
 `notdm`, `notcoop`, `friend`; `Hexen`-family things: `easy`, `medium`,

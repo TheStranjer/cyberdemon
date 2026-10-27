@@ -7,7 +7,8 @@ use alloc::vec;
 use super::super::{BlockerReason, KeyColor, KeyInfo, LockInfo, analyze_playability, blockers};
 use crate::wad::map::common::fixtures::spawn;
 use crate::wad::map::flags::{
-    BLOCK_MONSTERS, BLOCKING, FlagFamily, HEXEN_BLOCK_PLAYERS, PLAYER_USE_BITS, Skill, TWO_SIDED,
+    BLOCK_MONSTERS, BLOCKING, DOOM_BLOCK_LAND_MONSTERS, DOOM_BLOCK_PLAYERS, FlagFamily,
+    HEXEN_BLOCK_PLAYERS, PLAYER_USE_BITS, Skill, TWO_SIDED,
 };
 
 use super::{
@@ -101,6 +102,44 @@ fn the_blockplayers_bit_is_a_hexen_wall_and_a_doom_nop() {
         hexen.reachable,
         sectors(&[0]),
         "and means blockplayers to the Hexen ones"
+    );
+}
+
+#[test]
+fn an_mbf21_blockplayers_line_stops_a_doom_walk() {
+    let mut map = hall(&[cell(0_i32), cell(0_i32)]);
+    wire(&mut map, 0, (0_i32, 0_i32, TWO_SIDED | DOOM_BLOCK_PLAYERS));
+    let found = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);
+    assert_eq!(
+        found.reachable,
+        sectors(&[0]),
+        "MBF21's blockplayers bit is a wall to a Doom walk"
+    );
+    assert_eq!(
+        blockers(&map, FlagFamily::Doom, &found)
+            .first()
+            .map(|blocker| blocker.reason),
+        Some(BlockerReason::Impassable),
+        "and the blocker says so"
+    );
+    wire(
+        &mut map,
+        0,
+        (0_i32, 0_i32, TWO_SIDED | DOOM_BLOCK_LAND_MONSTERS),
+    );
+    let land = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);
+    assert_eq!(
+        land.reachable,
+        sectors(&[0, 1]),
+        "while blocklandmonsters holds walking monsters, not the player"
+    );
+    let mut at_hexen = map;
+    hexen_start(&mut at_hexen);
+    let hexen = analyze_playability(&at_hexen, FlagFamily::Hexen, Skill::Medium);
+    assert_eq!(
+        hexen.reachable,
+        sectors(&[0, 1]),
+        "and bit 12 is nobody's player block in the Hexen family"
     );
 }
 

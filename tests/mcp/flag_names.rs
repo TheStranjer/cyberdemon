@@ -28,6 +28,8 @@ mod tests {
         "BLOCKING",
         "BLOCK_MONSTERS",
         "BLOCK_SOUND",
+        "DOOM_BLOCK_LAND_MONSTERS",
+        "DOOM_BLOCK_PLAYERS",
         "DONT_DRAW",
         "DONT_PEG_BOTTOM",
         "DONT_PEG_TOP",

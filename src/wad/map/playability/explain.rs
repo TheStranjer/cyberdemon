@@ -32,8 +32,10 @@ use crate::wad::map::model::Map;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "reason")]
 pub enum BlockerReason {
-    /// The line carries the blocking flag (or a `Hexen` player-keeping bit):
-    /// nothing gets through, whatever the heights say.
+    /// The line carries the blocking flag (or its own family's
+    /// player-keeping bit: `Hexen`'s `blockplayers`/`blockeverything`,
+    /// `Doom`'s `MBF21` `blockplayers`): nothing gets through, whatever
+    /// the heights say.
     Impassable,
     /// The line is shorter than a player is wide, so the opening fits
     /// nobody.

@@ -80,7 +80,8 @@ all share one contract, and each result carries the fragment
   and on the element kind:
   - `linedef`, `Doom` family: `blocking`, `blockmonsters`, `twosided`,
     `dontpegtop`, `dontpegbottom`, `secret`, `blocksound`, `dontdraw`,
-    `mapped`, `passuse`;
+    `mapped`, `passuse`, `blocklandmonsters` (4096) and `blockplayers`
+    (8192) — the last two are `MBF21`'s bits;
   - `linedef`, `Hexen` family: `blocking`, `blockmonsters`, `twosided`,
     `dontpegtop`, `dontpegbottom`, `secret`, `blocksound`, `dontdraw`,
     `mapped`, `repeatspecial`, `playercross`, `playeruse`,

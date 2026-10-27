@@ -14,7 +14,7 @@ use crate::wad::archive::Lump;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::{lump, marker, name, two_room_map};
-use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::flags::{DOOM_BLOCK_LAND_MONSTERS, DOOM_BLOCK_PLAYERS, FlagFamily};
 use crate::wad::map::udmf_map::{read_udmf_map, write_udmf_map};
 use crate::wad::udmf::UdmfValue;
 
@@ -151,13 +151,13 @@ fn the_doom_family_decodes_every_linedef_and_thing_boolean() {
         " id = 66; arg0 = 66;",
         " blocking = true; blockmonsters = true; twosided = true; dontpegtop = true;",
         " dontpegbottom = true; secret = true; blocksound = true; dontdraw = true;",
-        " mapped = true; passuse = true; }",
+        " mapped = true; passuse = true; blocklandmonsters = true; blockplayers = true; }",
         "thing { x = 8; y = 16; type = 5; height = 24; angle = 90; id = 7; special = 2;",
         " arg1 = 3; skill1 = true; skill3 = true; skill5 = true; ambush = true;",
         " friend = true; }",
     ));
     let linedef = map.linedefs.first().expect("one linedef");
-    assert_eq!(linedef.flags, 0x3FF, "the ten Doom line bits");
+    assert_eq!(linedef.flags, 0x33FF, "the twelve Doom line bits");
     assert_eq!(linedef.tag, 66_i32, "the Doom tag rides on arg0");
     assert_eq!(
         linedef.args.first().copied(),
@@ -178,6 +178,30 @@ fn the_doom_family_decodes_every_linedef_and_thing_boolean() {
     assert_eq!(spawn.args.get(1).copied(), Some(3_i32), "thing args decode");
     let again = read_ok(&textmap_of(&write_udmf_map(&map).expect("writable")));
     assert_eq!(again, map, "the spelled flags survive a write cycle");
+}
+
+#[test]
+fn a_doomish_namespace_round_trips_the_mbf21_bits_as_booleans() {
+    for namespace in ["doom", "heretic", "strife"] {
+        let map = read_ok(&format!(
+            "namespace = \"{namespace}\";\
+             linedef {{ v1 = 0; v2 = 1; sidefront = 0;\
+             blocklandmonsters = true; blockplayers = true; }}"
+        ));
+        let linedef = map.linedefs.first().expect("one linedef");
+        assert_eq!(
+            linedef.flags,
+            DOOM_BLOCK_LAND_MONSTERS | DOOM_BLOCK_PLAYERS,
+            "'{namespace}' reads both MBF21 booleans into the Doom family's bits"
+        );
+        assert!(linedef.extra.is_empty(), "and keeps neither as a field");
+        let text = textmap_of(&write_udmf_map(&map).expect("writable"));
+        assert!(
+            text.contains("blocklandmonsters = true;") && text.contains("blockplayers = true;"),
+            "'{namespace}' writes both names again: {text}"
+        );
+        assert_eq!(read_ok(&text), map, "'{namespace}' round trips exactly");
+    }
 }
 
 #[test]

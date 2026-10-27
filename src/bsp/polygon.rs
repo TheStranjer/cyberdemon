@@ -138,8 +138,11 @@ pub fn ensure_clockwise(polygon: &mut Polygon) {
     }
 }
 
-/// The `16.16` form of whole units plus or minus a whole-unit margin.
-const fn scaled(value: i64) -> Option<i64> {
+/// The `16.16` form of whole units plus or minus a whole-unit margin,
+/// refusing what leaves the range: unlike [`crate::bsp::records::scaled`],
+/// which shifts an `i32` and cannot fail, this one must not silently clip
+/// a huge map box.
+const fn to_fixed(value: i64) -> Option<i64> {
     value.checked_shl(FRACBITS)
 }
 
@@ -163,10 +166,10 @@ pub fn bounds_polygon(map: &Map, margin: i64) -> Option<Polygon> {
         return None;
     }
     let back = margin.checked_neg()?;
-    let left = scaled(low_x.checked_add(back)?)?;
-    let right = scaled(high_x.checked_add(margin)?)?;
-    let bottom = scaled(low_y.checked_add(back)?)?;
-    let top = scaled(high_y.checked_add(margin)?)?;
+    let left = to_fixed(low_x.checked_add(back)?)?;
+    let right = to_fixed(high_x.checked_add(margin)?)?;
+    let bottom = to_fixed(low_y.checked_add(back)?)?;
+    let top = to_fixed(high_y.checked_add(margin)?)?;
     Some(vec![
         Point { x: left, y: bottom },
         Point {

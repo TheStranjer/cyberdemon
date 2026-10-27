@@ -6,6 +6,8 @@
 //! through the `fixtures` root,
 //! the server tests in `server`, the asset-group tests in `assets`, the
 //! audio-group tests in `audio`, the batch-group tests in `batch`, the
+//! shared `BSP` node-record, child-word and vertex-table single-owner guard
+//! in `bsp_records`, the
 //! convert-group helpers in `convert` with its `convert/udmf`,
 //! `convert/forward` and `convert/reverse` topic tests, the
 //! session-group tests in `session`, the
@@ -115,6 +117,9 @@ mod audio;
 #[cfg(test)]
 #[path = "mcp/batch.rs"]
 mod batch;
+#[cfg(test)]
+#[path = "mcp/bsp_records.rs"]
+mod bsp_records;
 #[cfg(test)]
 #[path = "mcp/convert.rs"]
 mod convert;

@@ -3,41 +3,47 @@
 //! to, the partner pass that faces the segs across a partition and the
 //! three lump serializers.
 //!
-//! [`VertexTable`] gives an exact map vertex its plain index and every
-//! other point a fraction-precise `GL_VERT` row; [`SegPool`] keeps the
+//! [`VertexWords`] gives an exact map vertex its plain index and every
+//! other point a fraction-precise `GL_VERT` row; its dedupe and index
+//! bookkeeping are the shared [`crate::bsp::records::VertexTable`], its own
+//! part the `bit 15` vertex word. [`SegPool`] keeps the
 //! [`GlSeg`](super::regions::GlSeg) loops as [`SegRow`] records until
 //! [`pair_faces`] links each one to the reversed-endpoint seg facing it.
 //! [`write_vertices`] renders `GL_VERT`, [`SegPool::write`] the `GL_SEGS`
-//! and `GL_SSECT` lumps and [`write_nodes`] `GL_NODES`, one
-//! [`write_node`] and [`write_boxes`] per interior node. Every refusal
-//! names the record field that overflowed, on the words
-//! [`oversized`](super::oversized) builds.
+//! and `GL_SSECT` lumps and [`write_nodes`] `GL_NODES` on the one shared
+//! node record writer. Every refusal names the record field that
+//! overflowed, on the words [`Refusals::GL`](crate::bsp::records::Refusals::GL)
+//! builds.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::bsp::gl::regions::GlSeg;
 use crate::bsp::gl::{
     GL_VERTEX_FLAG, MAGIC_GND2, MAX_INDEX, MAX_LINEDEF_INDEX, MAX_SEG_INDEX, MINISEG_LINEDEF,
-    NO_PARTNER, NODE_RECORD_LEN, SEG_RECORD_LEN, SSECT_RECORD_LEN, SUBSECTOR_FLAG, VERTEX_ROW_LEN,
-    coordinate, oversized, shown,
+    NO_PARTNER, NODE_RECORD_LEN, SEG_RECORD_LEN, SSECT_RECORD_LEN, VERTEX_ROW_LEN,
 };
-use crate::bsp::{BspTree, BuiltNode, Child, Point};
+use crate::bsp::records::{self, ChildWidth, Refusals, Spot, VertexTable};
+use crate::bsp::{BspTree, Point};
 use crate::error::CyberError;
-use crate::fixed::FRACBITS;
 use crate::wad::bytes::Writer;
 use crate::wad::map::Map;
+
+/// The words every `GL` refusal answers with.
+const REFUSALS: Refusals = Refusals::GL;
+
+/// The shared endpoint table over the exact `16.16` point, whose rows are
+/// the `GL_VERT` lump's own raw `16.16` pairs.
+type Endpoints = VertexTable<(i64, i64), (i32, i32)>;
 
 /// A `16.16` point to its `GL_SEGS` vertex word: an exact map vertex
 /// keeps its plain index, anything else becomes a new fraction-precise
 /// `GL_VERT` row indexed with the `bit 15` flag.
-pub(super) struct VertexTable {
-    /// Exact `16.16` point to its vertex word.
-    pub(super) points: BTreeMap<(i64, i64), u16>,
-    /// The new vertices, raw `16.16` pairs in lump order.
-    pub(super) added: Vec<(i32, i32)>,
+pub(super) struct VertexWords {
+    /// Total vertex index per exact point, with the `GL_VERT` rows under it.
+    table: Endpoints,
 }
 
-impl VertexTable {
+impl VertexWords {
     /// Seed the table with `map`'s own vertices scaled to `16.16`.
     ///
     /// # Errors
@@ -46,19 +52,30 @@ impl VertexTable {
     /// than the plain half of a vertex word can index.
     pub(super) fn new(map: &Map) -> Result<Self, CyberError> {
         if map.vertices.len() > MAX_INDEX.saturating_add(1) {
-            return Err(oversized("map vertices", shown(map.vertices.len())));
-        }
-        let mut points = BTreeMap::new();
-        for (index, vertex) in map.vertices.iter().enumerate() {
-            let word = u16::try_from(index).unwrap_or(u16::MAX);
-            points
-                .entry((scaled(vertex.x), scaled(vertex.y)))
-                .or_insert(word);
+            return Err(REFUSALS.oversized("map vertices", records::shown(map.vertices.len())));
         }
         Ok(Self {
-            points,
-            added: Vec::new(),
+            table: VertexTable::seeded(
+                map.vertices.len(),
+                map.vertices
+                    .iter()
+                    .map(|vertex| (records::scaled(vertex.x), records::scaled(vertex.y))),
+            ),
         })
+    }
+
+    /// A table of `added` fraction-precise rows over a map with none of its
+    /// own, for the full-`GL_VERT` test no real map can supply.
+    #[cfg(test)]
+    pub(super) fn over(added: usize) -> Self {
+        let mut table = Self {
+            table: VertexTable::seeded(0_usize, []),
+        };
+        for index in 0..added {
+            let key = (i64::try_from(index).unwrap(), 0_i64);
+            table.table.take(key, (0_i32, 0_i32));
+        }
+        table
     }
 
     /// The word for `point`, appending a `GL_VERT` row on a miss.
@@ -68,33 +85,59 @@ impl VertexTable {
     /// [`CyberError::LimitExceeded`] when the `GL_VERT` table is full or
     /// the point leaves the `i32` range of the vertex lump.
     pub(super) fn word(&mut self, point: Point) -> Result<u16, CyberError> {
-        if let Some(word) = self.points.get(&(point.x, point.y)).copied() {
-            return Ok(word);
+        let key = (point.x, point.y);
+        let total = match self.table.spot(&key) {
+            Spot::Known(index) => index,
+            Spot::Open { added, .. } => self.append(key, point, added)?,
+        };
+        Ok(flagged(total, self.table.originals()))
+    }
+
+    /// The total index of a new `GL_VERT` row for `point` at append index
+    /// `added`, refusing a full table or a coordinate past `i32`.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::LimitExceeded`] when `GL_VERT` is full or the point
+    /// leaves the `i32` range.
+    fn append(&mut self, key: (i64, i64), point: Point, added: usize) -> Result<usize, CyberError> {
+        if added > MAX_INDEX {
+            return Err(REFUSALS.oversized("GL_VERT entries", records::shown(added)));
         }
-        if self.added.len() > MAX_INDEX {
-            return Err(oversized("GL_VERT entries", shown(self.added.len())));
-        }
-        let raw_x = i32::try_from(point.x).map_err(|_error| coordinate(point.x))?;
-        let raw_y = i32::try_from(point.y).map_err(|_error| coordinate(point.y))?;
-        let gl_index = u16::try_from(self.added.len())
-            .map_err(|_error| oversized("GL_VERT entries", shown(self.added.len())))?;
-        let word = gl_index | GL_VERTEX_FLAG;
-        self.points.insert((point.x, point.y), word);
-        self.added.push((raw_x, raw_y));
-        Ok(word)
+        let row = (
+            i32::try_from(point.x).map_err(|_error| REFUSALS.coordinate(point.x))?,
+            i32::try_from(point.y).map_err(|_error| REFUSALS.coordinate(point.y))?,
+        );
+        Ok(self.table.take(key, row))
     }
 
     /// Rows written to `GL_VERT`.
     pub(super) fn added_count(&self) -> usize {
-        self.added.len()
+        self.table.added()
+    }
+
+    /// The `GL_VERT` rows, in lump order.
+    pub(super) fn rows(&self) -> &[(i32, i32)] {
+        self.table.rows()
     }
 }
 
-/// The `16.16` form of a whole-unit coordinate; the widening shift of an
-/// `i32` into `i64` cannot fail.
-fn scaled(value: i32) -> i64 {
-    let widened = i64::from(value);
-    widened.checked_shl(FRACBITS).unwrap_or(widened)
+/// The `GL_SEGS` vertex word of a total vertex index: one of the map's own
+/// vertices keeps its plain index, an appended row is numbered from zero
+/// among themselves and flagged as a `GL_VERT` lookup.
+fn flagged(total: usize, originals: usize) -> u16 {
+    let (index, from_lump) = total
+        .checked_sub(originals)
+        .map_or((total, false), |row| (row, true));
+    // Both tables are capped at `MAX_INDEX` before a row is taken, so the
+    // index always fits the plain half of the word; the clamp only stands
+    // in for a cast Clippy forbids.
+    let word = u16::try_from(index).unwrap_or(u16::MAX);
+    if from_lump {
+        word | GL_VERTEX_FLAG
+    } else {
+        word
+    }
 }
 
 /// Every loop seg of every subsector, in emission order, waiting on the
@@ -146,7 +189,7 @@ impl SegPool {
     pub(super) fn emit(
         &mut self,
         loop_segs: Vec<GlSeg>,
-        vertices: &mut VertexTable,
+        vertices: &mut VertexWords,
     ) -> Result<(), CyberError> {
         let count = emit_loop(self, loop_segs, vertices)?;
         self.ssectors.push(count);
@@ -176,11 +219,11 @@ impl SegPool {
             Writer::with_capacity(self.ssectors.len().saturating_mul(SSECT_RECORD_LEN));
         let mut first = 0_usize;
         for count in self.ssectors {
-            ssectors.put_u16(word_of(count, "subsector seg count")?);
-            ssectors.put_u16(word_of(first, "subsector first seg")?);
+            ssectors.put_u16(REFUSALS.u16(count, "subsector seg count")?);
+            ssectors.put_u16(REFUSALS.u16(first, "subsector first seg")?);
             first = first
                 .checked_add(count)
-                .ok_or_else(|| oversized("GL_SEGS entries", shown(first)))?;
+                .ok_or_else(|| REFUSALS.oversized("GL_SEGS entries", records::shown(first)))?;
         }
         Ok(WrittenRecords {
             segs: segs.into_inner(),
@@ -200,13 +243,13 @@ impl SegPool {
 fn emit_loop(
     pool: &mut SegPool,
     loop_segs: Vec<GlSeg>,
-    vertices: &mut VertexTable,
+    vertices: &mut VertexWords,
 ) -> Result<usize, CyberError> {
     let mut count = 0_usize;
     for seg in loop_segs {
         count = count.saturating_add(1);
         if pool.rows.len() > MAX_SEG_INDEX {
-            return Err(oversized("GL_SEGS entries", shown(pool.rows.len())));
+            return Err(REFUSALS.oversized("GL_SEGS entries", records::shown(pool.rows.len())));
         }
         let v1 = vertices.word(seg.start)?;
         let v2 = vertices.word(seg.end)?;
@@ -235,10 +278,9 @@ fn line_word(pool: &mut SegPool, source: Option<usize>) -> Result<u16, CyberErro
             pool.minisegs = pool.minisegs.saturating_add(1);
             Ok(MINISEG_LINEDEF)
         }
-        Some(index) if index <= MAX_LINEDEF_INDEX => {
-            u16::try_from(index).map_err(|_error| oversized("linedef index", shown(index)))
-        }
-        Some(index) => Err(oversized("linedef index", shown(index))),
+        Some(index) if index <= MAX_LINEDEF_INDEX => u16::try_from(index)
+            .map_err(|_error| REFUSALS.oversized("linedef index", records::shown(index))),
+        Some(index) => Err(REFUSALS.oversized("linedef index", records::shown(index))),
     }
 }
 
@@ -292,72 +334,21 @@ fn link_pair(rows: &mut [SegRow], used: &mut BTreeSet<usize>, mine: usize, their
     }
 }
 
-/// The `u16` of a count or index, naming the field on refusal.
-fn word_of(value: usize, what: &str) -> Result<u16, CyberError> {
-    u16::try_from(value).map_err(|_error| oversized(what, shown(value)))
-}
-
 /// The `GL_VERT` lump: magic plus the new fraction-precise vertices.
-pub(super) fn write_vertices(table: &VertexTable) -> Vec<u8> {
+pub(super) fn write_vertices(table: &VertexWords) -> Vec<u8> {
     let mut out = Writer::with_capacity(
         MAGIC_GND2
             .len()
-            .saturating_add(table.added.len().saturating_mul(VERTEX_ROW_LEN)),
+            .saturating_add(table.added_count().saturating_mul(VERTEX_ROW_LEN)),
     );
     out.put_bytes(MAGIC_GND2);
-    for &(x, y) in &table.added {
-        out.put_i32(x);
-        out.put_i32(y);
-    }
+    records::write_rows(&mut out, table.rows());
     out.into_inner()
 }
 
 /// The `GL_NODES` lump: one 28-byte record per interior node, root last.
 pub(super) fn write_nodes(tree: &BspTree) -> Result<Vec<u8>, CyberError> {
     let mut out = Writer::with_capacity(tree.nodes.len().saturating_mul(NODE_RECORD_LEN));
-    for node in &tree.nodes {
-        write_node(&mut out, node)?;
-    }
+    records::write_node_records(&mut out, tree, ChildWidth::Bits16, REFUSALS)?;
     Ok(out.into_inner())
-}
-
-/// One node record: the partition line, both child boxes and the two
-/// child words.
-fn write_node(out: &mut Writer, node: &BuiltNode) -> Result<(), CyberError> {
-    out.put_i16(i16_or(node.partition.x, "partition x")?);
-    out.put_i16(i16_or(node.partition.y, "partition y")?);
-    out.put_i16(i16_or(node.partition.dx, "partition dx")?);
-    out.put_i16(i16_or(node.partition.dy, "partition dy")?);
-    write_boxes(out, node)?;
-    out.put_u16(child_word(node.right)?);
-    out.put_u16(child_word(node.left)?);
-    Ok(())
-}
-
-/// Both bounding boxes of one node, right first.
-fn write_boxes(out: &mut Writer, node: &BuiltNode) -> Result<(), CyberError> {
-    for bbox in [node.right_bbox, node.left_bbox] {
-        out.put_i16(i16_or(bbox.top, "bbox top")?);
-        out.put_i16(i16_or(bbox.bottom, "bbox bottom")?);
-        out.put_i16(i16_or(bbox.left, "bbox left")?);
-        out.put_i16(i16_or(bbox.right, "bbox right")?);
-    }
-    Ok(())
-}
-
-/// The `i16` of a whole-unit value, naming the field on refusal.
-fn i16_or(value: i32, what: &str) -> Result<i16, CyberError> {
-    i16::try_from(value).map_err(|_error| oversized(what, i64::from(value)))
-}
-
-/// The `GL` child word: `bit 15` marks a subsector leaf.
-pub(super) fn child_word(child: Child) -> Result<u16, CyberError> {
-    let (index, flag) = match child {
-        Child::Node(index) => (index, 0_u16),
-        Child::Subsector(index) => (index, SUBSECTOR_FLAG),
-    };
-    if index > MAX_INDEX {
-        return Err(oversized("node child", shown(index)));
-    }
-    Ok(u16::try_from(index).unwrap_or(u16::MAX) | flag)
 }

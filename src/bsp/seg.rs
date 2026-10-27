@@ -121,58 +121,10 @@ fn dangling(what: &str, index: usize, owner: &str, owner_index: usize) -> CyberE
 #[cfg(test)]
 mod tests {
     use super::{WorkSeg, initial_segs};
-    use crate::bsp::{Partition, Point};
+    use crate::bsp::Partition;
+    use crate::bsp::fixtures::{linedef, point, sector, sidedef, vertex};
     use crate::error::CyberError;
-    use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
-
-    /// Append a vertex, returning its index.
-    fn vertex(map: &mut Map, x: i64, y: i64) -> usize {
-        let vx = i32::try_from(x).unwrap();
-        let vy = i32::try_from(y).unwrap();
-        map.vertices.push(Vertex {
-            x: vx,
-            y: vy,
-            ..Default::default()
-        });
-        map.vertices.len().checked_sub(1).unwrap()
-    }
-
-    /// Append a sidedef onto `sector`, returning its index.
-    fn sidedef(map: &mut Map, sector: usize) -> usize {
-        map.sidedefs.push(Sidedef {
-            sector,
-            ..Sidedef::default()
-        });
-        map.sidedefs.len().checked_sub(1).unwrap()
-    }
-
-    /// Append a sector, returning its index.
-    fn sector(map: &mut Map) -> usize {
-        map.sectors.push(Sector::default());
-        map.sectors.len().checked_sub(1).unwrap()
-    }
-
-    /// Append a linedef from `ends.0` to `ends.1` with the given sides.
-    fn linedef(map: &mut Map, ends: (usize, usize), sides: (Option<usize>, Option<usize>)) {
-        let (v1, v2) = ends;
-        let (front, back) = sides;
-        map.linedefs.push(Linedef {
-            v1,
-            v2,
-            front,
-            back,
-            ..Linedef::default()
-        });
-    }
-
-    /// A fixed point at whole map units.
-    fn point(x: i64, y: i64) -> Point {
-        Point::from_vertex(&Vertex {
-            x: i32::try_from(x).unwrap(),
-            y: i32::try_from(y).unwrap(),
-            ..Default::default()
-        })
-    }
+    use crate::wad::map::Map;
 
     /// A two-sector wall: shared side 0 is front and 1 is back.
     fn wall_map() -> Map {

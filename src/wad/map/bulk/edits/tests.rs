@@ -7,12 +7,15 @@
 //!
 //! [`geometry_kinds`] measures the sector, sidedef and vertex blocks with
 //! their stock and refusal rules, [`lines_things`] the linedef and thing
-//! blocks with their flags, and [`report`] the answer shape beside
-//! everything the entry gate refuses before a map is read.
+//! blocks with their flags, [`report`] the answer shape beside everything
+//! the entry gate refuses before a map is read, and [`table`] the field
+//! tables themselves: wire names round-tripping their field enums, every
+//! enum variant tabled, and every listed field moving its column.
 
 mod geometry_kinds;
 mod lines_things;
 mod report;
+mod table;
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;

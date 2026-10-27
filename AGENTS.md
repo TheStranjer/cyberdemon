@@ -1212,20 +1212,26 @@ src/
                   tables over all five element kinds, the family-gated
                   linedef fields and the named flag edits — the request
                   and answer shapes, the range vocabulary and the `apply`
-                  and `run` entry points in the root, the field tables
-                  with the `KindPlan` of accessors each drives in
+                  and `run` entry points in the root, the per-kind field
+                  enums with their wire-name tables folded into one
+                  `Field` key in `edits/fields.rs`, the field tables of
+                  those enums with the `KindPlan` each runs under in
                   `edits/tables.rs`, the `Job` of one run with its request
-                  checks and per-row `Pending` plans in `edits/job.rs`,
-                  the check, plan, write and report steps in
-                  `edits/commit.rs`, and the value bounds beside the typed
-                  readers and writers of the five blocks in
+                  names parsed once onto their table entries and its
+                  per-row `Pending` plans in `edits/job.rs`, the check,
+                  plan, write and report steps in `edits/commit.rs`, and
+                  the value bounds beside the exhaustive readers and
+                  writers the `Field` dispatches into in
                   `edits/access.rs`, with that module's tests in
                   `edits/tests.rs` (the stock, the request builders and
                   the sample maps) plus `edits/tests/geometry_kinds.rs`
                   (the sector, sidedef and vertex blocks),
                   `edits/tests/lines_things.rs` (the linedef and thing
-                  blocks with their flags) and `edits/tests/report.rs`
-                  (the answer and the entry gate),
+                  blocks with their flags), `edits/tests/report.rs`
+                  (the answer and the entry gate) and
+                  `edits/tests/table.rs` (every table name round-tripping
+                  its field enum, every enum variant tabled and every
+                  listed field moving its model column),
                   `map/placement.rs` + `placement/` the pure
                   thing-placement core: the clearance primitives (`fits`,
                   `keeps_distance`, `boundary_clear`, `axis_points`,

@@ -50,13 +50,15 @@
 //!
 //! This root holds the request and answer shapes, the range vocabulary
 //! (`NumRange`, `Stock`, `FieldKind` and `FieldSpec`), the [`apply`]
-//! entry point and its whole-selection `run` pass. Four private modules
-//! carry the rest: `tables` is every element kind's field table with the
-//! `KindPlan` of accessors it drives; `job` is the `Job` of one run, its
-//! request checks and its per-row `Pending` plans; `commit` the check,
-//! plan, write and report steps that drive a plan; and `access` the
-//! value bounds beside the typed readers and writers of the five element
-//! blocks.
+//! entry point and its whole-selection `run` pass. Five private modules
+//! carry the rest: `fields` is every element kind's field enum with its
+//! wire-name table, folded into one `Field` the tables and planned rows
+//! key on; `tables` is every element kind's field table with the
+//! `KindPlan` it runs under; `job` is the `Job` of one run, its request
+//! names parsed once onto their table entries beside its per-row
+//! `Pending` plans; `commit` the check, plan, write and report steps
+//! that drive a plan; and `access` the value bounds beside the
+//! exhaustive readers and writers the field enums dispatch into.
 //!
 //! [`Sector`]: crate::wad::map::Sector
 //! [`Sidedef`]: crate::wad::map::Sidedef
@@ -66,6 +68,7 @@
 
 mod access;
 mod commit;
+mod fields;
 mod job;
 mod tables;
 
@@ -87,6 +90,7 @@ use crate::error::CyberError;
 use crate::wad::classify::MapFormat;
 
 use commit::{commit, report};
+use fields::Field;
 use job::{Job, Pending, new_job};
 
 /// The texture name meaning "nothing here", always legal on a face,
@@ -237,8 +241,10 @@ enum FieldKind {
 
 /// One editable field of one element kind.
 struct FieldSpec {
-    /// The table's exact (lowercase) field name.
-    name: &'static str,
+    /// The field's enum value; [`Field::name`] is the table's exact
+    /// (lowercase) wire name and the [`access`](access) match arm that
+    /// reads and writes its column.
+    field: Field,
     /// Whether the field accepts an `add` amount.
     addable: bool,
     /// Whether the field holds a number or a name.

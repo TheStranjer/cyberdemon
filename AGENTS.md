@@ -394,8 +394,9 @@ src/
                   (`assets/fetch.rs`: `Fetched`, `derive_lump_name`).
   session.rs      The per-connection editing session: an optional IWAD layer and
                   read-only resource layers under one editable working archive,
-                  the merged view, the layer-only `base_lumps` view, `Scope`
-                  reads, the `find`/`find_global` engine lookups, the
+                  the cached merged view, the layer-only `base_lumps` view,
+                  `Scope` reads, the `analyzed` lump-plus-classification read,
+                  the `find`/`find_global` engine lookups, the cached
                   `effective_game`/`custom_sources`/`definitions` reads every
                   definition-asking tool shares, `Session::edit` and the one
                   batch scope (`Session::begin_batch`/`Session::end_batch`):
@@ -428,9 +429,19 @@ src/
                   block from the merged view into the working archive
                   (`has_map_block`, `copy_map_block`),
                   `session/views.rs` the bodies of the session's read views
-                  (`merged`, `base_lumps`, `game`, `lumps_in` and `find`) as
-                  free functions over a `&Session`, with the layer directory
-                  and lookup-match helpers they share,
+                  (`merged`, `analysis`, `base_lumps`, `analyzed`, `game`,
+                  `lumps_in` and `find`) as free functions over a `&Session`,
+                  each served from the keyed cache where one exists, with the
+                  layer directory and lookup-match helpers they share, and
+                  `session/cache.rs` the keyed read cache itself: `Key` (the
+                  working revision and layer generation a read belongs to),
+                  `Slot<T>` (one value in a `Cell`, filled by `&self` reads
+                  with no `RefCell` borrow flag to conflict and no error
+                  stored) and `ViewCache` (the merged, analysis, base and
+                  definitions slots, the layer `generation` and the
+                  test-only rebuild counters; `invalidate` and
+                  `bump_generation` run from every mutation path, and the
+                  whole cache transparent to clone, equality and debug),
                   `session/custom.rs` the merged-view collector behind
                   `Session::custom_sources` (the `DEHACKED`/`DECORATE`/`ZSCRIPT`
                   and `MAPINFO`/`ZMAPINFO` texts in load order, `#include`
@@ -452,7 +463,10 @@ src/
                   forms, the layer stack, the merged view, `find` and the
                   `Scope` reads), `session/tests/history.rs` (labels, undo,
                   redo, dirty state, the cap and the batch scope with its
-                  folds, rollbacks and refusals) and
+                  folds, rollbacks and refusals), `session/tests/cache.rs`
+                  (one merge for repeated reads, invalidation on every
+                  mutation path, the definitions cache, the cold clone, the
+                  `Slot` error policy and the `map_owners` table) and
                   `session/tests/state.rs` (the active map, the render
                   settings and theme, the layer-only view, game detection and
                   the effective-game/definitions reads),
@@ -1070,7 +1084,9 @@ src/
                   `MapBlock` and `Analysis` shapes, the size constants and
                   `analyze`, over `classify/namespaces.rs` (the marker
                   names and the open-namespace tracker), `classify/maps.rs`
-                  (the binary, `UDMF` and `GL` block finding) and
+                  (the binary, `UDMF` and `GL` block finding plus the
+                  one-sweep `map_owners` table `analyze` reads its
+                  per-lump ownership off) and
                   `classify/kinds.rs` (the type hints and the `is_doom_patch`
                   header check), with that module's tests in
                   `classify/tests.rs` (the shared builders and readers) plus

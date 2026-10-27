@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::error::CyberError;
 use crate::session::{MergedLump, Scope, Session, Source};
 use crate::wad::archive::Lump;
-use crate::wad::classify::{LumpInfo, LumpKind, Namespace, analyze};
+use crate::wad::classify::{LumpInfo, LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
 /// One lump of a listed scope, in the shared row shape.
@@ -46,20 +46,21 @@ type OffsetTables = Vec<(Source, Vec<u32>)>;
 
 /// The rows for every lump of `scope`, in directory order, classified over
 /// the full scope listing so indices and namespace regions match what an
-/// engine (and [`crate::session::Session::merged`]) sees.
+/// engine (and [`crate::session::Session::merged`]) sees. The listing and
+/// its classification come from [`Session::analyzed`]: the merged scope is
+/// served from the session's read cache instead of a fresh merge plus a
+/// re-analysis of every lump.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] for an out-of-range layer scope (through
-/// [`Session::lumps_in`]) and [`CyberError::LimitExceeded`] when a source
+/// [`Session::analyzed`]) and [`CyberError::LimitExceeded`] when a source
 /// archive no longer fits the `WAD` layout.
 pub(in crate::tools) fn build_rows(
     session: &Session,
     scope: Scope,
 ) -> Result<Vec<LumpRow>, CyberError> {
-    let entries = session.lumps_in(scope)?;
-    let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
-    let analysis = analyze(&lumps);
+    let (entries, analysis) = session.analyzed(scope)?;
     let tables = source_offsets(session, &entries)?;
     entries
         .iter()

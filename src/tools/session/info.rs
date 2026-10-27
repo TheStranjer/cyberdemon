@@ -18,9 +18,9 @@ use alloc::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::session::{Layer, LayerRole, MergedLump, Session, Source};
-use crate::wad::classify::{Analysis, LumpKind, MapFormat, analyze};
+use crate::wad::classify::{Analysis, LumpKind, MapFormat};
 use crate::wad::game::Game;
-use crate::wad::{Lump, LumpName, WadKind};
+use crate::wad::{LumpName, WadKind};
 
 use super::{UNSAVED_WORKING, chronological, path_text};
 
@@ -202,8 +202,7 @@ fn namespace_counts(analysis: &Analysis) -> BTreeMap<&'static str, usize> {
 /// The merged view as `get_wad_info` reports it.
 pub(super) fn describe_wad(session: &Session) -> WadInfo {
     let view = session.merged();
-    let lumps: Vec<Lump> = view.iter().map(|entry| entry.lump.clone()).collect();
-    let analysis = analyze(&lumps);
+    let analysis = session.analysis();
     WadInfo {
         game: session.game(),
         iwad: session.iwad().map(|layer| path_text(&layer.path)),
@@ -211,6 +210,6 @@ pub(super) fn describe_wad(session: &Session) -> WadInfo {
         total_lumps: view.len(),
         maps: merged_maps(&view, &analysis),
         namespaces: namespace_counts(&analysis),
-        warnings: analysis.warnings.clone(),
+        warnings: analysis.warnings,
     }
 }

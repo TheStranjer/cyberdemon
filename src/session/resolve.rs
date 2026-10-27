@@ -42,7 +42,7 @@ use crate::session::Scope;
 use crate::session::Session;
 use crate::session::palette::load_palette;
 use crate::wad::archive::Lump;
-use crate::wad::classify::{LumpInfo, LumpKind, Namespace, analyze};
+use crate::wad::classify::{LumpInfo, LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
 /// The `PLAYPAL` entry `PNG` graphics are quantized to: ports store such
@@ -66,7 +66,7 @@ const FLAT_PLACES: [Place; 2] = [Place::In(Namespace::Flats), Place::Anywhere];
 pub(super) struct Entry {
     /// Normalised lump name.
     pub(super) name: LumpName,
-    /// Type hint from [`analyze`].
+    /// Type hint from [`crate::wad::classify::analyze`].
     pub(super) kind: LumpKind,
     /// Namespace region the lump sits in, if any.
     pub(super) namespace: Option<Namespace>,
@@ -181,14 +181,16 @@ const SPRITE_PLACES: [Place; 3] = [
 /// The merged directory's entries: every lump of the view an engine reads,
 /// in directory order, with its name, classification and payload.
 ///
+/// Both the entries and the classification come from [`Session::analyzed`],
+/// so the resolvers no longer clone the whole view only to re-analyze it;
+/// the merged scope is served from the session's read cache.
+///
 /// # Errors
 ///
-/// [`Session::lumps_in`]'s [`CyberError::NotFound`] for an out-of-range
+/// [`Session::analyzed`]'s [`CyberError::NotFound`] for an out-of-range
 /// scope.
 fn merged_rows(session: &Session) -> Result<Vec<Entry>, CyberError> {
-    let entries = session.lumps_in(Scope::Merged)?;
-    let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
-    let analysis = analyze(&lumps);
+    let (entries, analysis) = session.analyzed(Scope::Merged)?;
     Ok(zip_rows(&entries, &analysis.lumps))
 }
 

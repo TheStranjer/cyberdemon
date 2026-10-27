@@ -8,6 +8,7 @@
 //! they were given. The read-only layers are never touched: their lumps can
 //! only be overridden with `replace_lump`.
 
+use alloc::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -165,10 +166,9 @@ pub(super) fn apply_remove(
     plan: &RemovePlan,
 ) -> Result<Vec<RemovedLump>, CyberError> {
     let analysis = analyze(&wad.lumps);
-    let mut doomed: Vec<usize> = Vec::new();
+    let mut doomed: BTreeSet<usize> = BTreeSet::new();
     for name in &plan.names {
-        let found = matched_positions(&analysis.lumps, *name, plan)?;
-        doomed.extend(found);
+        doomed.extend(matched_positions(&analysis.lumps, *name, plan)?);
     }
     let removed: Vec<RemovedLump> = analysis
         .lumps

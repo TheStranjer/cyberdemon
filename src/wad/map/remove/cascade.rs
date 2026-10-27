@@ -50,20 +50,28 @@ fn uses_removed_vertex(removal: &Removal, line: &Linedef) -> bool {
 
 /// Cascade rule: with `prune`, sidedefs of removed linedefs that no
 /// surviving linedef references go too.
+///
+/// The surviving lines' side references are collected once into a set,
+/// so every candidate is answered by one membership test instead of a
+/// scan of the whole linedef block per candidate.
 pub(super) fn add_orphaned_sides(map: &Map, removal: &mut Removal, prune: bool) {
     if !prune || removal.linedefs.is_empty() {
         return;
     }
     let mut candidates = BTreeSet::new();
+    let mut surviving = BTreeSet::new();
     for (index, line) in map.linedefs.iter().enumerate() {
+        let sides = [line.front, line.back].into_iter().flatten();
         if removal.linedefs.contains(&index) {
-            candidates.extend([line.front, line.back].into_iter().flatten());
+            candidates.extend(sides);
+        } else {
+            surviving.extend(sides);
         }
     }
     let doomed: Vec<usize> = candidates
         .into_iter()
         .filter(|side| !removal.sidedefs.contains(side))
-        .filter(|side| !survivor_uses_side(map, removal, *side))
+        .filter(|side| !surviving.contains(side))
         .collect();
     removal.sidedefs.extend(doomed);
 }
@@ -94,35 +102,29 @@ fn loses_every_side(line: &Linedef, removed: &BTreeSet<usize>) -> bool {
 
 /// Cascade rule: with `prune`, vertices that were endpoints of removed
 /// linedefs and are used by no surviving linedef go too.
+///
+/// The surviving lines' endpoints are collected once into a set, so
+/// every candidate is answered by one membership test instead of a scan
+/// of the whole linedef block per candidate.
 pub(super) fn add_orphaned_vertices(map: &Map, removal: &mut Removal, prune: bool) {
     if !prune || removal.linedefs.is_empty() {
         return;
     }
     let mut candidates = BTreeSet::new();
+    let mut surviving = BTreeSet::new();
     for (index, line) in map.linedefs.iter().enumerate() {
         if removal.linedefs.contains(&index) {
             candidates.insert(line.v1);
             candidates.insert(line.v2);
+        } else {
+            surviving.insert(line.v1);
+            surviving.insert(line.v2);
         }
     }
     let doomed: Vec<usize> = candidates
         .into_iter()
         .filter(|vertex| map.vertices.get(*vertex).is_some())
-        .filter(|vertex| !survivor_uses_vertex(map, removal, *vertex))
+        .filter(|vertex| !surviving.contains(vertex))
         .collect();
     removal.vertices.extend(doomed);
-}
-
-/// Whether any linedef outside the removal set references `side`.
-fn survivor_uses_side(map: &Map, removal: &Removal, side: usize) -> bool {
-    map.linedefs.iter().enumerate().any(|(index, line)| {
-        !removal.linedefs.contains(&index) && (line.front == Some(side) || line.back == Some(side))
-    })
-}
-
-/// Whether any linedef outside the removal set has `vertex` as an endpoint.
-fn survivor_uses_vertex(map: &Map, removal: &Removal, vertex: usize) -> bool {
-    map.linedefs.iter().enumerate().any(|(index, line)| {
-        !removal.linedefs.contains(&index) && (line.v1 == vertex || line.v2 == vertex)
-    })
 }

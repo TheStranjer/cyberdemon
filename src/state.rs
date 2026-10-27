@@ -26,6 +26,9 @@ pub struct AppState {
     assets: Arc<Mutex<AssetStore>>,
     /// The asset server, filled in on the first publish (it starts lazily).
     asset_server: Mutex<Option<ServerInfo>>,
+    /// The `HTTP` client for remote fetches, built on the first one
+    /// (see [`AppState::http_client`]).
+    http: Mutex<Option<Arc<reqwest::Client>>>,
 }
 
 impl Default for AppState {
@@ -38,6 +41,7 @@ impl Default for AppState {
             session: Mutex::new(Session::default()),
             assets: Arc::new(Mutex::new(AssetStore::from_env())),
             asset_server: Mutex::new(None),
+            http: Mutex::new(None),
         }
     }
 }
@@ -140,6 +144,30 @@ impl AppState {
             mime: asset.mime,
             size: asset.data.len(),
         })
+    }
+
+    /// The `HTTP` and `HTTPS` client shared by every remote fetch of this
+    /// connection, built on the first call. One client pools its
+    /// connections, so repeated fetches skip the per-call build; the
+    /// timeout and redirect policy live with the fetch rules in
+    /// [`fetch::build_http_client`].
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Internal`] when the client lock is poisoned;
+    /// [`fetch::build_http_client`]'s error when the client cannot be
+    /// built, in which case the slot stays empty and the next call
+    /// retries.
+    pub(crate) fn http_client(&self) -> Result<Arc<reqwest::Client>, CyberError> {
+        let Some(mut client) = self.http.lock().ok() else {
+            return Err(CyberError::Internal("HTTP client lock poisoned".to_owned()));
+        };
+        if let Some(shared) = client.as_ref() {
+            return Ok(Arc::clone(shared));
+        }
+        let fresh = Arc::new(fetch::build_http_client()?);
+        *client = Some(Arc::clone(&fresh));
+        Ok(fresh)
     }
 
     /// Turn a client-supplied `source` string into bytes.
@@ -354,6 +382,14 @@ mod tests {
     /// Panic while a reference into the locked asset-server slot is alive.
     fn poison_server_while_held(held: Option<&ServerInfo>) -> ! {
         panic!("poisoning the asset-server lock while holding {held:?}")
+    }
+
+    #[test]
+    fn http_client_builds_once_and_shares_the_one_client() {
+        let state = AppState::default();
+        let first = state.http_client().expect("a client builds");
+        let second = state.http_client().expect("the second call reuses it");
+        assert!(Arc::ptr_eq(&first, &second), "one client per connection");
     }
 
     #[test]

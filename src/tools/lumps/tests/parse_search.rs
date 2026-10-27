@@ -144,6 +144,10 @@ fn needles_match_with_the_right_case_rule() {
         bytes: b"TROOP",
         ignore_case: true,
     };
+    let lower = Needle {
+        bytes: b"troop",
+        ignore_case: true,
+    };
     let hex = Needle {
         bytes: b"(T",
         ignore_case: false,
@@ -153,22 +157,40 @@ fn needles_match_with_the_right_case_rule() {
         ignore_case: false,
     };
     assert_eq!(find_needle(&data, &text), Some(9), "case folds both ways");
+    assert_eq!(
+        find_needle(&data, &lower),
+        Some(9),
+        "a lowercase needle folds too"
+    );
     assert_eq!(find_needle(&data, &hex), Some(8), "exact bytes");
     assert_eq!(
         find_needle(&data, &lone),
         Some(0),
         "an empty needle matches at 0"
     );
-    let missing = Needle {
+    let missing_hex = Needle {
         bytes: b"(t",
         ignore_case: false,
     };
-    assert_eq!(find_needle(&data, &missing), None, "hex stays case-exact");
+    assert_eq!(
+        find_needle(&data, &missing_hex),
+        None,
+        "hex stays case-exact"
+    );
     let absent = Needle {
         bytes: b"NOPE",
         ignore_case: true,
     };
     assert_eq!(find_needle(&data, &absent), None, "absent text");
+    let past_end = Needle {
+        bytes: b"Thing 1 (Troop) and more",
+        ignore_case: true,
+    };
+    assert_eq!(
+        find_needle(&data, &past_end),
+        None,
+        "a needle longer than the payload cannot occur"
+    );
 }
 
 #[test]

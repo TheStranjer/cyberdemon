@@ -109,8 +109,9 @@ all share one contract, and each result carries the fragment
   `"working"` or `"layer:N"` (0 is the `IWAD`).
 - Returns: `{"maps": [{name, format, udmf_namespace, source, lumps,
   has_nodes, has_gl_nodes}]}` in directory order. `udmf_namespace` is the
-  namespace a `UDMF` `TEXTMAP` declares (`null` for binary blocks and for
-  blocks that do not decode); `source` is `"working"` or `{"layer": n}`
+  namespace a `UDMF` `TEXTMAP` declares as its leading statement (`null`
+  for binary blocks and for blocks whose `TEXTMAP` opens with anything
+  else); `source` is `"working"` or `{"layer": n}`
   like `list_lumps` rows; `lumps` lists the member lump names in directory
   order, an attached GL run included, without the map header itself.
 - Errors: `invalid_argument` (unknown `scope` name), `not_found`

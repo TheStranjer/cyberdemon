@@ -85,7 +85,7 @@ pub(super) fn region_of(label: Label) -> Option<usize> {
 ///
 /// [`CyberError::LimitExceeded`] when a merged point leaves the `i32`
 /// coordinate range.
-pub(super) fn plan_vertices(pieces: &[Piece], source: &Source) -> Result<Plan, CyberError> {
+pub(super) fn plan_vertices(pieces: &[Piece], source: &Source<'_>) -> Result<Plan, CyberError> {
     let wanted: BTreeSet<Pt> = pieces.iter().flat_map(|piece| [piece.a, piece.b]).collect();
     let mut index: BTreeMap<Pt, usize> = BTreeMap::new();
     let mut vertices: Vec<Vertex> = Vec::new();
@@ -143,7 +143,7 @@ pub(super) fn plan_point(plan: &Plan, point: Pt) -> Result<usize, CyberError> {
 
 /// The [`Linedef`] segment of `line`'s two vertices, `None` when either
 /// reference dangles.
-pub(super) fn segment_of(source: &Source, line: &Linedef) -> Option<(Pt, Pt)> {
+pub(super) fn segment_of(source: &Source<'_>, line: &Linedef) -> Option<(Pt, Pt)> {
     let ((ax, ay), (bx, by)) = source.map.line_endpoints(line)?;
     Some((
         (i64::from(ax), i64::from(ay)),
@@ -154,7 +154,7 @@ pub(super) fn segment_of(source: &Source, line: &Linedef) -> Option<(Pt, Pt)> {
 /// One external segment per linedef, in linedef order; unresolvable
 /// lines become zero-length segments the arrangement drops, keeping the
 /// indices aligned.
-pub(super) fn external_segments(source: &Source) -> (Vec<ExternalSegment>, Vec<usize>) {
+pub(super) fn external_segments(source: &Source<'_>) -> (Vec<ExternalSegment>, Vec<usize>) {
     let mut external = Vec::with_capacity(source.map.linedefs.len());
     let mut unresolved = Vec::new();
     for (index, line) in source.map.linedefs.iter().enumerate() {

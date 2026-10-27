@@ -80,7 +80,7 @@ pub(crate) async fn fetch_source_limited(
         Target::File(path) => read_local_file(&path, limit).await,
         Target::Http(url) => match state.asset_id_from_url(&url) {
             Some(id) => fetch_asset(state, &id, limit),
-            None => fetch_http(&url, limit).await,
+            None => fetch_http(state, &url, limit).await,
         },
     }
 }
@@ -233,15 +233,27 @@ fn mime_from_path(path: &str) -> Option<String> {
         .map(|ext| mime_for_extension(&ext).to_owned())
 }
 
-/// GET a remote URL: [`HTTP_TIMEOUT`] per request, at most
-/// [`MAX_REDIRECTS`] redirects, at most `limit` body bytes.
-async fn fetch_http(url: &str, limit: usize) -> Result<Fetched, CyberError> {
-    let filename = url_filename(url)?;
-    let client = reqwest::Client::builder()
+/// The policy of the connection's shared `HTTP` client: [`HTTP_TIMEOUT`]
+/// per request and at most [`MAX_REDIRECTS`] redirects. [`AppState`]
+/// builds it lazily and hands it to every remote fetch, so one client
+/// pools the connections instead of a fresh one per `URL`.
+///
+/// # Errors
+///
+/// [`CyberError::Fetch`] when the client cannot be built.
+pub(crate) fn build_http_client() -> Result<reqwest::Client, CyberError> {
+    reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
         .build()
-        .map_err(|error| CyberError::Fetch(format!("cannot build HTTP client: {error}")))?;
+        .map_err(|error| CyberError::Fetch(format!("cannot build HTTP client: {error}")))
+}
+
+/// GET a remote URL with the connection's shared client: [`AppState::http_client`]
+/// hands out the one built client, and at most `limit` body bytes.
+async fn fetch_http(state: &AppState, url: &str, limit: usize) -> Result<Fetched, CyberError> {
+    let filename = url_filename(url)?;
+    let client = state.http_client()?;
     let mut response = client
         .get(url)
         .send()

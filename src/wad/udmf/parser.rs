@@ -13,7 +13,40 @@
 use crate::error::CyberError;
 use crate::wad::udmf::cursor::{Cursor, is_word_char};
 use crate::wad::udmf::decimal::{drop_sign, is_float_literal, take_sign};
-use crate::wad::udmf::{Pos, UdmfBlock, UdmfDoc, UdmfValue, err_at};
+use crate::wad::udmf::{NAMESPACE, Pos, UdmfBlock, UdmfDoc, UdmfValue, err_at};
+
+/// The namespace declared by the `namespace = "...";` statement a
+/// `TEXTMAP` opens with, `None` when it opens with anything else.
+///
+/// This is [`crate::wad::map::udmf_map`]'s required first global read
+/// without the rest of the document: the same trivia (whitespace and
+/// both comment styles) before it, the same lowercased identifier and
+/// quoted-string rules, and no parse of the blocks or globals that
+/// follow. A missing semicolon, a non-string value or a leading block
+/// simply answers `None`, never an error.
+#[must_use]
+#[inline]
+pub fn leading_namespace(text: &str) -> Option<String> {
+    let mut parser = Parser::new(text);
+    if !parser.start_item().ok()? {
+        return None;
+    }
+    let name = parser.expect_ident().ok()?;
+    if name != NAMESPACE {
+        return None;
+    }
+    parser.cursor.skip_trivia().ok()?;
+    if parser.cursor.peek() == Some('{') {
+        return None;
+    }
+    let (_name, value) = parser.parse_assignment(name).ok()?;
+    match value {
+        UdmfValue::Str(namespace) => Some(namespace),
+        UdmfValue::Bool(_) | UdmfValue::Float(_) | UdmfValue::Int(_) | UdmfValue::Keyword(_) => {
+            None
+        }
+    }
+}
 
 /// The `UDMF` grammar, read from a [`Cursor`].
 pub(super) struct Parser<'input> {

@@ -37,10 +37,10 @@
 //! This file keeps the shapes a call is phrased in, the private reads of
 //! the original map and [`apply_overlay`] itself. The labeler the
 //! arrangement runs under, with the containment shapes it answers from,
-//! is the private `labeler` module; the snapshot of one overlay's inputs
-//! and every step that reads the original map is `prepared`; the rows
-//! under construction and the dressing they carry is `rebuilt`; and the
-//! integer geometry all of those measure with is `geometry`.
+//! is the private `labeler` module; the borrowed view of one overlay's
+//! inputs and every step that reads the original map is `prepared`; the
+//! rows under construction and the dressing they carry is `rebuilt`; and
+//! the integer geometry all of those measure with is `geometry`.
 
 mod geometry;
 mod labeler;
@@ -176,36 +176,15 @@ type Distance = (i128, i128);
 /// A nearest-wall candidate: its segment, distance and texture name.
 type WallClaim = (WallEnds, Distance, String);
 
-/// The map as it stood before the paint: the geometry the labels, splits
-/// and copies consult while new rows are built.
-#[derive(Clone, Debug)]
-struct Source {
-    /// The original element blocks, as one [`Map`] view so the shared
-    /// [`Map`] reference reads answer from it; the things and the
-    /// generated node lumps are left out because no overlay read
-    /// consults them.
-    map: Map,
-}
-
-impl Source {
-    /// The pre-paint view of `map`: its four edited element blocks.
-    fn snapshot(map: &Map) -> Self {
-        Self {
-            map: Map {
-                name: map.name,
-                format: map.format,
-                udmf_namespace: map.udmf_namespace.clone(),
-                extra_globals: Vec::new(),
-                extra_blocks: Vec::new(),
-                things: Vec::new(),
-                vertices: map.vertices.clone(),
-                linedefs: map.linedefs.clone(),
-                sidedefs: map.sidedefs.clone(),
-                sectors: map.sectors.clone(),
-                other: Vec::new(),
-            },
-        }
-    }
+/// The map as it stood before the paint: the borrowed view the geometry,
+/// splits and copies consult while new rows are built. It borrows the
+/// [`Map`] instead of cloning the element blocks, so preparing an
+/// overlay copies nothing until the rebuild writes the rows that survive.
+#[derive(Debug)]
+struct Source<'src> {
+    /// The map being painted. Every overlay read consults its element
+    /// blocks only; the generated node lumps are never touched.
+    map: &'src Map,
 }
 
 /// One original sector as a containment shape: its boundary segments and

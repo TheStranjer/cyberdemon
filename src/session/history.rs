@@ -18,6 +18,7 @@
 //! [`Session`](crate::session) for the whole-archive and saved-state swaps
 //! a fold cannot carry.
 
+use alloc::collections::VecDeque;
 use core::mem;
 
 use crate::error::CyberError;
@@ -80,10 +81,12 @@ struct Entry {
 /// The undo and redo stacks plus the revision bookkeeping of one session.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct History {
-    /// States to step back to, oldest first.
-    undo: Vec<Entry>,
+    /// States to step back to, oldest first. A [`VecDeque`] so dropping the
+    /// oldest past [`HISTORY_LIMIT`] is O(1) instead of the O(n) shift a
+    /// `Vec::remove(0)` pays on every recorded edit.
+    undo: VecDeque<Entry>,
     /// States stepped back over, oldest first.
-    redo: Vec<Entry>,
+    redo: VecDeque<Entry>,
     /// The revision the working archive currently holds.
     revision: u64,
     /// The revision the working archive was last saved at.
@@ -120,7 +123,7 @@ impl History {
         let previous = mem::replace(working, edited);
         match self.batch.as_mut() {
             Some(batch) => batch.edited = true,
-            None => self.undo.push(Entry {
+            None => self.undo.push_back(Entry {
                 label: label.to_owned(),
                 wad: previous,
                 revision: self.revision,
@@ -129,7 +132,7 @@ impl History {
         self.redo.clear();
         self.revision = self.next_revision();
         while self.undo.len() > HISTORY_LIMIT {
-            self.undo.remove(0);
+            self.undo.pop_front();
         }
     }
 
@@ -205,13 +208,13 @@ impl History {
     /// Leaves the open batch's single entry on the undo stack: the folded
     /// edits undo (and redo) as one step under the batch's label.
     fn settle_batch(&mut self, batch: OpenBatch) {
-        self.undo.push(Entry {
+        self.undo.push_back(Entry {
             label: batch.label,
             wad: batch.before,
             revision: batch.revision,
         });
         while self.undo.len() > HISTORY_LIMIT {
-            self.undo.remove(0);
+            self.undo.pop_front();
         }
     }
 
@@ -245,11 +248,11 @@ impl History {
         }
         let entry = self
             .undo
-            .pop()
+            .pop_back()
             .ok_or_else(|| CyberError::NotFound("nothing to undo".to_owned()))?;
         let label = entry.label;
         let left = mem::replace(working, entry.wad);
-        self.redo.push(Entry {
+        self.redo.push_back(Entry {
             label: label.clone(),
             wad: left,
             revision: self.revision,
@@ -271,11 +274,11 @@ impl History {
         }
         let entry = self
             .redo
-            .pop()
+            .pop_back()
             .ok_or_else(|| CyberError::NotFound("nothing to redo".to_owned()))?;
         let label = entry.label;
         let left = mem::replace(working, entry.wad);
-        self.undo.push(Entry {
+        self.undo.push_back(Entry {
             label: label.clone(),
             wad: left,
             revision: self.revision,
@@ -335,7 +338,7 @@ impl History {
 }
 
 /// The labels of `stack`, newest first.
-fn labels(stack: &[Entry]) -> Vec<&str> {
+fn labels(stack: &VecDeque<Entry>) -> Vec<&str> {
     stack
         .iter()
         .rev()
@@ -345,6 +348,8 @@ fn labels(stack: &[Entry]) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::collections::VecDeque;
+
     use super::{Entry, HISTORY_LIMIT, History, labels};
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::name::LumpName;
@@ -520,7 +525,7 @@ mod tests {
 
     #[test]
     fn labels_are_reported_newest_first() {
-        let stack = vec![
+        let stack: VecDeque<Entry> = VecDeque::from(vec![
             Entry {
                 label: "old".to_owned(),
                 wad: wad("A"),
@@ -531,10 +536,10 @@ mod tests {
                 wad: wad("B"),
                 revision: 2,
             },
-        ];
+        ]);
         assert_eq!(labels(&stack), vec!["new", "old"], "newest first");
         assert!(
-            labels(&Vec::new()).is_empty(),
+            labels(&VecDeque::new()).is_empty(),
             "an empty stack has no labels"
         );
     }

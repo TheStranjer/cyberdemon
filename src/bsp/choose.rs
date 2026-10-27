@@ -13,34 +13,74 @@ use crate::bsp::Partition;
 use crate::bsp::seg::WorkSeg;
 use crate::bsp::side::{FixedLine, SegPlace, classify_seg};
 
-/// Whether two partitions are the same line, same direction: parallel
-/// equal-direction vectors through a common point.
-fn same_line(a: Partition, b: Partition) -> bool {
-    let adx = i128::from(a.dx);
-    let ady = i128::from(a.dy);
-    let bdx = i128::from(b.dx);
-    let bdy = i128::from(b.dy);
-    let parallel = adx
-        .saturating_mul(bdy)
-        .saturating_sub(ady.saturating_mul(bdx));
-    let same_way = adx
-        .saturating_mul(bdx)
-        .saturating_add(ady.saturating_mul(bdy));
-    let on_line = adx
-        .saturating_mul(i128::from(b.y).saturating_sub(i128::from(a.y)))
-        .saturating_sub(ady.saturating_mul(i128::from(b.x).saturating_sub(i128::from(a.x))));
-    parallel == 0_i128 && same_way > 0_i128 && on_line == 0_i128
+/// The greatest common divisor of two non-negative values, kept in the
+/// `checked_*` form the crate's arithmetic rules require.
+const fn gcd(mut left: i64, mut right: i64) -> i64 {
+    while let Some(next) = left.checked_rem(right) {
+        left = right;
+        right = next;
+    }
+    left
 }
 
-/// The distinct partition lines of `set`, first-appearance order.
-fn distinct_partitions(set: &[WorkSeg]) -> Vec<Partition> {
-    let mut out: Vec<Partition> = Vec::new();
-    for work in set {
-        if !out.iter().any(|seen| same_line(*seen, work.partition)) {
-            out.push(work.partition);
+/// The dedupe key of a partition line: the primitive direction (the
+/// whole-unit delta divided by its component [`gcd`], signs kept) and the
+/// cross product of that direction with the line's point.
+type LineKey = (i32, i32, i128);
+
+/// A partition paired with its [`LineKey`] and [`distinct_partitions`]
+/// occurrence, the rows the sort-based dedupe runs on.
+type KeyedPartition = (LineKey, usize, Partition);
+
+/// The dedupe key of one partition line. Two partitions with a direction
+/// share a key exactly when their directions are equal and they run
+/// collinearly; the directionless ones match nothing — not even
+/// themselves — so each gets its occurrence's unique third component
+/// instead.
+fn line_key(partition: Partition, occurrence: usize) -> LineKey {
+    let dx = i64::from(partition.dx);
+    let dy = i64::from(partition.dy);
+    let scale = gcd(dx.abs(), dy.abs());
+    let primitive = |value: i64| {
+        value
+            .checked_div(scale)
+            .and_then(|whole| i32::try_from(whole).ok())
+    };
+    match (primitive(dx), primitive(dy)) {
+        (Some(ndx), Some(ndy)) if ndx != 0 || ndy != 0 => {
+            let cross = i128::from(ndx)
+                .saturating_mul(i128::from(partition.y))
+                .saturating_sub(i128::from(ndy).saturating_mul(i128::from(partition.x)));
+            (ndx, ndy, cross)
+        }
+        (Some(_) | None, Some(_) | None) => {
+            let unique = i64::try_from(occurrence).unwrap_or(i64::MAX);
+            (0, 0, i128::from(unique))
         }
     }
-    out
+}
+
+/// The distinct partition lines of `set`, first-appearance order: sort the
+/// [`line_key`]s so each line's first occurrence leads its group, drop the
+/// repeats, and put the survivors back in first-appearance order.
+fn distinct_partitions(set: &[WorkSeg]) -> Vec<Partition> {
+    let mut keyed: Vec<KeyedPartition> = set
+        .iter()
+        .enumerate()
+        .map(|(order, work)| (line_key(work.partition, order), order, work.partition))
+        .collect();
+    keyed.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    let mut firsts: Vec<(usize, Partition)> = Vec::with_capacity(keyed.len());
+    let mut previous: Option<LineKey> = None;
+    for (key, order, partition) in keyed {
+        if previous == Some(key) {
+            continue;
+        }
+        previous = Some(key);
+        firsts.push((order, partition));
+    }
+    firsts.sort_by_key(|entry| entry.0);
+    firsts.into_iter().map(|(_, partition)| partition).collect()
 }
 
 /// `values` truncated to `max` entries at even spacing, first and last
@@ -104,12 +144,32 @@ pub(crate) fn choose_partition(set: &[WorkSeg], opts: BuildOptions) -> Option<Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_partition, distinct_partitions, even_sample, same_line};
+    use super::{choose_partition, distinct_partitions, even_sample, line_key};
     use crate::bsp::BuildOptions;
     use crate::bsp::Partition;
     use crate::bsp::seg::WorkSeg;
     use crate::bsp::side::FixedLine;
     use crate::wad::map::Vertex;
+
+    /// Whether two partitions are the same line, same direction: parallel
+    /// equal-direction vectors through a common point. The relation the
+    /// [`line_key`] dedupe must reproduce exactly.
+    fn same_line(a: Partition, b: Partition) -> bool {
+        let adx = i128::from(a.dx);
+        let ady = i128::from(a.dy);
+        let bdx = i128::from(b.dx);
+        let bdy = i128::from(b.dy);
+        let parallel = adx
+            .saturating_mul(bdy)
+            .saturating_sub(ady.saturating_mul(bdx));
+        let same_way = adx
+            .saturating_mul(bdx)
+            .saturating_add(ady.saturating_mul(bdy));
+        let on_line = adx
+            .saturating_mul(i128::from(b.y).saturating_sub(i128::from(a.y)))
+            .saturating_sub(ady.saturating_mul(i128::from(b.x).saturating_sub(i128::from(a.x))));
+        parallel == 0_i128 && same_way > 0_i128 && on_line == 0_i128
+    }
 
     /// A seg between whole-unit endpoints on the given partition line.
     fn work(from: (i64, i64), to: (i64, i64), partition: Partition) -> WorkSeg {
@@ -188,6 +248,49 @@ mod tests {
             vec![east, north, west],
             "the fourth seg duplicates the first line"
         );
+    }
+
+    #[test]
+    fn distinct_keeps_every_directionless_partition() {
+        let east = partition((0, 0), (10, 0), 0);
+        let flat_a = partition((5, 5), (5, 5), 0);
+        let flat_b = partition((9, 9), (9, 9), 0);
+        let set = [
+            work((0, 0), (10, 0), east),
+            work((5, 5), (5, 5), flat_a),
+            work((640, 0), (1280, 0), partition((640, 0), (1280, 0), 0)),
+            work((9, 9), (9, 9), flat_b),
+        ];
+        assert_eq!(
+            distinct_partitions(&set),
+            vec![east, flat_a, flat_b],
+            "the third seg joins the first line, the directionless two never match"
+        );
+    }
+
+    #[test]
+    fn the_line_key_groups_exactly_the_same_line_pairs() {
+        let corpus = [
+            partition((0, 0), (10, 0), 0),
+            partition((640, 0), (1280, 0), 0),
+            partition((10, 0), (0, 0), 0),
+            partition((0, 0), (0, 10), 0),
+            partition((0, 5), (10, 5), 0),
+            partition((2, 3), (5, 6), 0),
+            partition((-4, -4), (6, 6), 0),
+            partition((5, 5), (5, 5), 0),
+            partition((9, 9), (9, 9), 0),
+        ];
+        let pairs = corpus
+            .iter()
+            .flat_map(|first| corpus.iter().map(move |second| (*first, *second)));
+        for (first, second) in pairs {
+            assert_eq!(
+                line_key(first, 0) == line_key(second, 1),
+                same_line(first, second),
+                "keys for {first:?} and {second:?} agree with the relation"
+            );
+        }
     }
 
     #[test]

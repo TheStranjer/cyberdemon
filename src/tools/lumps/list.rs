@@ -130,7 +130,7 @@ pub(super) struct Search {
     pub(super) kind: Option<LumpKind>,
     /// Namespace to keep, if given.
     pub(super) namespace: Option<Namespace>,
-    /// Upper-cased text needle, if given.
+    /// Text needle as given, matched case-insensitively, if given.
     pub(super) text: Option<Vec<u8>>,
     /// Needle bytes decoded from the hex string, if given.
     pub(super) hex: Option<Vec<u8>>,
@@ -201,16 +201,16 @@ impl Search {
 }
 
 /// The first offset in `data` where `needle` occurs, `None` when it does
-/// not. An empty needle matches at offset 0.
+/// not. An empty needle matches at offset 0. The case-insensitive rule
+/// folds `ASCII` on the fly, without copying the payload.
 pub(super) fn find_needle(data: &[u8], needle: &Needle<'_>) -> Option<usize> {
     if needle.bytes.is_empty() {
         return Some(0);
     }
     if needle.ignore_case {
-        let folded = data.to_ascii_uppercase();
-        return folded
+        return data
             .windows(needle.bytes.len())
-            .position(|window| window == needle.bytes);
+            .position(|window| window.eq_ignore_ascii_case(needle.bytes));
     }
     data.windows(needle.bytes.len())
         .position(|window| window == needle.bytes)
@@ -326,7 +326,8 @@ pub(super) fn parse_search(args: &SearchLumpsParams) -> Result<(Scope, usize, Se
         text: args
             .contains_text
             .as_deref()
-            .map(|needle| needle.as_bytes().to_ascii_uppercase()),
+            .map(str::as_bytes)
+            .map(<[u8]>::to_vec),
         hex: parse_hex(args.contains_hex.as_deref())?,
     };
     if search.is_empty() {

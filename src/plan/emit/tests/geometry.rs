@@ -5,9 +5,9 @@
 
 use super::{
     assert_line_orientation, assert_rows_are_plain, assert_sidedness_matches_faces,
-    assert_sides_are_placeholders, compile, door, door_pair, emit_error, faces_sector,
-    geometry_issues, line_flags, lines_between, map_name, on_map_border, opening, rect_room,
-    rooms_plan, two_rooms, vertical_at,
+    assert_sides_are_placeholders, compile, compile_identity, door, door_pair, emit_error,
+    faces_sector, geometry_issues, hexen_identity, line_flags, lines_between, map_name,
+    on_map_border, opening, rect_room, rooms_plan, two_rooms, vertical_at,
 };
 use crate::geom::Label;
 use crate::plan::emit::compiled_plan;
@@ -286,6 +286,19 @@ fn outdoor_rooms_fall_back_to_sky_and_flat_overrides_win() {
     assert!(
         geometry_issues(&emitted.map).is_empty(),
         "the emission is clean"
+    );
+}
+
+#[test]
+fn an_outdoor_room_in_a_hexen_identity_falls_back_to_f_sky() {
+    let mut court = rect_room("court", (0, 0), (128, 128));
+    court.outdoor = true;
+    let plan = rooms_plan(vec![court], 16);
+    let (emitted, _) = compile_identity(&plan, hexen_identity());
+    let sky = emitted.map.sectors.first().expect("the courtyard");
+    assert_eq!(
+        sky.ceiling_flat, "F_SKY",
+        "a Hexen identity emits the outdoor room under the Hexen sky"
     );
 }
 

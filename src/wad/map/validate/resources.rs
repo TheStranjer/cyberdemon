@@ -138,57 +138,66 @@ fn bare_plane(flat: &str) -> bool {
     !checkable(flat)
 }
 
+/// The standards `missing_flat` judges sector planes by: the carried flats
+/// (`None` for a session with none, which judges no names) and the
+/// session's sky flat, which never reports on either plane.
+struct FlatRules<'ctx> {
+    /// The merged view's flat names, `None` when it carries no flats at
+    /// all and so names nothing to check.
+    carried: Option<&'ctx BTreeSet<String>>,
+    /// The sky flat of the session's game: [`crate::wad::game::sky_flat`].
+    sky: &'ctx str,
+}
+
 /// The row one plane of sector `index` earns, or `None` when it is sound.
 /// An undressed plane always reports; a named flat reports only when
-/// `flats` does not carry it, `None` standing for a session that carries no
-/// flats and so judges no names at all. `F_SKY1` never reports: every port
-/// draws the sky itself.
-fn plane_gap(
-    index: usize,
-    role: &str,
-    flat: &str,
-    flats: Option<&BTreeSet<String>>,
-) -> Option<Issue> {
+/// `rules` carries flats and does not hold it, the empty set standing for
+/// a session that carries no flats and so judges no names at all. The
+/// session's sky flat never reports: every port draws the sky itself.
+fn plane_gap(index: usize, role: &str, flat: &str, rules: &FlatRules<'_>) -> Option<Issue> {
     if bare_plane(flat) {
         return Some(bare_plane_issue(index, role, flat));
     }
-    let carried = flats?;
-    let sound = is_sky_flat(flat) || known(carried, flat);
+    let carried = rules.carried?;
+    let sound = is_sky_flat(flat, rules.sky) || known(carried, flat);
     (!sound).then(|| flat_issue(index, role, flat))
 }
 
 /// The rows both planes of sector `index` earn, in floor then ceiling
 /// order.
-fn sector_flat_gaps(index: usize, space: &Sector, flats: Option<&BTreeSet<String>>) -> Vec<Issue> {
+fn sector_flat_gaps(index: usize, space: &Sector, rules: &FlatRules<'_>) -> Vec<Issue> {
     [
         ("floor", space.floor_flat.as_str()),
         ("ceiling", space.ceiling_flat.as_str()),
     ]
     .into_iter()
-    .filter_map(|(role, flat)| plane_gap(index, role, flat, flats))
+    .filter_map(|(role, flat)| plane_gap(index, role, flat, rules))
     .collect()
 }
 
 /// Sector planes left with no flat, and sector flats naming a flat the
-/// merged view does not carry. `F_SKY1` is always allowed on either plane -
-/// the engine substitutes the sky. A carried flat is the standard a name is
-/// measured against, so the name half stays quiet when the session carries
-/// none; an undressed plane needs no standard and reports whatever the
-/// session holds.
+/// merged view does not carry. The session's sky flat (`F_SKY1`, `F_SKY`
+/// in `Hexen`) is always allowed on either plane - the engine substitutes
+/// the sky. A carried flat is the standard a name is measured against, so
+/// the name half stays quiet when the session carries none; an undressed
+/// plane needs no standard and reports whatever the session holds.
 pub(super) fn missing_flat(map: &Map, context: &Context<'_>) -> Vec<Issue> {
-    let flats = (!context.resources.flats.is_empty()).then_some(&context.resources.flats);
+    let rules = FlatRules {
+        carried: (!context.resources.flats.is_empty()).then_some(&context.resources.flats),
+        sky: context.sky_flat,
+    };
     map.sectors
         .iter()
         .enumerate()
-        .flat_map(|(index, space)| sector_flat_gaps(index, space, flats))
+        .flat_map(|(index, space)| sector_flat_gaps(index, space, &rules))
         .collect()
 }
 
-/// Whether both sectors' ceilings are the sky: the band above a line
-/// between two sky-holding sectors draws the sky on both sides, so an
-/// upper texture there is nobody's missing face.
-fn both_sky(front: &Sector, back: &Sector) -> bool {
-    is_sky_flat(&front.ceiling_flat) && is_sky_flat(&back.ceiling_flat)
+/// Whether both sectors' ceilings are the sky flat `sky`: the band above
+/// a line between two sky-holding sectors draws the sky on both sides, so
+/// an upper texture there is nobody's missing face.
+fn both_sky(front: &Sector, back: &Sector, sky: &str) -> bool {
+    is_sky_flat(&front.ceiling_flat, sky) && is_sky_flat(&back.ceiling_flat, sky)
 }
 
 /// One hall-of-mirrors row for a bare required face, `why` naming the
@@ -219,14 +228,17 @@ fn one_sided_gap(line: usize, side: usize, row: &Sidedef) -> Option<Issue> {
 }
 
 /// The bands `this` side must dress against the sector across: an upper
-/// where the other ceiling is lower (unless both ceilings are sky) and a
-/// lower where the other floor is higher.
-fn this_side_gaps(issues: &mut Vec<Issue>, line: usize, this: Side<'_>, across: Side<'_>) {
+/// where the other ceiling is lower (unless both ceilings are the sky
+/// flat) and a lower where the other floor is higher.
+fn this_side_gaps(line: usize, this: Side<'_>, across: Side<'_>, sky: &str) -> Vec<Issue> {
     let (side_index, row, sector) = this;
     let (across_index, _, other) = across;
-    if other.ceiling_height < sector.ceiling_height && !both_sky(sector, other) && bare(&row.upper)
+    let mut gaps: Vec<Issue> = Vec::new();
+    if other.ceiling_height < sector.ceiling_height
+        && !both_sky(sector, other, sky)
+        && bare(&row.upper)
     {
-        issues.push(hom_issue(
+        gaps.push(hom_issue(
             line,
             side_index,
             "upper",
@@ -237,7 +249,7 @@ fn this_side_gaps(issues: &mut Vec<Issue>, line: usize, this: Side<'_>, across: 
         ));
     }
     if other.floor_height > sector.floor_height && bare(&row.lower) {
-        issues.push(hom_issue(
+        gaps.push(hom_issue(
             line,
             side_index,
             "lower",
@@ -247,6 +259,7 @@ fn this_side_gaps(issues: &mut Vec<Issue>, line: usize, this: Side<'_>, across: 
             ),
         ));
     }
+    gaps
 }
 
 /// The resolved rows and sectors of both sides of a two-sided line,
@@ -263,8 +276,9 @@ fn dressed_sides(map: &Map, front: usize, back: usize) -> Option<(Side<'_>, Side
 }
 
 /// The gaps of one linedef: its bare middle when it is one-sided, the
-/// required upper/lower faces of both sides when it is two-sided.
-fn line_gaps(map: &Map, line: usize) -> Vec<Issue> {
+/// required upper/lower faces of both sides when it is two-sided, judged
+/// against the sky flat `sky`.
+fn line_gaps(map: &Map, line: usize, sky: &str) -> Vec<Issue> {
     let mut issues: Vec<Issue> = Vec::new();
     let Some(edge) = map.linedefs.get(line) else {
         return issues;
@@ -280,19 +294,20 @@ fn line_gaps(map: &Map, line: usize) -> Vec<Issue> {
         return issues;
     };
     if let Some((front, back)) = dressed_sides(map, front_index, back_index) {
-        this_side_gaps(&mut issues, line, front, back);
-        this_side_gaps(&mut issues, line, back, front);
+        issues.extend(this_side_gaps(line, front, back, sky));
+        issues.extend(this_side_gaps(line, back, front, sky));
     }
     issues
 }
 
 /// Sidedefs whose geometry demands a face that was left `"-"`: the
 /// middle of a one-sided line, and the upper/lower faces of a two-sided
-/// line where the neighbour's heights make the band visible (sky on
-/// both ceilings exempts the upper faces).
-pub(super) fn missing_required_texture(map: &Map) -> Vec<Issue> {
+/// line where the neighbour's heights make the band visible (the session's
+/// sky flat on both ceilings exempts the upper faces).
+pub(super) fn missing_required_texture(map: &Map, context: &Context<'_>) -> Vec<Issue> {
+    let sky = context.sky_flat;
     (0..map.linedefs.len())
-        .flat_map(|line| line_gaps(map, line))
+        .flat_map(|line| line_gaps(map, line, sky))
         .collect()
 }
 
@@ -308,6 +323,7 @@ mod tests {
     use crate::wad::classify::MapFormat;
     use crate::wad::game::Game;
     use crate::wad::map::common::fixtures::{name, room, side, solid_line, vertex};
+    use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
     use crate::wad::map::validate::{Context, ResourceIndex, Severity};
     use crate::wad::map::{Linedef, Map, Sidedef};
 
@@ -335,12 +351,22 @@ mod tests {
         }
     }
 
-    /// The validation context borrowing a fixture's three tables.
+    /// The validation context borrowing a fixture's three tables, with the
+    /// vanilla sky flat.
     fn context_of(fixture: &Fixture) -> Context<'_> {
         Context {
             definitions: &fixture.doom,
             hexen_specials: &fixture.hexen,
             resources: &fixture.resources,
+            sky_flat: SKY_FLAT,
+        }
+    }
+
+    /// The [`context_of`] read of a fixture, with the `Hexen` sky flat.
+    fn hexen_sky_context(fixture: &Fixture) -> Context<'_> {
+        Context {
+            sky_flat: HEXEN_SKY_FLAT,
+            ..context_of(fixture)
         }
     }
 
@@ -615,8 +641,10 @@ mod tests {
 
     #[test]
     fn a_bare_middle_on_a_one_sided_line_is_a_hall_of_mirrors() {
+        let given = fixture(ResourceIndex::default());
+        let context = context_of(&given);
         assert!(
-            missing_required_texture(&ring_map()).is_empty(),
+            missing_required_texture(&ring_map(), &context).is_empty(),
             "the ring's walls carry WALL1 middles"
         );
         let mut naked = ring_map();
@@ -625,7 +653,7 @@ mod tests {
             .get_mut(0)
             .expect("the shared sidedef")
             .middle = "-".to_owned();
-        let issues = missing_required_texture(&naked);
+        let issues = missing_required_texture(&naked, &context);
         assert_eq!(issues.len(), 4, "every one of the four walls is bare");
         let issue = issues.first().expect("the first wall");
         assert_eq!(
@@ -644,7 +672,9 @@ mod tests {
 
     #[test]
     fn the_step_reports_one_lower_and_dressing_it_closes_the_gap() {
-        let issues = missing_required_texture(&step_map());
+        let given = fixture(ResourceIndex::default());
+        let context = context_of(&given);
+        let issues = missing_required_texture(&step_map(), &context);
         assert_eq!(
             issues.len(),
             1,
@@ -661,13 +691,15 @@ mod tests {
         let mut dressed = step_map();
         dressed.sidedefs.get_mut(0).expect("the front side").lower = "STEP1".to_owned();
         assert!(
-            missing_required_texture(&dressed).is_empty(),
+            missing_required_texture(&dressed, &context).is_empty(),
             "dressing the needed lower face closes the gap"
         );
     }
 
     #[test]
     fn a_missing_upper_on_the_taller_side_is_reported_too() {
+        let given = fixture(ResourceIndex::default());
+        let context = context_of(&given);
         let mut stepped = step_map();
         stepped
             .sectors
@@ -675,7 +707,7 @@ mod tests {
             .expect("the back sector")
             .ceiling_height = 64_i32;
         stepped.sidedefs.get_mut(0).expect("the front side").lower = "STEP1".to_owned();
-        let issues = missing_required_texture(&stepped);
+        let issues = missing_required_texture(&stepped, &context);
         let issue = issues.first().expect("the bare upper band");
         assert_eq!(issues.len(), 1, "exactly the upper gap: {issues:?}");
         assert!(
@@ -687,6 +719,8 @@ mod tests {
 
     #[test]
     fn sky_on_both_ceilings_exempts_the_upper_but_never_the_lower() {
+        let given = fixture(ResourceIndex::default());
+        let context = context_of(&given);
         let mut sky_hack = step_map();
         sky_hack
             .sectors
@@ -702,7 +736,7 @@ mod tests {
         }
         sky_hack.sidedefs.get_mut(0).expect("the front side").lower = "STEP1".to_owned();
         assert!(
-            missing_required_texture(&sky_hack).is_empty(),
+            missing_required_texture(&sky_hack, &context).is_empty(),
             "front ceiling 256 over back ceiling 128 needs an upper, but both sectors are sky"
         );
         let mut still_open = sky_hack;
@@ -711,7 +745,7 @@ mod tests {
             .get_mut(0)
             .expect("the front side")
             .lower = "-".to_owned();
-        let issues = missing_required_texture(&still_open);
+        let issues = missing_required_texture(&still_open, &context);
         assert_eq!(
             issues.len(),
             1,
@@ -729,10 +763,12 @@ mod tests {
 
     #[test]
     fn dangling_sides_and_sectors_never_report_hom() {
+        let given = fixture(ResourceIndex::default());
+        let context = context_of(&given);
         let mut map = step_map();
         map.linedefs.get_mut(0).expect("the step line").back = Some(42);
         assert!(
-            missing_required_texture(&map).is_empty(),
+            missing_required_texture(&map, &context).is_empty(),
             "a dangling back side is the reference check's problem"
         );
         let mut sectors_gone = step_map();
@@ -742,13 +778,13 @@ mod tests {
             .expect("the back side")
             .sector = 42;
         assert!(
-            missing_required_texture(&sectors_gone).is_empty(),
+            missing_required_texture(&sectors_gone, &context).is_empty(),
             "a dangling sector takes no measurement part"
         );
         let mut frontless = step_map();
         frontless.linedefs.get_mut(0).expect("the step line").front = None;
         assert!(
-            missing_required_texture(&frontless).is_empty(),
+            missing_required_texture(&frontless, &context).is_empty(),
             "a line without a front side is the reference check's problem"
         );
         let mut blank = step_map();
@@ -758,7 +794,7 @@ mod tests {
             ..Default::default()
         });
         assert!(
-            missing_required_texture(&blank)
+            missing_required_texture(&blank, &context)
                 .iter()
                 .all(|issue| issue.linedefs != vec![1]),
             "a line with no sides at all reports no face: {blank:?}"
@@ -767,6 +803,8 @@ mod tests {
 
     #[test]
     fn a_two_sided_line_with_equal_heights_needs_no_faces() {
+        let given = fixture(ResourceIndex::default());
+        let context = context_of(&given);
         let mut flat_line = step_map();
         flat_line
             .sectors
@@ -774,8 +812,93 @@ mod tests {
             .expect("the back sector")
             .floor_height = 0_i32;
         assert!(
-            missing_required_texture(&flat_line).is_empty(),
+            missing_required_texture(&flat_line, &context).is_empty(),
             "two sectors at equal heights share no visible band"
+        );
+    }
+
+    /// [`step_map`] with both ceilings at `floor`/`ceiling` and `sky_name`
+    /// written on them, the front side's lower dressed so only the upper
+    /// exemption is in play.
+    fn both_ceilings(sky_name: &str) -> Map {
+        let mut sky_hack = step_map();
+        sky_hack
+            .sectors
+            .get_mut(0)
+            .expect("the front sector")
+            .ceiling_height = 256_i32;
+        for index in [0_usize, 1_usize] {
+            let space = sky_hack.sectors.get_mut(index).expect("both sectors");
+            space.ceiling_flat = sky_name.to_owned();
+        }
+        sky_hack.sidedefs.get_mut(0).expect("the front side").lower = "STEP1".to_owned();
+        sky_hack
+    }
+
+    #[test]
+    fn the_hexen_sky_flat_exempts_the_upper_for_a_hexen_session() {
+        let given = fixture(full_index());
+        let context = hexen_sky_context(&given);
+        assert!(
+            missing_required_texture(&both_ceilings("F_SKY"), &context).is_empty(),
+            "F_SKY on both ceilings is the Hexen sky hack"
+        );
+        assert!(
+            missing_required_texture(&both_ceilings("f_sky "), &context).is_empty(),
+            "read trimmed and case-insensitively, like every stored name"
+        );
+        let issues = missing_required_texture(&both_ceilings("F_SKY1"), &context);
+        assert_eq!(
+            issues.len(),
+            1,
+            "the vanilla marker is just a flat to a Hexen session: {issues:?}"
+        );
+        assert!(
+            issues
+                .first()
+                .expect("the bare upper")
+                .message
+                .contains("upper"),
+            "the F_SKY1 ceilings do not exempt the Hexen session"
+        );
+    }
+
+    #[test]
+    fn the_vanilla_sky_flat_exempts_the_upper_and_f_skys_is_a_plain_flat() {
+        let given = fixture(full_index());
+        let context = context_of(&given);
+        assert!(
+            missing_required_texture(&both_ceilings("F_SKY1"), &context).is_empty(),
+            "F_SKY1 on both ceilings is the sky hack the vanilla session reads"
+        );
+        let issues = missing_required_texture(&both_ceilings("F_SKY"), &context);
+        assert_eq!(
+            issues.len(),
+            1,
+            "F_SKY is just another flat to a vanilla session: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn the_hexen_sky_flat_is_allowed_and_f_sky1_is_judged_by_a_hexen_session() {
+        let given = fixture(full_index());
+        let context = hexen_sky_context(&given);
+        assert!(
+            missing_flat(&reflatted(ring_map(), "FLOOR1", "F_SKY"), &context).is_empty(),
+            "F_SKY is the Hexen session's sky: always allowed, even unloaded"
+        );
+        assert!(
+            missing_flat(&reflatted(ring_map(), "f_sky", "FLOOR1"), &context).is_empty(),
+            "on either plane, trimmed and case-insensitively"
+        );
+        let issue = only_issue(missing_flat(
+            &reflatted(ring_map(), "FLOOR1", "F_SKY1"),
+            &context,
+        ));
+        assert!(
+            issue.message.contains("ceiling flat \"F_SKY1\""),
+            "the vanilla marker is an ordinary, uncarried flat here: {}",
+            issue.message
         );
     }
 }

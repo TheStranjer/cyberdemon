@@ -25,10 +25,10 @@ use crate::session::mapdir::load_map;
 use crate::session::palette::load_palette;
 use crate::session::resolve::{load_flat, load_texture};
 use crate::session::{Scope, Session};
-use crate::wad::game::Game;
+use crate::wad::game::{Game, sky_flat};
 use crate::wad::lumps;
 use crate::wad::map::Map;
-use crate::wad::map::consts::{SKY_FLAT, is_sky_flat, normalized_picture};
+use crate::wad::map::consts::{is_sky_flat, normalized_picture};
 use crate::wad::map::geometry;
 use crate::wad::name::LumpName;
 
@@ -84,7 +84,8 @@ pub struct Scene {
     /// where a ceiling or floor carries [`Scene::sky_flat`]; the silent
     /// fallback for a map no plane of which asks for a sky.
     pub sky: IndexedImage,
-    /// The flat name that means "sky": [`SKY_FLAT`].
+    /// The flat name that means "sky" in the session's game
+    /// ([`crate::wad::game::sky_flat`]): `F_SKY1`, or `F_SKY` in `Hexen`.
     pub sky_flat: String,
     /// The settings this scene was built with.
     pub settings: RenderSettings,
@@ -122,6 +123,7 @@ pub fn build_scene(
     let fallback = fallback_image(&palette)?;
     let textures = wall_textures(session, &model, &fallback, &mut problems);
     let flats = sector_flats(session, &model, &fallback, &mut problems);
+    let sky_marker = sky_flat(session.game());
     let sky = sky_image(session, &model, &fallback, &mut problems);
     Ok(Scene {
         map: model,
@@ -130,7 +132,7 @@ pub fn build_scene(
         textures,
         flats,
         sky,
-        sky_flat: SKY_FLAT.to_owned(),
+        sky_flat: sky_marker.to_owned(),
         settings: settings.clone(),
         problems,
     })
@@ -221,16 +223,16 @@ fn sector_flats(
 
 /// The sky image the map's name and the session's game select; a sky a map
 /// shows and the session lacks falls back, with a problem line. A map no
-/// sector of which names [`SKY_FLAT`] shows no sky at all, so its picture
-/// is neither looked for nor missed: the silent fallback stands in for an
-/// image the renderer never samples.
+/// sector of which names the game's sky flat shows no sky at all, so its
+/// picture is neither looked for nor missed: the silent fallback stands in
+/// for an image the renderer never samples.
 fn sky_image(
     session: &Session,
     map: &Map,
     fallback: &IndexedImage,
     problems: &mut Vec<String>,
 ) -> IndexedImage {
-    if !shows_sky(map) {
+    if !shows_sky(map, sky_flat(session.game())) {
         return fallback.clone();
     }
     let name = sky_name(session.game(), &map.name.to_string());
@@ -240,12 +242,13 @@ fn sky_image(
     })
 }
 
-/// Whether any plane of `map` shows the sky: `Doom` draws the sky texture
-/// on every ceiling *and* every floor named [`SKY_FLAT`].
-fn shows_sky(map: &Map) -> bool {
-    map.sectors
-        .iter()
-        .any(|sector| is_sky_flat(&sector.ceiling_flat) || is_sky_flat(&sector.floor_flat))
+/// Whether any plane of `map` shows the sky: the engine draws the sky
+/// texture on every ceiling *and* every floor named `sky` (`F_SKY1`,
+/// `F_SKY` in `Hexen`).
+fn shows_sky(map: &Map, sky: &str) -> bool {
+    map.sectors.iter().any(|sector| {
+        is_sky_flat(&sector.ceiling_flat, sky) || is_sky_flat(&sector.floor_flat, sky)
+    })
 }
 
 /// The picture a sky plane draws with: the texture definition named `name`
@@ -410,6 +413,7 @@ mod tests {
     use crate::gfx::palette::Palette;
     use crate::render::RenderSettings;
     use crate::wad::game::Game;
+    use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
     use crate::wad::map::{Linedef, Map, MapFormat, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
 
@@ -653,19 +657,35 @@ mod tests {
     fn only_a_map_that_names_the_sky_flat_shows_sky() {
         let indoor = two_room_map();
         assert!(
-            !shows_sky(&indoor),
+            !shows_sky(&indoor, SKY_FLAT),
             "the fixture map's planes are all plain flats"
         );
         let mut outdoors = indoor.clone();
         if let Some(room) = outdoors.sectors.get_mut(1) {
             room.ceiling_flat = "f_sky1".to_owned();
         }
-        assert!(shows_sky(&outdoors), "a lowercase ceiling marker counts");
+        assert!(
+            shows_sky(&outdoors, SKY_FLAT),
+            "a lowercase ceiling marker counts"
+        );
+        assert!(
+            !shows_sky(&outdoors, HEXEN_SKY_FLAT),
+            "a vanilla marker is not the Hexen sky"
+        );
         let mut pit = indoor.clone();
         if let Some(room) = pit.sectors.get_mut(0) {
             room.floor_flat = "F_SKY1 ".to_owned();
         }
-        assert!(shows_sky(&pit), "and so does a padded floor one");
+        assert!(shows_sky(&pit, SKY_FLAT), "and so does a padded floor one");
+        let mut hexen = indoor.clone();
+        if let Some(room) = hexen.sectors.get_mut(1) {
+            room.ceiling_flat = "f_sky".to_owned();
+        }
+        assert!(
+            shows_sky(&hexen, HEXEN_SKY_FLAT),
+            "the Hexen marker shows the sky for a Hexen scene"
+        );
+        assert!(!shows_sky(&hexen, SKY_FLAT), "and nothing to a vanilla one");
         let mut blank = indoor;
         if let Some(room) = blank.sectors.get_mut(0) {
             room.floor_flat = String::new();
@@ -676,7 +696,7 @@ mod tests {
             room.ceiling_flat = "-".to_owned();
         }
         assert!(
-            !shows_sky(&blank),
+            !shows_sky(&blank, SKY_FLAT),
             "an empty plane and the none-marker are not the sky"
         );
     }

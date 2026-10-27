@@ -24,6 +24,7 @@ use crate::wad::game::Game;
 use crate::wad::map::common::fixtures::{
     cell, hall, name, one_sided, room, side, slab, solid_line, vertex,
 };
+use crate::wad::map::consts::SKY_FLAT;
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::{Linedef, Map, Sector, Thing};
 
@@ -255,7 +256,7 @@ pub(super) fn neighbour_across(facts: &SectorFacts, sector: usize) -> &Neighbour
 
 /// The facts of `map`'s sector `index` through one shared [`Describe`].
 pub(super) fn described(map: &Map, index: usize) -> SectorFacts {
-    Describe::new(map, &doom_defs())
+    Describe::new(map, &doom_defs(), SKY_FLAT)
         .sector(index)
         .unwrap_or_else(|| panic!("sector {index} exists"))
 }

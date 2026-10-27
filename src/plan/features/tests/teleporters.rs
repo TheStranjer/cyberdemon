@@ -6,7 +6,7 @@
 use super::super::teleporters::remap_rows;
 use super::super::{FeatureRow, apply_features};
 use super::{
-    TestRoles, back_sector, door, dress, front_sector, line_at, map_name, opening, refuse_features,
+    TestRoles, back_sector, door, dress, front_sector, line_at, opening, refuse_features,
     two_rooms, wired,
 };
 use crate::error::PlanRef;
@@ -206,7 +206,7 @@ fn a_teleporter_centre_past_the_map_range_is_refused_by_role() {
 fn a_room_the_compiled_map_bounds_nowhere_breaks_internally() {
     let plan = teleport_fixture(vec![teleporter_feature("a", "b", 0, false)]);
     let mut compiled =
-        compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+        compile(&plan, super::identity(MapFormat::Doom), &TestRoles).expect("it compiles");
     compiled.room_sectors.insert("a".to_owned(), vec![99_usize]);
     let error =
         apply_features(&plan, &mut compiled, &dress()).expect_err("sector 99 bounds nothing");

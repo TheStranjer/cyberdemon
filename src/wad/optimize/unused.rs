@@ -21,7 +21,7 @@ use alloc::collections::BTreeSet;
 use crate::error::CyberError;
 use crate::wad::classify::{LumpInfo, LumpKind, Namespace};
 use crate::wad::lumps;
-use crate::wad::map::consts::normalized_picture;
+use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT, normalized_picture};
 use crate::wad::map::read_map;
 use crate::wad::name::LumpName;
 use crate::wad::optimize::animations::Animations;
@@ -35,7 +35,9 @@ use super::{Action, Context, Draft, Operation, PNAMES_ENTRY_LEN, Rewrite, Target
 
 /// The flats every engine draws a sky with: no sector has to name one for
 /// the sweep to keep it, since a sky is chosen by map, not by sector.
-const SKY_FLATS: [&str; 2] = ["F_SKY1", "F_SKY"];
+/// The union of the per-game markers
+/// ([`crate::wad::game::sky_flat`] answers one of them per game).
+const SKY_FLATS: [&str; 2] = [SKY_FLAT, HEXEN_SKY_FLAT];
 
 /// The working `PNAMES` to trim: the last global copy, `None` when the
 /// working archive holds none or the plan already removes it — a

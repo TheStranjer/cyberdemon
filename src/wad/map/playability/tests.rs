@@ -21,6 +21,7 @@ use alloc::vec::Vec;
 use super::Playability;
 use crate::plan::FeatureDress;
 use crate::plan::compile::compile;
+use crate::plan::emit::MapIdentity;
 use crate::plan::features::{FeatureRow, apply_features};
 use crate::plan::model::{Connection, ConnectionKind, Feature as PlanFeature, Plan, Room, Shape};
 use crate::plan::textures::{TextureRole, TextureRoles};
@@ -175,8 +176,12 @@ pub(super) fn plan(rooms: Vec<Room>, links: Vec<Connection>, features: Vec<PlanF
 
 /// A compiled plan in `format` with its features wired.
 pub(super) fn built(plan: &Plan, format: MapFormat) -> (Map, Vec<FeatureRow>) {
-    let mut compiled =
-        compile(plan, name("MAP01"), format, &FlatRoles).expect("the test plans compile");
+    let identity = MapIdentity {
+        name: name("MAP01"),
+        format,
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
+    };
+    let mut compiled = compile(plan, identity, &FlatRoles).expect("the test plans compile");
     let dress = FeatureDress {
         door: "DOORROL".to_owned(),
         track: "DTRROL".to_owned(),

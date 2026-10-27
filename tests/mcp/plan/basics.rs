@@ -23,11 +23,12 @@
 
 use serde_json::{Value, json};
 
+use crate::fixtures::iwad_hexen;
 use crate::plan::{
-    Client, features_loaded, plan_for, refuse_with, reported_sector_count, working_lines,
+    Client, features_loaded, path_arg, plan_for, refuse_with, reported_sector_count, working_lines,
     working_sector,
 };
-use crate::support::{call, call_err};
+use crate::support::{call, call_err, connect};
 
 /// The structural checks a compiled plan must pass; thing checks
 /// run separately because only the thing tests place a start.
@@ -615,5 +616,38 @@ async fn an_untextured_face_stores_dash_for_the_vanilla_texture_lookup() {
         "the plan leaves the two-sided lines' middles untextured, and each of those \
          {} faces stores 2D 00 00 00 00 00 00 00, not an empty field",
         records.len()
+    );
+}
+
+#[tokio::test]
+async fn an_outdoor_room_in_a_hexen_session_wears_f_sky() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = connect().await;
+    let base = iwad_hexen(dir.path());
+    call(&client, "open_iwad", path_arg(&base)).await;
+    let built = call(
+        &client,
+        "build_map_from_plan",
+        json!({
+            "map": "MAP05",
+            "rooms": [
+                {"id": "quad", "rect": {"x": 0_i64, "y": 0_i64, "w": 128_i64, "h": 128_i64},
+                 "outdoor": true}
+            ],
+            "connections": [],
+            "player_start": {"room": "quad"}
+        }),
+    )
+    .await;
+    assert_eq!(
+        built["rooms"]["quad"],
+        json!([0_u64]),
+        "the courtyard owns sector 0: {built}"
+    );
+    let yard = working_sector(&client, "MAP05", 0).await;
+    assert_eq!(
+        yard["ceiling_flat"],
+        json!("F_SKY"),
+        "an outdoor room of a Hexen session sees the Hexen sky"
     );
 }

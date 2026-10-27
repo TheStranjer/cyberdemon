@@ -205,6 +205,11 @@ pub struct Context<'defs> {
     /// What the merged view provides as textures and flats, for the
     /// resource checks.
     pub resources: &'defs ResourceIndex,
+    /// The sky flat of the session's game ([`crate::wad::game::sky_flat`]):
+    /// `F_SKY1` everywhere, `F_SKY` in `Hexen`. The flat check lets it
+    /// through on either plane and the hall-of-mirrors check reads it on
+    /// ceilings.
+    pub sky_flat: &'static str,
 }
 
 /// One named validation check in the pipeline.
@@ -319,7 +324,7 @@ pub const CHECKS: &[Check] = &[
     },
     Check {
         code: "missing_required_texture",
-        run: |map, _context| resources::missing_required_texture(map),
+        run: |map, context| resources::missing_required_texture(map, context),
     },
     Check {
         code: "texture_check_skipped",
@@ -431,6 +436,7 @@ mod tests {
             definitions: &tables.doom,
             hexen_specials: &tables.hexen,
             resources: &tables.resources,
+            sky_flat: crate::wad::map::consts::SKY_FLAT,
         }
     }
 

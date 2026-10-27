@@ -11,11 +11,13 @@
 //! Like [`describe`] and [`geometry`](super::geometry) this is a function of
 //! the map model and the passed [`QueryContext`] alone: no sessions, no
 //! `MCP`, no editing. The context carries the flag family (so `flags has`
-//! reads the [`flags`] tables) and the game definitions (so thing `name`
+//! reads the [`flags`] tables), the game definitions (so thing `name`
 //! and `category` resolve, and the derived sector fields reuse
-//! [`Describe`]). Derived fields that do not resolve — the back side of a
-//! one-sided line, a thing standing in the void, a line with a dangling
-//! vertex — match no filter, `ne`, `not_in` and `has_not` included.
+//! [`Describe`]) and the game's sky flat (so a `roles has sky` filter
+//! reads the right ceiling name). Derived fields that do not resolve —
+//! the back side of a one-sided line, a thing standing in the void, a
+//! line with a dangling vertex — match no filter, `ne`, `not_in` and
+//! `has_not` included.
 //!
 //! The field tables:
 //!
@@ -336,15 +338,23 @@ pub struct QueryContext<'defs> {
     pub family: FlagFamily,
     /// The game definitions naming thing types for `name` and `category`.
     pub defs: &'defs Definitions,
+    /// The sky flat of the caller's game ([`crate::wad::game::sky_flat`]):
+    /// what the derived `roles` read matches a `sky` ceiling against.
+    pub sky_flat: &'static str,
 }
 
 impl<'defs> QueryContext<'defs> {
-    /// A context reading flags in the `family`'s tables and things through
-    /// the game definitions `defs`.
+    /// A context reading flags in the `family`'s tables, things through
+    /// the game definitions `defs` and `sky` ceilings against the sky
+    /// flat `sky_flat`.
     #[must_use]
     #[inline]
-    pub const fn new(family: FlagFamily, defs: &'defs Definitions) -> Self {
-        Self { family, defs }
+    pub const fn new(family: FlagFamily, defs: &'defs Definitions, sky_flat: &'static str) -> Self {
+        Self {
+            family,
+            defs,
+            sky_flat,
+        }
     }
 
     /// The definition display name of thing type `kind`, `Unknown (n)` for

@@ -38,9 +38,9 @@ use crate::tools::maps::params::{
 use crate::tools::reply;
 use crate::tools::textures::TextureSet;
 use crate::wad::classify::{LumpKind, MapFormat, Namespace};
-use crate::wad::game::Game;
+use crate::wad::game::{Game, sky_flat};
 use crate::wad::map::Map;
-use crate::wad::map::consts::{NO_TEXTURE, SKY_FLAT};
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::specials::is_door_action;
 use crate::wad::name::LumpName;
 
@@ -70,9 +70,9 @@ pub(in crate::tools) struct Inventory {
 }
 
 /// The merged view's texture inventory: `TEXTURE1`/`TEXTURE2` names and
-/// widths, `TX_` lump names, the flats namespace, plus `F_SKY1`.
-/// Shared with the bulk-edit machinery in
-/// `crate::tools::query::replace`.
+/// widths, `TX_` lump names, the flats namespace, plus the session's sky
+/// flat (`F_SKY1`, `F_SKY` in `Hexen`). Shared with the bulk-edit
+/// machinery in `crate::tools::query::replace`.
 ///
 /// # Errors
 ///
@@ -84,7 +84,7 @@ pub(in crate::tools) fn inventory(session: &Session) -> Result<Inventory, CyberE
     for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {
         collect_lump(&mut available, info.namespace, info.kind, entry.lump.name);
     }
-    available.flats.insert(SKY_FLAT.to_owned());
+    available.flats.insert(sky_flat(session.game()).to_owned());
     let widths = TextureSet::load(session)?
         .widths()
         .into_iter()
@@ -533,6 +533,7 @@ fn auto_run(session: &mut Session, args: &AutoTextureParams) -> Result<AutoRepor
         door_lines: door_lines(&loaded),
         textures: paint_set(session)?,
         available: &stock.available,
+        sky_flat: sky_flat(session.game()),
     };
     let label = format!("{AUTO_LABEL} {name}");
     let (change, report) = session.edit_map(name, &label, |map| Ok(auto::apply(map, &plan)))?;
@@ -729,9 +730,11 @@ mod tests {
         AlignTexturesParams, AutoTextureParams, SetThemeParams, mode_label, parse_mode,
         push_tx_name, role_texture, surfaces, theme_roles, theme_wall,
     };
-    use crate::session::Session;
+    use crate::session::{Layer, LayerRole, Session};
     use crate::themes::auto::AutoMode;
     use crate::themes::{Role, table};
+    use crate::wad::archive::{Lump, Wad, WadKind};
+    use crate::wad::name::LumpName;
 
     #[test]
     fn modes_parse_case_insensitively_and_default_to_fill() {
@@ -796,6 +799,31 @@ mod tests {
         );
         let none_wanted = theme_roles(&session, None, &[]).expect("nothing asked");
         assert!(none_wanted.is_empty(), "nothing answered");
+    }
+
+    #[test]
+    fn a_hexen_session_holds_f_sky_as_its_always_available_flat() {
+        let mut session = Session::default();
+        let parsed = |text: &str| LumpName::parse(text).expect("test names are valid");
+        let layer = Layer::new(
+            std::path::PathBuf::from("hexen.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps: vec![
+                    Lump::marker(parsed("TITLE")),
+                    Lump::marker(parsed("WINNOWR")),
+                ],
+            },
+        );
+        session.set_iwad(layer).expect("no batch is open");
+        let wanted = [Role::Floor];
+        let resolved = theme_roles(&session, None, &wanted).expect("the Hexen session answers");
+        assert_eq!(
+            resolved.get(&Role::Floor).expect("floor"),
+            "F_SKY",
+            "the always-held flat of a Hexen session is the Hexen sky"
+        );
     }
 
     #[test]

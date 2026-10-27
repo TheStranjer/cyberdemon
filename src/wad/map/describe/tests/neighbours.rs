@@ -9,6 +9,7 @@ use alloc::vec;
 
 use serde_json::{json, to_value};
 
+use crate::wad::map::consts::SKY_FLAT;
 use crate::wad::map::describe::{Describe, Neighbour};
 use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 
@@ -18,7 +19,7 @@ use super::{cell, described, doom_defs, hall, neighbour_across, slab, split_divi
 fn equal_floors_meet_across_an_opening() {
     let map = hall(&[cell(0_i32), cell(0_i32)]);
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let from_a = describe.sector(0).expect("sector 0 exists");
     assert_eq!(
         from_a.neighbours,
@@ -130,7 +131,7 @@ fn one_blocking_line_among_several_seals_the_whole_boundary() {
 fn a_closed_band_between_two_rooms_reads_as_a_door() {
     let map = hall(&[cell(0_i32), slab(0_i32), cell(0_i32)]);
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let band = describe.sector(1).expect("the band exists");
     assert_eq!(band.roles, vec!["door".to_owned()], "no special needed");
     assert!(

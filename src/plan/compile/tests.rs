@@ -122,11 +122,20 @@ pub(super) fn two_rooms(thickness: i64, connections: Vec<Connection>) -> Plan {
     }
 }
 
+/// The identity every compile test emits into: `MAP01`, `Doom` layout,
+/// the vanilla sky flat.
+pub(super) fn identity() -> crate::plan::emit::MapIdentity {
+    crate::plan::emit::MapIdentity {
+        name: map_name("MAP01"),
+        format: MapFormat::Doom,
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
+    }
+}
+
 /// Compile a scenario plan with full roles.
 #[track_caller]
 pub(super) fn compiled(plan: &Plan) -> CompiledPlan {
-    compile(plan, map_name("MAP01"), MapFormat::Doom, &TestRoles::full())
-        .expect("the scenario compiles")
+    compile(plan, identity(), &TestRoles::full()).expect("the scenario compiles")
 }
 
 /// The codes [`assert_valid`] runs: geometry plus the resource lookups.
@@ -150,6 +159,7 @@ pub(super) fn issues_for(map: &Map, codes: &[&'static str]) -> Vec<Issue> {
         definitions: &definitions,
         hexen_specials: &definitions,
         resources: &resources,
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
     };
     let enabled: BTreeSet<&'static str> = codes.iter().copied().collect();
     run(map, &context, Some(&enabled)).issues

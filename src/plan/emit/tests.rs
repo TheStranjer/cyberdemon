@@ -18,6 +18,7 @@ use crate::plan::emit::{Emitted, MapIdentity, emit};
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Plan, Room, Shape};
 use crate::plan::walls::build_walls;
 use crate::wad::game::Game;
+use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
 use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::validate::{Context, Issue, ResourceIndex, run};
 use crate::wad::map::{Linedef, Map, MapFormat};
@@ -33,6 +34,16 @@ fn identity() -> MapIdentity {
     MapIdentity {
         name: map_name("MAP01"),
         format: MapFormat::Doom,
+        sky_flat: SKY_FLAT,
+    }
+}
+
+/// The identity of the map a `Hexen` session emits: the [`MapIdentity`]
+/// of [`identity`] wearing the `Hexen` sky flat.
+pub(super) fn hexen_identity() -> MapIdentity {
+    MapIdentity {
+        sky_flat: HEXEN_SKY_FLAT,
+        ..identity()
     }
 }
 
@@ -105,9 +116,18 @@ pub(super) fn rooms_plan(rooms: Vec<Room>, thickness: i64) -> Plan {
 /// placement for the bookkeeping asserts.
 #[track_caller]
 pub(super) fn compile(plan: &Plan) -> (Emitted, Vec<ConnectorGeometry>) {
+    compile_identity(plan, identity())
+}
+
+/// [`compile`] emitting into the given identity.
+#[track_caller]
+pub(super) fn compile_identity(
+    plan: &Plan,
+    ident: MapIdentity,
+) -> (Emitted, Vec<ConnectorGeometry>) {
     let walls = build_walls(plan).expect("the fixture walls build");
     let connectors = plan_connectors(plan, &walls).expect("the connectors place");
-    let emitted = emit(plan, &walls, &connectors, identity()).expect("the plan emits");
+    let emitted = emit(plan, &walls, &connectors, ident).expect("the plan emits");
     (emitted, connectors)
 }
 
@@ -302,6 +322,7 @@ pub(super) fn geometry_issues(map: &Map) -> Vec<Issue> {
         definitions: &definitions,
         hexen_specials: &definitions,
         resources: &resources,
+        sky_flat: SKY_FLAT,
     };
     let enabled: BTreeSet<&'static str> = [
         "crossing_lines",

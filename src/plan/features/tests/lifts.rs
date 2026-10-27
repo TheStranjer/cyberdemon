@@ -7,8 +7,8 @@ use super::super::lifts::{lift_join_rule, lift_side};
 use super::super::teleporters::teleport_wall;
 use super::super::{CompiledPlan, FeatureDress, FeatureRow, apply_features};
 use super::{
-    TestRoles, back_sector, dress, front_sector, line_at, map_name, rect_room, refuse_features,
-    wired, wired_dressed,
+    TestRoles, back_sector, dress, front_sector, line_at, rect_room, refuse_features, wired,
+    wired_dressed,
 };
 use crate::error::PlanRef;
 use crate::plan::compile::compile;
@@ -238,7 +238,7 @@ fn a_room_owning_several_sectors_refuses_the_plan_lift() {
     let plan = lift_fixture(ConnectionKind::Opening);
     for (count, owned) in [(2_usize, vec![1_usize, 2_usize]), (0_usize, Vec::new())] {
         let mut compiled =
-            compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+            compile(&plan, super::identity(MapFormat::Doom), &TestRoles).expect("it compiles");
         compiled.room_sectors.insert("b".to_owned(), owned);
         let error = apply_features(&plan, &mut compiled, &dress())
             .expect_err("the platform must be one sector");

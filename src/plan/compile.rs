@@ -38,19 +38,19 @@ use crate::plan::emit::{CompiledPlan, MapIdentity, compiled_plan, emit};
 use crate::plan::model::{ConnectionKind, Plan};
 use crate::plan::textures::{Scene, TextureRoles, apply_textures};
 use crate::plan::walls::build_walls;
-use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::MAX_STEP_HEIGHT;
-use crate::wad::name::LumpName;
 
-/// Compile `plan` into a dressed [`CompiledPlan`].
+/// Compile `plan` into a dressed [`CompiledPlan`], emitted as the map
+/// `identity` names.
 ///
 /// Runs the seven pipeline steps of this module's documentation:
 /// [`Plan::validate`], [`build_walls`], [`plan_connectors`], [`emit`]
-/// into a map named `name` in layout `format`, [`apply_textures`] with
-/// `roles`, the reachability / coverage / floor-gap warnings of this
-/// module, and the [`CompiledPlan`] bookkeeping. Every failure aborts
-/// the whole compile: nothing outside the returned value is touched, so
-/// a refused plan leaves no half-dressed map behind.
+/// into the [`MapIdentity`]'s map — named, laid out, and wearing its sky
+/// flat — [`apply_textures`] with `roles` over the same identity, the
+/// reachability / coverage / floor-gap warnings of this module, and the
+/// [`CompiledPlan`] bookkeeping. Every failure aborts the whole compile:
+/// nothing outside the returned value is touched, so a refused plan
+/// leaves no half-dressed map behind.
 ///
 /// # Errors
 ///
@@ -65,20 +65,19 @@ use crate::wad::name::LumpName;
 #[inline]
 pub fn compile(
     plan: &Plan,
-    name: LumpName,
-    format: MapFormat,
+    identity: MapIdentity,
     roles: &dyn TextureRoles,
 ) -> Result<CompiledPlan, CyberError> {
     plan.validate()?;
     let walls = build_walls(plan)?;
     let connectors = plan_connectors(plan, &walls)?;
-    let identity = MapIdentity { name, format };
     let mut emitted = emit(plan, &walls, &connectors, identity)?;
     let mut map = core::mem::take(&mut emitted.map);
     let scene = Scene {
         plan,
         connectors: &connectors,
         emitted: &emitted,
+        sky_flat: identity.sky_flat,
     };
     apply_textures(&mut map, &scene, roles)?;
     emitted.map = map;

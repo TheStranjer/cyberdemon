@@ -74,7 +74,8 @@ no texel is corrected a second time on its way in. Tables 32/33
 How the view gets its pictures: the scene loads every wall texture the
 map names (composited from `TEXTURE1`/`TEXTURE2` definitions, `TEXTURE2`
 winning, or a `TX_`-region patch of that name), every flat the sectors
-name, and — only where some sector's ceiling or floor is `F_SKY1` — a sky
+name, and — only where some sector's ceiling or floor is the session's
+sky flat (`F_SKY1`, or `F_SKY` in `Hexen`) — a sky
 chosen by map name: `E#M#` episodes take `SKY1..4` (`Heretic`:
 1,2,3,1,3), `MAP01`–`MAP11` take `SKY1`, `MAP12`–`MAP20` `SKY2`, `MAP21`
 up `SKY3`, anything else `SKY1`. That sky picture is the
@@ -378,7 +379,8 @@ do not apply, `show_things` does, and the overlay parameters (`underlay`,
   and texel row `floor(-y)`, wrapped into the picture (any supported
   flat size works: `64x64`, `64x128`, `128x128`, `256x256`), shaded
   row by row by that row's plane depth. A ceiling (or floor) whose
-  flat is `F_SKY1` draws the **sky texture** instead: the sky column
+  flat is the session's sky flat (`F_SKY1`, or `F_SKY` in `Hexen`) draws
+  the **sky texture** instead: the sky column
   comes from the column's view angle (Doom's 1024 slices per full
   turn, so a 256-wide sky repeats four times), the row from Doom's
   `320x200` sky placement, and sky is always full bright and infinitely
@@ -412,7 +414,8 @@ do not apply, `show_things` does, and the overlay parameters (`underlay`,
     `unreadable sprite NAME` line), and the rest of the frame still
     renders. Every `problems` line names a picture this render actually
     asked for: a sky is looked for in the texture definitions, where a
-    stock archive keeps it, and a map with no `F_SKY1` plane asks for no
+    stock archive keeps it, and a map with no plane wearing the session's
+    sky flat asks for no
     sky and reports none missing.
 - Current limitations: sprites and masked textures paint opaque (no
   translucency), fullbright sprite frames are not swapped in, and there

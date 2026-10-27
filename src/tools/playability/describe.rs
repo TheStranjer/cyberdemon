@@ -26,6 +26,7 @@ use crate::state::AppState;
 use crate::tools::maps::params::{ElementKind, check_index};
 use crate::tools::render::{OverviewMarks, playability_overview};
 use crate::tools::{Page, parse_limit};
+use crate::wad::game::sky_flat;
 use crate::wad::map::describe::{Describe, MapOverview, SectorFacts};
 use crate::wad::name::LumpName;
 
@@ -137,7 +138,7 @@ pub(super) async fn describe_run(
         prepared.map.name,
     )?;
     let (page, next_offset) = Page::new(args.offset.unwrap_or(0), limit).window(&selected);
-    let describe = Describe::new(&prepared.map, &prepared.defs);
+    let describe = Describe::new(&prepared.map, &prepared.defs, sky_flat(prepared.defs.game));
     let sectors: Vec<SectorFacts> = page
         .iter()
         .filter_map(|index| describe.sector(*index))

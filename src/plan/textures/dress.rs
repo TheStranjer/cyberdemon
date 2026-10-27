@@ -229,7 +229,7 @@ impl<'scene> Dresser<'scene> {
             owner,
             floor: space.floor_height,
             ceiling: space.ceiling_height,
-            sky: is_sky_flat(&space.ceiling_flat),
+            sky: is_sky_flat(&space.ceiling_flat, self.scene.sky_flat),
         })
     }
 
@@ -297,7 +297,8 @@ fn dress_flats(dress: &Dresser<'_>, map: &mut Map) {
 }
 
 /// Unset room flats take the `Floor` and `Ceiling` roles; an `outdoor`
-/// room's `F_SKY1` ceiling is set, so it is never touched.
+/// room's sky ceiling is set (it wears the scene's sky flat), so it is
+/// never touched.
 fn dress_room_flats(dress: &Dresser<'_>, map: &mut Map, index: usize) {
     let Some(sector) = dress
         .scene

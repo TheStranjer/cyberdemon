@@ -55,8 +55,13 @@ pub struct AutoPlan<'plan> {
     pub door_lines: BTreeSet<usize>,
     /// The resolved theme textures.
     pub textures: ThemeTextures,
-    /// What exists in the session (for fill checks and `F_SKY1`).
+    /// What exists in the session (for fill checks and the sky flat).
     pub available: &'plan Available,
+    /// The sky flat of the caller's game
+    /// ([`crate::wad::game::sky_flat`]): `F_SKY1`, or `F_SKY` in `Hexen`.
+    /// Ceilings wearing it are never painted over and exempt the upper
+    /// fill between them.
+    pub sky_flat: &'static str,
 }
 
 /// What one `auto_texture` pass changed.
@@ -206,7 +211,8 @@ fn upper_choice(side: &Side<'_>, other: &Sector, plan: &AutoPlan<'_>) -> Option<
     let this = side.this;
     let shows_gap = side.data.upper == NO_TEXTURE
         && other.ceiling_height < this.ceiling_height
-        && !(is_sky_flat(&this.ceiling_flat) && is_sky_flat(&other.ceiling_flat));
+        && !(is_sky_flat(&this.ceiling_flat, plan.sky_flat)
+            && is_sky_flat(&other.ceiling_flat, plan.sky_flat));
     if !shows_gap {
         return None;
     }
@@ -370,14 +376,15 @@ fn apply_flats(map: &mut Map, plan: &AutoPlan<'_>) -> usize {
 
 /// Whether this flat slot should move to `wanted` under the current mode.
 ///
-/// `is_ceiling` guards `F_SKY1`: the sky is never painted over.
+/// `is_ceiling` guards the sky: a ceiling wearing `plan.sky_flat` is
+/// never painted over.
 fn flat_wanted(
     plan: &AutoPlan<'_>,
     current: &str,
     wanted: &str,
     is_ceiling: bool,
 ) -> Option<String> {
-    if is_ceiling && is_sky_flat(current) {
+    if is_ceiling && is_sky_flat(current, plan.sky_flat) {
         return None;
     }
     match plan.mode {
@@ -396,7 +403,7 @@ mod tests {
     use super::{AutoMode, AutoPlan, ThemeTextures, apply};
     use crate::themes::Available;
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::consts::SKY_FLAT;
+    use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
 
     /// The resolved theme names used across these tests.
@@ -417,14 +424,15 @@ mod tests {
         walls.insert("WALL".to_owned());
         Available {
             walls,
-            flats: ["FLR", "CEL", SKY_FLAT]
+            flats: ["FLR", "CEL", SKY_FLAT, HEXEN_SKY_FLAT]
                 .iter()
                 .map(|f| (*f).to_owned())
                 .collect(),
         }
     }
 
-    /// A plan in `mode` over every sector, with `doors` as door lines.
+    /// A plan in `mode` over every sector, with `doors` as door lines,
+    /// dressing against the vanilla sky flat.
     fn plan(mode: AutoMode, doors: BTreeSet<usize>, available: &Available) -> AutoPlan<'_> {
         AutoPlan {
             mode,
@@ -433,6 +441,7 @@ mod tests {
             door_lines: doors,
             textures: textures(),
             available,
+            sky_flat: SKY_FLAT,
         }
     }
 
@@ -672,5 +681,69 @@ mod tests {
             &plan(AutoMode::FillMissing, BTreeSet::new(), &avail),
         );
         assert_eq!(map.sidedefs[6].lower, "WALL", "a 64-unit ledge is a wall");
+    }
+
+    /// A plan like [`plan`] reading the `Hexen` sky flat.
+    fn hexen_plan(mode: AutoMode, available: &Available) -> AutoPlan<'_> {
+        AutoPlan {
+            sky_flat: HEXEN_SKY_FLAT,
+            ..plan(mode, BTreeSet::new(), available)
+        }
+    }
+
+    /// [`hall`] with `sky_name` on every ceiling: sectors 0 and 1 share
+    /// the door-line gap that tests the upper exemption.
+    fn hall_skied(sky_name: &str) -> Map {
+        let mut map = hall();
+        for space in map.sectors.iter_mut().take(2) {
+            space.ceiling_flat = sky_name.to_owned();
+        }
+        map
+    }
+
+    #[test]
+    fn the_hexen_sky_flat_keeps_the_ceiling_and_gates_the_upper() {
+        let avail = available();
+        let mut kept = hall_skied(HEXEN_SKY_FLAT);
+        apply(&mut kept, &hexen_plan(AutoMode::Retexture, &avail));
+        assert_eq!(
+            kept.sectors[0].ceiling_flat, HEXEN_SKY_FLAT,
+            "F_SKY is the sky a Hexen plan never paints over"
+        );
+        let mut exempt = hall_skied(HEXEN_SKY_FLAT);
+        apply(&mut exempt, &hexen_plan(AutoMode::FillMissing, &avail));
+        assert_eq!(
+            exempt.sidedefs[1].upper, "-",
+            "both ceilings are the Hexen sky, so the gap needs no upper"
+        );
+        let mut repainted = hall_skied(HEXEN_SKY_FLAT);
+        apply(
+            &mut repainted,
+            &plan(AutoMode::Retexture, BTreeSet::new(), &avail),
+        );
+        assert_eq!(
+            repainted.sectors[0].ceiling_flat, "CEL",
+            "the same ceiling is just a plain flat to a vanilla plan"
+        );
+    }
+
+    #[test]
+    fn the_vanilla_sky_flat_keeps_the_ceiling_for_a_vanilla_plan_only() {
+        let avail = available();
+        let mut kept = hall_skied(SKY_FLAT);
+        apply(
+            &mut kept,
+            &plan(AutoMode::Retexture, BTreeSet::new(), &avail),
+        );
+        assert_eq!(
+            kept.sectors[0].ceiling_flat, SKY_FLAT,
+            "F_SKY1 is the vanilla sky"
+        );
+        let mut filled = hall_skied(SKY_FLAT);
+        apply(&mut filled, &hexen_plan(AutoMode::FillMissing, &avail));
+        assert_eq!(
+            filled.sidedefs[1].upper, "WALL",
+            "F_SKY1 ceilings are plain flats to a Hexen plan, so the gap fills"
+        );
     }
 }

@@ -18,7 +18,7 @@ use crate::wad::map::FlagFamily;
 use crate::wad::map::validate::{Issue, Outcome as ValidateOutcome, Severity};
 use crate::wad::name::LumpName;
 
-use super::{args, compiled_room, issue, request};
+use super::{args, compiled_room, doom_identity, issue, request};
 
 /// A minimal compile for the integration-free smoke: one room,
 /// no connections, roles answering nothing.
@@ -32,7 +32,7 @@ fn a_single_room_plan_compiles_through_the_same_parts() {
     let model = plan.to_model().expect("the wire maps onto the model");
     let theme = PlanTheme { names: Vec::new() };
     let name = LumpName::parse("MAP05").expect("a valid name");
-    let compiled = compile(&model, name, MapFormat::Doom, &theme).expect("one room compiles");
+    let compiled = compile(&model, doom_identity(name), &theme).expect("one room compiles");
     assert_eq!(compiled.map.sectors.len(), 1, "just the room");
     assert_eq!(compiled.room_sectors.get("a"), Some(&vec![0_usize]));
     assert_eq!(
@@ -113,8 +113,7 @@ fn the_report_counts_placed_things_under_its_documented_field() {
     let theme = PlanTheme { names: Vec::new() };
     let compiled = compile(
         &model,
-        LumpName::parse("MAP05").expect("a valid name"),
-        MapFormat::Doom,
+        doom_identity(LumpName::parse("MAP05").expect("a valid name")),
         &theme,
     )
     .expect("one room compiles");
@@ -153,8 +152,7 @@ fn the_report_lists_feature_rows_after_their_connections() {
     let theme = PlanTheme { names: Vec::new() };
     let compiled = compile(
         &model,
-        LumpName::parse("MAP05").expect("a valid name"),
-        MapFormat::Doom,
+        doom_identity(LumpName::parse("MAP05").expect("a valid name")),
         &theme,
     )
     .expect("one room compiles");
@@ -198,8 +196,7 @@ fn finalize_fills_the_nodes_and_validation_result_fields() {
     let theme = PlanTheme { names: Vec::new() };
     let compiled = compile(
         &model,
-        LumpName::parse("MAP05").expect("a valid name"),
-        MapFormat::Doom,
+        doom_identity(LumpName::parse("MAP05").expect("a valid name")),
         &theme,
     )
     .expect("one room compiles");

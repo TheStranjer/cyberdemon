@@ -5,9 +5,12 @@
 //! signature lumps `ZDoom` documents in its `iwadinfo.txt`, applied in the
 //! same order so the first matching rule wins. The pass is pure: it reads
 //! no files and never second-guesses a name into a guess about content.
+//! [`sky_flat`] answers the one per-game follow-up the map cores share:
+//! which flat name this game's engine draws the sky with.
 
 use serde::Serialize;
 
+use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
 use crate::wad::name::LumpName;
 
 /// The game a lump directory's signatures point to.
@@ -70,11 +73,32 @@ pub fn detect_game(names: &[LumpName]) -> Game {
     Game::Unknown
 }
 
+/// The flat name `game` draws the sky with.
+///
+/// `Hexen` stores its sky marker as [`HEXEN_SKY_FLAT`]'s `F_SKY`, every
+/// other game — and [`Game::Unknown`], which falls back to the vanilla
+/// marker — as [`SKY_FLAT`]'s `F_SKY1`. Feed it to
+/// [`is_sky_flat`](crate::wad::map::consts::is_sky_flat) wherever a core
+/// asks whether a plane is the sky.
+///
+/// ZDoom-family ports can also give a single map its own sky flats through
+/// `MAPINFO`; this server reads the per-game marker only and does not
+/// consult `MAPINFO` for it.
+#[must_use]
+#[inline]
+pub const fn sky_flat(game: Game) -> &'static str {
+    match game {
+        Game::Hexen => HEXEN_SKY_FLAT,
+        Game::Doom | Game::Doom2 | Game::Heretic | Game::Strife | Game::Unknown => SKY_FLAT,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{Game, detect_game};
+    use super::{Game, detect_game, sky_flat};
+    use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
     use crate::wad::name::LumpName;
 
     /// Parses fixture names; they are all valid.
@@ -141,6 +165,24 @@ mod tests {
             Game::Unknown,
             "a PWAD of flats only"
         );
+    }
+
+    #[test]
+    fn the_sky_flat_follows_the_game() {
+        assert_eq!(
+            sky_flat(Game::Hexen),
+            HEXEN_SKY_FLAT,
+            "Hexen's marker is F_SKY, without the trailing 1"
+        );
+        for game in [
+            Game::Doom,
+            Game::Doom2,
+            Game::Heretic,
+            Game::Strife,
+            Game::Unknown,
+        ] {
+            assert_eq!(sky_flat(game), SKY_FLAT, "the vanilla marker of {game:?}");
+        }
     }
 
     #[test]

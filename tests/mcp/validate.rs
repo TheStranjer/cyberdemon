@@ -16,7 +16,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::fixtures::{
-        iwad, iwad_broken_map, iwad_heretic, pwad_custom_defs, pwad_map_formats, two_room_map,
+        iwad, iwad_broken_map, iwad_heretic, iwad_hexen, pwad_custom_defs, pwad_map_formats,
+        two_room_map,
     };
     use crate::support::{call, call_err, connect};
 
@@ -653,6 +654,123 @@ mod tests {
         assert!(
             issue_codes(&cleaned).is_empty(),
             "the sky stays valid even where no F_SKY1 lump is carried: {cleaned}"
+        );
+    }
+
+    /// Load the Hexen `IWAD` fixture as layer 0.
+    async fn hexen_iwad(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad_hexen(dir);
+        call(
+            &client,
+            "open_iwad",
+            json!({ "path": base.display().to_string() }),
+        )
+        .await;
+        client
+    }
+
+    /// Wear `sky_name` on both two-room map ceilings and raise sector 0's
+    /// to 192: the bare upper of the step line's front side then needs
+    /// exactly the sky exemption.
+    async fn two_sky_ceilings(client: &Client, sky_name: &str) {
+        call(
+            client,
+            "edit_sector",
+            json!({
+                "map": "MAP01", "index": 0_i32,
+                "ceiling_height": 192_i32, "ceiling_flat": sky_name,
+            }),
+        )
+        .await;
+        call(
+            client,
+            "edit_sector",
+            json!({ "map": "MAP01", "index": 1_i32, "ceiling_flat": sky_name }),
+        )
+        .await;
+    }
+
+    /// Validate the sky-relevant checks of `MAP01`.
+    async fn sky_checks(client: &Client) -> Value {
+        call(
+            client,
+            "validate_map",
+            json!({
+                "map": "MAP01",
+                "codes": ["missing_flat", "missing_required_texture"],
+            }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_hexen_session_reads_f_sky_as_the_sky_flat() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = hexen_iwad(dir.path()).await;
+        two_sky_ceilings(&client, "F_SKY").await;
+        let report = sky_checks(&client).await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(0_u64),
+            "F_SKY is the Hexen sky: exempt from the flat check, though no F_SKY lump \
+             is carried: {report}"
+        );
+        assert_eq!(
+            report["counts"]["warning"],
+            json!(0_u64),
+            "no hall of mirrors between two F_SKY sectors: {report}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hexen_session_reads_f_sky1_as_a_plain_missing_flat() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = hexen_iwad(dir.path()).await;
+        two_sky_ceilings(&client, "F_SKY1").await;
+        let report = sky_checks(&client).await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(2_u64),
+            "both vanilla markers are just uncarried flats to a Hexen session: {report}"
+        );
+        assert_eq!(
+            report["counts"]["warning"],
+            json!(1_u64),
+            "and they do not exempt the step line's upper: {report}"
+        );
+        let flat_rows: Vec<&Value> = report["issues"]
+            .as_array()
+            .expect("an issue list")
+            .iter()
+            .filter(|row| row["code"] == json!("missing_flat"))
+            .collect();
+        assert_eq!(flat_rows.len(), 2, "both ceiling planes report: {report}");
+        assert!(
+            flat_rows.iter().all(|row| row["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("ceiling flat \"F_SKY1\"")),
+            "the ceiling rows name the flat: {flat_rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_doom_session_reads_f_sky_as_a_plain_missing_flat() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = plain_iwad(dir.path()).await;
+        two_sky_ceilings(&client, "F_SKY").await;
+        let report = sky_checks(&client).await;
+        assert_eq!(
+            report["counts"]["error"],
+            json!(2_u64),
+            "F_SKY is no sky to a DOOM II session and no such flat is carried: {report}"
+        );
+        assert_eq!(
+            report["counts"]["warning"],
+            json!(1_u64),
+            "so the bare upper between the two F_SKY ceilings is a hall of mirrors: \
+             {report}"
         );
     }
 

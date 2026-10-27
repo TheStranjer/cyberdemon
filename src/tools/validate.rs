@@ -26,7 +26,7 @@ use crate::tools::maps::common;
 use crate::tools::textures::TextureSet;
 use crate::tools::{parse_limit, reply};
 use crate::wad::classify::{LumpKind, Namespace};
-use crate::wad::game::Game;
+use crate::wad::game::{Game, sky_flat};
 use crate::wad::lumps;
 use crate::wad::map::validate::{self, Context, Issue, ResourceIndex, Severity};
 use crate::wad::name::LumpName;
@@ -80,7 +80,8 @@ pub(in crate::tools) struct Tables {
 
 impl Tables {
     /// The validation context borrowing both tables and the resource
-    /// index the caller read from the merged view.
+    /// index the caller read from the merged view, with the selected
+    /// game's sky flat: the resource checks let it through by name.
     pub(in crate::tools) const fn context<'res>(
         &'res self,
         resources: &'res ResourceIndex,
@@ -89,6 +90,7 @@ impl Tables {
             definitions: &self.definitions,
             hexen_specials: &self.hexen_specials,
             resources,
+            sky_flat: sky_flat(self.definitions.game),
         }
     }
 }
@@ -342,6 +344,7 @@ mod tests {
     use crate::state::AppState;
     use crate::wad::archive::{Lump, Wad, WadKind};
     use crate::wad::game::Game;
+    use crate::wad::map::consts::SKY_FLAT;
     use crate::wad::map::validate::{self, Context, ResourceIndex, Severity};
     use crate::wad::map::{Map, Sector};
     use crate::wad::name::LumpName;
@@ -485,6 +488,7 @@ mod tests {
             definitions: &doom,
             hexen_specials: &hexen,
             resources: &resources,
+            sky_flat: SKY_FLAT,
         };
         let map = one_sector();
         let outcome = validate::run(&map, &context, None);
@@ -607,6 +611,7 @@ mod tests {
             definitions: &doom,
             hexen_specials: &hexen,
             resources: &resources,
+            sky_flat: SKY_FLAT,
         };
         let map = one_sector();
         let name = LumpName::parse("MAP01").expect("test names are valid");
@@ -633,6 +638,7 @@ mod tests {
             definitions: &doom,
             hexen_specials: &hexen,
             resources: &resources,
+            sky_flat: SKY_FLAT,
         };
         let map = one_sector();
         let name = LumpName::parse("MAP01").expect("test names are valid");

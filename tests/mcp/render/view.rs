@@ -14,7 +14,7 @@ use cyberdemon::gfx::image::RgbaImage;
 use cyberdemon::render::gamma_table;
 use serde_json::{Value, json};
 
-use crate::fixtures::iwad_view_textures;
+use crate::fixtures::{iwad_hexen, iwad_view_textures};
 use crate::render::{Client, iwad_client, path_arg, rendered_image};
 use crate::support::{call, connect};
 
@@ -141,6 +141,49 @@ async fn render_view_reports_the_camera_and_paints_the_hall_view() {
         [1_u8, 254, 1, 255],
         "near the top-left the hall's own ceiling still shows"
     );
+}
+
+#[tokio::test]
+async fn a_hexen_session_draws_the_sky_on_an_f_sky_ceiling() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = connect().await;
+    let base = iwad_hexen(dir.path());
+    call(&client, "open_iwad", path_arg(&base)).await;
+    fullbright(&client).await;
+    call(
+        &client,
+        "edit_sector",
+        json!({ "map": "MAP01", "index": 0_i32, "ceiling_flat": "F_SKY" }),
+    )
+    .await;
+    let report = call(&client, "render_view", view_args(&Value::Null)).await;
+    assert_eq!(
+        report["camera"]["sector"],
+        json!(0_u64),
+        "standing in the hall under the F_SKY ceiling"
+    );
+    let problems = report["problems"].as_array().expect("a problems list");
+    assert!(
+        !problems
+            .iter()
+            .any(|row| row.as_str().unwrap_or_default().starts_with("missing sky")),
+        "the fixture carries SKY1, so the sky is not a problem: {problems:?}"
+    );
+    let image = rendered_image(&report).await;
+    for (column, row) in [
+        (40_u32, 0_u32),
+        (40, 10),
+        (80, 0),
+        (80, 10),
+        (120, 0),
+        (120, 10),
+    ] {
+        assert_eq!(
+            image.get(column, row).expect("a pixel"),
+            [200_u8, 55, 200, 255],
+            "the Hexen session's F_SKY ceiling draws the sky at column {column} row {row}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -19,6 +19,7 @@ use crate::defs::Definitions;
 use crate::error::{CyberError, PlanKind, PlanRef};
 use crate::plan::CompiledPlan;
 use crate::plan::compile;
+use crate::plan::emit::MapIdentity;
 use crate::plan::features::{FeatureRow, apply_features, playable_checks};
 use crate::plan::things::{
     PLAYER_ONE_START, PlacementContext, PlannedThing, place, presence_flags, resolve_thing_kind,
@@ -33,6 +34,7 @@ use crate::tools::plan::{
 };
 use crate::tools::validate::{Counts, resource_index, session_tables};
 use crate::wad::classify::MapFormat;
+use crate::wad::game::sky_flat;
 use crate::wad::map::FlagFamily;
 use crate::wad::map::Map;
 use crate::wad::map::validate::{Issue, Outcome as ValidateOutcome, Severity, run as run_checks};
@@ -357,8 +359,13 @@ pub(super) fn build_run(
     units.check()?;
     let plan = transform_plan(&drawn, &units, args.grid)?;
     let theme = plan_theme(session, args.theme.as_deref())?;
+    let identity = MapIdentity {
+        name,
+        format,
+        sky_flat: sky_flat(session.game()),
+    };
     let mut compiled =
-        compile(&plan, name, format, &theme.plan).map_err(|error| with_plan_path(error, args))?;
+        compile(&plan, identity, &theme.plan).map_err(|error| with_plan_path(error, args))?;
     compiled.map.udmf_namespace = namespace;
     compiled.warnings.extend(theme.notes);
     let features = apply_features(&plan, &mut compiled, &theme.features)

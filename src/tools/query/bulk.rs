@@ -33,6 +33,7 @@ use crate::state::AppState;
 use crate::tools::maps::common;
 use crate::tools::maps::params::edit_result_fragment;
 use crate::tools::query::replace::Stock;
+use crate::wad::game::sky_flat;
 use crate::wad::map::Map;
 use crate::wad::map::bulk::edits::{Applied, Change, EditScope, FieldEdits, apply};
 use crate::wad::map::query::{ElementKind, Filter, Query, QueryContext, Within, run_query};
@@ -166,7 +167,7 @@ fn selected(
     query: &Query,
     cap: Option<usize>,
 ) -> Result<Vec<usize>, CyberError> {
-    let ctx = QueryContext::new(map.flag_family(), defs);
+    let ctx = QueryContext::new(map.flag_family(), defs, sky_flat(defs.game));
     let hits = run_query(map, &ctx, query)?;
     let max = cap.unwrap_or(DEFAULT_MAX);
     if hits.len() > max {

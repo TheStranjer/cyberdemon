@@ -1075,7 +1075,9 @@ src/
                   and `optimize/tests/unused.rs` (the
                   content-reading sweeps, their refusals, the commit and the
                   wire shape), `wad/game.rs`
-                  the pure game signature detection (`detect_game`),
+                  the pure game signature detection (`detect_game`) and the
+                  per-game sky flat (`sky_flat`: `Hexen` draws the sky with
+                  `F_SKY`, every other game with `F_SKY1`),
                   `wad/textures.rs` the `PNAMES` and `TEXTURE1`/`TEXTURE2`
                   codecs: patch-name index, texture records with
                   `Doom`/`Strife` layout detection and patch-reference

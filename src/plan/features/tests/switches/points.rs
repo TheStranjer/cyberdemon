@@ -10,7 +10,7 @@ use crate::plan::features::{FeatureLineEnds, apply_features};
 use crate::plan::model::Side;
 use crate::wad::classify::MapFormat;
 
-use super::super::{TAG_ONE, TestRoles, dress, map_name, refuse_features, wired};
+use super::super::{TAG_ONE, TestRoles, dress, refuse_features, wired};
 use super::{action_of_line, c_room, ends, exit_at, stacked_doors, switch_at};
 
 /// The row's point mounts the panel where the drawing put it and the
@@ -100,7 +100,7 @@ fn a_switch_at_a_point_mounts_on_the_nearest_of_the_tied_walls() {
 fn a_panel_that_does_not_fit_where_its_point_sits_names_the_knob() {
     let mut plan = c_room();
     plan.features = vec![exit_at("c", Some(Side::West), Some((0_i64, 4_i64)))];
-    let mut compiled = compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles)
+    let mut compiled = compile(&plan, super::super::identity(MapFormat::Doom), &TestRoles)
         .expect("the fixture compiles");
     let error = apply_features(&plan, &mut compiled, &dress()).expect_err("the panel cannot fit");
     assert_eq!(error.code(), "invalid_argument", "a fit refusal");

@@ -12,8 +12,9 @@
 //! fills that window with the faced sector's ceiling and floor, sampled
 //! from the flat at the world point the row's exact ray parameter lands
 //! on (`Doom`'s world-grid alignment, shaded by that row's plane depth),
-//! and then paints the wall face its facing sidedef carries. An `F_SKY1`
-//! plane draws the sky texture instead, bucketed by the column's ray
+//! and then paints the wall face its facing sidedef carries. A plane
+//! wearing the scene's sky flat (`F_SKY1`, `F_SKY` in `Hexen`)
+//! draws the sky texture instead, bucketed by the column's ray
 //! angle and placed with `Doom`'s 320x200 sky rows, full bright (or the
 //! background when the sky switch is off). Masked middle textures seen
 //! through two-sided lines are collected, fully keyed, mapped, placed,

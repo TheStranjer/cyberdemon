@@ -153,10 +153,19 @@ pub(super) fn wired_dressed(
     format: MapFormat,
     themed: &FeatureDress,
 ) -> (CompiledPlan, Vec<FeatureRow>) {
-    let mut compiled =
-        compile(plan, map_name("MAP01"), format, &TestRoles).expect("the fixture compiles");
+    let mut compiled = compile(plan, identity(format), &TestRoles).expect("the fixture compiles");
     let rows = apply_features(plan, &mut compiled, themed).expect("features apply");
     (compiled, rows)
+}
+
+/// The identity a feature test compiles into: `MAP01` in `format`, the
+/// vanilla sky flat.
+pub(super) fn identity(format: MapFormat) -> crate::plan::emit::MapIdentity {
+    crate::plan::emit::MapIdentity {
+        name: map_name("MAP01"),
+        format,
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
+    }
 }
 
 /// The line `index` of the map.
@@ -213,8 +222,7 @@ pub(super) fn opening(id: &str, from: &str, to: &str) -> Connection {
 /// Compile `plan` and require the feature run to refuse.
 #[track_caller]
 pub(super) fn refuse_features(plan: &Plan) -> crate::error::CyberError {
-    let mut compiled =
-        compile(plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+    let mut compiled = compile(plan, identity(MapFormat::Doom), &TestRoles).expect("it compiles");
     let error = apply_features(plan, &mut compiled, &dress());
     error.expect_err("the feature must be refused")
 }

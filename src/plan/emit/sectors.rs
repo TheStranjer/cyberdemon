@@ -7,17 +7,17 @@
 
 use alloc::collections::BTreeMap;
 
-use super::{NO_TEXTURE, SKY_FLAT};
+use super::NO_TEXTURE;
 use crate::error::CyberError;
 use crate::plan::connectors::ConnectorGeometry;
 use crate::plan::model::{ConnectionKind, Plan, Room};
 use crate::wad::map::Sector;
 
 /// The sector row for a room: its heights and light, its flat overrides
-/// or the convention default (`outdoor` rooms fall back to the sky), and
-/// no special or tag yet.
-pub(super) fn room_sector(room: &Room) -> Sector {
-    let ceiling_default = if room.outdoor { SKY_FLAT } else { NO_TEXTURE };
+/// or the convention default (`outdoor` rooms fall back to the caller's
+/// sky flat `sky`), and no special or tag yet.
+pub(super) fn room_sector(room: &Room, sky: &str) -> Sector {
+    let ceiling_default = if room.outdoor { sky } else { NO_TEXTURE };
     Sector {
         floor_height: room.floor,
         ceiling_height: room.ceiling,

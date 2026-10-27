@@ -26,6 +26,7 @@ use crate::error::CyberError;
 use crate::state::AppState;
 use crate::tools::maps::common;
 use crate::tools::{Page, parse_limit};
+use crate::wad::game::sky_flat;
 use crate::wad::map::Map;
 use crate::wad::map::query::{ElementKind, Filter, Query, QueryContext, Within, run_query};
 
@@ -280,7 +281,11 @@ pub(super) fn find_run(
         r#where: args.r#where,
         within: args.within,
     };
-    let ctx = QueryContext::new(prepared.map.flag_family(), &prepared.defs);
+    let ctx = QueryContext::new(
+        prepared.map.flag_family(),
+        &prepared.defs,
+        sky_flat(prepared.defs.game),
+    );
     let hits = run_query(&prepared.map, &ctx, &query)?;
     let (page, next_offset) = Page::new(args.offset.unwrap_or(0), limit).window(&hits);
     let summary = rows(args.kind, &page, &prepared.map, &ctx);

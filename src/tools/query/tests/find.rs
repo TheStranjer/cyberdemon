@@ -62,7 +62,7 @@ fn page_hits_windows_the_list_and_names_the_rest() {
 fn rows_summarize_each_kind_in_its_documented_shape() {
     let map = mini_map();
     let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-    let ctx = QueryContext::new(map.flag_family(), &defs);
+    let ctx = QueryContext::new(map.flag_family(), &defs, crate::wad::map::consts::SKY_FLAT);
     let sector = rows(ElementKind::Sectors, &[0_usize], &map, &ctx)
         .into_iter()
         .next()
@@ -123,7 +123,7 @@ fn rows_summarize_each_kind_in_its_documented_shape() {
 fn rows_drop_indices_that_left_their_block() {
     let map = mini_map();
     let defs = definitions_for(Game::Doom2).expect("the embedded table is valid");
-    let ctx = QueryContext::new(map.flag_family(), &defs);
+    let ctx = QueryContext::new(map.flag_family(), &defs, crate::wad::map::consts::SKY_FLAT);
     assert!(
         rows(ElementKind::Sectors, &[0_usize, 42_usize], &map, &ctx).len() == 1,
         "the stale index contributes nothing"

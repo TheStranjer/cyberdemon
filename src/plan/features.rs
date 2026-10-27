@@ -39,8 +39,10 @@
 //! into the map before the plan's things are placed. The exit step ends
 //! the level: its `switch` style mounts the panel the same way, reading
 //! the row's `wall` and `at` and carrying the exit action, and its
-//! `walk_over` style dresses every two-sided boundary of the room's
-//! sectors with [`build_walk_over_exit`]. The
+//! `walk_over` style dresses every plain two-sided boundary of the
+//! room's sectors with [`build_walk_over_exit`] — a boundary line an
+//! earlier step already dressed keeps its action, and the note naming
+//! those lines joins the compiled plan's warnings. The
 //! lights step paints every room's `light_effect` [`LightEffect`] onto
 //! all its sectors with [`light_special`] (keeping the light level and
 //! every bit above the family's basic-type field), and the secret step
@@ -232,7 +234,9 @@ pub struct FeatureLineEnds {
 /// `compiled` must be the plan's own compilation: the steps act on the
 /// connector and room bookkeeping, never re-derive it. Lift and
 /// teleporter build notes (a drop too short for a ride, an overlay
-/// warning) join `compiled`'s warnings like every other advisory.
+/// warning) and the boundary lines a `walk_over` exit left to the
+/// feature that owns them join `compiled`'s warnings like every other
+/// advisory.
 ///
 /// # Errors
 ///
@@ -250,7 +254,10 @@ pub struct FeatureLineEnds {
 /// centre past the map coordinate range, and
 /// [`build_teleporter`](crate::wad::map::features::build_teleporter)'s refusals; the exit step refuses the same way,
 /// and a `walk_over` room whose sectors share no two-sided boundary
-/// with anything.
+/// with anything, or share only boundary lines another feature already
+/// dresses (its refusal names those lines and their specials); such a
+/// room with a plain line left over builds, and the lines it stepped
+/// over come back as a warning.
 #[inline]
 pub fn apply_features(
     plan: &Plan,

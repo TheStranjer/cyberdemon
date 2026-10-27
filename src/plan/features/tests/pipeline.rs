@@ -6,7 +6,7 @@ use super::super::{FeatureRow, playable_checks};
 use super::lifts::{join, lift_feature};
 use super::switches::{door_features, exit_feature, switch_feature};
 use super::teleporters::teleporter_feature;
-use super::{back_sector, door, door_plan, front_sector, line_at, rect_room, two_rooms, wired};
+use super::{back_sector, door, front_sector, line_at, opening_at, rect_room, two_rooms, wired};
 use crate::defs::{Definitions, definitions_for};
 use crate::plan::model::{ConnectionKind, DoorStyle, ExitStyle, KeyColor, Plan, Side};
 use crate::wad::game::Game;
@@ -164,10 +164,15 @@ fn checked(plan: &Plan, kinds: &[i32]) -> Vec<String> {
     playable_checks(plan, &compiled.map, &doom_defs())
 }
 
-/// The one-door `style` plan carrying an `exit` row, so only a key
-/// or remote warning can speak; the door's id is `d1`.
+/// The `style` door plan carrying a `walk_over` `exit` row in room `b`,
+/// joined to room `a` by a plain opening as well so the exit has a
+/// boundary line of its own to dress; only a key or remote warning can
+/// speak, and the door's id is `d1`.
 fn door_feature_plan(style: DoorStyle) -> Plan {
-    let mut plan = door_plan(style);
+    let mut plan = two_rooms(vec![
+        door("d1", style, (128_i64, 32_i64)),
+        opening_at("o1", (128_i64, 96_i64)),
+    ]);
     plan.features = vec![exit_feature("b", ExitStyle::WalkOver, false, None)];
     plan
 }

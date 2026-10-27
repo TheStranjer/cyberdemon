@@ -154,9 +154,13 @@ at 32 wide and wears the theme's `exit_switch` texture.
 ### Walk-over exit
 
 **"Crossing the threshold should end the level."** `walk_over` dresses
-every two-sided boundary of the sector with a W1 exit action. Tag 0 ends
-the game; set a destination map with `edit_linedef` where the port
-supports one.
+every plain two-sided boundary of the sector with a W1 exit action. A
+boundary line that already carries another feature's action (a door's
+use line, a lift trigger, a teleporter pad border) keeps it and comes
+back in `skipped_lines` with a warning; a sector whose every boundary
+line is busy is refused — mount the end on a wall with `kind: "switch"`
+or open a plain line instead. Tag 0 ends the game; set a destination map
+with `edit_linedef` where the port supports one.
 
 ```json recipe
 {"fixture": true, "steps": [{"tool": "add_exit", "arguments": {"kind": "walk_over", "sector": 1}}]}
@@ -361,12 +365,15 @@ form; check the result by ear with `preview_sound {"name": "DSPISTOL",
 **"Build me a small level: entry hall, big room with a door, exit in the
 back."** No existing map to read — write the plan and `build_map_from_plan`
 compiles it: rooms by rectangle, one `door` connection across the shared
-wall, a `walk_over` exit feature, things by name, and `finalize` builds
-the nodes and runs the checks inside the same edit. The coordinates here
-are the sketch-guide example's proportions without the sketch.
+wall, an `exit` feature on the hall's back wall (`switch` is the default
+style; a `walk_over` exit would need a boundary line the door does not
+own, since it leaves a dressed line to its own feature), things by name,
+and `finalize` builds the nodes and runs the checks inside the same edit.
+The coordinates here are the sketch-guide example's proportions without
+the sketch.
 
 ```json recipe
-{"fixture": true, "steps": [{"tool": "build_map_from_plan", "arguments": {"map": "MAP02", "rooms": [{"id": "entry", "rect": {"x": 0, "y": 0, "w": 128, "h": 128}, "light": 128}, {"id": "hall", "rect": {"x": 128, "y": 0, "w": 256, "h": 192}, "ceiling": 192, "light": 192}], "connections": [{"id": "gate", "from": "entry", "to": "hall", "kind": "door", "style": "normal", "at": [128, 64]}], "features": [{"kind": "exit", "room": "hall", "style": "walk_over"}], "things": [{"name": "shotgun", "room": "entry"}, {"name": "imp", "room": "hall"}], "player_start": {"room": "entry", "angle": 0}, "finalize": true}}]}
+{"fixture": true, "steps": [{"tool": "build_map_from_plan", "arguments": {"map": "MAP02", "rooms": [{"id": "entry", "rect": {"x": 0, "y": 0, "w": 128, "h": 128}, "light": 128}, {"id": "hall", "rect": {"x": 128, "y": 0, "w": 256, "h": 192}, "ceiling": 192, "light": 192}], "connections": [{"id": "gate", "from": "entry", "to": "hall", "kind": "door", "style": "normal", "at": [128, 64]}], "features": [{"kind": "exit", "room": "hall", "wall": "east"}], "things": [{"name": "shotgun", "room": "entry"}, {"name": "imp", "room": "hall"}], "player_start": {"room": "entry", "angle": 0}, "finalize": true}}]}
 ```
 
 ### Fix "can't reach the exit"

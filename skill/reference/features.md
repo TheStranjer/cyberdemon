@@ -428,7 +428,8 @@ call add_switch {"linedef": 7, "action": "open_door", "target_sector": 2}
 ## `add_exit`
 
 `{map?, kind, secret? = false, linedef?, sector?}` → `{kind, lines,
-special, secret, map, nodes_invalidated, copied_to_working}`
+special, secret, skipped_lines, warnings, map, nodes_invalidated,
+copied_to_working}`
 
 Places the level end in one undoable edit, either as an exit switch on a
 wall or as lines the player crosses. `kind` (required, case-insensitive)
@@ -445,8 +446,17 @@ with `playeruse` activation. `sector` is ignored.
 **`kind: "walk_over"`** dresses a whole sector: `sector` (required —
 its absence is `invalid_argument`, an index the map does not hold is
 `not_found` naming it) — **every
-two-sided linedef with the sector on either side** becomes a level-end
-line. A sector with no two-sided boundary is refused with a hint. The
+two-sided linedef with the sector on either side that carries no action
+of its own** becomes a level-end line. A boundary line whose `special`
+is already something else — a door's use line, a lift trigger, a
+teleporter pad border — is **left alone** so that feature keeps working;
+it is reported in `skipped_lines` as `{"line": index, "special": n}` and
+one `warnings` note says the same in prose. A line already carrying one
+of the map's own family's level ends (`52`/`124` in Doom, `243`/`244` in
+Hexen) is dressed again, so the same threshold can move between its
+normal and its secret form. A sector with no two-sided boundary, or one
+whose every boundary line is busy, is refused with a hint naming the
+busy lines and pointing at `kind: "switch"`. The
 Doom family gets `W1` 52 (124); such a line's tag is the destination map
 number in vanilla, so each line's existing tag is **kept** untouched (0
 ends the game, or the secret level on 124 — set a real destination with
@@ -455,15 +465,19 @@ activation field set to `playercross` — cross, not use; the lines' other
 flag bits, tags and args stay. `linedef` is ignored, and nothing is
 re-textured.
 
-The result reports `kind`, the installed `special`, the `secret` flag and
+The result reports `kind`, the installed `special`, the `secret` flag,
 `lines`: the one linedef for the switch kind (new when the wall was
-split), every dressed boundary for `walk_over`. Switch-kind edits set
+split), every dressed boundary for `walk_over` — and, for `walk_over`,
+`skipped_lines` and `warnings` as described above (both empty for the
+switch kind and for a room whose every boundary line was plain).
+Switch-kind edits set
 `nodes_invalidated` only when they split; walk-over edits are property
 changes and never do.
 
 ```json
 call add_exit {"kind": "walk_over", "sector": 1, "secret": true}
 -> {"kind": "walk_over", "lines": [2], "special": 124, "secret": true,
+    "skipped_lines": [], "warnings": [],
     "map": "E1M1", "nodes_invalidated": false, "copied_to_working": true}
 ```
 

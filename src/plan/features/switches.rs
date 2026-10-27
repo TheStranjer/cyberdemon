@@ -23,7 +23,7 @@ use crate::plan::model::{ExitStyle, Feature, Plan, Side};
 use crate::wad::map::Map;
 use crate::wad::map::features::place::distance_fraction;
 use crate::wad::map::features::{
-    DEFAULT_SWITCH_WIDTH, PlacedSwitch, SwitchAction, SwitchSpec, build_switch,
+    DEFAULT_SWITCH_WIDTH, PlacedSwitch, SwitchAction, SwitchSpec, WalkOverExit, build_switch,
     build_walk_over_exit,
 };
 use crate::wad::map::model::Linedef;
@@ -190,8 +190,9 @@ fn wall_middle(map: &Map, linedef: usize) -> String {
 /// The exit step: end the level where every `exit` row stands, in plan
 /// order — its `switch` style through the same wall-mounted panel as
 /// the switch step, reading the row's `wall` and `at`, its `walk_over`
-/// style on every two-sided boundary of the room's sectors (that style
-/// mounts no panel, so it reads neither).
+/// style on every plain two-sided boundary of the room's sectors (that
+/// style mounts no panel, so it reads neither, and it leaves a boundary
+/// line an earlier step dressed to its own action, warning about it).
 pub(super) fn exits(
     plan: &Plan,
     compiled: &mut CompiledPlan,
@@ -226,7 +227,7 @@ pub(super) fn exits(
                 let mount = exit_mount(dress, choice, secret);
                 vec![mount_panel(&mut compiled.map, &sectors, &mount)?.linedef]
             }
-            ExitStyle::WalkOver => walk_over_exit(&mut compiled.map, &sectors, secret)?,
+            ExitStyle::WalkOver => walk_over_row(compiled, &sectors, secret)?,
         };
         run.rows.push(FeatureRow {
             kind: "exit",
@@ -262,21 +263,48 @@ const fn exit_mount<'mount>(
     }
 }
 
-/// Dress every two-sided boundary of `sectors` with the family's
+/// Dress every plain two-sided boundary of `sectors` with the family's
 /// walk-over level end, keeping the tags those lines carry — a plan
 /// room's lines hold tag `0`, which in the `Doom` family ends the game.
+/// The lines the earlier steps already dressed (a door's use lines, a
+/// lift trigger, a teleporter pad border) come back in
+/// [`WalkOverExit::skipped_lines`]; the run warns with them.
 fn walk_over_exit(
     map: &mut Map,
     sectors: &[usize],
     secret: bool,
-) -> Result<Vec<usize>, CyberError> {
-    let mut lines = Vec::new();
+) -> Result<WalkOverExit, CyberError> {
+    let mut built = WalkOverExit {
+        special: 0_i32,
+        lines: Vec::new(),
+        skipped_lines: Vec::new(),
+    };
     for &sector in sectors {
-        lines.extend(build_walk_over_exit(map, sector, secret)?.lines);
+        let one = build_walk_over_exit(map, sector, secret)?;
+        built.special = one.special;
+        built.lines.extend(one.lines);
+        built.skipped_lines.extend(one.skipped_lines);
     }
-    lines.sort_unstable();
-    lines.dedup();
-    Ok(lines)
+    built.lines.sort_unstable();
+    built.lines.dedup();
+    built.skipped_lines.sort_by_key(|skip| skip.line);
+    built.skipped_lines.dedup();
+    Ok(built)
+}
+
+/// The `walk_over` style's row: dress the room's plain boundaries and
+/// turn every boundary line another feature owns into an advisory note
+/// on the compiled plan.
+fn walk_over_row(
+    compiled: &mut CompiledPlan,
+    sectors: &[usize],
+    secret: bool,
+) -> Result<Vec<usize>, CyberError> {
+    let built = walk_over_exit(&mut compiled.map, sectors, secret)?;
+    if let Some(note) = built.warning() {
+        compiled.warnings.push(note);
+    }
+    Ok(built.lines)
 }
 
 /// The map-unit point of a wall-mounted row's plan `at`, refused when an

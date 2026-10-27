@@ -15,7 +15,8 @@
 //! [`switches::build_switch`] mounts one on a named wall — fit the panel
 //! chunk, isolate it as its own linedef and dress the line with the
 //! action — while [`switches::build_walk_over_exit`] ends the level on
-//! every two-sided boundary of a sector. [`window`] is the
+//! every plain two-sided boundary of a sector, leaving a boundary line
+//! another feature already dresses to its own action. [`window`] is the
 //! pure window core: [`window::window_record`] computes the strip
 //! sector's sill/lintel heights and [`window::apply_window`] closes off
 //! the drawn strip with two-sided blocking view lines. [`stairs`] is
@@ -74,9 +75,9 @@ pub use stairs::{
     StairPlan, StairSpec, StairStep, build_stairs, plan_stairs,
 };
 pub use switches::{
-    Chunk, DEFAULT_SWITCH_WIDTH, PlacedSwitch, SwitchAction, SwitchSpec, WalkOverExit, action_name,
-    build_switch, build_walk_over_exit, dress_switch, isolate_chunk, switch_cut, switch_span,
-    switch_special, switch_tag, walk_over_special,
+    Chunk, DEFAULT_SWITCH_WIDTH, PlacedSwitch, SkippedLine, SwitchAction, SwitchSpec, WalkOverExit,
+    action_name, build_switch, build_walk_over_exit, dress_switch, is_level_end, isolate_chunk,
+    switch_cut, switch_span, switch_special, switch_tag, walk_over_special,
 };
 pub use teleport::{
     DEFAULT_PAD_SIZE, TELEPORT_DESTINATION_THING, TeleportBuild, TeleportSpec, build_teleporter,

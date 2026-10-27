@@ -784,7 +784,8 @@ src/
                   body and the `features::switches` mount core:
                   `build_switch`'s panel fit, `split_linedef` isolation,
                   tag resolution and dressing;
-                  `build_walk_over_exit`'s sector-boundary level ends),
+                  `build_walk_over_exit`'s plain-sector-boundary level
+                  ends),
                   `features/specials.rs` (the `mark_secret`/
                   `set_light_effect` special-bit steps over
                   `features::specials`) and `features/place_params.rs`
@@ -1393,7 +1394,8 @@ src/
                   `switch_special` action table, `build_switch`'s wall
                   mount: panel chunk fit, `split_linedef` isolation, tag
                   resolution and dressing, and `build_walk_over_exit`'s
-                  two-sided-boundary level ends) and
+                  plain two-sided-boundary level ends, its busy lines
+                  skipped and reported) and
                   `map/features/specials.rs` the pure sector-special builders
                   (`secret_edit`'s per-family secret bit, `light_special`'s
                   per-family light effect — each keeping every bit outside

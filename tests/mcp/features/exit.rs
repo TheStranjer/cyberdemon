@@ -1,13 +1,15 @@
 //! `add_exit`: the level-ending switch on a named wall, the walk-over exit
-//! dressing every two-sided boundary of a sector with 52/124 (`Doom`) or
-//! `playercross` 243/244 (`Hexen`), the destination tag kept on the `W1`
-//! line, and the missing-`linedef`/missing-`sector`/bad-`kind` refusals.
+//! dressing every plain two-sided boundary of a sector with 52/124 (`Doom`)
+//! or `playercross` 243/244 (`Hexen`), the destination tag kept on the `W1`
+//! line, the boundary lines a door already owns left alone and named in
+//! `skipped_lines`, and the missing-`linedef`/missing-`sector`/bad-`kind`
+//! refusals.
 
 use serde_json::{Value, json};
 
 use crate::features::{
-    Client, features_loaded, flag_names, formats_loaded, l_room_loaded, validate_clean,
-    working_linedef,
+    Client, features_loaded, flag_names, formats_loaded, index_list, l_room_loaded, reported_lines,
+    validate_clean, working_linedef,
 };
 use crate::support::{call, call_err};
 
@@ -242,4 +244,105 @@ async fn exit_arguments_are_validated() {
         "no two-sided boundary",
     )
     .await;
+}
+
+#[tokio::test]
+async fn a_walk_over_exit_skips_a_boundary_line_another_feature_owns() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let split = call(&client, "split_linedef", json!({"index": 2_i32})).await;
+    let owned = split["new_linedef"].as_u64().expect("the appended half");
+    call(
+        &client,
+        "edit_linedef",
+        json!({"index": owned, "special": 1_i32, "tag": 1_i32}),
+    )
+    .await;
+    let result = call(
+        &client,
+        "add_exit",
+        json!({"kind": "walk_over", "sector": 0_i32}),
+    )
+    .await;
+    assert_eq!(result["special"], json!(52_i32), "the W1 exit");
+    assert_eq!(
+        result["skipped_lines"],
+        json!([{"line": owned, "special": 1_i32}]),
+        "the door's own line is reported with the action it kept"
+    );
+    let warnings = result["warnings"].as_array().expect("a warning list");
+    assert_eq!(warnings.len(), 1, "the skip is the only note: {warnings:?}");
+    let note = warnings.first().expect("one note").to_string();
+    assert!(note.contains("walk_over exit left"), "{note}");
+    assert!(note.contains("special 1"), "{note}");
+    let crossed = index_list(&result, "lines");
+    let owned_line = usize::try_from(owned).expect("a small index");
+    assert!(
+        !crossed.contains(&owned_line) && crossed.len() == 1,
+        "the plain half alone ends the level: {crossed:?}"
+    );
+    for line in &crossed {
+        assert_eq!(
+            working_linedef(&client, "MAP01", *line).await["special"],
+            json!(52_i32),
+            "the W1 on line {line}"
+        );
+    }
+    let door = working_linedef(&client, "MAP01", owned_line).await;
+    assert_eq!(
+        door["special"],
+        json!(1_i32),
+        "the door still opens from its room"
+    );
+    assert_eq!(door["tag"], json!(1_i32), "and on its own tag");
+    validate_clean(&client, "MAP01").await;
+    let plays = call(
+        &client,
+        "check_playability",
+        json!({"map": "MAP01", "render": false}),
+    )
+    .await;
+    assert_eq!(
+        plays["ok"],
+        json!(true),
+        "the crossed plain line still ends the level: {plays}"
+    );
+}
+
+#[tokio::test]
+async fn a_walk_over_exit_refuses_a_sector_a_door_wholly_owns() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let door = call(&client, "add_door", json!({"between": [0_i32, 1_i32]})).await;
+    let lines = door["lines"].as_array().expect("two use lines");
+    assert_eq!(lines.len(), 2_usize, "a use line in each room");
+    for sector in [0_i32, 1_i32, 2_i32] {
+        let (code, message, _) = call_err(
+            &client,
+            "add_exit",
+            json!({"kind": "walk_over", "sector": sector}),
+        )
+        .await;
+        assert_eq!(code, "invalid_argument", "sector {sector} is all door");
+        assert!(
+            message.contains("no plain two-sided boundary to walk over"),
+            "{message}"
+        );
+        assert!(
+            message.contains("(special 1)"),
+            "the refusal names the door line: {message}"
+        );
+        assert!(
+            message.contains("kind \"switch\""),
+            "and points at the way out: {message}"
+        );
+    }
+    let kept = reported_lines(&client, "MAP01", &door, "lines").await;
+    for row in &kept {
+        assert_eq!(
+            row["special"],
+            json!(1_i32),
+            "the refusals wrote nothing over the door"
+        );
+    }
 }

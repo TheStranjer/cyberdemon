@@ -5,8 +5,9 @@
 //! existing sector or a new one drawn from its polygon with
 //! [`crate::wad::map::overlay::apply_overlay`]
 //! [`crate::wad::map::overlay::Paint::Sector`] (copying the sector under
-//! its centre), [`crate::wad::map::features::build_lift`] finds its
-//! edges that face a lower neighbour, turns each so its front looks down
+//! an interior point of its polygon),
+//! [`crate::wad::map::features::build_lift`] finds its edges that face a
+//! lower neighbour, turns each so its front looks down
 //! at the player who triggers the ride, stamps a fresh
 //! [`crate::wad::map::features::next_free_tag`] on the sector and
 //! installs the [`crate::wad::map::features::lift_specials`]
@@ -46,9 +47,9 @@ pub(super) struct AddLiftParams {
     #[serde(default)]
     pub(super) map: Option<String>,
     /// The outline of a new platform to draw, `{points: [{x, y}, ...]}`:
-    /// at least three corners, implicitly closed, and the sector under
-    /// its centre lends it the heights. Exactly one of `platform` and
-    /// `sector`.
+    /// at least three corners, implicitly closed, and the sector under a
+    /// point inside it lends it the heights. Exactly one of `platform`
+    /// and `sector`.
     #[serde(default)]
     pub(super) platform: Option<LiftPlatformParam>,
     /// The index of the existing platform sector. Exactly one of

@@ -6,8 +6,8 @@
 //! — an existing sector ([`LiftPlatform::Existing`]) or a polygon folded
 //! over the map with [`apply_overlay`](crate::wad::map::overlay::apply_overlay)
 //! ([`LiftPlatform::Draw`], whose floor, ceiling, flats and light come
-//! from the sector under its
-//! centre) — resolves the floor it lowers to (the explicit
+//! from the sector under an interior point of that polygon) — resolves
+//! the floor it lowers to (the explicit
 //! [`LiftSpec::low_floor`], else the lowest neighbouring floor found
 //! through [`neighbors`](crate::wad::map::geometry::neighbors)), stamps the
 //! platform with a fresh [`next_free_tag`](super::doors::next_free_tag), selects
@@ -170,7 +170,8 @@ pub enum LiftPlatform {
     /// platform sector.
     Existing(usize),
     /// The corners of a new platform's polygon, in order, implicitly
-    /// closed; it takes its heights from the sector under its centre.
+    /// closed; it takes its heights from the sector under an interior
+    /// point of the polygon.
     Draw(Vec<Pt>),
 }
 
@@ -276,18 +277,19 @@ fn no_way_down(sector: usize, floor: i32, low_floor: i32) -> CyberError {
 fn no_edges(sector: usize) -> CyberError {
     CyberError::invalid(&format!(
         "no edge of sector {sector} faces a lower sector: the activation lines are the \
-         platform's walls a player reaches from below; draw the polygon so its centre \
+         platform's walls a player reaches from below; draw the polygon so its interior \
          stands on the high side of the height change, or pick the sector above its \
          neighbours"
     ))
 }
 
-/// The refusal for a platform polygon whose centre is in the void.
-fn centre_lost(centre: Pt) -> CyberError {
+/// The refusal for a platform polygon whose interior anchor is in the
+/// void: no sector of the map holds the point inside the outline.
+fn base_lost(anchor: Pt) -> CyberError {
     CyberError::invalid(&format!(
-        "the platform's centre {}, {} lies in no sector: draw the polygon across the \
-         map so its centre sits on the floor the platform starts at",
-        centre.0, centre.1
+        "the platform's interior point {}, {} lies in no sector: draw the polygon across \
+         the map so its interior sits on the floor the platform starts at",
+        anchor.0, anchor.1
     ))
 }
 

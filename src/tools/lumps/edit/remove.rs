@@ -12,11 +12,13 @@ use alloc::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::WORKING_ARCHIVE;
 use super::in_region;
 use super::replace::not_working_message;
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::lumps::parse_namespace;
+use crate::tools::lumps::select::nth_match;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, Namespace, analyze};
 use crate::wad::name::LumpName;
@@ -142,16 +144,7 @@ pub(super) fn matched_positions(
     if plan.all {
         return Ok(matched);
     }
-    let count = matched.len();
-    let last = count.saturating_sub(1);
-    let wanted = plan.occurrence.unwrap_or(last);
-    let Some(&index) = matched.get(wanted) else {
-        return Err(CyberError::NotFound(format!(
-            "only {count} lumps named {name} in the working archive: occurrence {wanted} is out \
-             of range (0 to {last})"
-        )));
-    };
-    Ok(vec![index])
+    nth_match(matched, plan.occurrence, name, WORKING_ARCHIVE).map(|index| vec![index])
 }
 
 /// The whole `remove_lump` step: resolve every name against the working

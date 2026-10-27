@@ -5,9 +5,9 @@
 //! Each one is a pure function of the wire text, so every tool can refuse a
 //! bad argument before it takes a session lock. [`crate::tools::lumps::list`]
 //! and [`crate::tools::lumps::get`] import what their own tools parse; the
-//! two names [`crate::tools::lumps::select`],
+//! one name [`crate::tools::lumps::select`],
 //! [`crate::tools::lumps::place`] and [`crate::tools::lumps::edit`] parse
-//! with stay re-exported from the group's root, so their
+//! with stays re-exported from the group's root, so their
 //! `crate::tools::lumps::parse_namespace` imports keep working. Scope names
 //! come from [`Scope::parse_or_merged`] and page sizes from
 //! [`crate::tools::parse_limit`].

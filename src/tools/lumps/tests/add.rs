@@ -1,64 +1,44 @@
-//! The editing calls: the at-most-one payload field, the plans' up-front
-//! validation, the name an import derives after its fetch, the clash message
-//! and the single undoable insert with its duplicate rule.
+//! The editing calls: the plans' up-front validation, the name an import
+//! derives after its fetch, the clash message and the single undoable
+//! insert with its duplicate rule.
 
 use crate::session::Session;
 use crate::tools::lumps::add::{
-    AddLumpParams, Payload, Prepared, apply, chosen_name, clash_message, pick_payload, plan_add,
-    plan_import,
+    AddLumpParams, Prepared, apply, chosen_name, clash_message, plan_add, plan_import,
 };
-use crate::tools::lumps::parse::hex_bytes;
+use crate::tools::lumps::payload::Payload;
 use crate::tools::lumps::place::{Placement, PlacementParams};
 use crate::wad::classify::Namespace;
 
 use super::{add_args, code, import_args, name, prepared};
 
 #[test]
-fn payload_picking_takes_at_most_one_field() {
-    assert!(
-        matches!(
-            pick_payload(None, None, None).expect("none"),
-            Payload::Empty
-        ),
-        "no data field is a marker"
-    );
-    assert!(
-        matches!(pick_payload(Some("t"), None, None), Ok(Payload::Text(_))),
-        "text wins alone"
-    );
-    assert!(
-        matches!(pick_payload(None, Some("4D55"), None), Ok(Payload::Hex(_))),
-        "hex wins alone"
-    );
-    assert!(
-        matches!(
-            pick_payload(None, None, Some("/x/y.bin")),
-            Ok(Payload::Source(_))
-        ),
-        "source wins alone"
-    );
-    for (text, digits, source) in [
-        (Some("t"), Some("4d"), None),
-        (Some("t"), None, Some("/x")),
-        (None, Some("4d"), Some("/x")),
-    ] {
-        let error = pick_payload(text, digits, source).expect_err("two fields");
-        assert_eq!(code(&error), "invalid_argument", "payload conflict code");
-        assert!(
-            error.to_string().contains("at most one"),
-            "the message states the rule: {error}"
-        );
-    }
-}
-
-#[test]
-fn plan_add_validates_name_and_placement_up_front() {
+fn plan_add_validates_name_payload_and_placement_up_front() {
     let plan = plan_add(&add_args("note")).expect("valid");
     assert_eq!(plan.name, Some(name("NOTE")), "the name uppercases");
     assert_eq!(plan.verb, "add_lump", "the undo verb");
+    assert!(
+        matches!(plan.payload, Payload::Empty),
+        "no data field is an empty marker"
+    );
     assert!(plan.source.is_none(), "add_lump echoes no source");
     let long = plan_add(&add_args("TOO LONG FOR WAD")).expect_err("over eight bytes");
     assert_eq!(code(&long), "invalid_argument", "bad name code");
+    let twin_fields = AddLumpParams {
+        text: Some("t".to_owned()),
+        hex: Some("4d".to_owned()),
+        ..add_args("NOTE")
+    };
+    let payload_error = plan_add(&twin_fields).expect_err("two payload fields");
+    assert_eq!(
+        code(&payload_error),
+        "invalid_argument",
+        "payload conflict code"
+    );
+    assert!(
+        payload_error.to_string().contains("at most one"),
+        "the shared picker states the rule: {payload_error}"
+    );
     let conflicted = AddLumpParams {
         placement: PlacementParams {
             index: Some(1),
@@ -108,30 +88,6 @@ fn an_import_name_falls_back_to_the_derived_file_stem() {
     );
     let nofile = chosen_name(None, None).expect_err("no filename at all");
     assert_eq!(code(&nofile), "invalid_argument", "absent filename code");
-}
-
-#[test]
-fn hex_payloads_report_under_their_own_field_name() {
-    assert_eq!(
-        hex_bytes("hex", "4d 5553").expect("decodes"),
-        vec![0x4D_u8, 0x55, 0x53],
-        "spaces are ignored"
-    );
-    assert!(
-        hex_bytes("hex", "").expect("empty hex").is_empty(),
-        "empty hex is an empty payload"
-    );
-    let odd = hex_bytes("hex", "4D5").expect_err("odd digits");
-    assert_eq!(code(&odd), "invalid_argument", "odd hex code");
-    assert!(
-        odd.to_string().starts_with("hex "),
-        "the field is named: {odd}"
-    );
-    let bad = hex_bytes("hex", "0G").expect_err("not hex");
-    assert!(
-        bad.to_string().starts_with("hex "),
-        "the field is named: {bad}"
-    );
 }
 
 #[test]

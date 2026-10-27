@@ -521,14 +521,17 @@ src/
                   `publish_playable` preview step); the ones
                   with shared machinery split it into submodules described
                   below, e.g. `tools/lumps.rs` with `lumps/rows.rs` (shared
-                  directory rows), `lumps/select.rs` (the lump selector),
+                  directory rows), `lumps/select.rs` (the lump selector and
+                  the shared `nth_match` occurrence pick),
                   `lumps/parse.rs` (the shared namespace, kind, map
                   and hex argument parsers), `lumps/list.rs` (the
                   `list_lumps` and `search_lumps` arguments, criteria and
                   runs), `lumps/get.rs` (`get_lump`'s formats, bodies and
                   delivery), `lumps/extract.rs` (`extract_lump`'s target,
-                  overwrite rule and read), `lumps/add.rs` (`add_lump` and
-                  the two import tools' payloads, plans and one undoable
+                  overwrite rule and read), `lumps/payload.rs` (the one
+                  payload picker, its two rules and the fetched payload
+                  bytes), `lumps/add.rs` (`add_lump` and
+                  the two import tools' plans and one undoable
                   insert), `lumps/place.rs` (placement), `lumps/edit.rs`
                   (the working-archive selector over `edit/replace.rs` (the
                   copy-on-write payload swap), `edit/remove.rs` (the
@@ -538,7 +541,8 @@ src/
                   `edit/tests/remove.rs` and `edit/tests/rename.rs`) and
                   `lumps/reorder.rs` (the run move), that group's own tests
                   in `lumps/tests.rs` plus `lumps/tests/parse_search.rs`,
-                  `lumps/tests/get.rs` and `lumps/tests/add.rs`,
+                  `lumps/tests/get.rs`, `lumps/tests/payload.rs` and
+                  `lumps/tests/add.rs`,
                   `tools/imports.rs` (the
                   `PNAMES` reader and plan, the name and region parsers with
                   the region wording, the one working-archive write every

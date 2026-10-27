@@ -14,10 +14,10 @@ use crate::wad::map::{Linedef, Map};
 use crate::tools::render::frame::{Plane, bounds_plane, fit, height_span, iso_plane};
 use crate::tools::render::paint::{Scene, editor_line_color, light_grey};
 use crate::tools::render::params::{
-    BoundsParams, HighlightParams, Projection, RenderTopdownParams,
+    BoundsParams, Call, HighlightParams, Projection, RenderTopdownParams,
 };
 use crate::tools::render::resolve::{
-    parse_projection, resolve_bounds, resolve_highlight, resolve_request,
+    check_overlays, parse_projection, resolve_bounds, resolve_highlight, resolve_request,
 };
 use crate::tools::render::topdown::paint_map;
 
@@ -372,12 +372,22 @@ fn the_isometric_projection_paints_a_wireframe_and_reports_no_transform() {
     assert!(marks > 0, "the wireframe drew {marks} pixels");
 }
 
+/// The [`Call`] [`topdown_report`] would hand [`resolve_request`]: the
+/// arguments with their projection parsed and their overlays checked,
+/// exactly as the run does once before any fetch.
+fn checked(args: &RenderTopdownParams) -> Call<'_> {
+    let projection = parse_projection(args.projection.as_deref()).expect("test projections");
+    check_overlays(args, projection).expect("test overlays");
+    Call { args, projection }
+}
+
 #[test]
 fn resolve_request_falls_back_to_the_settings_and_validates_overrides() {
     let map = two_rooms();
     let settings = RenderSettings::default();
     let plain: RenderTopdownParams = serde_json::from_value(json!({})).expect("all optional");
-    let request = resolve_request(&settings, &plain, &map, None).expect("defaults resolve");
+    let request =
+        resolve_request(&settings, &checked(&plain), &map, None).expect("defaults resolve");
     assert_eq!(
         (request.width, request.height),
         (640_u32, 400),
@@ -396,7 +406,8 @@ fn resolve_request_falls_back_to_the_settings_and_validates_overrides() {
         "fill_sectors": true,
     }))
     .expect("the override object");
-    let overridden = resolve_request(&settings, &over, &map, None).expect("valid overrides");
+    let overridden =
+        resolve_request(&settings, &checked(&over), &map, None).expect("valid overrides");
     assert_eq!(
         (overridden.width, overridden.height),
         (64_u32, 64),
@@ -410,10 +421,11 @@ fn resolve_request_falls_back_to_the_settings_and_validates_overrides() {
     let bad_size: RenderTopdownParams =
         serde_json::from_value(json!({ "width": 8_u64 })).expect("one field");
     let size_error =
-        resolve_request(&settings, &bad_size, &map, None).expect_err("below the floor");
+        resolve_request(&settings, &checked(&bad_size), &map, None).expect_err("below the floor");
     assert_eq!(size_error.code(), "invalid_argument", "tiny width code");
     let bad_style: RenderTopdownParams =
         serde_json::from_value(json!({ "style": "wireframe" })).expect("one field");
-    let style_error = resolve_request(&settings, &bad_style, &map, None).expect_err("not a style");
+    let style_error =
+        resolve_request(&settings, &checked(&bad_style), &map, None).expect_err("not a style");
     assert_eq!(style_error.code(), "invalid_argument", "bad style code");
 }

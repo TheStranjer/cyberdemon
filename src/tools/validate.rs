@@ -23,11 +23,9 @@ use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::maps::common;
-use crate::tools::textures::TextureSet;
+use crate::tools::themes::merged_stock;
 use crate::tools::{parse_limit, reply};
-use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::game::{Game, sky_flat};
-use crate::wad::lumps;
 use crate::wad::map::validate::{self, Context, Issue, ResourceIndex, Severity};
 use crate::wad::name::LumpName;
 
@@ -111,52 +109,25 @@ pub(in crate::tools) fn session_tables(session: &Session) -> Result<Tables, Cybe
     })
 }
 
-/// Adds the texture name a `TX_` lump stands for (`TX_WALL1` names
-/// `WALL1`) and records that the merged view defines textures.
-fn push_tx_lump(index: &mut ResourceIndex, lump: &str) {
-    if let Some(texture) = lump.strip_prefix("TX_")
-        && !texture.is_empty()
-    {
-        index.textures.insert(texture.to_owned());
-        index.has_texture_defs = true;
-    }
-}
-
 /// The merged view's resource index: what the texture and flat checks
-/// look names up against. The textures are the merged `TEXTURE1` and
-/// `TEXTURE2` entries plus the `TX_` names of the textures namespace,
-/// and `has_texture_defs` records whether either source exists; the
-/// flats are the merged flats-namespace lump names.
+/// look names up against. It is the theme layer's
+/// [`crate::tools::themes::MergedStock`] read in [`merged_stock`] - the
+/// same one walk of the flats namespace, the `TX_` textures-region lumps
+/// and the merged `TEXTURE1`/`TEXTURE2` entries - relabelled for the
+/// resource checks, the sky flat left out exactly as before (the checks
+/// carry it separately through [`Context::sky_flat`]).
 ///
 /// # Errors
 ///
-/// [`common::directory`]'s errors and [`TextureSet::load`]'s
-/// [`CyberError::Format`] for a malformed texture lump. Shared with
-/// `build_map_from_plan`'s `finalize` pass.
+/// [`merged_stock`]'s errors. Shared with `build_map_from_plan`'s
+/// `finalize` pass.
 pub(in crate::tools) fn resource_index(session: &Session) -> Result<ResourceIndex, CyberError> {
-    let dir = common::directory(session, Scope::Merged)?;
-    let mut index = ResourceIndex::default();
-    for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {
-        let name = entry.lump.name;
-        if name == lumps::TEXTURE1 || name == lumps::TEXTURE2 {
-            index.has_texture_defs = true;
-        }
-        if info.kind == LumpKind::Marker {
-            continue;
-        }
-        let text = entry.lump.name.to_string();
-        match info.namespace {
-            Some(Namespace::Flats) => {
-                index.flats.insert(text);
-            }
-            Some(Namespace::Textures) => push_tx_lump(&mut index, &text),
-            Some(_) | None => {}
-        }
-    }
-    index
-        .textures
-        .extend(TextureSet::load(session)?.widths().into_keys());
-    Ok(index)
+    let stock = merged_stock(session)?;
+    Ok(ResourceIndex {
+        textures: stock.walls,
+        flats: stock.flats,
+        has_texture_defs: stock.has_texture_defs,
+    })
 }
 
 /// The severity floor `min_severity` names, [`Severity::Info`] (keep
@@ -573,6 +544,26 @@ mod tests {
             vec!["STEP1".to_owned(), "WALL1".to_owned(), "WIDE".to_owned()],
             "the defined records plus the TX_ name, sorted"
         );
+    }
+
+    #[test]
+    fn resource_index_counts_a_tx_region_as_texture_definitions() {
+        let session = session_over(vec![
+            Lump::marker(parsed("TX_START")),
+            Lump::new(parsed("TX_WALL1"), vec![1_u8; 8]),
+            Lump::marker(parsed("TX_END")),
+        ]);
+        let index = resource_index(&session).expect("a textures-only view indexes");
+        assert!(
+            index.has_texture_defs,
+            "the textures region alone is a definition source"
+        );
+        assert_eq!(
+            index.textures.into_iter().collect::<Vec<String>>(),
+            vec!["WALL1".to_owned()],
+            "the stripped texture name, without its TX_ prefix"
+        );
+        assert!(index.flats.is_empty(), "no flats anywhere");
     }
 
     #[test]

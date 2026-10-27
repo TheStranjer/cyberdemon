@@ -120,21 +120,23 @@ fn shows(status: Status, include_unchanged: bool) -> bool {
     include_unchanged || status != Status::Unchanged
 }
 
-/// Parse one side string: a scope keyword, `base` or an absolute path.
+/// Parse one side string: the `base` view, a scope keyword through the
+/// shared [`Scope`] grammar (`working`, `merged`, `layer:N`) or, when the
+/// text names no scope, an absolute path to a file on disk.
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] for a keyword [`Scope::parse`] rejects,
 /// for a bad `layer:` index and for any relative path.
 fn parse_side(text: &str) -> Result<Side, CyberError> {
-    if Path::new(text).is_absolute() {
-        return Ok(Side::File(PathBuf::from(text)));
-    }
     if text.eq_ignore_ascii_case("base") {
         return Ok(Side::Base);
     }
     if Scope::accepts(text) {
         return Scope::parse(text).map(Side::Scope);
+    }
+    if Path::new(text).is_absolute() {
+        return Ok(Side::File(PathBuf::from(text)));
     }
     Err(CyberError::InvalidArgument(format!(
         "unknown side {text:?}: expected \"working\", \"merged\", \"base\", \"layer:N\" (N is \

@@ -39,10 +39,10 @@ use crate::tools::reply;
 use crate::tools::textures::TextureSet;
 use crate::wad::classify::{LumpKind, MapFormat, Namespace};
 use crate::wad::game::{Game, sky_flat};
+use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::specials::is_door_action;
-use crate::wad::name::LumpName;
 
 /// The `auto_texture` step label prefix.
 const AUTO_LABEL: &str = "auto_texture";
@@ -69,61 +69,101 @@ pub(in crate::tools) struct Inventory {
     pub(in crate::tools) widths: BTreeMap<String, u32>,
 }
 
-/// The merged view's texture inventory: `TEXTURE1`/`TEXTURE2` names and
-/// widths, `TX_` lump names, the flats namespace, plus the session's sky
-/// flat (`F_SKY1`, `F_SKY` in `Hexen`). Shared with the bulk-edit
-/// machinery in `crate::tools::query::replace`.
+/// What the merged view provides to draw with, from the one walk of its
+/// directory and texture definitions that [`merged_stock`] runs. The
+/// theme [`inventory`] and the `validate` group's `resource_index` are
+/// the two readings of it, so the directory is never swept twice.
+pub(in crate::tools) struct MergedStock {
+    /// The flats-namespace lump names, the sky flat not yet folded in.
+    pub(in crate::tools) flats: BTreeSet<String>,
+    /// Wall texture names: the `TEXTURE1`/`TEXTURE2` entries and the
+    /// stripped names of the `TX_` lumps.
+    pub(in crate::tools) walls: BTreeSet<String>,
+    /// Wall texture name to width in pixels, from `TEXTURE1`/`TEXTURE2`.
+    pub(in crate::tools) widths: BTreeMap<String, u32>,
+    /// Whether the merged view defines composite textures at all: a
+    /// `TEXTURE1`/`TEXTURE2` lump or a `TX_` name in the textures region.
+    pub(in crate::tools) has_texture_defs: bool,
+}
+
+/// The merged view's stock in one walk: every non-marker flats-region
+/// lump by name, every `TX_` textures-region lump as its stripped
+/// texture name, and the `TEXTURE1`/`TEXTURE2` records' names and widths
+/// through [`TextureSet`].
 ///
 /// # Errors
 ///
 /// [`common::directory`]'s `not_found` and [`TextureSet::load`]'s
 /// [`CyberError::Format`] for a malformed texture lump.
-pub(in crate::tools) fn inventory(session: &Session) -> Result<Inventory, CyberError> {
+pub(in crate::tools) fn merged_stock(session: &Session) -> Result<MergedStock, CyberError> {
     let dir = common::directory(session, Scope::Merged)?;
-    let mut available = Available::default();
+    let mut flats = BTreeSet::new();
+    let mut walls = BTreeSet::new();
+    let mut has_texture_defs = false;
     for (entry, info) in dir.entries.iter().zip(dir.analysis.lumps.iter()) {
-        collect_lump(&mut available, info.namespace, info.kind, entry.lump.name);
+        let name = entry.lump.name;
+        if name == lumps::TEXTURE1 || name == lumps::TEXTURE2 {
+            has_texture_defs = true;
+        }
+        if info.kind == LumpKind::Marker {
+            continue;
+        }
+        let text = name.to_string();
+        match info.namespace {
+            Some(Namespace::Flats) => {
+                flats.insert(text);
+            }
+            Some(Namespace::Textures) => push_tx_name(&mut walls, &mut has_texture_defs, &text),
+            Some(_) | None => {}
+        }
     }
-    available.flats.insert(sky_flat(session.game()).to_owned());
     let widths = TextureSet::load(session)?
         .widths()
         .into_iter()
         .map(|(name, width)| {
-            available.walls.insert(name.clone());
+            walls.insert(name.clone());
             (name, u32::from(width))
         })
         .collect();
-    Ok(Inventory { available, widths })
+    Ok(MergedStock {
+        flats,
+        walls,
+        widths,
+        has_texture_defs,
+    })
 }
 
-/// Files one merged lump into the availability sets by namespace.
-fn collect_lump(
-    available: &mut Available,
-    namespace: Option<Namespace>,
-    kind: LumpKind,
-    name: LumpName,
-) {
-    if kind == LumpKind::Marker {
-        return;
-    }
-    match namespace {
-        Some(Namespace::Flats) => {
-            available.flats.insert(name.to_string());
-        }
-        Some(Namespace::Textures) => {
-            push_tx_name(&mut available.walls, &name.to_string());
-        }
-        Some(_) | None => {}
-    }
+/// The merged view's texture inventory: [`merged_stock`]' names and
+/// widths with the session's sky flat (`F_SKY1`, `F_SKY` in `Hexen`)
+/// folded into the flats, so a floor role always has its sky to resolve
+/// against. Shared with the bulk-edit machinery in
+/// `crate::tools::query::replace`.
+///
+/// # Errors
+///
+/// [`merged_stock`]'s errors.
+pub(in crate::tools) fn inventory(session: &Session) -> Result<Inventory, CyberError> {
+    let stock = merged_stock(session)?;
+    let mut available = Available {
+        walls: stock.walls,
+        flats: stock.flats,
+    };
+    available.flats.insert(sky_flat(session.game()).to_owned());
+    Ok(Inventory {
+        available,
+        widths: stock.widths,
+    })
 }
 
 /// Adds the texture name a `TX_` lump stands for (`TX_WALL1` names
-/// `WALL1`).
-fn push_tx_name(walls: &mut BTreeSet<String>, lump: &str) {
+/// `WALL1`): the stripped name joins the walls, and the textures region
+/// itself counts as a definition source.
+fn push_tx_name(walls: &mut BTreeSet<String>, has_texture_defs: &mut bool, lump: &str) {
     if let Some(texture) = lump.strip_prefix("TX_")
         && !texture.is_empty()
     {
         walls.insert(texture.to_owned());
+        *has_texture_defs = true;
     }
 }
 
@@ -760,11 +800,13 @@ mod tests {
     #[test]
     fn tx_lumps_contribute_their_stripped_names() {
         let mut walls = BTreeSet::new();
-        push_tx_name(&mut walls, "TX_WALL9");
-        push_tx_name(&mut walls, "TX_");
-        push_tx_name(&mut walls, "WALLP1");
+        let mut defined = false;
+        push_tx_name(&mut walls, &mut defined, "TX_WALL9");
+        push_tx_name(&mut walls, &mut defined, "TX_");
+        push_tx_name(&mut walls, &mut defined, "WALLP1");
         assert_eq!(walls.len(), 1, "only the real TX_ name lands");
         assert!(walls.contains("WALL9"), "stripped of its TX_ prefix");
+        assert!(defined, "the TX_ lump says the view defines textures");
     }
 
     #[test]

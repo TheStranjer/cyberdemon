@@ -85,13 +85,14 @@ pub(in crate::tools::maps) struct CopyReport {
 }
 
 /// Runs one `copy_map`: resolve the source block in its scope and append
-/// the renamed copy as one undoable edit.
+/// the renamed copy through [`append_block`], the same exists/replace
+/// door `create_map` uses, as one undoable edit.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] when `scope` holds no block named `from`,
-/// [`CyberError::AlreadyExists`] when the working archive holds `to`
-/// without `replace`; a failed call changes nothing.
+/// [`append_block`]'s [`CyberError::AlreadyExists`] when the working
+/// archive holds `to` without `replace`; a failed call changes nothing.
 pub(in crate::tools::maps) fn copy_run(
     session: &mut Session,
     plan: &CopyPlan,
@@ -106,18 +107,7 @@ pub(in crate::tools::maps) fn copy_run(
     let label = format!("copy_map {} -> {}", plan.from, plan.to);
     let to = plan.to;
     let replace = plan.replace;
-    session.edit(&label, move |wad| {
-        let existing = doomed_positions(&analyze(&wad.lumps), to);
-        if !existing.is_empty() && !replace {
-            return Err(CyberError::AlreadyExists(format!(
-                "the working archive already holds a map block named {to}: pass replace true to \
-                 discard it first, or copy to another name"
-            )));
-        }
-        drop_positions(wad, &existing);
-        wad.lumps.extend(copies);
-        Ok(())
-    })?;
+    session.edit(&label, move |wad| append_block(wad, to, replace, copies))?;
     Ok(CopyReport {
         from: plan.from,
         to: plan.to,

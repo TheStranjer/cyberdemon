@@ -10,6 +10,8 @@
 //! or the [`Pending`] publish job builds the [`Body`]. [`deliver`] finishes
 //! that job outside the session lock and assembles the [`GetReport`].
 
+use core::fmt::Write as _;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -298,22 +300,42 @@ pub(super) const fn decide(requested: Requested, row: &LumpRow) -> Applied {
     }
 }
 
-/// `data` as space-separated uppercase hex, e.g. `"4D 55 53 1A"`.
+/// `data` as space-separated uppercase hex, e.g. `"4D 55 53 1A"`, written
+/// into one `String` in a single pass.
 fn hex_of(data: &[u8]) -> String {
-    data.iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let capacity = data.len().saturating_mul(3);
+    let mut out = String::with_capacity(capacity);
+    for byte in data {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        // A `String` sink never fails to write; the `is_err` arm only
+        // consumes the `must_use` result and keeps the loop honest.
+        if write!(out, "{byte:02X}").is_err() {
+            break;
+        }
+    }
+    out
 }
 
 /// The `text` body: `data` decoded as UTF-8 with invalid sequences
-/// replaced, cut at `max_chars`.
+/// replaced, cut at `max_chars`. The truncation test rides the same
+/// single char walk that builds the text, so the decoded string is never
+/// counted a second time.
 pub(super) fn text_body(data: &[u8], max_chars: usize) -> Body {
     let decoded = String::from_utf8_lossy(data);
-    let text: String = decoded.chars().take(max_chars).collect();
+    let mut text = String::new();
+    let mut truncated = false;
+    for (position, ch) in decoded.chars().enumerate() {
+        if position >= max_chars {
+            truncated = true;
+            break;
+        }
+        text.push(ch);
+    }
     Body {
         lossy: Some(core::str::from_utf8(data).is_err()),
-        truncated: Some(decoded.chars().count() > max_chars),
+        truncated: Some(truncated),
         text: Some(text),
         ..Body::default()
     }

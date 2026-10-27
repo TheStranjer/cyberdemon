@@ -24,6 +24,7 @@ use alloc::vec::Vec;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::query::replace::{
@@ -180,10 +181,15 @@ pub(super) struct ThingSwapReport {
     pub(super) swap: ReplaceReport,
 }
 
-/// [`resolve_thing_ref`]'s answer with an `invalid_argument` refusal
-/// attributed to the `parameter` that carried the bad reference.
-fn resolve_side(session: &Session, value: &ThingRef, parameter: &str) -> Result<i32, CyberError> {
-    match resolve_thing_ref(session, value) {
+/// [`resolve_thing_ref`]'s answer over the call's one `definitions`
+/// read, with an `invalid_argument` refusal attributed to the
+/// `parameter` that carried the bad reference.
+fn resolve_side(
+    definitions: &Definitions,
+    value: &ThingRef,
+    parameter: &str,
+) -> Result<i32, CyberError> {
+    match resolve_thing_ref(definitions, value) {
         Err(error) if error.is_invalid_argument() => {
             Err(error.map_message(|problem| format!("{parameter}: {problem}")))
         }
@@ -191,24 +197,25 @@ fn resolve_side(session: &Session, value: &ThingRef, parameter: &str) -> Result<
     }
 }
 
-/// `replace_thing_type`'s work: resolve both sides (each failure naming
-/// its parameter), refuse an undefined `to` unless `allow_unknown` lets
-/// it through, and run [`replace_thing_types`] over the selected maps
-/// as one step.
+/// `replace_thing_type`'s work: read the session's definitions once,
+/// resolve both sides against them (each failure naming its parameter),
+/// refuse an undefined `to` unless `allow_unknown` lets it through, and
+/// run [`replace_thing_types`] over the selected maps as one step.
 ///
 /// # Errors
 ///
-/// [`resolve_side`]'s and [`require_defined_thing`]'s
-/// [`CyberError::InvalidArgument`] refusals and [`run_replacement`]'s
-/// for a map no scope holds.
+/// [`Session::definitions`]' read error, [`resolve_side`]'s and
+/// [`require_defined_thing`]'s [`CyberError::InvalidArgument`] refusals
+/// and [`run_replacement`]'s for a map no scope holds.
 pub(super) fn thing_type_run(
     session: &mut Session,
     args: &ReplaceThingTypeParams,
 ) -> Result<ThingSwapReport, CyberError> {
-    let from = resolve_side(session, &args.from, "from")?;
-    let to = resolve_side(session, &args.to, "to")?;
+    let definitions = session.definitions()?;
+    let from = resolve_side(&definitions, &args.from, "from")?;
+    let to = resolve_side(&definitions, &args.to, "to")?;
     if !args.allow_unknown.unwrap_or(false) {
-        require_defined_thing(&session.definitions()?, to)?;
+        require_defined_thing(&definitions, to)?;
     }
     let label = format!("replace_thing_type {from} -> {to}");
     let replacement = Replacement {

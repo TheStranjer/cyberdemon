@@ -21,7 +21,7 @@ use super::PNG_MIME;
 use super::frame::{View, bounds_plane, fit, height_span, iso_plane};
 use super::paint::{Scene, draw_isometric, draw_topdown};
 use super::params::{
-    HighlightParams, LabelsParams, Projection, RenderTopdownParams, Request, Underlay,
+    Call, HighlightParams, LabelsParams, Projection, RenderTopdownParams, Request, Underlay,
 };
 use super::resolve::{check_overlays, load_underlay, parse_projection, resolve_request};
 
@@ -179,38 +179,43 @@ fn load_scene(state: &AppState, requested: Option<&str>) -> Result<Prepared, Cyb
     })
 }
 
-/// `render_topdown`' work: check the overlays, fetch and decode the
-/// underlay before any lock, then resolve, paint, gamma, encode, publish.
+/// `render_topdown`' work: parse the projection and check the overlays
+/// once up front, fetch and decode the underlay before any lock, then
+/// resolve, paint, gamma, encode, publish.
 ///
 /// # Errors
 ///
-/// [`load_scene`] and [`resolve_request`]'s errors, [`load_underlay`]'s
+/// [`load_scene`] and [`resolve_request`]'s errors, the
+/// [`parse_projection`] and [`check_overlays`] refusals, [`load_underlay`]'s
 /// fetch, decode and transform refusals, [`encode_png`]' and
 /// [`AppState::publish`]' failures.
 pub(super) async fn topdown_report(
     state: &AppState,
     args: &RenderTopdownParams,
 ) -> Result<TopdownReport, CyberError> {
-    check_overlays(args, parse_projection(args.projection.as_deref())?)?;
+    let projection = parse_projection(args.projection.as_deref())?;
+    check_overlays(args, projection)?;
     let underlay = match args.underlay.as_ref() {
         Some(wanted) => Some(load_underlay(state, wanted).await?),
         None => None,
     };
     let prepared = load_scene(state, args.map.as_deref())?;
-    published_report(state, &prepared, args, underlay)
+    let call = Call { args, projection };
+    published_report(state, &prepared, &call, underlay)
 }
 
 /// The lock-free tail of one `render_topdown`: resolve the request against
 /// the already-loaded `prepared` inputs, paint, gamma-correct, encode and
 /// publish. Shared by [`topdown_report`] and [`playability_overview`] so
-/// neither paints a different revision than it resolved.
+/// neither paints a different revision than it resolved. The `call`'s
+/// projection is parsed once by the caller, never re-read here.
 fn published_report(
     state: &AppState,
     prepared: &Prepared,
-    args: &RenderTopdownParams,
+    call: &Call<'_>,
     underlay: Option<Underlay>,
 ) -> Result<TopdownReport, CyberError> {
-    let request = resolve_request(&prepared.settings, args, &prepared.map, underlay)?;
+    let request = resolve_request(&prepared.settings, call, &prepared.map, underlay)?;
     let mut painted = paint_map(&prepared.map, &prepared.defs, &request);
     painted
         .canvas
@@ -257,7 +262,8 @@ pub(in crate::tools) struct OverviewMarks {
 ///
 /// [`resolve_request`]'s errors plus [`encode_png`]' and
 /// [`AppState::publish`]' failures — the standalone render's, minus its
-/// map resolution.
+/// map resolution and its projection parsing, since this call is always
+/// the top-down one.
 pub(in crate::tools) async fn playability_overview(
     state: &AppState,
     prepared: &Prepared,
@@ -288,5 +294,9 @@ pub(in crate::tools) async fn playability_overview(
         annotations: None,
         label_scale: None,
     };
-    Ok(published_report(state, prepared, &args, None)?.asset)
+    let call = Call {
+        args: &args,
+        projection: Projection::Topdown,
+    };
+    Ok(published_report(state, prepared, &call, None)?.asset)
 }

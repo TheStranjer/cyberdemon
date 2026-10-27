@@ -124,8 +124,9 @@ pub(in crate::tools) fn swatch_image(palette: &Palette) -> Result<RgbaImage, Cyb
     RgbaImage::new(SWATCH_SIDE, SWATCH_SIDE, pixels)
 }
 
-/// `get_palette`'s work: read under the session lock, then publish the
-/// swatch.
+/// `get_palette`'s work: read the winning `PLAYPAL` once under the
+/// session lock - the requested entry and the palette count both come
+/// off those one copy of the bytes - then publish the swatch.
 ///
 /// # Errors
 ///
@@ -133,11 +134,10 @@ pub(in crate::tools) fn swatch_image(palette: &Palette) -> Result<RgbaImage, Cyb
 /// `index`; the encoder's and publisher's errors for the swatch.
 fn get_palette_run(state: &AppState, index: usize) -> Result<GetPaletteReport, CyberError> {
     let loaded = state.with_session(|session| {
-        let palette = load_palette(session, index)?;
+        let bytes = require_playpal(session)?;
+        let palette = Palette::from_playpal(&bytes, index)?;
         Ok(LoadedPalette {
-            palettes: require_playpal(session)?
-                .chunks_exact(PALETTE_BYTES)
-                .count(),
+            palettes: bytes.chunks_exact(PALETTE_BYTES).count(),
             palette,
             has_colormap: session.find_global(lumps::COLORMAP).is_some(),
         })

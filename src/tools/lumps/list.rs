@@ -5,7 +5,8 @@
 //! [`SearchLumpsParams`]; both come from [`parse_listing`] and
 //! [`parse_search`] over the shared names in [`crate::tools::lumps::parse`].
 //! [`list_run`] filters and pages the scope's rows, [`search_run`] judges
-//! every row with [`Search::judge`] and keeps up to `limit` [`Match`]es.
+//! every row with [`Search::judge`] and pages the [`Match`]es at the shared
+//! [`Page`] so `offset` and `next_offset` walk a long result.
 //! [`Needle`] is one content criterion, [`find_needle`] its first offset in
 //! a payload, and [`parse_pair`] over [`hex_digit`] spells one byte of the
 //! hex string [`crate::tools::lumps::parse::hex_bytes`] turns into a needle.
@@ -17,7 +18,7 @@ use crate::error::CyberError;
 use crate::gfx::ops::hex_digit;
 use crate::session::{Scope, Session};
 use crate::tools::lumps::parse::{parse_hex, parse_kind, parse_map, parse_namespace};
-use crate::tools::parse_limit;
+use crate::tools::{Page, parse_limit};
 
 use super::{DEFAULT_LIMIT, MAX_LIMIT};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
@@ -82,8 +83,11 @@ pub(super) struct SearchLumpsParams {
     /// `"layer:N"`.
     #[serde(default)]
     scope: Option<String>,
-    /// Maximum rows in the result (default 200, at most 2000); `truncated`
-    /// says whether more matched.
+    /// Matching lumps to skip before the page (default 0).
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Maximum rows in the result (default 200, at most 2000);
+    /// `next_offset` names the page that follows.
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -123,6 +127,7 @@ pub(super) struct Needle<'crit> {
 }
 
 /// The parsed criteria of one `search_lumps` call.
+#[derive(Debug)]
 pub(super) struct Search {
     /// Case-insensitive name glob, if given.
     pub(super) pattern: Option<String>,
@@ -265,11 +270,16 @@ pub(super) struct SearchRow {
 pub(super) struct SearchReport {
     /// The scope that was searched.
     scope: Scope,
-    /// Rows in the result.
+    /// Lumps matching the criteria, before paging.
+    total: usize,
+    /// Rows skipped before this page.
+    offset: usize,
+    /// Rows in this page.
     count: usize,
-    /// Whether more lumps matched than `limit` allowed.
-    truncated: bool,
-    /// The hits, in directory order, capped at `limit`.
+    /// The `offset` that continues the hits, `null` when this page ends
+    /// them.
+    next_offset: Option<usize>,
+    /// The page of hits, in directory order.
     lumps: Vec<SearchRow>,
 }
 
@@ -318,7 +328,7 @@ pub(super) fn list_run(session: &Session, listing: &Listing) -> Result<ListRepor
 ///
 /// [`CyberError::InvalidArgument`] for a bad `scope`, `kind`, `namespace`,
 /// `contains_hex` or `limit`, and when no criterion was given.
-pub(super) fn parse_search(args: &SearchLumpsParams) -> Result<(Scope, usize, Search), CyberError> {
+pub(super) fn parse_search(args: &SearchLumpsParams) -> Result<(Scope, Page, Search), CyberError> {
     let search = Search {
         pattern: args.pattern.clone(),
         kind: parse_kind(args.kind.as_deref())?,
@@ -339,16 +349,16 @@ pub(super) fn parse_search(args: &SearchLumpsParams) -> Result<(Scope, usize, Se
     }
     Ok((
         Scope::parse_or_merged(args.scope.as_deref())?,
-        parse_limit(args.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?,
+        Page::parse(args.offset, args.limit, DEFAULT_LIMIT, MAX_LIMIT)?,
         search,
     ))
 }
 
-/// Judge every row of the scope and keep up to `limit` hits.
+/// Judge every row of the scope and page the hits at the [`Page`].
 pub(super) fn search_run(
     session: &Session,
     scope: Scope,
-    limit: usize,
+    page: &Page,
     search: &Search,
 ) -> Result<SearchReport, CyberError> {
     let rows = build_rows(session, scope)?;
@@ -359,12 +369,19 @@ pub(super) fn search_run(
             Match::Miss => None,
         })
         .collect();
-    let truncated = hits.len() > limit;
-    let lumps: Vec<SearchRow> = hits.into_iter().take(limit).collect();
+    let total = hits.len();
+    let lumps: Vec<SearchRow> = hits
+        .into_iter()
+        .skip(page.offset)
+        .take(page.limit)
+        .collect();
+    let reached = page.offset.saturating_add(lumps.len());
     Ok(SearchReport {
         scope,
+        total,
+        offset: page.offset,
         count: lumps.len(),
-        truncated,
+        next_offset: (reached < total).then_some(reached),
         lumps,
     })
 }

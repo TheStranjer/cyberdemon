@@ -105,13 +105,16 @@ is `not_found`.
     bytes; hex digits in pairs, spaces allowed (`"4D 55 53 1A"`), matched
     exactly.
   - `scope` (string, default `"merged"`).
+  - `offset` (number, default 0) — matching lumps to skip before the page.
   - `limit` (number, default 200, 1 to 2000).
 - Criteria combine with AND.
-- Returns: `{"scope", "count", "truncated", "lumps": [rows +
-  "match_offset"]}` — `match_offset` is the byte offset of the first
+- Returns: `{"scope", "total", "offset", "count", "next_offset",
+  "lumps": [rows + "match_offset"]}` — `total` counts every match in the
+  scope before paging and `next_offset` names the `offset` that continues
+  the hits (`null` when this page ends them), so paging a long search works
+  exactly like `list_lumps`. `match_offset` is the byte offset of the first
   content match (lowest when both `contains_text` and `contains_hex` were
-  given), `null` when no content criterion was used; `truncated` says more
-  lumps matched than `limit` allowed.
+  given), `null` when no content criterion was used.
 - Errors: `invalid_argument` (no criterion at all, bad `scope`/`kind`/
   `namespace`/`limit`, or hex text that is not whole hex pairs), `not_found`
   (`layer:N` not loaded).

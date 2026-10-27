@@ -307,20 +307,9 @@ pub(super) struct Graph {
 }
 
 impl Graph {
-    /// Elements across the included arrays.
-    fn total(&self) -> usize {
-        [
-            self.vertices.as_ref().map_or(0, Vec::len),
-            self.linedefs.as_ref().map_or(0, Vec::len),
-            self.sidedefs.as_ref().map_or(0, Vec::len),
-            self.sectors.as_ref().map_or(0, Vec::len),
-            self.things.as_ref().map_or(0, Vec::len),
-        ]
-        .into_iter()
-        .fold(0_usize, usize::saturating_add)
-    }
-
-    /// The per-kind row counts plus the problem count.
+    /// The per-kind row counts plus the problem count; the inline-limit
+    /// total is then read off these once-measured lengths (see
+    /// [`Counts::total`]).
     fn counts(&self) -> Counts {
         Counts {
             vertices: self.vertices.as_ref().map_or(0, Vec::len),
@@ -348,6 +337,22 @@ pub(super) struct Counts {
     things: usize,
     /// Dangling references found.
     problems: usize,
+}
+
+impl Counts {
+    /// Elements across the five kind arrays; the problem count rides
+    /// along in the report but never decides the inline limit.
+    fn total(&self) -> usize {
+        [
+            self.vertices,
+            self.linedefs,
+            self.sidedefs,
+            self.sectors,
+            self.things,
+        ]
+        .into_iter()
+        .fold(0_usize, usize::saturating_add)
+    }
 }
 
 /// What the `assemble_map` tool hands the client: the graph itself when it
@@ -387,7 +392,8 @@ impl Plan {
     /// [`CyberError::Internal`] when the graph does not serialize (a
     /// server bug) and [`AppState::publish`]'s errors for the asset store.
     pub(super) fn finish(self, state: &AppState, limit: usize) -> Result<Outcome, CyberError> {
-        if self.graph.total() <= limit {
+        let counts = self.graph.counts();
+        if counts.total() <= limit {
             return Ok(Outcome::Inline(self.graph));
         }
         let data = json_bytes(&self.graph, "graph")?;
@@ -395,7 +401,7 @@ impl Plan {
         let asset = state.publish(&filename, mime_for_extension(JSON_EXTENSION), data)?;
         Ok(Outcome::Asset(Summary {
             map: self.graph.map,
-            counts: self.graph.counts(),
+            counts,
             asset,
         }))
     }

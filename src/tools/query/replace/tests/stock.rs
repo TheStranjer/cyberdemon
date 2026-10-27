@@ -118,27 +118,34 @@ fn thing_ref_reads_a_doomednum_or_a_name_from_the_wire() {
     );
 }
 
+/// The default session's thing definitions, read once for a test.
+fn definitions() -> crate::defs::Definitions {
+    Session::default()
+        .definitions()
+        .expect("the default tables read")
+}
+
 #[test]
 fn resolve_thing_ref_passes_numbers_and_resolves_names() {
-    let session = Session::default();
+    let defs = definitions();
     assert_eq!(
-        resolve_thing_ref(&session, &ThingRef::Number(3001_u32)).expect("a doomednum"),
+        resolve_thing_ref(&defs, &ThingRef::Number(3001_u32)).expect("a doomednum"),
         3001_i32,
         "numbers pass through without touching the definitions"
     );
     assert_eq!(
-        resolve_thing_ref(&session, &ThingRef::Name("imp".to_owned())).expect("the exact name"),
+        resolve_thing_ref(&defs, &ThingRef::Name("imp".to_owned())).expect("the exact name"),
         3001_i32,
         "the exact name Imp wins over the Dead Imp substring"
     );
     assert_eq!(
-        resolve_thing_ref(&session, &ThingRef::Name("demon".to_owned()))
+        resolve_thing_ref(&defs, &ThingRef::Name("demon".to_owned()))
             .expect("the exact name beats its substrings"),
         3002_i32,
         "Demon names 3002, not the CyberDemon (16) or Cacodemon it is a substring of"
     );
-    let huge = resolve_thing_ref(&session, &ThingRef::Number(u32::MAX))
-        .expect_err("above the signed range");
+    let huge =
+        resolve_thing_ref(&defs, &ThingRef::Number(u32::MAX)).expect_err("above the signed range");
     assert_eq!(huge.code(), "invalid_argument", "range refusal code");
     assert!(
         huge.to_string().contains("32-bit"),
@@ -148,15 +155,15 @@ fn resolve_thing_ref_passes_numbers_and_resolves_names() {
 
 #[test]
 fn resolve_thing_ref_refuses_unknown_and_ambiguous_names() {
-    let session = Session::default();
-    let unknown = resolve_thing_ref(&session, &ThingRef::Name("not-a-thing".to_owned()))
+    let defs = definitions();
+    let unknown = resolve_thing_ref(&defs, &ThingRef::Name("not-a-thing".to_owned()))
         .expect_err("nothing carries that name");
     assert_eq!(unknown.code(), "invalid_argument", "unknown name code");
     assert!(
         unknown.to_string().contains("get_thing_types"),
         "the fix is named: {unknown}"
     );
-    let ambiguous = resolve_thing_ref(&session, &ThingRef::Name("emon".to_owned()))
+    let ambiguous = resolve_thing_ref(&defs, &ThingRef::Name("emon".to_owned()))
         .expect_err("several types share that substring");
     assert_eq!(ambiguous.code(), "invalid_argument", "ambiguous name code");
     let message = ambiguous.to_string();

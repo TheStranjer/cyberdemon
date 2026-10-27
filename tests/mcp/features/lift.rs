@@ -2,7 +2,9 @@
 //! sector, the step line dressed `SR` 62 / `S1` 21 / `WR` 88 / `W1` 10 with
 //! its front facing the lower hall and the theme's `lift_side` below the
 //! ledge, the short-drop note present), a 96-unit ledge with no note, a
-//! platform drawn across the step through the overlay engine, binary
+//! platform drawn across the step through the overlay engine and a
+//! concave one whose base sector comes from a point inside its outline
+//! rather than the mean of its corners, binary
 //! `Hexen` `Plat_DownWaitUpStayLip` 206 with the tag in `args[0]` and the
 //! `playeruse`/`playercross` field, the both/neither platform-selector
 //! refusal, the named-fix refusals, and the one-step undo.
@@ -72,6 +74,24 @@ fn platform_points() -> Value {
         {"x": 320_i64, "y": 64_i64},
         {"x": 320_i64, "y": 192_i64},
         {"x": 224_i64, "y": 192_i64},
+    ])
+}
+
+/// The concave platform: the same step straddled by a `120x120` square
+/// with an `80x40` notch cut out of its left side. The mean of its
+/// corners, `(242, 128)`, falls out in that notch over the lower hall;
+/// a point inside the shape, `(292, 128)`, stands on the raised room
+/// whose floor the platform rides down from.
+fn concave_platform_points() -> Value {
+    json!([
+        {"x": 192_i64, "y": 68_i64},
+        {"x": 312_i64, "y": 68_i64},
+        {"x": 312_i64, "y": 188_i64},
+        {"x": 192_i64, "y": 188_i64},
+        {"x": 192_i64, "y": 148_i64},
+        {"x": 272_i64, "y": 148_i64},
+        {"x": 272_i64, "y": 108_i64},
+        {"x": 192_i64, "y": 108_i64},
     ])
 }
 
@@ -343,6 +363,48 @@ async fn a_drawn_platform_lifts_from_where_the_player_stands() {
 }
 
 #[tokio::test]
+async fn a_concave_platform_reads_the_sector_under_its_interior() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    call(
+        &client,
+        "set_texture_theme",
+        json!({"overrides": {"lift_side": "WALL1"}}),
+    )
+    .await;
+    let result = call(
+        &client,
+        "add_lift",
+        json!({"platform": {"points": concave_platform_points()}}),
+    )
+    .await;
+    assert_eq!(result["platform_sector"], json!(2_i32), "the drawn sector");
+    assert_eq!(
+        result["floor_height"],
+        json!(32_i32),
+        "the raised floor its interior stands on, not the hall its corner mean falls in"
+    );
+    assert_eq!(result["low_floor"], json!(0_i32), "the hall below");
+    assert_eq!(result["drop"], json!(32_i32), "the ride down");
+    let lines = reported_lines(&client, "MAP01", &result, "lines").await;
+    assert!(!lines.is_empty(), "the hall-facing edges activate");
+    expect_hall_lines(&lines, 62_i32, &result["tag"]);
+    let platform = working_sector(&client, "MAP01", 2_usize).await;
+    assert_eq!(
+        platform["floor_height"],
+        json!(32_i32),
+        "the platform stands on the copied high floor"
+    );
+    assert_eq!(
+        platform["light"],
+        json!(192_i32),
+        "the raised room's light came across"
+    );
+    assert_eq!(platform["tag"], result["tag"], "and the fresh tag");
+    validate_clean(&client, "MAP01").await;
+}
+
+#[tokio::test]
 async fn a_hexen_map_gets_the_scripted_plat() {
     let dir = tempfile::tempdir().expect("temp dir");
     let client = formats_loaded(dir.path()).await;
@@ -435,7 +497,7 @@ async fn lift_requests_name_their_fix() {
             {"x": 5064_i64, "y": 5064_i64},
             {"x": 5000_i64, "y": 5064_i64},
         ]}}),
-        "centre 5032, 5032 lies in no sector",
+        "interior point 5032, 5032 lies in no sector",
     )
     .await;
 }

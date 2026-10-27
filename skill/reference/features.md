@@ -239,10 +239,12 @@ or `add walk_trigger lift`). The player starts the ride from **below**.
 - `platform: {points: [{x, y}, ...]}` — draw a **new** platform: at
   least three corners, implicitly closed, painted with the same overlay
   engine as `create_sector_from_loop`. It copies the floor, ceiling,
-  flats and light of the sector under its polygon centre, so draw it
-  across a height change with the centre on the high side (a centre in
-  the void is `invalid_argument`). The new sector's index comes back as
-  `platform_sector`.
+  flats and light of the sector under **a point inside** that outline
+  (an even-odd interior anchor, so a concave platform is read from its
+  actual inside and not from the average of its corners), so draw it
+  across a height change with its interior on the high side (an interior
+  point in the void is `invalid_argument`). The new sector's index comes
+  back as `platform_sector`.
 
 The platform is the **high floor**: it lowers to `low_floor`, which
 defaults to its lowest neighbouring sector's floor (`get_map_summary`

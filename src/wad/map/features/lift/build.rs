@@ -8,8 +8,8 @@
 //! live beside them in [`super`].
 
 use crate::error::CyberError;
-use crate::fixed::{div_round, narrow_i64};
 use crate::geom::Pt;
+use crate::geom::ring::{label_point, ring_edges};
 use crate::wad::map::flags::{BLOCKING, FlagFamily};
 use crate::wad::map::geometry::{neighbors, point_in_sector};
 use crate::wad::map::model::{Linedef, Map, Sector};
@@ -20,26 +20,21 @@ use crate::wad::map::query::{ElementKind, check_index};
 
 use super::{
     Edge, EdgeProbe, LiftBuild, LiftPlatform, LiftSpec, MIN_LIFT_DROP, MIN_PLATFORM_CORNERS,
-    NO_TEXTURE, Side, TRIGGER_MASK, centre_lost, isolated, lift_specials, no_edges, no_way_down,
+    NO_TEXTURE, Side, TRIGGER_MASK, base_lost, isolated, lift_specials, no_edges, no_way_down,
     paint_lost, shrink_note,
 };
 
-/// The mean of one axis of the polygon's corners, rounded to the
-/// nearest whole unit and saturated into the grid.
-fn mean_axis(sum: i128, count: i128) -> i64 {
-    narrow_i64(div_round(sum, count).unwrap_or(sum))
-}
-
-/// The corner-average centre of a platform polygon.
-pub(super) fn polygon_centre(polygon: &[Pt]) -> Pt {
-    let mut sum_x = 0_i128;
-    let mut sum_y = 0_i128;
-    for &(x, y) in polygon {
-        sum_x = sum_x.saturating_add(i128::from(x));
-        sum_y = sum_y.saturating_add(i128::from(y));
-    }
-    let count = i128::try_from(polygon.len()).unwrap_or(1);
-    (mean_axis(sum_x, count), mean_axis(sum_y, count))
+/// An interior anchor of a drawn platform's polygon: the even-odd label
+/// point of its boundary ring, a point guaranteed inside the shape
+/// however concave it is (the mean of a concave ring's corners can fall
+/// outside it, in the void or in the sector the platform stands over).
+/// A ring too degenerate to label falls back to its first corner, and an
+/// empty one to `(0, 0)`; [`draw_platform`] refuses fewer than three
+/// corners before asking, so a real platform always anchors on a point
+/// of its own outline.
+pub(super) fn platform_anchor(polygon: &[Pt]) -> Pt {
+    label_point(&ring_edges(polygon))
+        .unwrap_or_else(|| polygon.first().copied().unwrap_or_default())
 }
 
 /// The sector record for a drawn platform: the base's heights, flats and
@@ -67,7 +62,8 @@ fn platform_request(map: &Map, polygon: &[Pt], base: usize, side: &str) -> Overl
 }
 
 /// Draw a new platform: the `polygon` folded over the map as a sector
-/// copying the heights of the sector under its centre.
+/// copying the heights of the sector under an interior point of that
+/// polygon.
 ///
 /// Returns the new sector's index and the paint's notes.
 fn draw_platform(
@@ -81,8 +77,8 @@ fn draw_platform(
              the new platform (its last corner closes it)",
         ));
     }
-    let centre = polygon_centre(polygon);
-    let base = point_in_sector(map, centre.0, centre.1).ok_or_else(|| centre_lost(centre))?;
+    let anchor = platform_anchor(polygon);
+    let base = point_in_sector(map, anchor.0, anchor.1).ok_or_else(|| base_lost(anchor))?;
     let drawn = apply_overlay(map, &platform_request(map, polygon, base, side))?;
     let sector = drawn.sector.ok_or_else(paint_lost)?;
     Ok((sector, drawn.notes))
@@ -210,8 +206,8 @@ fn dress_edges(map: &mut Map, edges: &[Edge], setup: &DoorLineSetup, side: &str)
 ///
 /// [`CyberError::NotFound`] for an out-of-range platform sector,
 /// [`CyberError::InvalidArgument`] for a polygon with fewer than three
-/// corners or a
-/// centre in no sector, a platform with no neighbour and no explicit
+/// corners or an interior point in no sector, a platform with no
+/// neighbour and no explicit
 /// `low_floor`, a low floor not below the platform's, or a platform no
 /// edge of which faces a lower sector; [`CyberError::Internal`] when a
 /// platform paint reports no sector. A refusal on an existing platform

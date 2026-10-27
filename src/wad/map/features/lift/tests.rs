@@ -1,13 +1,16 @@
 //! Tests for the lift core: the [`lift_specials`] tables for both flag
 //! families, [`build_lift`] on an existing platform and on a drawn one,
-//! the edge probe, the refusals and the small-drop note.
+//! the interior anchor a drawn platform reads its base sector from, the
+//! edge probe, the refusals and the small-drop note.
 
-use super::build::{activation_edges, build_lift, polygon_centre};
+use super::build::{activation_edges, build_lift, platform_anchor};
 use super::{LiftPlatform, LiftSpec, LiftStyle, MIN_LIFT_DROP, lift_specials};
 use crate::error::CyberError;
+use crate::geom::Pt;
 use crate::wad::map::common::fixtures::{name, room, side, solid_line, two_room_map, vertex};
 use crate::wad::map::features::DoorLineSetup;
 use crate::wad::map::flags::FlagFamily;
+use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::{Map, MapFormat};
 
 /// The tag the table tests ask `lift_specials` for.
@@ -67,6 +70,24 @@ fn spec(platform: LiftPlatform) -> LiftSpec {
         side: "LIFTSIDE".to_owned(),
         floor_flat: "FLAT10".to_owned(),
     }
+}
+
+/// The concave platform: a `120x120` square with a `80x40` notch cut out
+/// of its left side, standing so that the mean of its corners, `(242,
+/// 128)`, falls in that notch over the lower hall while its interior
+/// middle, `(292, 128)`, stands on the raised room whose floor the
+/// platform rides down from.
+fn concave_platform() -> Vec<Pt> {
+    vec![
+        (192_i64, 68_i64),
+        (312_i64, 68_i64),
+        (312_i64, 188_i64),
+        (192_i64, 188_i64),
+        (192_i64, 148_i64),
+        (272_i64, 148_i64),
+        (272_i64, 108_i64),
+        (192_i64, 108_i64),
+    ]
 }
 
 #[test]
@@ -342,12 +363,38 @@ fn an_out_of_range_platform_refuses_with_the_current_count() {
 }
 
 #[test]
-fn the_centre_of_a_platform_polygon_is_the_corner_average() {
+fn a_convex_platform_anchors_at_its_middle() {
     assert_eq!(
-        polygon_centre(&[(0, 0), (64, 0), (64, 64), (0, 64)]),
+        platform_anchor(&[(0, 0), (64, 0), (64, 64), (0, 64)]),
         (32_i64, 32_i64),
         "the rectangle's middle"
     );
+}
+
+#[test]
+fn a_concave_platform_anchors_inside_its_interior() {
+    assert_eq!(
+        platform_anchor(&concave_platform()),
+        (292_i64, 128_i64),
+        "the middle of the back bar, not the notch its corners average to"
+    );
+    let map = two_room_map();
+    assert_eq!(
+        point_in_sector(&map, 242, 128),
+        Some(0_usize),
+        "the corner mean stands out in the lower hall's notch"
+    );
+    assert_eq!(
+        point_in_sector(&map, 292, 128),
+        Some(1_usize),
+        "the interior anchor stands on the raised room"
+    );
+}
+
+#[test]
+fn a_ring_too_degenerate_to_label_falls_back_to_a_corner() {
+    assert_eq!(platform_anchor(&[(5, 7)]), (5_i64, 7_i64), "a lone corner");
+    assert_eq!(platform_anchor(&[]), (0_i64, 0_i64), "nothing to anchor on");
 }
 
 #[test]
@@ -404,6 +451,38 @@ fn a_drawn_platform_straddles_the_step() {
 }
 
 #[test]
+fn a_concave_platform_builds_off_the_sector_under_its_interior() {
+    let mut map = two_room_map();
+    let wanted = spec(LiftPlatform::Draw(concave_platform()));
+    let build = build_lift(&mut map, &wanted).expect("the notched platform rides down");
+    assert_eq!(build.platform_sector, 2_usize, "the drawn sector");
+    assert_eq!(
+        (build.floor_height, build.low_floor, build.drop),
+        (32_i32, 0_i32, 32_i32),
+        "the raised floor its interior stands on, the hall below"
+    );
+    assert!(!build.lines.is_empty(), "the hall-facing edges activate");
+    for index in &build.lines {
+        let line = map.linedefs.get(*index).expect("an activation line");
+        assert_eq!(
+            map.side_sector(line.front),
+            Some(0_usize),
+            "edge {index} faces the lower hall"
+        );
+        assert_eq!(
+            map.side_sector(line.back),
+            Some(2_usize),
+            "and the platform behind"
+        );
+    }
+    let platform = map.sectors.get(2).expect("the platform");
+    assert_eq!(platform.floor_height, 32_i32, "the interior sector's floor");
+    assert_eq!(platform.ceiling_height, 128_i32, "and ceiling");
+    assert_eq!(platform.light, 192_i32, "copied from the same sector");
+    assert_eq!(platform.tag, build.tag, "stamped with the fresh tag");
+}
+
+#[test]
 fn a_small_or_misplaced_platform_polygon_refuses() {
     let mut thin = two_room_map();
     let before = thin.clone();
@@ -433,7 +512,7 @@ fn a_small_or_misplaced_platform_polygon_refuses() {
         .unwrap_err(),
     );
     assert!(
-        lost.contains("centre 1032, 1032 lies in no sector"),
+        lost.contains("interior point 1032, 1032 lies in no sector"),
         "{lost}"
     );
 

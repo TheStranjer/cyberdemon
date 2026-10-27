@@ -9,7 +9,7 @@ use super::{
     MONSTER_ACTIVATE, PASS_USE, PLAYER_CROSS_BITS, PLAYER_USE_BITS, REPEAT_SPECIAL, SECRET,
     SHARED_LINEDEF_BITS, Skill, THING_AMBUSH, THING_DOOM_NOT_SINGLE, THING_EASY,
     THING_HEXEN_SINGLE, THING_HEXEN_STANDING, THING_SKILL_BITS, TWO_SIDED, blocks_players,
-    from_names, names, to_names,
+    check_flag, from_names, names, to_names,
 };
 use crate::error::CyberError;
 
@@ -29,6 +29,48 @@ fn error_for(wanted: &str, kind: FlagKind, family: FlagFamily) -> String {
         Err(other) => panic!("expected InvalidArgument, got {other:?}"),
         Ok(bits) => panic!("expected a refusal, got bits {bits:#x}"),
     }
+}
+
+/// The `InvalidArgument` message `check_flag` gives for `wanted`.
+fn refused_by_check(wanted: &str, kind: FlagKind, family: FlagFamily) -> String {
+    match check_flag(kind, family, wanted) {
+        Err(CyberError::InvalidArgument(message)) => message,
+        Ok(()) => panic!("expected a refusal of '{wanted}'"),
+        Err(other) => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+#[test]
+fn check_flag_accepts_every_table_name_and_refuses_the_rest() {
+    for (kind, family) in [
+        (FlagKind::Linedef, FlagFamily::Doom),
+        (FlagKind::Linedef, FlagFamily::Hexen),
+        (FlagKind::Thing, FlagFamily::Doom),
+        (FlagKind::Thing, FlagFamily::Hexen),
+    ] {
+        for entry in names(kind, family) {
+            assert!(
+                check_flag(kind, family, entry.0).is_ok(),
+                "'{}' is in the table",
+                entry.0
+            );
+        }
+    }
+    let refused = refused_by_check("twosided", FlagKind::Thing, FlagFamily::Doom);
+    assert!(
+        refused.contains("unknown thing flag 'twosided'") && refused.contains("valid names are"),
+        "the refusal names the bad flag and the valid list: {refused}"
+    );
+    assert_eq!(
+        refused,
+        error_for("twosided", FlagKind::Thing, FlagFamily::Doom),
+        "the same wording the bit-setter uses"
+    );
+    assert!(
+        refused_by_check("nope", FlagKind::Linedef, FlagFamily::Hexen)
+            .contains("unknown linedef flag 'nope' for the hexen family"),
+        "the other tables answer the same way"
+    );
 }
 
 #[test]

@@ -45,6 +45,15 @@ pub fn normalized_picture(name: &str) -> Option<String> {
 /// passes and the movement walk all cap a single climb at this.
 pub const MAX_STEP_HEIGHT: i32 = 24_i32;
 
+/// The lowest coordinate an `i16` binary `VERTEXES` column holds
+/// (`i16::MIN`), the range the geometry and transform engines refuse
+/// outside on a binary map.
+pub const COORD_MIN: i32 = -0x8000_i32;
+
+/// The highest coordinate an `i16` binary `VERTEXES` column holds
+/// (`i16::MAX`).
+pub const COORD_MAX: i32 = 0x7FFF_i32;
+
 /// The height a player needs to stand in, and the smallest gap across
 /// any line they can cross.
 pub const PLAYER_HEIGHT: i32 = 56_i32;
@@ -80,9 +89,9 @@ pub const PLAYER1_START_U32: u32 = PLAYER1_START.unsigned_abs();
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_LINTEL, MAX_STEP_HEIGHT, MIN_LINE_WIDTH, NO_TEXTURE, PLAYER_HEIGHT,
-        PLAYER_START_TYPES, PLAYER1_START, PLAYER1_START_U32, SKY_FLAT, UNKNOWN_THING_RADIUS,
-        is_sky_flat, normalized_picture,
+        COORD_MAX, COORD_MIN, DEFAULT_LINTEL, MAX_STEP_HEIGHT, MIN_LINE_WIDTH, NO_TEXTURE,
+        PLAYER_HEIGHT, PLAYER_START_TYPES, PLAYER1_START, PLAYER1_START_U32, SKY_FLAT,
+        UNKNOWN_THING_RADIUS, is_sky_flat, normalized_picture,
     };
 
     #[test]
@@ -94,6 +103,17 @@ mod tests {
         assert_eq!(PLAYER_HEIGHT, 56_i32);
         assert_eq!(MIN_LINE_WIDTH, 32_i32);
         assert_eq!(UNKNOWN_THING_RADIUS, 20_i64);
+    }
+
+    #[test]
+    fn the_coordinate_range_is_the_i16_columns() {
+        assert_eq!(COORD_MIN, i32::from(i16::MIN));
+        assert_eq!(COORD_MAX, i32::from(i16::MAX));
+        assert!(
+            (COORD_MIN..=COORD_MAX).contains(&0_i32)
+                && !((COORD_MIN..=COORD_MAX).contains(&COORD_MAX.saturating_add(1))),
+            "the range is closed and one step short of leaving it"
+        );
     }
 
     #[test]

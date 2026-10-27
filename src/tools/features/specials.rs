@@ -27,8 +27,6 @@ use crate::wad::map::Map;
 use crate::wad::map::features::{LightEffect, SecretEdit, boom_note, light_special, secret_edit};
 use crate::wad::map::query::missing_index;
 
-use super::invalid;
-
 /// The lowest light level the vanilla range allows.
 pub(super) const LIGHT_MIN: i32 = 0_i32;
 
@@ -78,7 +76,7 @@ pub(super) struct SetLightParams {
 /// duplicates and never empty.
 pub(super) fn sector_selection(list: &[usize]) -> Result<Vec<usize>, CyberError> {
     if list.is_empty() {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "sectors is empty: pass at least one sector index (get_map_summary lists the \
              map's sectors)",
         ));
@@ -94,7 +92,7 @@ pub(super) fn check_light_level(level: i32) -> Result<(), CyberError> {
     if (LIGHT_MIN..=LIGHT_MAX).contains(&level) {
         return Ok(());
     }
-    Err(invalid(&format!(
+    Err(CyberError::invalid(&format!(
         "light {level} is out of range: the light level holds {LIGHT_MIN}..={LIGHT_MAX}"
     )))
 }
@@ -107,7 +105,7 @@ pub(super) fn effect_of(text: &str) -> Result<LightEffect, CyberError> {
         .into_iter()
         .find(|effect| effect.name() == wanted)
         .ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "effect {text:?} is not a light effect: pass one of {}",
                 effect_names().join(", ")
             ))

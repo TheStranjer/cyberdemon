@@ -35,11 +35,11 @@ const WORD_LEN: usize = 2;
 /// The empty list: start and end adjacent.
 const MIN_LIST_LEN: usize = 4;
 /// Words in the blockmap header.
-const HEADER_WORDS: usize = 4;
+pub(super) const HEADER_WORDS: usize = 4;
 /// Words in a blocklist beyond its linedef entries (`0x0000` and `0xFFFF`).
 const LIST_OVERHEAD: usize = 2;
 /// The largest `BLOCKMAP` lump its `u16` word offsets can address.
-const MAX_LUMP_WORDS: usize = 0xFFFF_usize;
+pub(super) const MAX_LUMP_WORDS: usize = 0xFFFF_usize;
 /// Side of one blockmap block in map units.
 pub const BLOCK_SIZE: i32 = 128;
 
@@ -143,9 +143,8 @@ impl Blockmap {
     /// [`CyberError::LimitExceeded`] when the offset table alone leaves
     /// the lump.
     fn check_shape(&self) -> Result<usize, CyberError> {
-        let cells = usize::from(self.columns)
-            .checked_mul(usize::from(self.rows))
-            .ok_or_else(too_large)?;
+        let table_end = offset_table_end(self.columns, self.rows)?;
+        let cells = usize::from(self.columns).saturating_mul(usize::from(self.rows));
         if self.blocks.len() != cells {
             return Err(CyberError::InvalidArgument(format!(
                 "the BLOCKMAP holds {} lists for a {}x{} grid ({cells} blocks): rebuild the \
@@ -155,11 +154,26 @@ impl Blockmap {
                 self.rows
             )));
         }
-        HEADER_WORDS
-            .checked_add(cells)
-            .filter(|end| *end <= MAX_LUMP_WORDS)
-            .ok_or_else(too_large)
+        Ok(table_end)
     }
+}
+
+/// The first free word after the header and the `columns × rows` offset
+/// table, the shape both [`Blockmap::to_bytes`] and the builder check
+/// before they allocate anything that large.
+///
+/// # Errors
+///
+/// [`CyberError::LimitExceeded`] ("blockmap too large") when the cell
+/// count overflows or the offset table alone leaves the lump.
+pub(super) fn offset_table_end(columns: u16, rows: u16) -> Result<usize, CyberError> {
+    let cells = usize::from(columns)
+        .checked_mul(usize::from(rows))
+        .ok_or_else(too_large)?;
+    HEADER_WORDS
+        .checked_add(cells)
+        .filter(|end| *end <= MAX_LUMP_WORDS)
+        .ok_or_else(too_large)
 }
 
 /// Offset assignment in progress: the next free word, the shared-copy
@@ -269,7 +283,7 @@ fn list_words(after: usize, list: &[u16]) -> Result<usize, CyberError> {
 
 /// The refusal of a grid or lump that leaves the words a `BLOCKMAP`
 /// can hold.
-fn too_large() -> CyberError {
+pub(super) fn too_large() -> CyberError {
     CyberError::LimitExceeded(
         "blockmap too large: the grid or its blocklists leave the 65535 words a \
          BLOCKMAP lump can hold"

@@ -27,6 +27,7 @@ use serde::Serialize;
 use crate::error::CyberError;
 use crate::fixed::{self, narrow_i32};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
 use crate::wad::map::query::{ElementKind, missing_index};
 
 use super::model::{Linedef, Map, Sidedef, Vertex};
@@ -34,10 +35,6 @@ use super::remove::RemovalReport;
 use join::{apply_join, plan_join};
 use split::{apply_split, plan_split, require_on_segment, split_point};
 
-/// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
-const COORD_MIN: i32 = -0x8000_i32;
-/// The highest coordinate an `i16` binary `VERTEXES` column holds (`i16::MAX`).
-const COORD_MAX: i32 = 0x7FFF_i32;
 /// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
 const OFFSET_MIN: i32 = -0x8000_i32;
 /// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).

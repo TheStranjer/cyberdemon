@@ -31,7 +31,7 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::{LiftBuild, LiftPlatform, LiftSpec, LiftStyle, build_lift};
 
-use super::{current_map, invalid};
+use super::current_map;
 use crate::tools::maps::params::PointParam;
 
 /// The `add_lift` default trigger style name.
@@ -133,7 +133,7 @@ pub(super) fn lift_style_of(text: &str) -> Result<LiftStyle, CyberError> {
         .into_iter()
         .find(|style| lift_style_name(*style) == wanted)
         .ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "style {text:?} is not a lift style: pass one of {}",
                 lift_style_names().join(", ")
             ))
@@ -155,7 +155,7 @@ pub(super) fn lift_platform_of(
                 .collect(),
         )),
         (None, Some(index)) => Ok(LiftPlatform::Existing(index)),
-        _ => Err(invalid(
+        _ => Err(CyberError::invalid(
             "pass exactly one of platform ({points: [{x, y}, ...]}: the outline of a \
              new platform to draw) and sector (the index of the existing platform \
              sector)",

@@ -22,7 +22,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{Context, Issue, Severity};
-use crate::wad::map::consts::{NO_TEXTURE, is_sky_flat};
+use crate::wad::map::consts::{NO_TEXTURE, is_sky_flat, normalized_picture};
 use crate::wad::map::model::{Map, Sector, Sidedef};
 
 /// One resolved side of a two-sided line: sidedef index, its row and
@@ -41,9 +41,10 @@ fn checkable(name: &str) -> bool {
 }
 
 /// Whether `name` is in `set` case-insensitively (names are stored
-/// uppercase, a hand-built row might not be).
+/// uppercase, a hand-built row might not be), through the one shared
+/// texture-name normalisation.
 fn known(set: &BTreeSet<String>, name: &str) -> bool {
-    set.contains(&name.to_ascii_uppercase())
+    normalized_picture(name).is_some_and(|key| set.contains(&key))
 }
 
 /// The one info row of a session whose merged view defines no composite
@@ -452,6 +453,27 @@ mod tests {
             issue.message.contains("lower texture \"brick1\""),
             "the message quotes the role and name: {}",
             issue.message
+        );
+    }
+
+    #[test]
+    fn a_padded_known_name_is_the_same_picture_through_the_shared_normalisation() {
+        let given = fixture(full_index());
+        let context = context_of(&given);
+        let mut padded = ring_map();
+        padded
+            .sidedefs
+            .get_mut(0)
+            .expect("the shared sidedef")
+            .middle = " wall1 ".to_owned();
+        assert!(
+            missing_texture(&padded, &context).is_empty(),
+            "\" wall1 \" trims and uppercases to the known WALL1"
+        );
+        let flat_padded = reflatted(ring_map(), " floor1 ", "F_SKY1");
+        assert!(
+            missing_flat(&flat_padded, &context).is_empty(),
+            "the flat side reads names the same way"
         );
     }
 

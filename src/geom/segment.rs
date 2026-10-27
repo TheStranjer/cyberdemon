@@ -1,10 +1,11 @@
 //! Integer segment geometry for the arrangement.
 //!
-//! Orientation and rounding primitives, the per-pair discovery of where
-//! segments meet (proper crossings rounded to the nearest integer point,
-//! endpoint T-junctions and collinear overlaps), the bounding-box
-//! sort-and-prune sweep along x, and the point merge union-find that
-//! collapses candidate points registered closer than one unit apart.
+//! Orientation and rounding primitives, the shared exact point-to-segment
+//! distance, the per-pair discovery of where segments meet (proper
+//! crossings rounded to the nearest integer point, endpoint T-junctions
+//! and collinear overlaps), the bounding-box sort-and-prune sweep along
+//! x, and the point merge union-find that collapses candidate points
+//! registered closer than one unit apart.
 
 use alloc::collections::BTreeMap;
 
@@ -175,6 +176,40 @@ pub(crate) fn on_segment_tol(from: Pt, to: Pt, point: Pt) -> bool {
         .and_then(|squared| squared.checked_mul(4))
         .is_some_and(|four_cross_squared| four_cross_squared <= length_squared);
     close && between(point, from, to)
+}
+
+/// `point` widened from the `i64` grid into the exact `i128` vector space.
+#[must_use]
+#[inline]
+pub(crate) fn widen(point: Pt) -> Delta {
+    (i128::from(point.0), i128::from(point.1))
+}
+
+/// The squared distance from `point` to the segment `from`→`to` as an
+/// exact fraction `(numerator, denominator)` with `denominator` positive,
+/// exact in `i128`: clamped endpoint distances use `1`, the perpendicular
+/// interior distance the squared run length. Two of them compare by
+/// cross-multiplication, and the distance is at least a squared `min`
+/// exactly when the numerator is at least `min * min * denominator`.
+#[must_use]
+#[inline]
+pub(crate) const fn distance_point_segment(point: Delta, from: Delta, to: Delta) -> (i128, i128) {
+    let run = (to.0.saturating_sub(from.0), to.1.saturating_sub(from.1));
+    let offset = (
+        point.0.saturating_sub(from.0),
+        point.1.saturating_sub(from.1),
+    );
+    let squared = dot(run, run);
+    let along = dot(run, offset);
+    if squared <= 0_i128 || along <= 0_i128 {
+        return (dot(offset, offset), 1_i128);
+    }
+    if along >= squared {
+        let back = (point.0.saturating_sub(to.0), point.1.saturating_sub(to.1));
+        return (dot(back, back), 1_i128);
+    }
+    let perpendicular = cross(run, offset);
+    (perpendicular.saturating_mul(perpendicular), squared)
 }
 
 /// The point where the two segment lines cross, rounded to the nearest
@@ -415,7 +450,8 @@ impl PointMerge {
 #[cfg(test)]
 mod tests {
     use super::{
-        PointMerge, Seg, between, cross, delta, dot, on_segment_tol, opposite, orient, sweep_cuts,
+        PointMerge, Seg, between, cross, delta, distance_point_segment, dot, on_segment_tol,
+        opposite, orient, sweep_cuts, widen,
     };
     use crate::geom::Pt;
     use crate::geom::segment::SourceId;
@@ -456,6 +492,91 @@ mod tests {
         assert!(opposite(1, -1), "opposite");
         assert!(!opposite(1, 0), "zero is not opposite");
         assert!(!opposite(-1, -2), "same side");
+    }
+
+    #[test]
+    fn widen_lifts_a_grid_point_into_the_exact_space() {
+        assert_eq!(widen((3_i64, -4_i64)), (3_i128, -4_i128), "axis by axis");
+        assert_eq!(
+            widen((i64::from(i32::MIN), i64::from(i32::MAX))),
+            (
+                i128::from(i64::from(i32::MIN)),
+                i128::from(i64::from(i32::MAX))
+            ),
+            "every map coordinate survives the lift"
+        );
+    }
+
+    #[test]
+    fn distance_point_segment_clamps_to_the_ends_off_span() {
+        let from = widen((0_i64, 0_i64));
+        let to = widen((10_i64, 0_i64));
+        assert_eq!(
+            distance_point_segment(widen((-3_i64, 4_i64)), from, to),
+            (25_i128, 1_i128),
+            "before the start: the squared distance to `from`"
+        );
+        assert_eq!(
+            distance_point_segment(widen((13_i64, 4_i64)), from, to),
+            (25_i128, 1_i128),
+            "past the end: the squared distance to `to`"
+        );
+        assert_eq!(
+            distance_point_segment(widen((0_i64, 0_i64)), from, to),
+            (0_i128, 1_i128),
+            "exactly on an end"
+        );
+        assert_eq!(
+            distance_point_segment(from, from, from),
+            (0_i128, 1_i128),
+            "a zero-length segment measures to its one point"
+        );
+    }
+
+    #[test]
+    fn distance_point_segment_divides_by_the_squared_run_in_span() {
+        let from = widen((0_i64, 0_i64));
+        let to = widen((10_i64, 0_i64));
+        assert_eq!(
+            distance_point_segment(widen((5_i64, 3_i64)), from, to),
+            (900_i128, 100_i128),
+            "cross^2 over len^2: 30^2/10^2 = 9 squared units, unreduced"
+        );
+        assert_eq!(
+            distance_point_segment(widen((5_i64, 0_i64)), from, to),
+            (0_i128, 100_i128),
+            "on the segment itself"
+        );
+        let steep = widen((10_i64, 15_i64));
+        assert_eq!(
+            distance_point_segment(steep, from, to),
+            (225_i128, 1_i128),
+            "level with the end and 15 above: the endpoint distance to (10, 0)"
+        );
+    }
+
+    #[test]
+    fn distance_point_segment_agrees_with_the_at_or_below_test() {
+        // The clearance tests compare a squared `min` against the
+        // fraction by `num >= min * min * den`; check that contract on a
+        // diagonal, where the perpendicular case runs, against the
+        // hand-computed distance of (4, 0) from the line `y = x`.
+        let from = widen((0_i64, 0_i64));
+        let to = widen((4_i64, 4_i64));
+        let point = widen((4_i64, 0_i64));
+        let (num, den) = distance_point_segment(point, from, to);
+        assert_eq!(
+            (num, den),
+            (256_i128, 32_i128),
+            "256/32 = 8 = (2*sqrt(2))^2"
+        );
+        for (min, at_least) in [(1_i128, true), (2_i128, true), (3_i128, false)] {
+            assert_eq!(
+                num >= min.saturating_mul(min).saturating_mul(den),
+                at_least,
+                "is the squared distance at least {min}^2?"
+            );
+        }
     }
 
     #[test]

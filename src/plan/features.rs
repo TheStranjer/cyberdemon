@@ -372,7 +372,7 @@ struct FeatureRun {
 /// is attributed to that room row.
 fn room_sectors_of(compiled: &CompiledPlan, room: &str) -> Result<Vec<usize>, CyberError> {
     compiled.room_sectors.get(room).cloned().ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "feature names room '{room}', which the compiled map holds no sector for: it \
              was painted over by a later room; move the rooms apart or drop the feature"
         ))
@@ -387,11 +387,6 @@ fn room_sectors_of(compiled: &CompiledPlan, room: &str) -> Result<Vec<usize>, Cy
 /// install nothing for such a room instead of refusing.
 fn owned_sectors(compiled: &CompiledPlan, room: &str) -> Vec<usize> {
     compiled.room_sectors.get(room).cloned().unwrap_or_default()
-}
-
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
 }
 
 /// The door core's style behind a plan [`DoorStyle`]: the locked

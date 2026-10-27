@@ -131,6 +131,10 @@ fn coordinates_the_format_cannot_store_refuse_intact() {
         message.contains("i16") && message.contains("convert_map_format"),
         "the error names the limit and the fix: {message}"
     );
+    assert!(
+        message.contains("a doom map stores"),
+        "the format is named with the wire spelling the reports use: {message}"
+    );
     assert_eq!(doom, before, "nothing moved");
     let mut udmf = two_room_map();
     udmf.format = MapFormat::Udmf;

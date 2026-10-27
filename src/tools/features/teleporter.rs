@@ -32,8 +32,8 @@ use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportBuild, TeleportSpec, build_teleporter};
 use crate::wad::map::ops::Point;
 
+use super::current_map;
 use super::door::point_of;
-use super::{current_map, invalid};
 use crate::tools::maps::params::PointParam;
 
 /// Arguments for [`Cyberdemon::add_teleporter`].
@@ -124,10 +124,10 @@ pub(super) fn teleport_spec(
     skins: &TeleportSkins,
 ) -> Result<TeleportSpec, CyberError> {
     let pad_param = args.pad.ok_or_else(|| {
-        invalid("pad is required: the {x, y} centre of the pad the player walks onto")
+        CyberError::invalid("pad is required: the {x, y} centre of the pad the player walks onto")
     })?;
     let wanted = args.destination.as_ref().ok_or_else(|| {
-        invalid(
+        CyberError::invalid(
             "destination is required: the {x, y, angle} centre of the sector the \
              player arrives in",
         )

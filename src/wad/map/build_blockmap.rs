@@ -17,13 +17,9 @@
 //! knows about sessions or MCP.
 
 use crate::error::CyberError;
-use crate::wad::map::blockmap::BLOCK_SIZE;
+use crate::wad::map::blockmap::{BLOCK_SIZE, offset_table_end, too_large};
 use crate::wad::map::{Blockmap, Linedef, Map};
 
-/// Words in the blockmap header (two origins and the grid size).
-const HEADER_WORDS: usize = 4;
-/// The largest `BLOCKMAP` lump its `u16` word offsets can address.
-const MAX_LUMP_WORDS: usize = 0xFFFF_usize;
 /// The largest lump vanilla `Doom` reads whole (it signs the offsets).
 const VANILLA_MAX_WORDS: usize = 0x7FFF_usize;
 /// The margin the grid keeps below the lowest vertex, in map units.
@@ -145,13 +141,10 @@ impl Grid {
         let origin_y = origin_of(min_y)?;
         let columns = extent(max_x, origin_x)?;
         let rows = extent(max_y, origin_y)?;
-        let cells = usize::from(columns)
-            .checked_mul(usize::from(rows))
-            .ok_or_else(too_large)?;
-        HEADER_WORDS
-            .checked_add(cells)
-            .filter(|end| *end <= MAX_LUMP_WORDS)
-            .ok_or_else(too_large)?;
+        // The codec's own shape check, run here rather than from
+        // `to_bytes`: a grid whose offset table alone leaves the lump
+        // must be refused before the blocklists are allocated.
+        offset_table_end(columns, rows)?;
         Ok(Self {
             origin_x,
             origin_y,
@@ -396,15 +389,6 @@ impl Line {
     }
 }
 
-/// The documented refusal of a grid or lump the format cannot hold.
-fn too_large() -> CyberError {
-    CyberError::LimitExceeded(
-        "blockmap too large: the grid or its blocklists leave the 65535 words a \
-         BLOCKMAP lump can hold"
-            .to_owned(),
-    )
-}
-
 /// The refusal of a linedef index no blocklist can carry.
 fn oversized(index: usize) -> CyberError {
     CyberError::LimitExceeded(format!(
@@ -415,7 +399,8 @@ fn oversized(index: usize) -> CyberError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_LUMP_WORDS, VANILLA_MAX_WORDS, build};
+    use super::{VANILLA_MAX_WORDS, build};
+    use crate::wad::map::blockmap::MAX_LUMP_WORDS;
     use crate::wad::map::common::fixtures::{name, two_room_map, vertex};
     use crate::wad::map::{Blockmap, Linedef, Map};
 

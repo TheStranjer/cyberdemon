@@ -19,7 +19,6 @@ use crate::plan::things::resolve_thing_kind;
 use crate::wad::map::flags::{self, FlagFamily, FlagKind, Skill};
 use crate::wad::map::placement::{Area, Facing, snap_angle};
 
-use super::invalid;
 use super::specials::sector_selection;
 
 /// The `place_things` count ceiling per call.
@@ -268,8 +267,9 @@ pub(super) fn place_kind(
 ) -> Result<u32, CyberError> {
     match param.clone() {
         ThingKindParam::Type(number) => Ok(number),
-        ThingKindParam::Name(text) => resolve_thing_kind(definitions, &text)
-            .map_err(|problem| invalid(&problem).with_hint("get_thing_types with a search term")),
+        ThingKindParam::Name(text) => resolve_thing_kind(definitions, &text).map_err(|problem| {
+            CyberError::invalid(&problem).with_hint("get_thing_types with a search term")
+        }),
     }
 }
 
@@ -279,7 +279,7 @@ fn where_spec(args: &PlaceThingsParams) -> Result<WhereSpec, CyberError> {
         (Some(list), None, None) => Ok(WhereSpec::Sectors(sector_selection(&list)?)),
         (None, Some(edges), None) => Ok(WhereSpec::Area(rect_area(edges)?)),
         (None, None, Some(around)) => Ok(WhereSpec::Area(circle_area(around)?)),
-        _ => Err(invalid(
+        _ => Err(CyberError::invalid(
             "pass exactly one of sectors, bbox and near: the tool places into one kind of area",
         )),
     }
@@ -289,7 +289,7 @@ fn where_spec(args: &PlaceThingsParams) -> Result<WhereSpec, CyberError> {
 fn rect_area(edges: [i32; 4]) -> Result<Area, CyberError> {
     let [x0, y0, x1, y1] = edges;
     if x0 >= x1 || y0 >= y1 {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "bbox [{x0}, {y0}, {x1}, {y1}] is empty or backwards: pass [x0, y0, x1, y1] with \
              x0 < x1 and y0 < y1"
         )));
@@ -307,7 +307,7 @@ fn rect_area(edges: [i32; 4]) -> Result<Area, CyberError> {
 fn circle_area(around: NearParam) -> Result<Area, CyberError> {
     if around.radius < 1_i32 {
         let radius = around.radius;
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "near radius {radius} is not a circle: pass a positive radius in map units"
         )));
     }
@@ -322,11 +322,11 @@ pub(super) fn need_spec(args: &PlaceThingsParams) -> Result<NeedSpec, CyberError
     match (args.count, args.per_sector) {
         (Some(total), None) => Ok(NeedSpec::Total(check_copies("count", total)?)),
         (None, Some(each)) => Ok(NeedSpec::PerSector(check_copies("per_sector", each)?)),
-        (Some(_), Some(_)) => Err(invalid(
+        (Some(_), Some(_)) => Err(CyberError::invalid(
             "pass one of count and per_sector, not both: count splits across the areas, \
              per_sector fills every one of them",
         )),
-        (None, None) => Err(invalid(
+        (None, None) => Err(CyberError::invalid(
             "pass count (1..=256 things in total) or per_sector (that many in every area)",
         )),
     }
@@ -335,12 +335,12 @@ pub(super) fn need_spec(args: &PlaceThingsParams) -> Result<NeedSpec, CyberError
 /// A requested copy count inside `1..=256`, as a `usize`.
 fn check_copies(name: &str, value: u32) -> Result<usize, CyberError> {
     if value == 0_u32 || value > COPIES_MAX {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "{name} {value} is out of range: pass 1..={COPIES_MAX}"
         )));
     }
     usize::try_from(value).map_err(|conversion| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "{name} {value} exceeds the supported count: {conversion}"
         ))
     })
@@ -353,7 +353,7 @@ fn clearance_of(given: Option<i32>) -> Result<Option<i64>, CyberError> {
         return Ok(None);
     };
     if value < 1_i32 {
-        return Err(invalid(&format!(
+        return Err(CyberError::invalid(&format!(
             "clearance {value} is out of range: pass a positive distance in map units, or leave \
              it out for the thing's radius plus 8"
         )));
@@ -365,7 +365,7 @@ fn clearance_of(given: Option<i32>) -> Result<Option<i64>, CyberError> {
 /// things on no skill at all, so it is refused.
 fn place_skills(texts: &[String]) -> Result<Vec<Skill>, CyberError> {
     if texts.is_empty() {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "skills is empty: pass some of easy, medium and hard, or leave skills out for every \
              skill",
         ));
@@ -374,7 +374,7 @@ fn place_skills(texts: &[String]) -> Result<Vec<Skill>, CyberError> {
         .iter()
         .map(|text| {
             Skill::parse(text).ok_or_else(|| {
-                invalid(&format!(
+                CyberError::invalid(&format!(
                     "skill {text:?} is not a skill: pass easy, medium or hard, or leave skills \
                      out for every skill"
                 ))
@@ -393,7 +393,7 @@ pub(super) fn facing_of(param: Option<&AngleParam>, seed: u32) -> Result<Facing,
             "face_player_start" => Ok(Facing::PlayerStart),
             "face_center" => Ok(Facing::Centre),
             "random_seeded" => Ok(Facing::Seeded(seed)),
-            other => Err(invalid(&format!(
+            other => Err(CyberError::invalid(&format!(
                 "angle {other:?} is not an angle: pass a number of degrees or one of \
                  face_player_start, face_center, random_seeded"
             ))),

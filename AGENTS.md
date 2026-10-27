@@ -28,13 +28,17 @@ src/
                   topmost-layer `LayerLabeler` (even-odd in i128),
                   `geom/segment.rs` integer segment math: orientations,
                   rounded crossings, T-junction and overlap cut finding,
-                  the bounding-box sweep and the point-merge union-find,
-                  `geom/arrange.rs` the pipeline root: the entry point,
-                  the shared constants and polygon validation, over
-                  `geom/arrange/split.rs` (chain splitting and the dedupe
-                  table) and `geom/arrange/merge.rs` (side labelling and
-                  the collinear merge), with the engine's tests in
-                  `geom/arrange/tests.rs` plus
+                  the bounding-box sweep, the point-merge union-find and
+                  the shared exact `widen`/`distance_point_segment` the
+                  overlay, door placement and clearance tests measure
+                  with,
+                  `geom/arrange.rs` the pipeline root: the two entry
+                  points (`arrange` and the reusable `cut`/`Cut` label
+                  stage), the shared constants and polygon validation,
+                  over `geom/arrange/split.rs` (chain splitting and the
+                  dedupe table) and `geom/arrange/merge.rs` (side
+                  labelling and the collinear merge), with the engine's
+                  tests in `geom/arrange/tests.rs` plus
                   `geom/arrange/tests/cases.rs` and
                   `geom/arrange/tests/properties.rs`.
   gfx.rs          Graphics core module root: dimensions limits and shared helpers.
@@ -1099,8 +1103,9 @@ src/
                   `SKY_FLAT`, `is_sky_flat`, `normalized_picture`, the
                   player's `MAX_STEP_HEIGHT`/`PLAYER_HEIGHT`/
                   `MIN_LINE_WIDTH`, `DEFAULT_LINTEL`,
-                  `UNKNOWN_THING_RADIUS`, `PLAYER_START_TYPES` and
-                  `PLAYER1_START`), `map/model.rs` the
+                  `UNKNOWN_THING_RADIUS`, `PLAYER_START_TYPES`,
+                  `PLAYER1_START` and the binary `COORD_MIN`/`COORD_MAX`
+                  vertex range), `map/model.rs` the
                   format-neutral `Map` model (`Thing`, `Vertex`,
                   `Linedef`, `Sidedef`, `Sector`, `extra` side-bags),
                   `map/doom.rs` the binary Doom map reader/writer
@@ -1163,7 +1168,8 @@ src/
                   map and `apply_overlay` in the root, the `OverlayLabeler`
                   and the containment shapes it answers from in
                   `overlay/labeler.rs`, the `Prepared` borrowed view of the original map, the
-                  arrangement runs and the side dressing in
+                  one shared `geom` cut its `keep_interior` probe and
+                  final labelling both label, and the side dressing in
                   `overlay/prepared.rs`, the `Rebuilt`, `Plan`, `Built` and
                   `LineCtx` rows with their flag, orientation and texture
                   rules in `overlay/rebuilt.rs` and the integer geometry

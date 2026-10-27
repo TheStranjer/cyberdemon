@@ -120,7 +120,7 @@ pub fn analyze(img: &RgbaImage, options: &AnalyzeOptions) -> Result<Analysis, Cy
     assign_mark_regions(&mut marks, &regions);
     let bridge = closed.without(&walls);
     let radius = params.close_radius.saturating_add(stroke).saturating_add(2);
-    let gaps = find_gaps(&bridge, &regions, stroke, radius);
+    let gaps = find_gaps(&bridge, &regions, params.min_gap_area, radius);
     let warnings = build_warnings(dropped, region_info.len());
     Ok(Analysis {
         ink,
@@ -160,6 +160,10 @@ struct Params {
     min_region_area: u32,
     /// Maximum mark bounding-box edge.
     mark_max_size: u32,
+    /// Minimum bridge blob counted as a wall gap: one stroke's worth of
+    /// pixels, so the closing's own noise (thinner specks) never reads
+    /// as an opening.
+    min_gap_area: u32,
 }
 
 impl Params {
@@ -179,6 +183,7 @@ impl Params {
             mark_max_size: options
                 .mark_max_size
                 .unwrap_or_else(|| stroke.saturating_mul(3).saturating_add(8)),
+            min_gap_area: stroke,
         }
     }
 }
@@ -329,16 +334,17 @@ impl RegionFile {
     }
 }
 
-/// The gap components of the bridge mask with at least `min_area`
-/// pixels, each tagged with the two region ids its `radius`-pixel
-/// neighbourhood most often sees.
-fn find_gaps(bridge: &Mask, regions: &Labels, min_area: u32, radius: u32) -> Vec<Gap> {
+/// The gap components of the bridge mask with at least `min_gap_area`
+/// pixels (see [`Params::min_gap_area`], the stroke-wide noise floor),
+/// each tagged with the two region ids its `radius`-pixel neighbourhood
+/// most often sees.
+fn find_gaps(bridge: &Mask, regions: &Labels, min_gap_area: u32, radius: u32) -> Vec<Gap> {
     let (labels, components) = label_components(bridge, true, Connectivity::Eight);
     let pixels = collect_pixels(&labels);
     let mut gaps: Vec<Gap> = Vec::new();
     for component in components
         .into_iter()
-        .filter(|candidate| candidate.area >= min_area)
+        .filter(|candidate| candidate.area >= min_gap_area)
     {
         let counts = neighbour_region_counts(regions, &pixels, component.id, radius);
         gaps.push(Gap {

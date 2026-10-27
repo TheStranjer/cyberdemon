@@ -461,6 +461,26 @@ pub fn from_names(
     Ok(bits)
 }
 
+/// Whether `wanted` names a flag in `kind`'s table for `family`,
+/// refusing it with the shared unknown-flag wording listing the valid
+/// names when the table does not carry it.
+///
+/// The single check the `find_elements` flag filters run on a named
+/// flag; [`from_names`] refuses the same name the same way through the
+/// same builder.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] when the table holds no entry named
+/// `wanted`.
+#[inline]
+pub fn check_flag(kind: FlagKind, family: FlagFamily, wanted: &str) -> Result<(), CyberError> {
+    if names(kind, family).iter().any(|entry| entry.0 == wanted) {
+        return Ok(());
+    }
+    Err(unknown(wanted, kind, family))
+}
+
 /// The bits after applying one table entry to them.
 fn set_name(bits: u32, entry: &(&str, u32)) -> u32 {
     if is_activation_name(entry.0) {

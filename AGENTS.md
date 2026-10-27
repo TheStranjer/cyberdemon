@@ -1155,7 +1155,16 @@ src/
                   (bounds-derived grid, block-touching linedef lists),
                   `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
-                  bounding boxes, line lengths and sector adjacency),
+                  bounding boxes, line lengths and sector adjacency) as
+                  thin wrappers over the one-pass `map/geometry/index.rs`
+                  `SectorIndex` (per-sector boundary lines, carrying
+                  segments, box, neighbours, degrees and bbox-filtered
+                  point candidates), with that engine's tests in
+                  `map/geometry/index/tests.rs` plus
+                  `map/geometry/index/tests/reference.rs` (the verbatim
+                  full-scan bodies the index must match) and
+                  `map/geometry/index/tests/fixtures.rs` (the maps and
+                  probe points they walk),
                   `map/overlay.rs` + `overlay/labeler.rs` +
                   `overlay/prepared.rs` + `overlay/rebuilt.rs` +
                   `overlay/geometry.rs` the pure room-drawing and

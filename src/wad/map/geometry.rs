@@ -8,10 +8,19 @@
 //! pointing past `SECTORS` - are never errors: such parts simply do not
 //! take part in the answer.
 //!
+//! The answers come from the [`SectorIndex`]: one pass over `map.linedefs`
+//! that stores per sector its boundary lines, carrying segments, bounding
+//! box, neighbours and the bbox-filtered point lookup. Each free function
+//! below builds one index and reads its answer from it; the index itself
+//! lives in the private `index` submodule.
+//!
 //! [`Map`]: crate::wad::map::Map
+
+mod index;
 
 use super::model::{Endpoints, Linedef, Map};
 use crate::fixed::hypot;
+pub use index::SectorIndex;
 
 /// A linedef with both vertices resolved, coordinates widened to `i64`.
 #[derive(Clone, Copy, Debug)]
@@ -26,15 +35,21 @@ struct Segment {
     y2: i64,
 }
 
+impl Segment {
+    /// The segment across resolved `endpoints`.
+    fn from_endpoints(((x1, y1), (x2, y2)): Endpoints) -> Self {
+        Self {
+            x1: i64::from(x1),
+            y1: i64::from(y1),
+            x2: i64::from(x2),
+            y2: i64::from(y2),
+        }
+    }
+}
+
 /// The endpoints of `line` as a [`Segment`], when both vertices resolve.
 fn segment_of(map: &Map, line: &Linedef) -> Option<Segment> {
-    let ((x1, y1), (x2, y2)) = map.line_endpoints(line)?;
-    Some(Segment {
-        x1: i64::from(x1),
-        y1: i64::from(y1),
-        x2: i64::from(x2),
-        y2: i64::from(y2),
-    })
+    map.line_endpoints(line).map(Segment::from_endpoints)
 }
 
 /// Whether `line`'s two sides point at the same sector; such a line bounds
@@ -52,16 +67,7 @@ fn same_sector_sides(map: &Map, line: &Linedef) -> bool {
 #[must_use]
 #[inline]
 pub fn sector_boundary(map: &Map, sector: usize) -> Vec<(usize, bool)> {
-    let mut boundary = Vec::new();
-    for (index, line) in map.linedefs.iter().enumerate() {
-        let (front, back) = map.line_sectors(line);
-        match (front == Some(sector), back == Some(sector)) {
-            (true, _) => boundary.push((index, true)),
-            (false, true) => boundary.push((index, false)),
-            (false, false) => {}
-        }
-    }
-    boundary
+    SectorIndex::new(map).boundary(sector).to_vec()
 }
 
 /// The bounding box `(min_x, min_y, max_x, max_y)` of the vertices on
@@ -70,16 +76,7 @@ pub fn sector_boundary(map: &Map, sector: usize) -> Vec<(usize, bool)> {
 #[must_use]
 #[inline]
 pub fn sector_bbox(map: &Map, sector: usize) -> Option<(i32, i32, i32, i32)> {
-    let mut bbox = None;
-    for &(index, _) in &sector_boundary(map, sector) {
-        let Some(line) = map.linedefs.get(index) else {
-            continue;
-        };
-        if let Some(pair) = map.line_endpoints(line) {
-            bbox = Some(widen(bbox, pair));
-        }
-    }
-    bbox
+    SectorIndex::new(map).bbox(sector)
 }
 
 /// The box covering `bbox` and a segment's endpoints; a fresh box when
@@ -115,141 +112,21 @@ pub fn linedef_length(map: &Map, linedef: usize) -> Option<u64> {
 #[must_use]
 #[inline]
 pub fn neighbors(map: &Map, sector: usize) -> Vec<usize> {
-    let mut out: Vec<usize> = sector_boundary(map, sector)
-        .into_iter()
-        .filter_map(|(index, is_front)| {
-            let line = map.linedefs.get(index)?;
-            let other = if is_front { line.back } else { line.front };
-            map.side_sector(other).filter(|across| *across != sector)
-        })
-        .collect();
-    out.sort_unstable();
-    out.dedup();
-    out
-}
-
-/// The boundary segments of `sector` that carry geometry: unresolvable
-/// lines and lines whose two sides share the sector are skipped; each
-/// surviving segment keeps its `is_front` flag.
-fn boundary_segments(map: &Map, sector: usize) -> Vec<(Segment, bool)> {
-    sector_boundary(map, sector)
-        .into_iter()
-        .filter_map(|(index, is_front)| {
-            let line = map.linedefs.get(index)?;
-            if same_sector_sides(map, line) {
-                return None;
-            }
-            Some((segment_of(map, line)?, is_front))
-        })
-        .collect()
-}
-
-/// The exact `i128` product of two `i64` differences (map coordinates
-/// make the true products far smaller than `i64::MAX` squared).
-fn wide_product(a: i64, b: i64) -> i128 {
-    i128::from(a)
-        .checked_mul(i128::from(b))
-        .unwrap_or(i128::MAX)
-}
-
-/// Whether `x`/`y` lies on `segment`, endpoints included: within the
-/// segment's box and collinear through the cross product.
-fn point_on_segment(x: i64, y: i64, segment: &Segment) -> bool {
-    let within_x = x >= segment.x1.min(segment.x2) && x <= segment.x1.max(segment.x2);
-    let within_y = y >= segment.y1.min(segment.y2) && y <= segment.y1.max(segment.y2);
-    let (Some(dx), Some(dy), Some(px), Some(py)) = (
-        segment.x2.checked_sub(segment.x1),
-        segment.y2.checked_sub(segment.y1),
-        x.checked_sub(segment.x1),
-        y.checked_sub(segment.y1),
-    ) else {
-        return false;
-    };
-    within_x && within_y && wide_product(px, dy) == wide_product(py, dx)
-}
-
-/// Whether the ray from `x`/`y` straight right crosses `segment` at a
-/// point strictly to the right of `x` (the even-odd crossing test).
-fn crosses_ray(x: i64, y: i64, segment: &Segment) -> bool {
-    if (segment.y1 > y) == (segment.y2 > y) {
-        return false;
-    }
-    let (Some(dx), Some(dy), Some(px), Some(py)) = (
-        segment.x2.checked_sub(segment.x1),
-        segment.y2.checked_sub(segment.y1),
-        x.checked_sub(segment.x1),
-        y.checked_sub(segment.y1),
-    ) else {
-        return false;
-    };
-    // Intersection x > x iff (x - x1) * dy is below (y - y1) * dx for an
-    // upward segment and above it for a downward one.
-    if dy > 0 {
-        wide_product(px, dy) < wide_product(py, dx)
-    } else {
-        wide_product(px, dy) > wide_product(py, dx)
-    }
-}
-
-/// Whether `sector` contains `x`/`y`: an even-odd ray-crossing count
-/// against its boundary segments; when the point sits exactly on the
-/// boundary the front-side rule decides - the sector holds the point only
-/// if it fronts a line the point is on.
-fn sector_contains(map: &Map, sector: usize, x: i64, y: i64) -> bool {
-    let segments = boundary_segments(map, sector);
-    let mut inside = false;
-    let mut on_boundary = false;
-    let mut on_front = false;
-    for &(segment, is_front) in &segments {
-        if point_on_segment(x, y, &segment) {
-            on_boundary = true;
-            on_front |= is_front;
-            continue;
-        }
-        if crosses_ray(x, y, &segment) {
-            inside = !inside;
-        }
-    }
-    if on_boundary {
-        return on_front;
-    }
-    inside
-}
-
-/// The area of a bounding box in square map units, exact in `i128`.
-fn bbox_area((min_x, min_y, max_x, max_y): (i32, i32, i32, i32)) -> i128 {
-    let width = i128::from(max_x)
-        .checked_sub(i128::from(min_x))
-        .unwrap_or(i128::MAX);
-    let height = i128::from(max_y)
-        .checked_sub(i128::from(min_y))
-        .unwrap_or(i128::MAX);
-    width.checked_mul(height).unwrap_or(i128::MAX)
+    SectorIndex::new(map).neighbours(sector).to_vec()
 }
 
 /// The sector containing the point `x`/`y`, or `None` when no sector
 /// holds it.
 ///
-/// Every sector's boundary gets an even-odd ray-crossing test; a point
-/// exactly on a line counts as inside the sector on that line's front
-/// side. When nested sectors all hold the point the one with the smallest
-/// bounding-box area wins (ties by the lower sector index).
+/// Only sectors whose bounding box covers the point - an exact
+/// pre-filter - get the even-odd ray-crossing test; a point exactly on a
+/// line counts as inside the sector on that line's front side. When nested
+/// sectors all hold the point the one with the smallest bounding-box area
+/// wins (ties by the lower sector index).
 #[must_use]
 #[inline]
 pub fn point_in_sector(map: &Map, x: i64, y: i64) -> Option<usize> {
-    let mut best: Option<(i128, usize)> = None;
-    for sector in 0..map.sectors.len() {
-        if !sector_contains(map, sector, x, y) {
-            continue;
-        }
-        let Some(area) = sector_bbox(map, sector).map(bbox_area) else {
-            continue;
-        };
-        if best.is_none_or(|(best_area, _)| area < best_area) {
-            best = Some((area, sector));
-        }
-    }
-    best.map(|(_, sector)| sector)
+    SectorIndex::new(map).point_in_sector(x, y)
 }
 
 #[cfg(test)]

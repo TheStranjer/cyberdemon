@@ -11,9 +11,10 @@
 
 use alloc::collections::BTreeMap;
 
-use super::{MAX_SEGMENTS, normalize_polygon, ring_edges, validate_polygon};
+use super::{MAX_SEGMENTS, validate_polygon};
 use crate::error::CyberError;
 use crate::fixed::gcd;
+use crate::geom::ring::{normalize_ring, ring_edges};
 use crate::geom::segment::{
     ExternalSegment, PointMerge, Seg, SegmentOrigin, SourceId, between, cross, delta, dot,
     on_segment_tol,
@@ -27,7 +28,7 @@ pub(super) fn collect_segments(
 ) -> Result<Vec<Seg>, CyberError> {
     let mut segs: Vec<Seg> = Vec::new();
     for (index, layer) in layers.iter().enumerate() {
-        let vertices = normalize_polygon(&layer.polygon);
+        let vertices = normalize_ring(&layer.polygon);
         validate_polygon(index, layer.label, &vertices)?;
         // After normalization every ring edge (and thus every piece
         // below it) has positive length.

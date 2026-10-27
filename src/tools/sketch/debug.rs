@@ -134,28 +134,13 @@ fn paint_regions(canvas: &mut Canvas, vectorized: &Vectorized) {
     for shape in &vectorized.regions {
         let fill = region_colour(shape.id);
         let [red, green, blue] = fill;
-        let edges = ring_edges(&shape.points);
+        let edges = crate::geom::ring::ring_edges(&shape.points);
         canvas.blend_polygon_evenodd(&edges, [red, green, blue, REGION_ALPHA]);
         let stroke = Stroke::new(OUTLINE_PX, darken(fill));
         for (from, to) in edges {
             canvas.thick_line(from, to, stroke);
         }
     }
-}
-
-/// The closed edge list of a point ring: consecutive pairs plus the
-/// closing edge (an empty ring or a lone point yields nothing).
-fn ring_edges(points: &[(i64, i64)]) -> Vec<Edge> {
-    let mut edges: Vec<Edge> = points
-        .windows(2)
-        .filter_map(|pair| Some((*pair.first()?, *pair.get(1)?)))
-        .collect();
-    if points.len() > 2
-        && let (Some(first), Some(last)) = (points.first(), points.last())
-    {
-        edges.push((*last, *first));
-    }
-    edges
 }
 
 /// Every reported gap as a magenta disc of half its width at its centre.
@@ -224,7 +209,7 @@ fn i64_pair(point: (u32, u32)) -> (i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CYAN, MAGENTA, REGION_COLORS, build, darken, region_colour, ring_edges, wash};
+    use super::{CYAN, MAGENTA, REGION_COLORS, build, darken, region_colour, wash};
     use crate::gfx::image::RgbaImage;
     use crate::sketch::vectorize::VectorizeOptions;
     use crate::sketch::{Analysis, AnalyzeOptions, InkMode, Vectorized, analyze, vectorize};
@@ -294,6 +279,7 @@ mod tests {
 
     #[test]
     fn ring_edges_close_the_polygon_and_ignore_degenerate_rings() {
+        use crate::geom::ring::ring_edges;
         let square = vec![(0_i64, 0_i64), (10, 0), (10, 10), (0, 10)];
         let edges = ring_edges(&square);
         assert_eq!(edges.len(), 4_usize, "one edge per vertex");
@@ -302,9 +288,12 @@ mod tests {
             Some(((0, 10), (0, 0))),
             "closing edge"
         );
-        assert!(ring_edges(&[]).is_empty(), "an empty ring draws nothing");
         assert!(
-            ring_edges(&[(1, 1)]).is_empty(),
+            ring_edges::<(i64, i64)>(&[]).is_empty(),
+            "an empty ring draws nothing"
+        );
+        assert!(
+            ring_edges(&[(1_i64, 1_i64)]).is_empty(),
             "a lone point draws nothing"
         );
     }

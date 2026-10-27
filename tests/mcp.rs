@@ -50,7 +50,9 @@
 //! `features/switch`, `features/exit`, `features/secret`, `features/light`,
 //! `features/stairs`, `features/lift`, `features/teleporter` and
 //! `features/place` topic tests, the linedef/thing flag-name
-//! glossary guard in `flag_names`, the shared box-window, tap-blend and
+//! glossary guard in `flag_names`, the polygon, segment and ring
+//! primitive single-owner guard in `geom_primitives`, the shared
+//! box-window, tap-blend and
 //! luminance-weight duplication guard in `shared_math`, the big-endian-helper
 //! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the shared
 //! TSV-reader and category-word single-owner guard in `tsv_tables`, the
@@ -168,6 +170,9 @@ pub mod fixtures;
 #[cfg(test)]
 #[path = "mcp/flag_names.rs"]
 mod flag_names;
+#[cfg(test)]
+#[path = "mcp/geom_primitives.rs"]
+mod geom_primitives;
 #[cfg(test)]
 #[path = "mcp/graphics.rs"]
 mod graphics;

@@ -33,7 +33,7 @@ pub fn room_layers(plan: &Plan) -> Vec<Layer> {
         .iter()
         .enumerate()
         .map(|(index, room)| Layer {
-            label: Label::Region(u32::try_from(index).unwrap_or(u32::MAX)),
+            label: Label::region(index),
             polygon: room.polygon(),
         })
         .collect()

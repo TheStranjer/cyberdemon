@@ -11,58 +11,19 @@
 
 use alloc::collections::BTreeMap;
 
+use super::LineKey;
 use super::split::divided;
-use super::{LineKey, SAMPLE_HALF, SAMPLE_OFFSET};
-use crate::fixed::{div_round, gcd, isqrt};
+use crate::fixed::gcd;
 use crate::geom::Piece;
 use crate::geom::Pt;
 use crate::geom::label::{Label, Labeler, ScaledPt};
-use crate::geom::segment::{SegmentOrigin, cross, delta, dot};
+use crate::geom::segment::{SegmentOrigin, cross, delta, side_samples, widen};
 
-/// The integer length of `start`→`end`, at least one.
-fn segment_length(start: Pt, end: Pt) -> i128 {
-    let direction = delta(start, end);
-    let length_squared = dot(direction, direction);
-    let magnitude = u64::try_from(length_squared).unwrap_or(u64::MAX);
-    i128::from(isqrt(magnitude)).max(1)
-}
-
-/// The unit normal of `start`→`end` scaled to an eighth of a unit, left
-/// positive.
-fn side_offset(start: Pt, end: Pt) -> ScaledPt {
-    let direction = delta(start, end);
-    let length = segment_length(start, end);
-    (
-        div_round(
-            direction.1.saturating_neg().saturating_mul(SAMPLE_OFFSET),
-            length,
-        )
-        .unwrap_or(0),
-        div_round(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0),
-    )
-}
-
-/// Sample just left and just right of the midpoint (in scaled
-/// coordinates) and ask `labeler` for both sides.
+/// Ask `labeler` for both sides of the piece `start`→`end` (the shared
+/// side samples an eighth of a unit off its midpoint, left and right).
 fn side_labels(start: Pt, end: Pt, labeler: &dyn Labeler) -> (Label, Label) {
-    let centre = (
-        i128::from(start.0)
-            .saturating_add(i128::from(end.0))
-            .saturating_mul(SAMPLE_HALF),
-        i128::from(start.1)
-            .saturating_add(i128::from(end.1))
-            .saturating_mul(SAMPLE_HALF),
-    );
-    let offset = side_offset(start, end);
-    let left = labeler.label((
-        centre.0.saturating_add(offset.0),
-        centre.1.saturating_add(offset.1),
-    ));
-    let right = labeler.label((
-        centre.0.saturating_sub(offset.0),
-        centre.1.saturating_sub(offset.1),
-    ));
-    (left, right)
+    let [left, right]: [ScaledPt; 2] = side_samples(start, end);
+    (labeler.label(left), labeler.label(right))
 }
 
 /// Label every deduped piece and drop the ones whose sides agree.
@@ -104,8 +65,7 @@ fn line_key(piece: &Piece) -> LineKey {
     let direction = delta(piece.a, piece.b);
     let divisor = gcd(direction.0.saturating_abs(), direction.1.saturating_abs());
     let unit = (divided(direction.0, divisor), divided(direction.1, divisor));
-    let from = (i128::from(piece.a.0), i128::from(piece.a.1));
-    (unit.0, unit.1, cross(unit, from))
+    (unit.0, unit.1, cross(unit, widen(piece.a)))
 }
 
 /// Position of a piece's start along its unit direction.

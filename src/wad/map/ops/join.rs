@@ -15,11 +15,12 @@
 use alloc::collections::BTreeSet;
 
 use crate::error::CyberError;
+use crate::geom::segment::{cross, delta, dot};
 
 use super::split::piece_length;
 use super::{
-    JoinPlan, JoinResult, Linedef, Map, Order, Point, SideShift, check_offset, delta, endpoint,
-    linedef_row, sidedef_of, wide,
+    JoinPlan, JoinResult, Linedef, Map, Order, Point, SideShift, check_offset, endpoint,
+    linedef_row, sidedef_of,
 };
 use crate::wad::map::remove::{CascadeOptions, Removal, apply_removal, expand_cascade};
 
@@ -67,16 +68,16 @@ pub(super) fn require_same_direction(
     (start, stop): (Point, Point),
     (next_start, next_stop): (Point, Point),
 ) -> Result<(), CyberError> {
-    let (fx, fy) = delta(start, stop);
-    let (sx, sy) = delta(next_start, next_stop);
-    if wide(fx, sy) != wide(fy, sx) {
+    let first_run = delta(start, stop);
+    let second_run = delta(next_start, next_stop);
+    if cross(first_run, second_run) != 0_i128 {
         return Err(CyberError::InvalidArgument(
             "the two linedefs are not collinear: join only lines along one straight run, \
              check their coordinates with assemble_map"
                 .to_owned(),
         ));
     }
-    if wide(fx, sx).saturating_add(wide(fy, sy)) <= 0_i128 {
+    if dot(first_run, second_run) <= 0_i128 {
         return Err(CyberError::InvalidArgument(
             "the two linedefs run in opposite directions: flip one with edit_linedef \
              (flip: true) so they point the same way along the join"

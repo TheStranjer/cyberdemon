@@ -10,14 +10,14 @@
 //! recess polygon on that cut for [`crate::wad::map::overlay`] to draw.
 
 use crate::error::CyberError;
-use crate::geom::segment::{Delta, cross, delta, dot};
+use crate::geom::segment::{Delta, cross, delta, dot, widen};
 use crate::wad::map::model::Map;
 use crate::wad::map::ops::Point;
 use crate::wad::map::query::{ElementKind, check_index};
 
 use super::{
     DoorWall, ORIGIN, VertexPair, endpoints, from_axes, half_axis, length_of, moved, scale_shift,
-    vector, wide,
+    wide,
 };
 
 /// The linedef `index` endpoints for a `role` that must exist: refuses
@@ -217,16 +217,16 @@ pub fn door_wall(
 #[must_use]
 #[inline]
 pub fn door_rect(wall: &DoorWall, normal: Point, depth: i32, from_room_side: bool) -> Vec<Point> {
-    let perpendicular = vector(normal);
+    let perpendicular = widen(normal);
     let length = i128::from(length_of(perpendicular)).max(1_i128);
     let reach = if from_room_side {
         i128::from(depth).saturating_neg()
     } else {
         i128::from(depth)
     };
-    let offset = vector(scale_shift(ORIGIN, perpendicular, reach, length));
-    let centre = vector(wall.point);
-    let half = vector(wall.half_dir);
+    let offset = widen(scale_shift(ORIGIN, perpendicular, reach, length));
+    let centre = widen(wall.point);
+    let half = widen(wall.half_dir);
     let near_left = from_axes(
         centre.0.saturating_sub(half.0),
         centre.1.saturating_sub(half.1),

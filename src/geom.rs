@@ -18,7 +18,9 @@
 
 pub mod arrange;
 pub mod label;
+pub mod ring;
 pub mod segment;
+pub mod union;
 
 pub use arrange::{Cut, arrange, cut};
 pub use label::{Label, Labeler, LayerLabeler, SAMPLE_SCALE, ScaledPt};
@@ -26,6 +28,34 @@ pub use segment::{ExternalSegment, SegmentOrigin, SourceId};
 
 /// An integer map point, `Doom` units.
 pub type Pt = (i64, i64);
+
+/// A 2-D integer point the shared primitives read coordinates through.
+///
+/// The crate's geometry lives in several coordinate spaces (the `i64`
+/// [`Pt`] grid, the `i32` map model, the `16.16` [`crate::bsp::Point`]),
+/// and [`segment`] and [`ring`] are generic over this trait so every
+/// primitive — orientation, distance, ring walking, crossings — is
+/// written exactly once. Coordinates widen to `i64`; products are taken
+/// in exact `i128`.
+pub trait Point: Copy {
+    /// The `x` coordinate, widened to `i64`.
+    fn x(self) -> i64;
+
+    /// The `y` coordinate, widened to `i64`.
+    fn y(self) -> i64;
+}
+
+impl Point for Pt {
+    #[inline]
+    fn x(self) -> i64 {
+        self.0
+    }
+
+    #[inline]
+    fn y(self) -> i64 {
+        self.1
+    }
+}
 
 /// One painter's-algorithm layer: a labelled, simple polygon.
 ///

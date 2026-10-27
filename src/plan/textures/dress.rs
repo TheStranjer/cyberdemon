@@ -263,16 +263,8 @@ fn band_labels(connectors: &[ConnectorGeometry]) -> BTreeMap<u32, (usize, usize)
                 .enumerate()
                 .map(move |(step, layer)| (layer.label, (connector, step)))
         })
-        .filter_map(|(label, owner)| region_id(label).map(|id| (id, owner)))
+        .filter_map(|(label, owner)| label.region_id().map(|id| (id, owner)))
         .collect()
-}
-
-/// The `u32` of a [`Label::Region`], `None` for [`Label::Void`].
-const fn region_id(label: Label) -> Option<u32> {
-    match label {
-        Label::Region(id) => Some(id),
-        Label::Void => None,
-    }
 }
 
 /// The piece's face labels in linedef order: the front face's region
@@ -304,7 +296,7 @@ fn dress_room_flats(dress: &Dresser<'_>, map: &mut Map, index: usize) {
         .scene
         .emitted
         .sector_of_label
-        .get(&region_label(index))
+        .get(&Label::region(index))
         .copied()
     else {
         return;
@@ -318,12 +310,6 @@ fn dress_room_flats(dress: &Dresser<'_>, map: &mut Map, index: usize) {
     if space.ceiling_flat == NO_TEXTURE {
         space.ceiling_flat.clone_from(&dress.names.ceiling);
     }
-}
-
-/// The region label of plan index `index`, matching the room numbering of
-/// [`room_layers`](crate::plan::walls::room_layers).
-fn region_label(index: usize) -> Label {
-    Label::Region(u32::try_from(index).unwrap_or(u32::MAX))
 }
 
 /// A door band dresses floor and ceiling in the `DoorFloor` role: the
@@ -385,7 +371,7 @@ fn adjoining_sectors(dress: &Dresser<'_>, connector: &ConnectorGeometry) -> Vec<
                 .scene
                 .emitted
                 .sector_of_label
-                .get(&region_label(index))
+                .get(&Label::region(index))
                 .copied()
         })
         .collect()

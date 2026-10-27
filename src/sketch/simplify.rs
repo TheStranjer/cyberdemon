@@ -15,39 +15,13 @@
 //! every near-vertical run onto its mean `x`; edges that are neither (more
 //! than `max_skew_permille` off axis) keep their slope.
 
+use crate::geom::Pt;
+use crate::geom::ring::{drop_collinear, normalize_ring};
+use crate::geom::segment::{distance_squared, orient};
 use crate::gfx::ops::rounded_div;
 
 /// A polygon vertex in pixel-corner coordinates.
-type Point = (i64, i64);
-
-/// The cross product `(b - a) x (c - a)` as `i128`.
-pub(crate) fn cross(a: Point, b: Point, c: Point) -> i128 {
-    let ux = delta(b.0, a.0);
-    let uy = delta(b.1, a.1);
-    let vx = delta(c.0, a.0);
-    let vy = delta(c.1, a.1);
-    ux.checked_mul(vy)
-        .unwrap_or(i128::MAX)
-        .checked_sub(vx.checked_mul(uy).unwrap_or(i128::MIN))
-        .unwrap_or(i128::MAX)
-}
-
-/// The squared distance between two points as `i128`.
-pub(crate) fn dist2(a: Point, b: Point) -> i128 {
-    let dx = delta(b.0, a.0);
-    let dy = delta(b.1, a.1);
-    dx.checked_mul(dx)
-        .unwrap_or(i128::MAX)
-        .checked_add(dy.checked_mul(dy).unwrap_or(i128::MAX))
-        .unwrap_or(i128::MAX)
-}
-
-/// The `i128` difference of two `i64` coordinates, saturating on overflow.
-fn delta(one: i64, other: i64) -> i128 {
-    i128::from(one)
-        .checked_sub(i128::from(other))
-        .unwrap_or(i128::MAX)
-}
+type Point = Pt;
 
 /// Which coordinate an edge run flattens onto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,16 +108,7 @@ pub(crate) fn edges_axis_aligned(points: &[Point]) -> bool {
 /// Drops duplicate and collinear vertices of the closed ring `points`,
 /// keeping the result cyclically reduced.
 pub(crate) fn clean_ring(points: &[Point]) -> Vec<Point> {
-    let mut out: Vec<Point> = Vec::with_capacity(points.len());
-    for &point in points {
-        if out.last() == Some(&point) {
-            continue;
-        }
-        out.push(point);
-    }
-    if out.len() > 1 && out.first() == out.last() {
-        out.pop();
-    }
+    let mut out = normalize_ring(points);
     loop {
         let (shrunk, dropped) = drop_collinear(&out);
         out = shrunk;
@@ -151,36 +116,6 @@ pub(crate) fn clean_ring(points: &[Point]) -> Vec<Point> {
             return out;
         }
     }
-}
-
-/// One pass dropping vertices lying on the line through their two ring
-/// neighbours; reports whether anything went.
-fn drop_collinear(points: &[Point]) -> (Vec<Point>, bool) {
-    let count = points.len();
-    if count < 3 {
-        return (points.to_vec(), false);
-    }
-    let mut out = Vec::with_capacity(count);
-    let mut dropped = false;
-    for (index, &point) in points.iter().enumerate() {
-        let back = index
-            .checked_sub(1)
-            .unwrap_or_else(|| count.saturating_sub(1));
-        let prev = ring_get(points, back);
-        let next = ring_get(
-            points,
-            index
-                .checked_add(1)
-                .filter(|&followed| followed < count)
-                .unwrap_or(0),
-        );
-        if prev != next && cross(prev, next, point) == 0 {
-            dropped = true;
-            continue;
-        }
-        out.push(point);
-    }
-    (out, dropped)
 }
 
 /// The vertex at cyclic index `index`, `(0, 0)` for an empty ring.
@@ -251,7 +186,7 @@ fn dp_closed(points: &[Point], tolerance: u32) -> Vec<Point> {
 fn farthest_index(points: &[Point], from: Point) -> usize {
     let mut best = (0_i128, 0_usize);
     for (index, &point) in points.iter().enumerate() {
-        let distance = dist2(from, point);
+        let distance = distance_squared(from, point);
         if distance > best.0 {
             best = (distance, index);
         }
@@ -322,11 +257,11 @@ fn dp_line(points: &[Point], tolerance: u32) -> Vec<Point> {
 /// perpendicular excess, if any fails the keep test for `tol2`.
 fn worst_between(points: &[Point], head: usize, tail: usize, tol2: i128) -> Option<usize> {
     let (a, b) = (points.get(head).copied()?, points.get(tail).copied()?);
-    let span = dist2(a, b);
+    let span = distance_squared(a, b);
     let mut worst: Option<(i128, usize)> = None;
     for index in head.saturating_add(1)..tail {
         let point = *points.get(index)?;
-        let offset = cross(a, b, point);
+        let offset = orient(a, b, point);
         let excess = offset.checked_mul(offset).unwrap_or(i128::MAX);
         if excess > tol2.saturating_mul(span) && worst.is_none_or(|(best, _)| excess > best) {
             worst = Some((excess, index));

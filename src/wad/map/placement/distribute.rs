@@ -16,13 +16,13 @@ use alloc::vec::Vec;
 
 use crate::defs::Definitions;
 use crate::geom::Pt;
+use crate::geom::segment::{distance_squared, widen};
 use crate::wad::map::geometry::sector_bbox;
 use crate::wad::map::model::Map;
 
 use super::facing::{Facing, FacingRun};
 use super::{
-    Area, End, MAX_AXIS_POINTS, Occupant, axis_points, distance_squared, keeps_distance, occupants,
-    wall_segments, wide,
+    Area, End, MAX_AXIS_POINTS, Occupant, axis_points, keeps_distance, occupants, wall_segments,
 };
 
 /// The smallest grid spacing [`distribute`] ever lays, map units.
@@ -112,7 +112,7 @@ impl<'ctx> Run<'ctx> {
             && self.wall_clear(at)
             && self.blockers.iter().all(|occupant| {
                 let need = i128::from(self.clearance.saturating_add(occupant.radius));
-                keeps_distance(wide(occupant.at), wide(occupant.at), wide(at), need)
+                keeps_distance(widen(occupant.at), widen(occupant.at), widen(at), need)
             })
     }
 
@@ -121,7 +121,7 @@ impl<'ctx> Run<'ctx> {
         let need = i128::from(self.clearance);
         self.walls
             .iter()
-            .all(|&(from, to)| keeps_distance(from, to, wide(at), need))
+            .all(|&(from, to)| keeps_distance(from, to, widen(at), need))
     }
 
     /// The usable candidates of `area`, ordered by distance from the area

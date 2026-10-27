@@ -19,19 +19,31 @@ src/
   fixed/          Math internals (no MCP concerns): `fixed/angle.rs` 32-bit
                   binary angles (BAM) with `atan2`, `hypot`, `rotate_point`,
                   `fixed/trig.rs` the integer CORDIC engine.
-  geom.rs         Planar arrangement engine root: `Pt`, layers, pieces and
-                  `arrange`, turning layered polygons plus external
+  geom.rs         Planar arrangement engine root: the `Point` trait every
+                  shared primitive is generic over, `Pt`, layers, pieces
+                  and `arrange`, turning layered polygons plus external
                   segments into non-crossing, side-labelled segments.
                   All drawing goes through `geom::arrange`.
   geom/           Arrangement internals (no MCP concerns):
-                  `geom/label.rs` `Label`, the `Labeler` trait and the
+                  `geom/label.rs` `Label` (with its `region_id`/`region`
+                  words), the `Labeler` trait, the sample scale and the
                   topmost-layer `LayerLabeler` (even-odd in i128),
-                  `geom/segment.rs` integer segment math: orientations,
-                  rounded crossings, T-junction and overlap cut finding,
-                  the bounding-box sweep, the point-merge union-find and
-                  the shared exact `widen`/`distance_point_segment` the
-                  overlay, door placement and clearance tests measure
-                  with,
+                  `geom/segment.rs` integer segment math: the `Point`-trait
+                  orientation products (`delta`/`cross`/`dot`/`orient`/
+                  `opposite`), the exact `distance_squared`/`grid_hypot`/
+                  `integer_length`/`widen`/`distance_point_segment` the
+                  overlay, door placement, split and clearance tests
+                  measure with, the `crosses_properly`/`segments_meet`
+                  meeting tests, rounded crossings, T-junction and overlap
+                  cut finding, the bounding-box sweep, the point-merge
+                  union-find and the arrangement's `side_samples`,
+                  `geom/ring.rs` the shared ring and polygon primitives
+                  (generic edge ring, normalisation, shoelace `area2`,
+                  one collinear-drop pass, the self-crossing and simplicity
+                  walks, and the `label_point` even-odd interior anchor the
+                  describer and the renderer's sector labels both read),
+                  `geom/union.rs` the one `UnionFind` the point merge and
+                  the `REJECT` builder share,
                   `geom/arrange.rs` the pipeline root: the two entry
                   points (`arrange` and the reusable `cut`/`Cut` label
                   stage), the shared constants and polygon validation,
@@ -1184,7 +1196,7 @@ src/
                   `overlay/prepared.rs`, the `Rebuilt`, `Plan`, `Built` and
                   `LineCtx` rows with their flag, orientation and texture
                   rules in `overlay/rebuilt.rs` and the integer geometry
-                  from `grid_length` to `void_front` in
+                  from `collect_replaced` to `void_front` in
                   `overlay/geometry.rs`, with that module's tests in
                   `overlay/tests.rs` plus `overlay/tests/rooms.rs` (the
                   painted rooms) and `overlay/tests/carve.rs` (the
@@ -1719,6 +1731,18 @@ tests/
                     usability.rs; shared_math.rs: the guard that the box
                     window, the tap blend and the `Rec. 601` luminance
                     weights are each defined once under `src/`;
+                    geom_primitives.rs: the guard that the polygon, segment
+                    and ring primitives (`ring_edges`, `normalize_ring`,
+                    `drop_collinear`, `crosses_properly`, `segments_meet`,
+                    `side_samples`, `distance_point_segment`,
+                    `integer_length`, `grid_hypot`, `squared_length`, the
+                    `intersect_x`/`intersect_y` crossings, `edge_area2`,
+                    `self_crossing`, `unite` and `Label::region_id`) are
+                    defined only under `src/geom/`, with the folded-away
+                    copies (`polygon_area2`, `normalize_polygon`,
+                    `segments_cross`, `proper_crossing`, the `s_*` sample
+                    helpers, `side_normal`, `strictly_collinear`, `dist2`,
+                    `region_label`) banned anywhere under `src/`;
                     bsp_records.rs: the guard that the shared `BSP` node
                     record, its `write_box` and `ChildWidth` child words,
                     its `VertexTable` and its `Refusals` makers are defined

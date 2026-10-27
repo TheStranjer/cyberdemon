@@ -62,11 +62,6 @@ use prepared::Prepared;
 /// shared from [`consts`](super::consts), re-exported for this module's
 /// children.
 pub(super) use super::consts::NO_TEXTURE;
-/// Half of `SAMPLE_SCALE`: turns an endpoint sum into the scaled midpoint.
-const SAMPLE_HALF: i128 = 0x8_0000;
-/// Side samples sit an eighth of a unit off the piece, along the unit
-/// normal, in sample-scale units (the arrangement's own offset).
-const SAMPLE_OFFSET: i128 = 0x2_0000;
 /// Half a sample-scaled unit squared, `2^19 * 2^19`: the radius at which
 /// a side sample counts as lying on a wall.
 const NEAR_HALF_SQ: i128 = 0x40_0000_0000;

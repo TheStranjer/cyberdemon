@@ -11,21 +11,19 @@
 //! boundary segments and bounding-box area, built by [`shape_for`] and
 //! [`sector_shapes`] and read back by [`label_at`] with the even-odd,
 //! smallest-box rule of [`crate::wad::map::geometry::point_in_sector`].
-//! [`near_segment`] is the half-unit "sits on an original wall" test,
-//! [`side_samples`] the two points the arrangement asks a piece's sides
-//! about and [`side_normal`] the offset they sit at.
+//! [`near_segment`] is the half-unit "sits on an original wall" test; the
+//! two points the arrangement asks a piece's sides about come from
+//! [`side_samples`](crate::geom::segment::side_samples), the
+//! arrangement's own sample geometry.
 
-use crate::fixed::div_round;
 use crate::geom::Pt;
 use crate::geom::label::{
     Label, Labeler, ScaledPt, contains_point, crosses_ray, scale_point, spans,
 };
-use crate::geom::segment::delta;
+use crate::geom::segment::distance_point_segment;
 
-use super::geometry::{
-    box_area, grid_length, s_cross, s_delta, s_dist2, s_dot, segment_of, widen_box,
-};
-use super::{NEAR_HALF_SQ, OutsideRule, SAMPLE_HALF, SAMPLE_OFFSET, Shape, Source};
+use super::geometry::{box_area, segment_of, widen_box};
+use super::{NEAR_HALF_SQ, OutsideRule, Shape, Source};
 
 /// The [`Labeler`] one overlay arranges under.
 pub(super) struct OverlayLabeler<'lbl> {
@@ -162,61 +160,9 @@ fn shape_contains(shape: &Shape, point: ScaledPt) -> bool {
 }
 
 /// Whether `point` lies within half a map unit of the integer segment
-/// `from` to `to`, in scaled coordinates.
+/// `from` to `to`, in scaled coordinates: the arrangement's exact
+/// point-to-segment fraction against [`NEAR_HALF_SQ`].
 fn near_segment(from: Pt, to: Pt, point: ScaledPt) -> bool {
-    let (low, high) = (scale_point(from), scale_point(to));
-    let direction = s_delta(low, high);
-    let offset = s_delta(low, point);
-    let squared = s_dot(direction, direction);
-    if squared <= 0 {
-        return s_dist2(low, point) <= NEAR_HALF_SQ;
-    }
-    let along = s_dot(direction, offset);
-    if along <= 0 {
-        return s_dist2(low, point) <= NEAR_HALF_SQ;
-    }
-    if along >= squared {
-        return s_dist2(high, point) <= NEAR_HALF_SQ;
-    }
-    let cross = s_cross(direction, offset);
-    cross.saturating_mul(cross) <= squared.saturating_mul(NEAR_HALF_SQ)
-}
-
-/// The sample points an eighth of a unit left and right of the piece
-/// midpoint (the arrangement's own side samples).
-pub(super) fn side_samples(start: Pt, finish: Pt) -> [ScaledPt; 2] {
-    let centre = (
-        i128::from(start.0)
-            .saturating_add(i128::from(finish.0))
-            .saturating_mul(SAMPLE_HALF),
-        i128::from(start.1)
-            .saturating_add(i128::from(finish.1))
-            .saturating_mul(SAMPLE_HALF),
-    );
-    let normal = side_normal(start, finish);
-    [
-        (
-            centre.0.saturating_add(normal.0),
-            centre.1.saturating_add(normal.1),
-        ),
-        (
-            centre.0.saturating_sub(normal.0),
-            centre.1.saturating_sub(normal.1),
-        ),
-    ]
-}
-
-/// The unit normal of `start` to `finish` scaled to an eighth of a unit,
-/// left positive.
-pub(super) fn side_normal(start: Pt, finish: Pt) -> ScaledPt {
-    let direction = delta(start, finish);
-    let length = grid_length(start, finish);
-    (
-        div_round(
-            direction.1.saturating_neg().saturating_mul(SAMPLE_OFFSET),
-            length,
-        )
-        .unwrap_or(0_i128),
-        div_round(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0_i128),
-    )
+    let (num, den) = distance_point_segment(point, scale_point(from), scale_point(to));
+    num <= den.saturating_mul(NEAR_HALF_SQ)
 }

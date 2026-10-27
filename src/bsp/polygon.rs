@@ -15,6 +15,7 @@ use crate::bsp::side::{FixedLine, side_value};
 use crate::bsp::split::scale_round;
 use crate::bsp::{BuildSeg, Point};
 use crate::fixed::FRACBITS;
+use crate::geom::ring::{area2, ring_edges};
 use crate::wad::map::Map;
 
 /// A convex region boundary in `16.16` [`Point`]s, consecutive vertices
@@ -100,11 +101,8 @@ pub fn clip(polygon: &[Point], line: &FixedLine, keep_right: bool) -> Polygon {
         return out;
     }
     let plane = HalfPlane { line, keep_right };
-    let edges = polygon
-        .iter()
-        .zip(polygon.iter().cycle().skip(1).take(polygon.len()));
-    for (from, to) in edges {
-        clip_edge(plane, *from, *to, &mut out);
+    for (from, to) in ring_edges(polygon) {
+        clip_edge(plane, from, to, &mut out);
     }
     if out.len() > 1 && out.first().zip(out.last()).is_some_and(|(a, b)| a == b) {
         out.pop();
@@ -112,28 +110,12 @@ pub fn clip(polygon: &[Point], line: &FixedLine, keep_right: bool) -> Polygon {
     out
 }
 
-/// The signed `i128` shoelace sum of `polygon`: positive is
-/// counterclockwise with `y` up.
-#[must_use]
-fn shoelace(polygon: &[Point]) -> i128 {
-    polygon
-        .iter()
-        .zip(polygon.iter().cycle().skip(1).take(polygon.len()))
-        .fold(0_i128, |sum, (here, next)| {
-            sum.saturating_add(
-                i128::from(here.x)
-                    .saturating_mul(i128::from(next.y))
-                    .saturating_sub(i128::from(next.x).saturating_mul(i128::from(here.y))),
-            )
-        })
-}
-
 /// Reorders `polygon` in place to run clockwise as seen with `y` up, so
 /// its interior lies right of every edge — the direction `Doom` segs face
 /// their subsector.
 #[inline]
 pub fn ensure_clockwise(polygon: &mut Polygon) {
-    if polygon.len() > 2 && shoelace(polygon) > 0_i128 {
+    if polygon.len() > 2 && area2(polygon) > 0_i128 {
         polygon.reverse();
     }
 }
@@ -200,7 +182,7 @@ pub fn region_polygon(polygon: &[Point], segs: &[BuildSeg]) -> Polygon {
 
 #[cfg(test)]
 mod tests {
-    use super::{Polygon, bounds_polygon, clip, ensure_clockwise, region_polygon, shoelace};
+    use super::{Polygon, area2, bounds_polygon, clip, ensure_clockwise, region_polygon};
     use crate::bsp::side::FixedLine;
     use crate::bsp::{BuildSeg, Point};
     use crate::wad::map::{Map, Vertex};
@@ -300,9 +282,9 @@ mod tests {
     #[test]
     fn ensure_clockwise_reverses_counterclockwise_rings_only() {
         let mut counter = square();
-        assert!(shoelace(&counter) > 0_i128, "the test ring is ccw");
+        assert!(area2(&counter) > 0_i128, "the test ring is ccw");
         ensure_clockwise(&mut counter);
-        assert!(shoelace(&counter) < 0_i128, "now it runs clockwise");
+        assert!(area2(&counter) < 0_i128, "now it runs clockwise");
         let mut once = counter.clone();
         ensure_clockwise(&mut once);
         assert_eq!(once, counter, "idempotent on a clockwise ring");
@@ -322,7 +304,7 @@ mod tests {
         let outside = ring(&[(-64, -64), (320, -64), (320, 320), (-64, 320)]);
         let mut region = region_polygon(&outside, &walls);
         assert_same_set(&region, &[(0, 0), (256, 0), (256, 256), (0, 256)]);
-        assert!(shoelace(&region) < 0_i128, "the room comes out clockwise");
+        assert!(area2(&region) < 0_i128, "the room comes out clockwise");
         region.reverse();
         assert_same_set(&region, &[(0, 0), (256, 0), (256, 256), (0, 256)]);
     }

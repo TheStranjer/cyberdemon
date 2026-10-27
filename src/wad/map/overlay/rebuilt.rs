@@ -237,19 +237,3 @@ fn move_faces_to_middle(side: &mut Sidedef) {
     NO_TEXTURE.clone_into(&mut side.upper);
     NO_TEXTURE.clone_into(&mut side.lower);
 }
-
-/// Drop repeated neighbours and a closing repeat so every ring edge has
-/// positive length (the arrangement's own normalization, needed here for
-/// the containment probes).
-pub(super) fn normalize_ring(points: &[Pt]) -> Vec<Pt> {
-    let mut out: Vec<Pt> = Vec::with_capacity(points.len());
-    for point in points {
-        if out.last() != Some(point) {
-            out.push(*point);
-        }
-    }
-    while out.len() > 1 && out.first() == out.last() {
-        out.pop();
-    }
-    out
-}

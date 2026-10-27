@@ -19,7 +19,8 @@ use crate::bsp::polygon::{Polygon, bounds_polygon, clip, region_polygon};
 use crate::bsp::side::FixedLine;
 use crate::bsp::{BspTree, BuildSeg, Child, Point};
 use crate::error::CyberError;
-use crate::fixed::hypot;
+use crate::geom::ring::drop_collinear;
+use crate::geom::segment::{cross, delta, dot, grid_hypot, squared_length};
 use crate::wad::map::Map;
 
 /// Every subsector's closed region polygon, in subsector order: the map
@@ -64,49 +65,13 @@ fn collect_regions(
 /// so every polygon edge marks a genuine direction change. Polygonal
 /// shapes of three points or fewer are left alone.
 fn collapse_collinear(polygon: &mut Polygon) {
-    let mut previous = polygon.len().saturating_add(1);
-    while polygon.len() > 3 && polygon.len() < previous {
-        previous = polygon.len();
-        *polygon = drop_collinear(polygon);
+    while polygon.len() > 3 {
+        let (shrunk, dropped) = drop_collinear(polygon);
+        if !dropped {
+            break;
+        }
+        *polygon = shrunk;
     }
-}
-
-/// `polygon` without its strictly-collinear middle vertices.
-fn drop_collinear(polygon: &[Point]) -> Polygon {
-    let count = polygon.len();
-    let before_edge = polygon
-        .iter()
-        .cycle()
-        .skip(count.saturating_sub(1))
-        .take(count);
-    let after_edge = polygon.iter().cycle().skip(1).take(count);
-    polygon
-        .iter()
-        .zip(before_edge)
-        .zip(after_edge)
-        .filter_map(|((here, before), after)| {
-            (!strictly_collinear(*before, *here, *after)).then_some(*here)
-        })
-        .collect()
-}
-
-/// Whether `here` lies exactly on the line from `before` through `next`.
-fn strictly_collinear(before: Point, here: Point, next: Point) -> bool {
-    let ax = i128::from(here.x).saturating_sub(i128::from(before.x));
-    let ay = i128::from(here.y).saturating_sub(i128::from(before.y));
-    let bx = i128::from(next.x).saturating_sub(i128::from(here.x));
-    let by = i128::from(next.y).saturating_sub(i128::from(here.y));
-    cross(ax, ay, bx, by) == 0_i128
-}
-
-/// The `i128` cross product of two direction vectors.
-const fn cross(ax: i128, ay: i128, bx: i128, by: i128) -> i128 {
-    ax.saturating_mul(by).saturating_sub(ay.saturating_mul(bx))
-}
-
-/// The `i128` dot product of two direction vectors.
-const fn dot(ax: i128, ay: i128, bx: i128, by: i128) -> i128 {
-    ax.saturating_mul(bx).saturating_add(ay.saturating_mul(by))
 }
 
 /// `value * 2` through `i128`, saturating at the extremes.
@@ -196,9 +161,8 @@ fn holds(region: &[Point], edge: usize, seg: &BuildSeg) -> bool {
     let (Some(from), Some(to)) = (region.get(edge), next_vertex(region, edge)) else {
         return false;
     };
-    let dx = to.x.saturating_sub(from.x);
-    let dy = to.y.saturating_sub(from.y);
-    let slack = i128::from(hypot(dx, dy)).saturating_mul(COLLINEAR_SLACK);
+    let run = delta(*from, *to);
+    let slack = i128::from(grid_hypot(*from, *to)).saturating_mul(COLLINEAR_SLACK);
     let both = on_line(*from, *to, seg.start, slack) && on_line(*from, *to, seg.end, slack);
     if !both {
         return false;
@@ -209,26 +173,15 @@ fn holds(region: &[Point], edge: usize, seg: &BuildSeg) -> bool {
     let mid_y = i128::from(seg.start.y)
         .saturating_add(i128::from(seg.end.y))
         .saturating_sub(twice(i128::from(from.y)));
-    let along = dot(mid_x, mid_y, i128::from(dx), i128::from(dy));
-    along >= 0_i128
-        && along
-            <= twice(dot(
-                i128::from(dx),
-                i128::from(dy),
-                i128::from(dx),
-                i128::from(dy),
-            ))
+    let along = dot((mid_x, mid_y), run);
+    along >= 0_i128 && along <= twice(squared_length(run))
 }
 
 /// Whether `point` is within `1/16` unit of the line through `from`
 /// along `(dx, dy)`: the ticket's cross-product test, perpendicular
 /// distance `|cross| / len <= 4096` scaled to `|cross| <= len * 4096`.
 fn on_line(from: Point, to: Point, point: Point, slack: i128) -> bool {
-    let dx = i128::from(to.x.saturating_sub(from.x));
-    let dy = i128::from(to.y.saturating_sub(from.y));
-    let px = i128::from(point.x).saturating_sub(i128::from(from.x));
-    let py = i128::from(point.y).saturating_sub(i128::from(from.y));
-    cross(dx, dy, px, py).saturating_abs() <= slack
+    cross(delta(from, to), delta(from, point)).saturating_abs() <= slack
 }
 
 /// The vertex after `edge`, wrapping around the polygon.
@@ -242,16 +195,8 @@ fn sort_along(region: &[Point], edge: usize, bucket: &mut Vec<&BuildSeg>) {
     let (Some(from), Some(to)) = (region.get(edge), next_vertex(region, edge)) else {
         return;
     };
-    let dx = i128::from(to.x.saturating_sub(from.x));
-    let dy = i128::from(to.y.saturating_sub(from.y));
-    bucket.sort_by_key(|seg| {
-        dot(
-            i128::from(seg.start.x).saturating_sub(i128::from(from.x)),
-            i128::from(seg.start.y).saturating_sub(i128::from(from.y)),
-            dx,
-            dy,
-        )
-    });
+    let run = delta(*from, *to);
+    bucket.sort_by_key(|seg| dot(delta(*from, seg.start), run));
 }
 
 /// A real seg as emitted: its provenance, loop direction as stored.
@@ -283,10 +228,7 @@ fn gap_to(loop_segs: &mut [GlSeg], cursor: &mut Point, target: Point) -> Option<
         return None;
     }
     let from = *cursor;
-    let distance = hypot(
-        target.x.saturating_sub(cursor.x),
-        target.y.saturating_sub(cursor.y),
-    );
+    let distance = grid_hypot(*cursor, target);
     let needs_filler = distance > SNAP || !snap_into(loop_segs, target);
     *cursor = target;
     needs_filler.then(|| miniseg(from, target))

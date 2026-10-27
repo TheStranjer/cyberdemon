@@ -25,9 +25,8 @@ mod split;
 
 use crate::error::CyberError;
 use crate::geom::label::{Label, Labeler};
-use crate::geom::segment::{
-    self, ExternalSegment, PointMerge, SegmentOrigin, cross, opposite, orient,
-};
+use crate::geom::ring::{self, area2};
+use crate::geom::segment::{self, ExternalSegment, PointMerge, SegmentOrigin};
 use crate::geom::{Layer, Piece, Pt};
 use alloc::collections::BTreeMap;
 use merge::{label_pieces, merge_collinear};
@@ -37,11 +36,6 @@ use split::{collect_segments, dedupe_segments};
 pub(super) const MAX_SEGMENTS: usize = 0x0003_0D40; // 200 000
 /// The smallest polygon a layer may hold.
 const MIN_VERTICES: usize = 3;
-/// Half of `SAMPLE_SCALE`: turns an endpoint sum into the scaled midpoint.
-pub(super) const SAMPLE_HALF: i128 = 0x8_0000;
-/// Side samples sit an eighth of a unit off the piece, along the unit
-/// normal, in sample-scale units.
-pub(super) const SAMPLE_OFFSET: i128 = 0x2_0000;
 /// A line class for collinear merging: primitive direction `(ux, uy)`
 /// with `ux > 0 || (ux == 0 && uy > 0)` and the cross constant
 /// `ux * y - uy * x`, equal for every integer point on the line.
@@ -122,78 +116,6 @@ impl Cut {
     }
 }
 
-/// Drop repeated neighbours and an explicit closing vertex so every edge
-/// of the returned ring has positive length.
-pub(super) fn normalize_polygon(points: &[Pt]) -> Vec<Pt> {
-    let mut out: Vec<Pt> = Vec::with_capacity(points.len());
-    for point in points {
-        if out.last() != Some(point) {
-            out.push(*point);
-        }
-    }
-    while out.len() > 1 && out.first() == out.last() {
-        out.pop();
-    }
-    out
-}
-
-/// The closing edge ring `(v0, v1), ..., (vn-1, v0)` of a vertex list.
-pub(super) fn ring_edges(vertices: &[Pt]) -> Vec<(Pt, Pt)> {
-    let Some(first) = vertices.first().copied() else {
-        return Vec::new();
-    };
-    let mut edges: Vec<(Pt, Pt)> = Vec::with_capacity(vertices.len());
-    let mut previous = first;
-    for vertex in vertices.iter().skip(1).chain(core::iter::once(&first)) {
-        edges.push((previous, *vertex));
-        previous = *vertex;
-    }
-    edges
-}
-
-/// twice the signed area of the ring, in `i128` (shoelace).
-pub(super) fn polygon_area2(vertices: &[Pt]) -> i128 {
-    ring_edges(vertices).iter().fold(0_i128, |total, edge| {
-        let (start, end) = *edge;
-        let from = (i128::from(start.0), i128::from(start.1));
-        let to = (i128::from(end.0), i128::from(end.1));
-        total.saturating_add(cross(from, to))
-    })
-}
-
-/// Whether two segments cross at a point strictly inside both.
-pub(super) fn segments_cross(first: &(Pt, Pt), second: &(Pt, Pt)) -> bool {
-    let (start_a, end_a) = *first;
-    let (start_b, end_b) = *second;
-    opposite(
-        orient(start_a, end_a, start_b),
-        orient(start_a, end_a, end_b),
-    ) && opposite(
-        orient(start_b, end_b, start_a),
-        orient(start_b, end_b, end_a),
-    )
-}
-
-/// The first pair of non-adjacent edges that properly cross.
-pub(super) fn self_crossing(vertices: &[Pt]) -> Option<(usize, usize)> {
-    let edges = ring_edges(vertices);
-    let count = edges.len();
-    let all = &edges;
-    all.iter()
-        .enumerate()
-        .flat_map(|(first, edge)| {
-            all.iter()
-                .enumerate()
-                .skip(first.saturating_add(2))
-                .map(move |(second, other)| (first, second, edge, other))
-        })
-        .find(|&(first, second, edge, other)| {
-            let wraps_around = first == 0 && second.saturating_add(1) == count;
-            !wraps_around && segments_cross(edge, other)
-        })
-        .map(|(first, second, _, _)| (first, second))
-}
-
 /// Reject a layer polygon the arrangement cannot represent.
 ///
 /// Every refusal carries the geometry hint: the calling map tools are
@@ -211,13 +133,13 @@ pub(super) fn validate_polygon(
         ))
         .with_hint(GEOMETRY_HINT));
     }
-    if polygon_area2(vertices) == 0 {
+    if area2(vertices) == 0 {
         return Err(CyberError::InvalidArgument(format!(
             "layer {index} ({name}): polygon has zero area"
         ))
         .with_hint(GEOMETRY_HINT));
     }
-    if let Some((first, second)) = self_crossing(vertices) {
+    if let Some((first, second)) = ring::self_crossing(vertices) {
         return Err(CyberError::InvalidArgument(format!(
             "layer {index} ({name}): polygon is self-intersecting, edges {first} and {second} cross"
         ))

@@ -7,33 +7,25 @@
 //! [`plan_vertices`] lays out the rebuilt vertex rows and [`plan_point`]
 //! reads one back. [`collect_replaced`] finds the sectors `keep_interior`
 //! spares and [`region_of`] reads a piece's two labels. The rest are the
-//! arithmetic: [`grid_length`] and [`unit_length`] for lengths, [`midpoint`]
-//! for positions (the exact point-to-segment distance the wall claims rank
-//! by is [`distance_point_segment`](crate::geom::segment) in [`crate::geom`]),
-//! [`widen_box`] and [`box_area`] for the containment boxes, and the
-//! `s_`-prefixed helpers for the arrangement's scaled sample coordinates.
+//! arithmetic: [`unit_length`] for lengths and [`midpoint`] for positions
+//! (the exact point-to-segment distance the wall claims rank by and the
+//! side samples `collect_replaced` reads are [`crate::geom`]'s shared
+//! segment geometry), [`widen_box`] and [`box_area`] for the containment
+//! boxes.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::error::CyberError;
-use crate::fixed::{self, hypot, isqrt};
-use crate::geom::label::{Label, ScaledPt, contains_point};
-use crate::geom::segment::{ExternalSegment, SourceId, delta, dot};
+use crate::fixed;
+use crate::geom::label::{Label, contains_point};
+use crate::geom::segment::{ExternalSegment, SourceId, grid_hypot, side_samples};
 use crate::geom::{Piece, Pt};
 use crate::wad::map::model::{Linedef, Map, Sector, Vertex};
 use crate::wad::map::query::{ElementKind, check_index};
 
-use super::labeler::{label_at, side_samples};
+use super::labeler::label_at;
 use super::rebuilt::Plan;
 use super::{Distance, Outside, OverlayRequest, Shape, Source, WallClaim};
-
-/// The integer length of `start` to `finish`, at least one.
-pub(super) fn grid_length(start: Pt, finish: Pt) -> i128 {
-    let direction = delta(start, finish);
-    let squared = dot(direction, direction);
-    let magnitude = u64::try_from(squared).unwrap_or(u64::MAX);
-    i128::from(isqrt(magnitude)).max(1)
-}
 
 /// The original sectors touching the paint polygon's boundary from
 /// inside: every boundary piece's inside sample.
@@ -73,10 +65,7 @@ pub(super) fn first_external(piece: &Piece) -> Option<usize> {
 /// The sector a label names, `None` for void.
 #[must_use]
 pub(super) fn region_of(label: Label) -> Option<usize> {
-    match label {
-        Label::Void => None,
-        Label::Region(id) => usize::try_from(id).ok(),
-    }
+    label.region_id().and_then(|id| usize::try_from(id).ok())
 }
 
 /// The vertex plan for `pieces`: reused originals in index order, then
@@ -222,7 +211,7 @@ pub(super) fn midpoint(from: Pt, to: Pt) -> Pt {
 /// [`CyberError::InvalidArgument`] when the piece is longer than
 /// `i32::MAX` map units.
 pub(super) fn unit_length(from: Pt, to: Pt) -> Result<i32, CyberError> {
-    let length = hypot(to.0.saturating_sub(from.0), to.1.saturating_sub(from.1));
+    let length = grid_hypot(from, to);
     i32::try_from(length).map_err(|_error| {
         CyberError::InvalidArgument(format!(
             "the split piece is {length} units long, past what an x_offset can shift by"
@@ -271,31 +260,6 @@ pub(super) const fn ceiling_height(sector: &Sector) -> i32 {
 /// The sector's floor height, a `faces_differ` probe.
 pub(super) const fn floor_height(sector: &Sector) -> i32 {
     sector.floor_height
-}
-
-/// `to - from` in scaled coordinates.
-pub(super) const fn s_delta(from: ScaledPt, to: ScaledPt) -> ScaledPt {
-    (to.0.saturating_sub(from.0), to.1.saturating_sub(from.1))
-}
-
-/// The `i128` dot product of two scaled vectors.
-pub(super) const fn s_dot(left: ScaledPt, right: ScaledPt) -> i128 {
-    left.0
-        .saturating_mul(right.0)
-        .saturating_add(left.1.saturating_mul(right.1))
-}
-
-/// The `i128` cross product of two scaled vectors.
-pub(super) const fn s_cross(left: ScaledPt, right: ScaledPt) -> i128 {
-    left.0
-        .saturating_mul(right.1)
-        .saturating_sub(left.1.saturating_mul(right.0))
-}
-
-/// The squared scaled distance between two sample points.
-pub(super) const fn s_dist2(from: ScaledPt, to: ScaledPt) -> i128 {
-    let step = s_delta(from, to);
-    s_dot(step, step)
 }
 
 /// The `Internal` for a source line whose vertices vanished after the

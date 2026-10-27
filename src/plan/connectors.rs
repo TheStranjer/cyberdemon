@@ -120,15 +120,7 @@ impl ConnectorGeometry {
         self.layers
             .get(step)
             .map(|layer| layer.label)
-            .and_then(region_id)
-    }
-}
-
-/// The `u32` of a [`Label::Region`], `None` for [`Label::Void`].
-const fn region_id(label: Label) -> Option<u32> {
-    match label {
-        Label::Region(id) => Some(id),
-        Label::Void => None,
+            .and_then(Label::region_id)
     }
 }
 

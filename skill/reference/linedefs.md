@@ -164,8 +164,9 @@ down and references follow. The removal always runs the cascade and the
 pruning switches say how far: sidedefs no surviving linedef references
 go too (`prune_sidedefs`, default `true`) and so do vertices no
 surviving linedef ends at (`prune_vertices`, default `true`) — switch a
-pruning off to leave the orphans in the block (trailing orphan vertices
-still go with the invalidated nodes). Sectors are never touched.
+pruning off to leave the orphans in the block (an invalidating edit sheds
+only the split points the block's own node run named, so your own orphans
+stay). Sectors are never touched.
 `removed` lists the **original** indices per kind (sorted);
 `flipped_linedefs`/`one_sided_linedefs` stay empty for linedef removals.
 

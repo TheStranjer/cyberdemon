@@ -56,9 +56,9 @@ cleanup rules, applied repeatedly until the selection is self-consistent:
 
 The cascade never adds sectors or things: those go only when you name
 them. Switching a pruning off keeps those orphans in the block (an
-engine ignores unreferenced sides and trailing unreferenced vertices;
-note that any node-invalidating edit — a later `build_nodes` included —
-strips vertices no linedef references past the last one that does).
+engine ignores unreferenced sides and trailing unreferenced vertices and
+they stay put: a node-invalidating edit sheds only the split points a node
+run named in its own `SEGS` records).
 
 `dry_run: true` computes the entire cascade on a copy and returns the
 same `removed` report without editing anything: no undo entry,

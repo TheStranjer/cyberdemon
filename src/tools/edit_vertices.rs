@@ -14,14 +14,16 @@
 //!
 //! The geometry rule: a vertex is geometry for the node lumps while a
 //! linedef ends at it. Editing a referenced vertex changes geometry — the
-//! generated node lumps are emptied (and the trailing unreferenced ones,
-//! split points a `build_nodes` left behind, are stripped with them), the
-//! block's `GL` run dropped, and the result reports `nodes_invalidated:
-//! true`. Run `build_nodes` before playing such a map in vanilla `Doom`;
-//! `ZDoom`-family ports rebuild the missing node data themselves. Trailing
-//! vertices no linedef references are invisible to the node builder: an
-//! `add_vertex` append keeps the nodes trusted until a line ends at the
-//! new point.
+//! generated node lumps are emptied, the block's `GL` run is dropped and the
+//! result reports `nodes_invalidated: true`. The edit takes the shed run's
+//! own split points with it (the trailing vertices its `SEGS` records name,
+//! which is where `build_nodes` keeps them) and no other: a trailing point
+//! the run never named is the caller's, an `add_vertex` append waiting for a
+//! line to end at it, and it survives whatever the nodes do. Run
+//! `build_nodes` before playing such a map in vanilla `Doom`; `ZDoom`-family
+//! ports rebuild the missing node data themselves. Trailing vertices no
+//! linedef references are invisible to the node builder: an `add_vertex`
+//! append keeps the nodes trusted until a line ends at the new point.
 //!
 //! The format rules: the binary formats store each coordinate as `i16`, so
 //! `Doom` and `Hexen` maps keep `x`/`y` inside `-32768..=32767` and a value

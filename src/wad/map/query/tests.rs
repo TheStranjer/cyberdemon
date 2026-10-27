@@ -6,11 +6,19 @@
 //! `filters` runs every op over the fixture's stored and derived fields and
 //! both `within` bounds; `checks` combines filters, reads every refusal and
 //! the family tables, and checks the wire shape and the plain context reads;
-//! `index` runs the shared element-index guard's own checks.
+//! `index` runs the shared element-index guard's own checks; and `shape`
+//! guards the engine's one geometry read: the light [`SectorShape`] row
+//! against the full [`SectorFacts`] fields it must match, and the
+//! dangling-boundary sector that resolves to nothing, `ne` and `not_in`
+//! included.
+//!
+//! [`SectorShape`]: crate::wad::map::describe::SectorShape
+//! [`SectorFacts`]: crate::wad::map::describe::SectorFacts
 
 mod checks;
 mod filters;
 mod index;
+mod shape;
 
 use serde_json::Value;
 

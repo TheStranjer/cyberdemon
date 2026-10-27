@@ -28,7 +28,7 @@ use crate::wad::map::specials::tables::Trigger;
 
 use super::{
     Edge, NAME_DAMAGING, NAME_LIGHT_EFFECT, NAME_OPENING, NAME_SECRET, NAME_STEP_DOWN,
-    NAME_STEP_UP, Neighbour, Point,
+    NAME_STEP_UP, Point,
 };
 
 /// The largest footprint of a stair-step sector, square map units:
@@ -123,18 +123,21 @@ pub(super) const fn height_via(delta: i32) -> &'static str {
     }
 }
 
-/// Whether an `area` sector wedged between `neighbours` reads as a stair
-/// step: a footprint of at most [`STAIR_MAX_AREA`] square units with one
-/// neighbour [`STEP_UP`] to [`MAX_STEP_UP`] units above and another
-/// [`MAX_STEP_DOWN`] to [`STEP_DOWN_TOP`] units below.
-pub(super) fn is_stair_step(area: u64, neighbours: &[Neighbour]) -> bool {
+/// Whether an `area` sector wedged between neighbours standing at the
+/// `floor_deltas` reads as a stair step: a footprint of at most
+/// [`STAIR_MAX_AREA`] square units with one delta [`STEP_UP`] to
+/// [`MAX_STEP_UP`] units above and another [`MAX_STEP_DOWN`] to
+/// [`STEP_DOWN_TOP`] units below. The deltas are all a neighbour row
+/// contributes to this read, so the light [`super::SectorShape`] path can
+/// answer them off the neighbour groups without dressing the rows.
+pub(super) fn is_stair_step(area: u64, floor_deltas: &[i32]) -> bool {
     area <= STAIR_MAX_AREA
-        && neighbours
+        && floor_deltas
             .iter()
-            .any(|row| (STEP_UP..=MAX_STEP_UP).contains(&row.floor_delta))
-        && neighbours
+            .any(|delta| (STEP_UP..=MAX_STEP_UP).contains(delta))
+        && floor_deltas
             .iter()
-            .any(|row| (MAX_STEP_DOWN..=STEP_DOWN_TOP).contains(&row.floor_delta))
+            .any(|delta| (MAX_STEP_DOWN..=STEP_DOWN_TOP).contains(delta))
 }
 
 /// Whether the exit special on `line` ends the level by walking over it:

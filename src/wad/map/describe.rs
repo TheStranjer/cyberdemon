@@ -15,7 +15,9 @@
 //! and each thing's home sector, [`feature_targets`], and
 //! [`analyze_playability`] at [`Skill::Medium`] — happen once per
 //! [`Describe`]; [`sector_facts`] is the one-sector convenience wrapper
-//! over it.
+//! over it. [`Describe::sector_shape`] is the light half: the same
+//! `area`, `bbox`, `center` and `roles` a row states, and nothing else,
+//! for callers (the query engine) that filter on the shape alone.
 //!
 //! The roles, all lowercase, sorted and deduplicated: `door` (a door
 //! action raises the sector's ceiling, or it is a closed band no more
@@ -75,7 +77,7 @@ mod shape;
 mod tally;
 
 #[cfg(test)]
-mod tests;
+pub(in crate::wad::map) mod tests;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -226,6 +228,28 @@ pub struct SectorFacts {
     pub neighbours: Vec<Neighbour>,
 }
 
+/// One sector's light shape row: what [`Describe::sector_shape`] answers
+/// the query engine's sector filters with, and nothing else.
+///
+/// Its `area`, `bbox`, `center` and `roles` are identical to the
+/// same-named [`SectorFacts`] fields of the same sector; the
+/// wall-texture tally, the thing counts, the flat and sky names and the
+/// [`Neighbour`] rows the engine never reads are simply never built.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SectorShape {
+    /// The even-odd floor area: [`SectorFacts::area`]'s shoelace.
+    pub area: u64,
+    /// The boundary's `(min_x, min_y, max_x, max_y)` box:
+    /// [`SectorFacts::bbox`]'s answer.
+    pub bbox: Option<[i32; 4]>,
+    /// A world point the even-odd scan places inside the sector:
+    /// [`SectorFacts::center`]'s answer.
+    pub center: Option<[i64; 2]>,
+    /// What this sector is, as [`SectorFacts::roles`] spells it:
+    /// lowercase, sorted and deduplicated.
+    pub roles: Vec<String>,
+}
+
 /// One player-start thing: where a type 1 to 4 stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct PlayerStart {
@@ -305,7 +329,8 @@ pub struct MapOverview {
     pub playable: PlayableSummary,
 }
 
-/// The per-map read behind [`SectorFacts`] rows and the [`MapOverview`].
+/// The per-map read behind [`SectorFacts`] rows, the light [`SectorShape`]
+/// rows and the [`MapOverview`].
 ///
 /// Roles and neighbours ask what the map's door, lift, teleport and
 /// level-end actions work on, so [`Describe::new`] folds the flag family,
@@ -314,6 +339,8 @@ pub struct MapOverview {
 /// The boundary, box and point reads come from one [`SectorIndex`] folded
 /// in [`Describe::new`] too, alongside each thing's home sector resolved
 /// through it once, so no per-row call rescans the map.
+/// [`Describe::sector_shape`] answers only the `area`, `bbox`, `center`
+/// and `roles` from these same reads.
 /// [`Describe::summary`] folds the same reads, plus one stuck-test pass,
 /// into the map-wide [`MapOverview`].
 ///

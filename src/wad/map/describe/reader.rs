@@ -2,7 +2,10 @@
 //! folds the map's flag family, its [`SectorIndex`], each thing's home
 //! sector resolved through that index, its [`FeatureTargets`] and its
 //! [`Skill::Medium`] [`Playability`] walk once, [`Describe::sector`]
-//! answers one [`SectorFacts`] row from them and [`Describe::summary`] the
+//! answers one [`SectorFacts`] row from them, [`Describe::sector_shape`]
+//! the light [`SectorShape`] row — the area, box, centre and roles the
+//! query engine filters on, without the dressed neighbour rows, texture
+//! tallies, thing counts or flat names — and [`Describe::summary`] the
 //! whole [`MapOverview`].
 //!
 //! Nothing here measures or classifies on its own: the area and the label
@@ -43,7 +46,7 @@ use super::tally::{
 use super::{
     Describe, MapOverview, NAME_DOOR, NAME_EXIT_ROOM, NAME_IMPASSABLE, NAME_LIFT, NAME_SECRET,
     NAME_SKY, NAME_STAIR_STEP, NAME_TELEPORT_DESTINATION, NAME_WINDOW, Neighbour, PlayableSummary,
-    SectorFacts,
+    SectorFacts, SectorShape,
 };
 
 /// The greatest headroom of a closed door band, map units.
@@ -102,6 +105,7 @@ impl<'map> Describe<'map> {
         let edges = boundary_edges(self.map, &self.index, sector);
         let area = shoelace_area(&edges);
         let neighbours = self.build_neighbours(sector, row.floor_height);
+        let floor_deltas: Vec<i32> = neighbours.iter().map(|across| across.floor_delta).collect();
         Some(SectorFacts {
             sector,
             area,
@@ -118,8 +122,33 @@ impl<'map> Describe<'map> {
             tag: row.tag,
             wall_textures: wall_textures(self.map, &self.index, sector),
             things: thing_counts(self.map, self.defs, &self.homes, sector),
-            roles: self.collect_roles(sector, area, &neighbours),
+            roles: self.collect_roles(sector, area, &floor_deltas),
             neighbours,
+        })
+    }
+
+    /// The light shape row of sector `sector`: the measured area, box and
+    /// label centre and the role names this module's rules state, answered
+    /// from the stored [`SectorIndex`] and the folded feature and
+    /// playability reads. The same rules as [`Describe::sector`] and the
+    /// same answers; what it does not build is the wall-texture tally,
+    /// the thing counts, the flat and sky strings and the dressed
+    /// [`Neighbour`] rows — the stair step sees only its neighbour groups'
+    /// floor deltas.
+    ///
+    /// `None` when the map holds no sector with that index.
+    #[must_use]
+    #[inline]
+    pub fn sector_shape(&self, sector: usize) -> Option<SectorShape> {
+        let row = self.map.sectors.get(sector)?;
+        let edges = boundary_edges(self.map, &self.index, sector);
+        let area = shoelace_area(&edges);
+        let floor_deltas = self.step_deltas(sector, row.floor_height);
+        Some(SectorShape {
+            area,
+            bbox: self.index.bbox(sector).map(<[i32; 4]>::from),
+            center: label_point(&edges),
+            roles: self.collect_roles(sector, area, &floor_deltas),
         })
     }
 
@@ -144,6 +173,24 @@ impl<'map> Describe<'map> {
                 };
                 let via = self.via_for(sector, &draft);
                 Neighbour { via, ..draft }
+            })
+            .collect()
+    }
+
+    /// The floor deltas across `sector`'s two-sided neighbour groups, in
+    /// sector order: everything [`is_stair_step`] reads of the
+    /// [`Neighbour`] rows, taken off [`neighbour_groups`] directly without
+    /// dressing a `via` or keeping the shared lines. A group across a
+    /// sector the map does not hold reads level, as the full rows do.
+    fn step_deltas(&self, sector: usize, own_floor: i32) -> Vec<i32> {
+        neighbour_groups(self.map, &self.index, sector)
+            .into_iter()
+            .map(|(other, _)| {
+                self.map
+                    .sectors
+                    .get(other)
+                    .map_or(own_floor, |row| row.floor_height)
+                    .saturating_sub(own_floor)
             })
             .collect()
     }
@@ -232,9 +279,11 @@ impl<'map> Describe<'map> {
     }
 
     /// The sector's role names: lowercase, sorted and deduplicated, as
-    /// the module-doc rules state them for `area`, its `neighbours` and
-    /// its own row.
-    fn collect_roles(&self, sector: usize, area: u64, neighbours: &[Neighbour]) -> Vec<String> {
+    /// the module-doc rules state them for `area`, the neighbour floor
+    /// `deltas` and the sector's own row. Both the full [`SectorFacts`]
+    /// row and the light [`SectorShape`] row answer through here, so the
+    /// stair-step read sees the neighbour groups' deltas either way.
+    fn collect_roles(&self, sector: usize, area: u64, floor_deltas: &[i32]) -> Vec<String> {
         let Some(row) = self.map.sectors.get(sector) else {
             return Vec::new();
         };
@@ -254,7 +303,7 @@ impl<'map> Describe<'map> {
         if is_sky_flat(&row.ceiling_flat, self.sky_flat) {
             found.insert(NAME_SKY.to_owned());
         }
-        if is_stair_step(area, neighbours) {
+        if is_stair_step(area, floor_deltas) {
             found.insert(NAME_STAIR_STEP.to_owned());
         }
         found.extend(

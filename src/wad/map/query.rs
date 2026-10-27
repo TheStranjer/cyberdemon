@@ -43,7 +43,7 @@
 //! points inside the box, sectors whose `center` lies inside it, linedefs
 //! with **both** vertices inside it, and sidedefs whose owning line meets
 //! that rule; a `sectors` index set keeps things and vertices standing in
-//! one of them ([`point_in_sector`](super::geometry::point_in_sector)),
+//! one of them ([`SectorIndex::point_in_sector`](super::geometry::SectorIndex)),
 //! sectors by index, linedefs with a resolvable side in one of them, and
 //! sidedefs opening into one of them. Indices outside the sector block
 //! simply match nothing.

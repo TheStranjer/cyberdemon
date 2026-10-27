@@ -41,24 +41,6 @@ const MIN_THIN_RADIUS: u32 = 1;
 /// Largest accepted [`thin_stroke`] opening radius.
 const MAX_THIN_RADIUS: u32 = 16;
 
-/// Parameters of [`crate::gfx::ops::ImageOp::Threshold`].
-pub(crate) struct ThresholdSpec {
-    /// Fixed cut-off; `None` picks the Otsu level.
-    pub(crate) level: Option<u8>,
-    /// Whether to swap the black and white classes.
-    pub(crate) invert: bool,
-}
-
-/// Parameters of [`crate::gfx::ops::ImageOp::ThinStrokeFilter`].
-pub(crate) struct ThinStrokeSpec {
-    /// Opening radius, `1..=16`.
-    pub(crate) radius: u32,
-    /// Fixed cut-off; `None` picks the Otsu level.
-    pub(crate) level: Option<u8>,
-    /// Whether to swap the black and white classes.
-    pub(crate) invert: bool,
-}
-
 /// Counts opaque pixels per luminance value.
 #[must_use]
 #[inline]
@@ -134,21 +116,17 @@ const fn is_ink(value: u8, level: u8, invert: bool) -> bool {
     }
 }
 
-/// Binarizes every pixel to opaque black (ink) or white (paper).
-pub(crate) fn binarize(img: RgbaImage, spec: &ThresholdSpec) -> (RgbaImage, Value) {
+/// Binarizes every pixel to opaque black (ink) or white (paper) at the
+/// `(level, invert)` classification: `level` `None` picks Otsu's.
+pub(crate) fn binarize(img: RgbaImage, level: Option<u8>, invert: bool) -> (RgbaImage, Value) {
     let detected = || (otsu_level(&luminance_histogram(&img)), true);
-    let (level, otsu) = spec
-        .level
-        .map_or_else(detected, |explicit| (explicit, false));
+    let (cut, otsu) = level.map_or_else(detected, |explicit| (explicit, false));
     let mut out = img;
     for chunk in out.pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
         let pixel = to_pixel(chunk);
-        chunk.copy_from_slice(&binary_pixel(pixel, level, spec.invert));
+        chunk.copy_from_slice(&binary_pixel(pixel, cut, invert));
     }
-    (
-        out,
-        json!({"op": "threshold", "level": level, "otsu": otsu}),
-    )
+    (out, json!({"op": "threshold", "level": cut, "otsu": otsu}))
 }
 
 /// The binarized `RGBA` of one pixel: opaque ink black, paper white.
@@ -162,37 +140,36 @@ fn binary_pixel(pixel: [u8; 4], level: u8, invert: bool) -> [u8; 4] {
 }
 
 /// Drops hairline strokes: classifies the ink of `img` exactly as
-/// [`binarize`] would, opens it with the square `(2r + 1) x (2r + 1)`
-/// element and paints the surviving ink back as opaque black on opaque
-/// white paper.
+/// [`binarize`] would at the `(radius, level, invert)` opening, opens it
+/// with the square `(2r + 1) x (2r + 1)` element and paints the surviving
+/// ink back as opaque black on opaque white paper.
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] when `spec.radius` is outside `1..=16`.
+/// [`CyberError::InvalidArgument`] when `radius` is outside `1..=16`.
 pub(crate) fn thin_stroke(
     img: RgbaImage,
     index: usize,
-    spec: &ThinStrokeSpec,
+    opening: (u32, Option<u8>, bool),
 ) -> Result<(RgbaImage, Value), CyberError> {
-    check_thin_radius(index, spec.radius)?;
+    let (radius, level, invert) = opening;
+    check_thin_radius(index, radius)?;
     let detected = || (otsu_level(&luminance_histogram(&img)), true);
-    let (level, otsu) = spec
-        .level
-        .map_or_else(detected, |explicit| (explicit, false));
+    let (cut, otsu) = level.map_or_else(detected, |explicit| (explicit, false));
     let ink = Mask {
         width: img.width,
         height: img.height,
-        bits: binary_mask(&img, level, spec.invert),
+        bits: binary_mask(&img, cut, invert),
     };
-    let opened = dilate(&erode(&ink, spec.radius), spec.radius);
+    let opened = dilate(&erode(&ink, radius), radius);
     let (removed, kept) = count_opening(&ink, &opened);
     let out = paint_ink(img, &opened);
     Ok((
         out,
         json!({
             "op": "thin_stroke_filter",
-            "radius": spec.radius,
-            "level": level,
+            "radius": radius,
+            "level": cut,
             "otsu": otsu,
             "removed_ink_pixels": removed,
             "kept_ink_pixels": kept,
@@ -281,10 +258,7 @@ impl Class {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BINS, ThinStrokeSpec, ThresholdSpec, binarize, binary_mask, luminance_histogram,
-        otsu_level, thin_stroke,
-    };
+    use super::{BINS, binarize, binary_mask, luminance_histogram, otsu_level, thin_stroke};
     use crate::gfx::image::RgbaImage;
     use serde_json::Value;
 
@@ -317,12 +291,7 @@ mod tests {
 
     /// Runs [`thin_stroke`] at radius `1` with the given classification.
     fn opened(img: RgbaImage, level: Option<u8>, invert: bool) -> (RgbaImage, Value) {
-        let spec = ThinStrokeSpec {
-            radius: 1,
-            level,
-            invert,
-        };
-        thin_stroke(img, 0, &spec).expect("fixture radius is valid")
+        thin_stroke(img, 0, (1, level, invert)).expect("fixture radius is valid")
     }
 
     /// Whether the pixel at `(x, y)` is opaque black ink.
@@ -407,13 +376,7 @@ mod tests {
     #[test]
     fn binarize_maps_levels_to_black_and_white_at_the_otsu_default() {
         let img = greys(&[30, 60, 180, 220]);
-        let (out, step) = binarize(
-            img,
-            &ThresholdSpec {
-                level: None,
-                invert: false,
-            },
-        );
+        let (out, step) = binarize(img, None, false);
         assert_eq!(step["op"], "threshold", "op name");
         assert_eq!(step["otsu"], true, "the default level is Otsu's");
         let level = u32::try_from(step["level"].as_u64().expect("numeric level")).expect("u8");
@@ -428,20 +391,12 @@ mod tests {
     #[test]
     fn binarize_with_an_explicit_level_and_invert() {
         let img = greys(&[100, 130]);
-        let spec = ThresholdSpec {
-            level: Some(128),
-            invert: false,
-        };
-        let (out, step) = binarize(img.clone(), &spec);
+        let (out, step) = binarize(img.clone(), Some(128), false);
         assert_eq!(step["level"], 128_i32, "explicit level");
         assert_eq!(step["otsu"], false, "an explicit level is not Otsu");
         assert_eq!(out.get(0, 0), Some([0, 0, 0, 255]), "at the level is black");
         assert_eq!(out.get(1, 0), Some([255, 255, 255, 255]), "above is white");
-        let flipped = ThresholdSpec {
-            level: Some(128),
-            invert: true,
-        };
-        let (swapped, _step) = binarize(img, &flipped);
+        let (swapped, _step) = binarize(img, Some(128), true);
         assert_eq!(
             swapped.get(0, 0),
             Some([255, 255, 255, 255]),
@@ -458,11 +413,7 @@ mod tests {
     fn binarize_forces_transparent_pixels_opaque() {
         let mut img = greys(&[10, 250]);
         assert!(img.set(0, 0, [10, 10, 10, 0]), "in-bounds overwrite");
-        let spec = ThresholdSpec {
-            level: Some(128),
-            invert: false,
-        };
-        let (out, _step) = binarize(img, &spec);
+        let (out, _step) = binarize(img, Some(128), false);
         assert_eq!(
             out.get(0, 0),
             Some([0, 0, 0, 255]),
@@ -562,12 +513,8 @@ mod tests {
     #[test]
     fn thin_stroke_rejects_radii_outside_the_documented_range() {
         for radius in [0_u32, 17_u32] {
-            let spec = ThinStrokeSpec {
-                radius,
-                level: Some(128),
-                invert: false,
-            };
-            let error = thin_stroke(paper(3, 3), 3, &spec).expect_err("out of range radius");
+            let error = thin_stroke(paper(3, 3), 3, (radius, Some(128), false))
+                .expect_err("out of range radius");
             assert_eq!(error.code(), "invalid_argument", "radius {radius} refuses");
             let message = error.to_string();
             assert!(

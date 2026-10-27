@@ -56,17 +56,6 @@ pub struct Corner {
     pub y: i32,
 }
 
-/// Parameters of [`crate::gfx::ops::ImageOp::PerspectiveCorrect`].
-pub(crate) struct PerspectiveSpec {
-    /// The quad's source corners: top-left, top-right, bottom-right,
-    /// bottom-left.
-    pub(crate) corners: [Corner; 4],
-    /// Destination width in pixels.
-    pub(crate) width: u32,
-    /// Destination height in pixels.
-    pub(crate) height: u32,
-}
-
 /// A solved rectangle-to-quad homography: normalised destination
 /// coordinates map to [`Homography::shift`]-scaled source pixel
 /// positions through `x_num` / `depth` and `y_num` / `depth`.
@@ -88,8 +77,9 @@ type Row = [Fixed; SYSTEM + 1];
 /// The whole augmented system.
 type System = [Row; SYSTEM];
 
-/// Warps the source quad `spec.corners` onto a `spec.width` x
-/// `spec.height` rectangle.
+/// Warps the source quad `(corners, width, height)` — the four corners in
+/// source pixel coordinates, ordered top-left, top-right, bottom-right,
+/// bottom-left, onto a `width` x `height` rectangle.
 ///
 /// # Errors
 ///
@@ -99,29 +89,26 @@ type System = [Row; SYSTEM];
 pub(crate) fn correct(
     img: &RgbaImage,
     index: usize,
-    spec: &PerspectiveSpec,
+    quad: ([Corner; 4], u32, u32),
 ) -> Result<(RgbaImage, Value), CyberError> {
-    check_op_dimension(index, "width", spec.width)?;
-    check_op_dimension(index, "height", spec.height)?;
-    let Some(map) = solve(&spec.corners) else {
+    let (corners, width, height) = quad;
+    check_op_dimension(index, "width", width)?;
+    check_op_dimension(index, "height", height)?;
+    let Some(map) = solve(&corners) else {
         return Err(arg_error(index, "corners", DEGENERATE_EXPECTATION));
     };
-    let out = warp(img, &map, spec.width, spec.height);
-    Ok((out, step(spec)))
+    let out = warp(img, &map, width, height);
+    Ok((out, step(&corners, width, height)))
 }
 
 /// The op's report entry: the target shape and the corner pairs.
-fn step(spec: &PerspectiveSpec) -> Value {
-    let corners: Vec<[i32; 2]> = spec
-        .corners
-        .iter()
-        .map(|corner| [corner.x, corner.y])
-        .collect();
+fn step(corners: &[Corner; 4], width: u32, height: u32) -> Value {
+    let pairs: Vec<[i32; 2]> = corners.iter().map(|corner| [corner.x, corner.y]).collect();
     json!({
         "op": "perspective_correct",
-        "width": spec.width,
-        "height": spec.height,
-        "corners": corners,
+        "width": width,
+        "height": height,
+        "corners": pairs,
     })
 }
 
@@ -418,7 +405,7 @@ fn clamp_edge(value: i64, last: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Corner, PerspectiveSpec, correct};
+    use super::{Corner, correct};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::to_pixel;
@@ -428,13 +415,9 @@ mod tests {
         Corner { x, y }
     }
 
-    /// A spec over four corners.
-    fn spec(corners: [Corner; 4], width: u32, height: u32) -> PerspectiveSpec {
-        PerspectiveSpec {
-            corners,
-            width,
-            height,
-        }
+    /// The warp request over four corners and a target rectangle.
+    fn quad(corners: [Corner; 4], width: u32, height: u32) -> ([Corner; 4], u32, u32) {
+        (corners, width, height)
     }
 
     /// A 4x4 colour-block image: pixel `p` is opaque grey `17 * p`.
@@ -526,7 +509,7 @@ mod tests {
         let (trapezoid, _step) = correct(
             &source,
             0,
-            &spec(
+            quad(
                 [corner(0, 0), corner(5, 1), corner(5, 5), corner(0, 7)],
                 4,
                 4,
@@ -537,7 +520,7 @@ mod tests {
         let (skew, _other_step) = correct(
             &source,
             0,
-            &spec(
+            quad(
                 [corner(1, 1), corner(6, 0), corner(7, 6), corner(0, 7)],
                 5,
                 3,
@@ -553,7 +536,7 @@ mod tests {
         let (out, step) = correct(
             &source,
             0,
-            &spec(
+            quad(
                 [corner(0, 0), corner(3, 0), corner(3, 3), corner(0, 3)],
                 4,
                 4,
@@ -588,7 +571,7 @@ mod tests {
         let (out, _step) = correct(
             &source,
             1,
-            &spec(
+            quad(
                 [corner(0, 0), corner(5, 1), corner(5, 5), corner(0, 7)],
                 4,
                 4,
@@ -609,7 +592,7 @@ mod tests {
         let (out, _step) = correct(
             &source,
             0,
-            &spec(
+            quad(
                 [corner(-4, 0), corner(5, 0), corner(5, 7), corner(-4, 7)],
                 4,
                 1,
@@ -638,7 +621,7 @@ mod tests {
             ],
         ];
         for corners in quads {
-            let message = rejection(correct(&source, 4, &spec(corners, 4, 4)));
+            let message = rejection(correct(&source, 4, quad(corners, 4, 4)));
             assert!(
                 message.contains("ops[4].corners must form a non-degenerate quad"),
                 "the refusal names the field and the rule: {message}"
@@ -655,7 +638,7 @@ mod tests {
         let (out, _step) = correct(
             &source,
             0,
-            &spec(
+            quad(
                 [
                     corner(0, 0),
                     corner(0x80_0000, 1),
@@ -675,12 +658,12 @@ mod tests {
     fn a_bad_target_edge_names_the_op_index_and_field() {
         let source = blocks();
         let sound = [corner(0, 0), corner(3, 0), corner(3, 3), corner(0, 3)];
-        let wide = rejection(correct(&source, 1, &spec(sound, 0, 4)));
+        let wide = rejection(correct(&source, 1, quad(sound, 0, 4)));
         assert!(
             wide.contains("ops[1].width") && wide.contains("1..=4096"),
             "the zero width is refused by name: {wide}"
         );
-        let tall = rejection(correct(&source, 2, &spec(sound, 4, 4097)));
+        let tall = rejection(correct(&source, 2, quad(sound, 4, 4097)));
         assert!(
             tall.contains("ops[2].height") && tall.contains("1..=4096"),
             "the oversized height is refused by name: {tall}"
@@ -693,7 +676,7 @@ mod tests {
         let (out, _step) = correct(
             &source,
             0,
-            &spec(
+            quad(
                 [corner(0, 0), corner(3, 0), corner(3, 3), corner(0, 3)],
                 1,
                 4,

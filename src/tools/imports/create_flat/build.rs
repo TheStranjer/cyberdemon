@@ -18,15 +18,15 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::flat::{decode_flat, encode_flat};
+use crate::gfx::ops::FitMode;
 use crate::gfx::ops::dither::Dither;
-use crate::gfx::ops::{Filter, FitMode, ImageOp};
 use crate::gfx::quantize::Transparency;
 use crate::session::{Session, Source};
 use crate::state::AppState;
 use crate::tools::imports::create_flat::{
     CreateFlatParams, FLAT_SIDE, FlatRequest, NEXT_STEPS, PNG_MIME, TILE_BAND, parse_create_flat,
 };
-use crate::tools::imports::processed::{Processed, process, to_indexed};
+use crate::tools::imports::processed::{Processed, automatic, process, shape_ops, to_indexed};
 use crate::tools::imports::texture::layer_label;
 use crate::tools::imports::transparent_alpha_pixels;
 use crate::tools::imports::{apply_extra, apply_role, put_lump, region_write};
@@ -35,37 +35,27 @@ use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
 /// The automatic `Fit` to the `size` square and `MakeTileable` (when
-/// asked) ops, appended to the processed picture and its report.
+/// asked) ops of [`shape_ops`], run through [`apply_extra`] over the
+/// processed picture.
 ///
 /// # Errors
 ///
-/// [`apply_extra`]' [`CyberError::InvalidArgument`] widened to say the
-/// failure came from the automatic step, not the user's ops.
+/// [`apply_extra`]' refusal of the first op that fails, widened by
+/// [`automatic`] to say the flat's own sizing step rather than a user op
+/// failed.
 pub(super) fn shape_flat(
     processed: Processed,
     fit: FitMode,
     tileable: bool,
     size: u32,
 ) -> Result<Processed, CyberError> {
-    let mut extra: Vec<ImageOp> = vec![ImageOp::Fit {
-        width: size,
-        height: size,
-        mode: fit,
-        filter: Filter::Area,
-        background: None,
-    }];
-    if tileable {
-        extra.push(ImageOp::MakeTileable {
-            band: Some(TILE_BAND),
-            horizontal: true,
-            vertical: true,
-        });
-    }
-    apply_extra(processed, &extra).map_err(|error| {
-        CyberError::InvalidArgument(format!(
-            "the automatic flat sizing step failed: {error}: adjust fit or size, or pass \
-             tileable=false"
-        ))
+    let ops = shape_ops(Some((size, size)), fit, tileable, Some(TILE_BAND));
+    apply_extra(processed, &ops).map_err(|error| {
+        automatic(
+            "flat sizing",
+            "adjust fit or size, or pass tileable=false",
+            &error,
+        )
     })
 }
 

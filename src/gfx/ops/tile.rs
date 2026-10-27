@@ -16,23 +16,13 @@ use crate::error::CyberError;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::ops::{arg_error, rounded_div};
 
-/// Parameters of [`crate::gfx::ops::ImageOp::MakeTileable`].
-pub(crate) struct TileSpec {
-    /// Blend width; `None` uses a quarter of the enabled axis length.
-    pub(crate) band: Option<u32>,
-    /// Blend the left and right edges.
-    pub(crate) horizontal: bool,
-    /// Blend the top and bottom edges.
-    pub(crate) vertical: bool,
-}
-
 /// Bands resolved per axis; `None` on an axis that stays untouched.
 #[derive(Debug)]
-pub(crate) struct TileBands {
+struct TileBands {
     /// Blend width on the horizontal axis.
-    pub(crate) x: Option<u32>,
+    x: Option<u32>,
     /// Blend width on the vertical axis.
-    pub(crate) y: Option<u32>,
+    y: Option<u32>,
 }
 
 /// Validates and resolves the band of one enabled axis; the default is
@@ -62,26 +52,31 @@ fn axis_band(
     Ok(band)
 }
 
-/// Resolves and validates the bands of the enabled axes.
-fn resolve_bands(img: &RgbaImage, index: usize, spec: &TileSpec) -> Result<TileBands, CyberError> {
-    let x = spec
-        .horizontal
-        .then(|| axis_band(index, "width", spec.band, img.width))
+/// Resolves and validates the bands of the enabled axes of a
+/// `(band, horizontal, vertical)` request.
+fn resolve_bands(
+    img: &RgbaImage,
+    index: usize,
+    axes: (Option<u32>, bool, bool),
+) -> Result<TileBands, CyberError> {
+    let (band, horizontal, vertical) = axes;
+    let x = horizontal
+        .then(|| axis_band(index, "width", band, img.width))
         .transpose()?;
-    let y = spec
-        .vertical
-        .then(|| axis_band(index, "height", spec.band, img.height))
+    let y = vertical
+        .then(|| axis_band(index, "height", band, img.height))
         .transpose()?;
     Ok(TileBands { x, y })
 }
 
-/// Blends the enabled axes so the result tiles in both directions.
+/// Blends the `(band, horizontal, vertical)` axes so the result tiles in
+/// both directions.
 pub(crate) fn make_tileable(
     img: RgbaImage,
     index: usize,
-    spec: &TileSpec,
+    axes: (Option<u32>, bool, bool),
 ) -> Result<(RgbaImage, Value), CyberError> {
-    let bands = resolve_bands(&img, index, spec)?;
+    let bands = resolve_bands(&img, index, axes)?;
     let mut out = img;
     if let Some(band) = bands.x {
         out = blend_axis(&out, band, true);
@@ -201,7 +196,7 @@ fn blend_pixel(source: [u8; 4], shifted: [u8; 4], weight: u32, band: u32) -> [u8
 
 #[cfg(test)]
 mod tests {
-    use super::{TileBands, TileSpec, edge_weight, make_tileable, resolve_bands};
+    use super::{TileBands, edge_weight, make_tileable, resolve_bands};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
 
@@ -252,31 +247,19 @@ mod tests {
         painted(width, height, grey_y)
     }
 
-    /// A spec that tiles only the horizontal axis.
-    fn horizontal_only(band: Option<u32>) -> TileSpec {
-        TileSpec {
-            band,
-            horizontal: true,
-            vertical: false,
-        }
+    /// The axes that blend the horizontal one only.
+    fn horizontal_only(band: Option<u32>) -> (Option<u32>, bool, bool) {
+        (band, true, false)
     }
 
-    /// A spec that tiles only the vertical axis.
-    fn vertical_only(band: Option<u32>) -> TileSpec {
-        TileSpec {
-            band,
-            horizontal: false,
-            vertical: true,
-        }
+    /// The axes that blend the vertical one only.
+    fn vertical_only(band: Option<u32>) -> (Option<u32>, bool, bool) {
+        (band, false, true)
     }
 
-    /// A spec that tiles both axes.
-    fn both_axes(band: Option<u32>) -> TileSpec {
-        TileSpec {
-            band,
-            horizontal: true,
-            vertical: true,
-        }
+    /// The axes that blend both.
+    fn both_axes(band: Option<u32>) -> (Option<u32>, bool, bool) {
+        (band, true, true)
     }
 
     /// The rejection message of a failing band resolution.
@@ -290,7 +273,7 @@ mod tests {
     #[test]
     fn horizontal_gradient_wraps_seamlessly() {
         let (out, step) =
-            make_tileable(column_gradient(4), 0, &horizontal_only(None)).expect("256x4 tiles");
+            make_tileable(column_gradient(4), 0, horizontal_only(None)).expect("256x4 tiles");
         assert_eq!(step["op"], "make_tileable", "op name");
         assert_eq!(step["band_x"], 64_i32, "default band is width / 4");
         assert!(step["band_y"].is_null(), "a disabled axis reports null");
@@ -314,7 +297,7 @@ mod tests {
     #[test]
     fn pixels_beyond_the_band_keep_their_colour() {
         let (out, _step) =
-            make_tileable(column_gradient(1), 0, &horizontal_only(None)).expect("256x1 tiles");
+            make_tileable(column_gradient(1), 0, horizontal_only(None)).expect("256x1 tiles");
         for x in [64_u32, 128, 192] {
             assert_eq!(
                 out.get(x, 0).expect("in bounds")[0],
@@ -331,7 +314,7 @@ mod tests {
         // real differences, the vertical pass mixes equal values.
         let cols = column_strip(6, 6);
         let (horiz, _h_step) =
-            make_tileable(cols.clone(), 0, &horizontal_only(Some(2))).expect("6x6 tiles");
+            make_tileable(cols.clone(), 0, horizontal_only(Some(2))).expect("6x6 tiles");
         assert_eq!(
             horiz.get(0, 0).expect("edge")[0],
             3,
@@ -339,7 +322,7 @@ mod tests {
         );
         assert_ne!(horiz, cols, "the horizontal pass changed the image");
         let (vert, _v_step) =
-            make_tileable(cols.clone(), 1, &vertical_only(Some(2))).expect("6x6 tiles");
+            make_tileable(cols.clone(), 1, vertical_only(Some(2))).expect("6x6 tiles");
         assert_eq!(
             vert, cols,
             "a vertical-only blend cannot touch a column strip"
@@ -347,12 +330,12 @@ mod tests {
         // The row-strip is the mirror case.
         let rows = row_strip(6, 6);
         let (flat, _f_step) =
-            make_tileable(rows.clone(), 2, &horizontal_only(Some(2))).expect("6x6 tiles");
+            make_tileable(rows.clone(), 2, horizontal_only(Some(2))).expect("6x6 tiles");
         assert_eq!(
             flat, rows,
             "a horizontal-only blend cannot touch a row strip"
         );
-        let (steep, _s_step) = make_tileable(rows, 3, &vertical_only(Some(2))).expect("6x6 tiles");
+        let (steep, _s_step) = make_tileable(rows, 3, vertical_only(Some(2))).expect("6x6 tiles");
         assert_eq!(
             steep.get(0, 0).expect("edge")[0],
             3,
@@ -365,18 +348,18 @@ mod tests {
         let wide = rejection(resolve_bands(
             &column_strip(8, 8),
             0,
-            &horizontal_only(Some(5)),
+            horizontal_only(Some(5)),
         ));
         assert!(
             wide.contains("ops[0].band") && wide.contains("1..=4"),
             "band over width/2 is rejected: {wide}"
         );
-        let thin = rejection(resolve_bands(&column_strip(1, 4), 1, &both_axes(None)));
+        let thin = rejection(resolve_bands(&column_strip(1, 4), 1, both_axes(None)));
         assert!(
             thin.contains("ops[1].width") && thin.contains("at least 2"),
             "a 1-pixel-wide axis cannot tile: {thin}"
         );
-        let tall = rejection(resolve_bands(&row_strip(4, 1), 2, &vertical_only(None)));
+        let tall = rejection(resolve_bands(&row_strip(4, 1), 2, vertical_only(None)));
         assert!(
             tall.contains("ops[2].height"),
             "a 1-pixel-tall axis cannot tile vertically: {tall}"
@@ -385,12 +368,8 @@ mod tests {
 
     #[test]
     fn both_axes_disabled_is_a_valid_no_op() {
-        let idle = TileSpec {
-            band: None,
-            horizontal: false,
-            vertical: false,
-        };
-        let (out, step) = make_tileable(column_strip(3, 3), 0, &idle).expect("the no-op validates");
+        let (out, step) = make_tileable(column_strip(3, 3), 0, (None, false, false))
+            .expect("the no-op validates");
         assert!(
             step["band_x"].is_null() && step["band_y"].is_null(),
             "no bands"

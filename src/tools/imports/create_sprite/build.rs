@@ -17,7 +17,7 @@ use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::image::RgbaImage;
-use crate::gfx::ops::{Filter, FitMode, ImageOp, rounded_div};
+use crate::gfx::ops::{FitMode, ImageOp, rounded_div};
 use crate::gfx::patch::{Patch, decode_patch, encode_patch};
 use crate::gfx::quantize::{DEFAULT_ALPHA_THRESHOLD, Transparency};
 use crate::session::Session;
@@ -27,7 +27,7 @@ use crate::tools::imports::create_sprite::{
     parse_create,
 };
 use crate::tools::imports::image_pipeline::{OffsetDefault, resolve_offsets, to_i16_offsets};
-use crate::tools::imports::processed::{Processed, process, to_indexed};
+use crate::tools::imports::processed::{Processed, automatic, fit_op, process, to_indexed};
 use crate::tools::imports::sprite::{Naming, warnings_for};
 use crate::tools::imports::{apply_extra, put_lump, region_write};
 use crate::tools::palette::load_palette;
@@ -103,8 +103,8 @@ pub(super) fn scaled_width(picture: &RgbaImage, height: u32) -> u32 {
 ///
 /// # Errors
 ///
-/// [`apply_ops`]' [`CyberError::InvalidArgument`] widened to say the
-/// failure came from the automatic step, not the user's ops.
+/// [`apply_extra`]' refusal of the automatic [`fit_op`], widened to say the
+/// height step rather than a user op failed.
 pub(super) fn fit_step(
     processed: Processed,
     request: &SpriteRequest,
@@ -112,17 +112,13 @@ pub(super) fn fit_step(
     let Some(plan) = choose_height(request, &processed.rgba) else {
         return Ok((processed, None));
     };
-    let ops = [ImageOp::Fit {
-        width: plan.width,
-        height: plan.height,
-        mode: FitMode::Contain,
-        filter: Filter::Area,
-        background: None,
-    }];
+    let ops = [fit_op(plan.width, plan.height, FitMode::Contain)];
     let shaped = apply_extra(processed, &ops).map_err(|error| {
-        CyberError::InvalidArgument(format!(
-            "the automatic height step failed: {error}: pass a smaller height or crop the picture"
-        ))
+        automatic(
+            "height",
+            "pass a smaller height or crop the picture",
+            &error,
+        )
     })?;
     Ok((shaped, plan.note))
 }

@@ -1,7 +1,7 @@
 //! The wire shapes: the documented `JSON` op lists with every serde
 //! default, the new pixel ops' defaults, the grayscale and blur runs,
 //! the hairline filter and the adaptive threshold reaching their
-//! dispatchers, and the radius errors each one answers with.
+//! modules, and the radius errors each one answers with.
 
 use crate::error::CyberError;
 use crate::gfx::ops::{Filter, FitMode, ImageOp, apply_ops};
@@ -138,7 +138,7 @@ fn grayscale_and_blur_deserialize_from_their_documented_json() {
 }
 
 #[test]
-fn grayscale_and_blur_run_through_the_pixel_dispatcher() {
+fn grayscale_and_blur_run_through_apply_ops() {
     let ops = [ImageOp::Grayscale, ImageOp::Blur { radius: 1 }];
     let (out, report) = apply_ops(quad(), &ops).expect("chain applies");
     assert_eq!(
@@ -217,7 +217,7 @@ fn thin_stroke_fields(op: &ImageOp) -> (u32, Option<u8>, bool) {
 }
 
 #[test]
-fn thin_stroke_filter_runs_through_the_restoration_dispatcher() {
+fn thin_stroke_filter_runs_through_apply_ops() {
     let ops = [
         ImageOp::Threshold {
             level: Some(128),
@@ -306,7 +306,7 @@ fn adaptive_fields(op: &ImageOp) -> (u32, u8, bool) {
 }
 
 #[test]
-fn adaptive_threshold_runs_through_the_pixel_dispatcher() {
+fn adaptive_threshold_runs_through_apply_ops() {
     let ops = [
         ImageOp::Threshold {
             level: Some(128),

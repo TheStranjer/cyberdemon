@@ -43,40 +43,32 @@ const MAX_OFFSET: u32 = 255;
 /// the background and the shade the paper class is painted in.
 const PAPER: u8 = 255;
 
-/// Parameters of [`crate::gfx::ops::ImageOp::AdaptiveThreshold`].
-pub(crate) struct AdaptiveThresholdSpec {
-    /// Background window radius, `1..=128`.
-    pub(crate) radius: u32,
-    /// How far below the local mean counts as ink, `0..=255`.
-    pub(crate) offset: u8,
-    /// Whether to swap the ink and paper classes.
-    pub(crate) invert: bool,
-}
-
-/// Flattens the background and binarizes: every pixel is compared to the
-/// mean [`luminance`] of its `(2r + 1) x (2r + 1)` window and painted
-/// opaque black (ink) or opaque white (paper).
+/// Flattens the background and binarizes at the `(radius, offset, invert)`
+/// window: every pixel is compared to the mean [`luminance`] of its
+/// `(2r + 1) x (2r + 1)` window and painted opaque black (ink) or opaque
+/// white (paper).
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] when `spec.radius` is outside `1..=128`
-/// or `spec.offset` is outside `0..=255`.
+/// [`CyberError::InvalidArgument`] when `radius` is outside `1..=128` or
+/// `offset` is outside `0..=255`.
 pub(crate) fn adaptive_threshold(
     img: RgbaImage,
     index: usize,
-    spec: &AdaptiveThresholdSpec,
+    window: (u32, u8, bool),
 ) -> Result<(RgbaImage, Value), CyberError> {
-    check_radius(index, spec.radius)?;
-    check_offset(index, u32::from(spec.offset))?;
-    let means = background_means(&img, spec.radius);
-    let (out, ink_pixels) = paint(img, &means, spec);
+    let (radius, offset, invert) = window;
+    check_radius(index, radius)?;
+    check_offset(index, u32::from(offset))?;
+    let means = background_means(&img, radius);
+    let (out, ink_pixels) = paint(img, &means, offset, invert);
     let (background_min, background_max) = extremes(&means);
     Ok((
         out,
         json!({
             "op": "adaptive_threshold",
-            "radius": spec.radius,
-            "offset": spec.offset,
+            "radius": radius,
+            "offset": offset,
             "background_min": background_min,
             "background_max": background_max,
             "ink_pixels": ink_pixels,
@@ -126,17 +118,17 @@ fn background_value(pixel: [u8; 4]) -> u8 {
 /// Whether one source pixel is ink against its local mean `mean`: opaque
 /// pixels `offset` or more below it, or `offset` or more above it when
 /// `invert`ed; transparent pixels are always paper.
-fn counts_as_ink(pixel: [u8; 4], mean: i64, spec: &AdaptiveThresholdSpec) -> bool {
+fn counts_as_ink(pixel: [u8; 4], mean: i64, offset: u8, invert: bool) -> bool {
     let [_, _, _, alpha] = pixel;
     if alpha < OPAQUE_ALPHA {
         return false;
     }
     let value = i64::from(luminance(pixel));
-    let offset = i64::from(spec.offset);
-    if spec.invert {
-        value.saturating_sub(offset) >= mean
+    let margin = i64::from(offset);
+    if invert {
+        value.saturating_sub(margin) >= mean
     } else {
-        value.saturating_add(offset) <= mean
+        value.saturating_add(margin) <= mean
     }
 }
 
@@ -183,7 +175,7 @@ fn span_at(position: usize, reach: usize, len: usize) -> u64 {
 
 /// Paints the classification over `img`: opaque black where `means` makes
 /// the pixel ink, opaque white everywhere else; answers the ink count.
-fn paint(img: RgbaImage, means: &[i64], spec: &AdaptiveThresholdSpec) -> (RgbaImage, usize) {
+fn paint(img: RgbaImage, means: &[i64], offset: u8, invert: bool) -> (RgbaImage, usize) {
     let mut out = img;
     let mut ink_pixels = 0_usize;
     for (chunk, mean) in out
@@ -191,7 +183,7 @@ fn paint(img: RgbaImage, means: &[i64], spec: &AdaptiveThresholdSpec) -> (RgbaIm
         .chunks_exact_mut(BYTES_PER_PIXEL)
         .zip(means.iter().copied())
     {
-        let ink = counts_as_ink(to_pixel(chunk), mean, spec);
+        let ink = counts_as_ink(to_pixel(chunk), mean, offset, invert);
         if ink {
             ink_pixels = ink_pixels.saturating_add(1);
         }
@@ -210,20 +202,16 @@ fn extremes(means: &[i64]) -> (i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AdaptiveThresholdSpec, adaptive_threshold, background_means, check_offset};
+    use super::{adaptive_threshold, background_means, check_offset};
     use crate::error::CyberError;
     use crate::gfx::image::RgbaImage;
     use crate::gfx::ops::threshold::{luminance_histogram, otsu_level};
     use crate::gfx::to_pixel;
     use serde_json::Value;
 
-    /// Builds the spec of an adaptive run at `radius` and `offset`.
-    fn spec(radius: u32, offset: u8, invert: bool) -> AdaptiveThresholdSpec {
-        AdaptiveThresholdSpec {
-            radius,
-            offset,
-            invert,
-        }
+    /// The `(radius, offset, invert)` window of an adaptive run.
+    fn window(radius: u32, offset: u8, invert: bool) -> (u32, u8, bool) {
+        (radius, offset, invert)
     }
 
     /// The alphas [`speckle`] cycles through, one per pixel.
@@ -335,7 +323,7 @@ mod tests {
 
     /// Runs [`adaptive_threshold`] at index `0` with fixture parameters.
     fn adaptive(img: RgbaImage, radius: u32, offset: u8, invert: bool) -> (RgbaImage, Value) {
-        adaptive_threshold(img, 0, &spec(radius, offset, invert)).expect("fixture parameters")
+        adaptive_threshold(img, 0, window(radius, offset, invert)).expect("fixture parameters")
     }
 
     /// The fixture's grey level at row `y`: the band's luminance `30`
@@ -515,7 +503,7 @@ mod tests {
             let error = adaptive_threshold(
                 RgbaImage::new(3_u32, 3_u32, vec![255_u8; 36_usize]).expect("3x3 is valid"),
                 3,
-                &spec(radius, 15, false),
+                window(radius, 15, false),
             )
             .expect_err("the radius must be rejected");
             assert_eq!(
@@ -552,7 +540,7 @@ mod tests {
             height: 1_u32,
             pixels: Vec::new(),
         };
-        let (out, step) = adaptive_threshold(empty, 0, &spec(4, 15, false)).expect("parameters");
+        let (out, step) = adaptive_threshold(empty, 0, window(4, 15, false)).expect("parameters");
         assert_eq!(out.pixels.len(), 0_usize, "nothing to paint");
         assert_eq!(step["op"], "adaptive_threshold", "the op still reports");
         assert_eq!(step["ink_pixels"], 0_i32, "no pixels, no ink");

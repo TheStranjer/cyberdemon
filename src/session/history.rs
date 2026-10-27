@@ -325,6 +325,15 @@ impl History {
         self.revision != self.saved_revision
     }
 
+    /// The revision the working archive currently holds. The counter never
+    /// rewinds, so this number names one exact working state across the
+    /// session's whole life; the session's read cache keys on it.
+    #[must_use]
+    #[inline]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Drops both stacks and starts a fresh revision for a working archive
     /// replaced wholesale, which is clean from the first moment. The
     /// session's guard keeps this out of reach while a batch scope is open.

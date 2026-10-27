@@ -45,10 +45,12 @@
 //! that copy, the typed edit and the node invalidation into the single
 //! undoable [`Session::edit_map`] step every map editing tool builds on.
 //!
-//! The scope and origin types are `scope`; the read-view bodies are `views`;
-//! the [`Session::custom_sources`] collection behind [`Session::definitions`]
+//! The scope and origin types are `scope`; the read-view bodies are `views`,
+//! served from the keyed read cache in `session/cache.rs`; the
+//! [`Session::custom_sources`] collection behind [`Session::definitions`]
 //! is `custom`.
 
+mod cache;
 pub mod cow;
 mod custom;
 pub mod history;
@@ -71,11 +73,18 @@ use crate::defs::{CustomSources, Definitions, session_definitions};
 use crate::error::CyberError;
 use crate::render::RenderSettings;
 use crate::session::{
+    cache::ViewCache,
     history::{BatchOutcome, BatchToken, History, batch_open_conflict},
     map_edit::MapEditReport,
 };
 use crate::themes::TextureTheme;
-use crate::wad::{archive::Wad, classify::Namespace, game::Game, map::Map, name::LumpName};
+use crate::wad::{
+    archive::Wad,
+    classify::{Analysis, Namespace},
+    game::Game,
+    map::Map,
+    name::LumpName,
+};
 
 /// What a read-only archive in the layer stack is to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -155,6 +164,11 @@ pub struct Session {
     render: RenderSettings,
     /// Session-level texture theme, never part of the undo history.
     theme: TextureTheme,
+    /// The keyed read cache: merged directory, its classification, the
+    /// layers-only view and the session definitions, plus the layer
+    /// generation they are keyed with. Session machinery, never session
+    /// state: it clones cold, compares equal and changes no wire report.
+    cache: ViewCache,
 }
 
 impl Session {
@@ -173,6 +187,7 @@ impl Session {
         self.refuse_in_batch("replacing the base game layer")?;
         layer.role = LayerRole::Iwad;
         self.iwad = Some(layer);
+        self.cache.bump_generation();
         Ok(())
     }
 
@@ -188,6 +203,7 @@ impl Session {
         self.refuse_in_batch("stacking a resource layer")?;
         layer.role = LayerRole::Resource;
         self.resources.push(layer);
+        self.cache.bump_generation();
         Ok(())
     }
 
@@ -292,6 +308,7 @@ impl Session {
         self.working = wad;
         self.working_path = path;
         self.history.reset();
+        self.cache.invalidate();
         Ok(())
     }
 
@@ -308,6 +325,15 @@ impl Session {
         self.working_path = Some(path);
         self.history.mark_saved();
         Ok(())
+    }
+
+    /// The cache key of the session's current state: the revision the
+    /// working archive holds and the generation the layer stack stands at.
+    /// Revisions never come back with different content and the generation
+    /// moves with every layer change, so one key names one merged view and
+    /// one definition set for the session's whole life.
+    fn cache_key(&self) -> cache::Key {
+        self.cache.key(self.history.revision())
     }
 
     /// Refuses an operation that replaces session state the open batch
@@ -354,6 +380,7 @@ impl Session {
         let mut candidate = self.working.clone();
         let value = f(&mut candidate)?;
         self.history.record(label, &mut self.working, candidate);
+        self.cache.invalidate();
         Ok(value)
     }
 
@@ -391,7 +418,9 @@ impl Session {
         token: BatchToken,
         outcome: BatchOutcome,
     ) -> Result<bool, CyberError> {
-        self.history.end_batch(&mut self.working, token, outcome)
+        let left = self.history.end_batch(&mut self.working, token, outcome)?;
+        self.cache.invalidate();
+        Ok(left)
     }
 
     /// Whether a [`Session::begin_batch`] scope currently owns the history.
@@ -412,7 +441,9 @@ impl Session {
     /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn undo(&mut self) -> Result<String, CyberError> {
-        self.history.undo(&mut self.working)
+        let label = self.history.undo(&mut self.working)?;
+        self.cache.invalidate();
+        Ok(label)
     }
 
     /// How many undo entries the history currently holds. The batch tool
@@ -433,7 +464,9 @@ impl Session {
     /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn redo(&mut self) -> Result<String, CyberError> {
-        self.history.redo(&mut self.working)
+        let label = self.history.redo(&mut self.working)?;
+        self.cache.invalidate();
+        Ok(label)
     }
 
     /// The labels of the edits that [`Session::undo`] would take back, newest
@@ -452,12 +485,60 @@ impl Session {
         self.history.redo_labels()
     }
 
+    /// How many merged directories the session's reads have built: one per
+    /// cache key they actually needed, thanks to `session/cache.rs`. The cache
+    /// invalidation tests count these.
+    #[cfg(test)]
+    #[must_use]
+    #[inline]
+    pub(in crate::session) fn merge_count(&self) -> u64 {
+        self.cache.rebuild_count()
+    }
+
+    /// How many definition sets the session's reads have built; the cache
+    /// tests read this beside [`Session::merge_count`].
+    #[cfg(test)]
+    #[must_use]
+    #[inline]
+    pub(in crate::session) fn definition_count(&self) -> u64 {
+        self.cache.definition_rebuild_count()
+    }
+
     /// The directory an engine would see: every layer in load order with the
     /// working archive on top, later archives overriding earlier ones.
+    ///
+    /// Served from the session's read cache: the fold runs once per working
+    /// revision and layer generation, later reads clone the built directory
+    /// (its lump payloads are shared `Arc` slices) instead of merging every
+    /// layer again.
     #[must_use]
     #[inline]
     pub fn merged(&self) -> Vec<MergedLump> {
         views::merged(self)
+    }
+
+    /// The merged directory's [`Analysis`], cached alongside [`Session::merged`]
+    /// at the same key. Tools that list or classify a scope read the view and
+    /// its analysis as one pair through [`Session::analyzed`].
+    #[must_use]
+    #[inline]
+    pub fn analysis(&self) -> Analysis {
+        views::analysis(self)
+    }
+
+    /// The lumps of `scope`, in directory order, paired index-for-index with
+    /// their [`Analysis`]: the one read the listing and directory tools build
+    /// their rows from. [`Scope::Merged`] answers from the cached merged view
+    /// and its cached analysis, so a caller no longer fetches every lump and
+    /// then re-classifies the whole listing itself.
+    ///
+    /// # Errors
+    ///
+    /// [`Session::lumps_in`]' [`CyberError::NotFound`] for a [`Scope::Layer`]
+    /// that is not loaded.
+    #[inline]
+    pub fn analyzed(&self, scope: Scope) -> Result<(Vec<MergedLump>, Analysis), CyberError> {
+        views::analyzed(self, scope)
     }
 
     /// The merged view of the read-only layers alone: `IWAD` plus resources
@@ -510,14 +591,26 @@ impl Session {
     /// `ZScript` and `MAPINFO` customs — one read under one session lock,
     /// shared by every tool that resolves thing names or describes specials.
     ///
+    /// The result is cached at the same key as [`Session::merged`] (the
+    /// merged view and the detected game are the only inputs), so the
+    /// custom texts are collected and re-parsed once per working revision
+    /// and layer generation, not once per call.
+    ///
     /// # Errors
     ///
     /// [`Session::custom_sources`]' read errors and
-    /// [`session_definitions`]' refusal for malformed embedded tables.
+    /// [`session_definitions`]' refusal for malformed embedded tables. A
+    /// refusal is reported unchanged and nothing is cached, so the next
+    /// call collects again.
     #[inline]
     pub fn definitions(&self) -> Result<Definitions, CyberError> {
-        let (sources, _notes) = self.custom_sources()?;
-        session_definitions(self.effective_game(), &sources)
+        let key = self.cache_key();
+        self.cache.definitions.get_or_try_init(key, || {
+            #[cfg(test)]
+            self.cache.count_definition_rebuild();
+            let (sources, _notes) = self.custom_sources()?;
+            session_definitions(self.effective_game(), &sources)
+        })
     }
 
     /// The lumps of one scope, in directory order.

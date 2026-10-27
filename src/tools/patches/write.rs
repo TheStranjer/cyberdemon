@@ -19,8 +19,7 @@ use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::imports::image_pipeline::parse_import;
 use crate::tools::imports::{PnamesPlan, current_pnames, pnames_plan, put_lump, region_write};
-use crate::wad::archive::Lump;
-use crate::wad::classify::{LumpKind, Namespace, analyze};
+use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::lumps;
 use crate::wad::name::LumpName;
 
@@ -32,11 +31,10 @@ use super::{
 ///
 /// # Errors
 ///
-/// [`Session::lumps_in`]' errors (none for the working scope).
+/// [`Session::analyzed`]' errors (none for the working scope).
 pub(super) fn holds_patch(session: &Session, name: LumpName) -> Result<bool, CyberError> {
-    let entries = session.lumps_in(Scope::Working)?;
-    let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
-    let holds = analyze(&lumps)
+    let (_entries, analysis) = session.analyzed(Scope::Working)?;
+    let holds = analysis
         .lumps
         .iter()
         .any(|info| info.name == name && info.namespace == Some(Namespace::Patches));
@@ -50,7 +48,7 @@ pub(super) fn holds_patch(session: &Session, name: LumpName) -> Result<bool, Cyb
 /// # Errors
 ///
 /// [`CyberError::AlreadyExists`] for a working `patches`-region twin, and
-/// [`Session::lumps_in`]' read errors.
+/// [`holds_patch`]' (i.e. [`Session::analyzed`]'s) read errors.
 pub(super) fn refuse_working_twin(session: &Session, name: LumpName) -> Result<(), CyberError> {
     if holds_patch(session, name)? {
         return Err(CyberError::AlreadyExists(format!(
@@ -83,9 +81,7 @@ pub(super) fn pnames_position(
 /// `patches`-region occurrence also matches here, which is harmless: this
 /// only ever decides the fallback after the region lookup came up empty.)
 pub(super) fn holds_global_patch(session: &Session, name: LumpName) -> bool {
-    let view = session.merged();
-    let lumps: Vec<Lump> = view.iter().map(|entry| entry.lump.clone()).collect();
-    analyze(&lumps).lumps.iter().any(|info| {
+    session.analysis().lumps.iter().any(|info| {
         info.name == name
             && info.kind != LumpKind::Marker
             && !matches!(info.namespace, Some(Namespace::Flats | Namespace::Sprites))

@@ -3,11 +3,11 @@
 //!
 //! The member names of a binary `Doom`/`Hexen` block and of a `GL` node
 //! block, and the header tests that tell a real block from a loose
-//! `THINGS`, are `find_maps`' own business; `map_at` answers which block
-//! owns a directory index. `gl_marker_for` is the one naming rule every
-//! `GL` writer shares: `GL_<map>`, or the name-less `GL_LEVEL` marker for
-//! longer names. [`super::analyze`] runs `find_maps` once over the
-//! directory and asks `map_at` per lump. Marker names are
+//! `THINGS`, are `find_maps`' own business; `map_owners` answers which block
+//! owns every directory index in one sweep, `gl_marker_for` is the one
+//! naming rule every `GL` writer shares: `GL_<map>`, or the name-less
+//! `GL_LEVEL` marker for longer names. [`super::analyze`] runs `find_maps`
+//! once over the directory and reads the owner table per lump. Marker names are
 //! [`super::namespaces`]' business: `is_marker_name` keeps `S_START`-style
 //! lumps from being read as map headers. The [`MapBlock`] and
 //! [`MapFormat`] shapes themselves stay in the root.
@@ -197,19 +197,49 @@ fn attach_gl(maps: &mut [MapBlock], lumps: &[Lump], start: usize, end: usize) {
     }
 }
 
-/// The map a lump at `index` belongs to, with whether it is the header.
-pub(super) fn map_at(maps: &[MapBlock], index: usize) -> Option<(LumpName, bool)> {
-    maps.iter().find_map(|block| {
-        if index == block.header {
-            Some((block.name, true))
-        } else if (block.header < index && index < block.end)
-            || block
-                .gl
-                .is_some_and(|(start, end)| start <= index && index < end)
-        {
-            Some((block.name, false))
-        } else {
-            None
+/// The owner of every directory position, index by index, in one sweep:
+/// each block claims its header (the `true` flag), its member run
+/// (`header + 1..end`) and its attached `GL` run, and a position keeps its
+/// first claimant — the block earliest in directory order that owns it, the
+/// same answer the original per-lump linear scan gave by returning the
+/// first matching block, in the same block order. This is what turns
+/// [`super::analyze`]'s per-lump scan from O(lumps × maps) into
+/// O(lumps + claimed positions).
+pub(crate) fn map_owners(maps: &[MapBlock], len: usize) -> Vec<Option<(LumpName, bool)>> {
+    let mut owners: Vec<Option<(LumpName, bool)>> = core::iter::repeat_n(None, len).collect();
+    for block in maps {
+        claim(&mut owners, block.header, block.name);
+        claim_run(
+            &mut owners,
+            block.header.saturating_add(1)..block.end,
+            block.name,
+        );
+        if let Some((start, end)) = block.gl {
+            claim_run(&mut owners, start..end, block.name);
         }
-    })
+    }
+    owners
+}
+
+/// Claims position `index` for `map`'s block header while nothing owns it.
+fn claim(owners: &mut [Option<(LumpName, bool)>], index: usize, map: LumpName) {
+    if let Some(slot) = owners.get_mut(index).filter(|held| held.is_none()) {
+        *slot = Some((map, true));
+    }
+}
+
+/// Claims every still-unowned position of `range` for `map`'s data.
+fn claim_run(
+    owners: &mut [Option<(LumpName, bool)>],
+    range: core::ops::Range<usize>,
+    map: LumpName,
+) {
+    let Some(head) = owners.get_mut(range.start..) else {
+        return;
+    };
+    for slot in head.iter_mut().take(range.end.saturating_sub(range.start)) {
+        if slot.is_none() {
+            *slot = Some((map, false));
+        }
+    }
 }

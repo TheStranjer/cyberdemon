@@ -30,8 +30,7 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::session::history::HISTORY_LIMIT;
 use crate::tools::reply;
-use crate::wad::classify::analyze;
-use crate::wad::{Lump, LumpName};
+use crate::wad::LumpName;
 
 /// Arguments for [`Cyberdemon::undo`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -133,10 +132,15 @@ fn walk_history(
 }
 
 /// Whether the merged view still declares a map block named `map`.
+///
+/// The classification comes from [`Session::analysis`], the session's
+/// cached read of the merged directory.
 pub(super) fn merged_holds_map(session: &Session, map: LumpName) -> bool {
-    let view = session.merged();
-    let lumps: Vec<Lump> = view.iter().map(|entry| entry.lump.clone()).collect();
-    analyze(&lumps).maps.iter().any(|block| block.name == map)
+    session
+        .analysis()
+        .maps
+        .iter()
+        .any(|block| block.name == map)
 }
 
 /// Drops the active-map selection when the stepped-back working archive no

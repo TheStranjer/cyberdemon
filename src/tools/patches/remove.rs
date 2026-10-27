@@ -19,8 +19,8 @@ use crate::error::CyberError;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::textures::{PnamesRewrite, plan_pnames_removal, write_pnames_rewrite};
-use crate::wad::archive::{Lump, Wad};
-use crate::wad::classify::{LumpInfo, LumpKind, Namespace, analyze};
+use crate::wad::archive::Wad;
+use crate::wad::classify::{LumpInfo, LumpKind, Namespace};
 use crate::wad::name::LumpName;
 
 use super::{RemoveOutcome, RemovePatchParams, write::pnames_position};
@@ -48,15 +48,13 @@ fn is_removal_candidate(info: &LumpInfo, name: LumpName, listed: bool) -> bool {
 /// # Errors
 ///
 /// [`crate::tools::imports::current_pnames`]' [`CyberError::Format`] for a malformed `PNAMES` and
-/// [`Session::lumps_in`]' read errors (none for the working scope).
+/// [`Session::analyzed`]' read errors (none for the working scope).
 pub(super) fn working_patch_slot(
     session: &Session,
     name: LumpName,
 ) -> Result<Option<usize>, CyberError> {
     let listed = pnames_position(session, name)?.is_some();
-    let entries = session.lumps_in(Scope::Working)?;
-    let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
-    let analysis = analyze(&lumps);
+    let (_entries, analysis) = session.analyzed(Scope::Working)?;
     let mut slot = None;
     for info in &analysis.lumps {
         if is_removal_candidate(info, name, listed) {

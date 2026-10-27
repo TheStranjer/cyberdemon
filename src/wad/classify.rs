@@ -30,7 +30,7 @@ use serde::Serialize;
 
 use crate::wad::archive::Lump;
 use crate::wad::classify::kinds::classify;
-use crate::wad::classify::maps::{find_maps, map_at};
+use crate::wad::classify::maps::{find_maps, map_owners};
 use crate::wad::classify::namespaces::NamespaceState;
 use crate::wad::name::LumpName;
 
@@ -379,11 +379,12 @@ pub struct Analysis {
 pub fn analyze(lumps: &[Lump]) -> Analysis {
     let mut warnings = Vec::new();
     let maps = find_maps(lumps, &mut warnings);
+    let owners = map_owners(&maps, lumps.len());
     let mut state = NamespaceState::default();
     let mut infos = Vec::with_capacity(lumps.len());
     for (index, lump) in lumps.iter().enumerate() {
         let namespace = state.visit(lump.name, index, &mut warnings);
-        let owner = map_at(&maps, index);
+        let owner = owners.get(index).copied().flatten();
         infos.push(LumpInfo {
             index,
             name: lump.name,

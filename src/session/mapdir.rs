@@ -11,7 +11,7 @@
 use crate::error::CyberError;
 use crate::session::{MergedLump, Scope, Session};
 use crate::wad::archive::Lump;
-use crate::wad::classify::{Analysis, MapBlock, analyze};
+use crate::wad::classify::{Analysis, MapBlock};
 use crate::wad::lumps;
 use crate::wad::map::Map;
 use crate::wad::map::read_map;
@@ -81,14 +81,18 @@ fn is_node_lump(lump: &Lump) -> bool {
 
 /// Read `scope` into a [`Directory`].
 ///
+/// The entries and their classification come from [`Session::analyzed`]:
+/// the merged scope is served from the session's read cache, and the
+/// working and layer scopes are classified here once instead of every
+/// caller re-analyzing the listing it was handed.
+///
 /// # Errors
 ///
-/// [`Session::lumps_in`]'s [`CyberError::NotFound`] for a [`Scope::Layer`]
+/// [`Session::analyzed`]'s [`CyberError::NotFound`] for a [`Scope::Layer`]
 /// that is not loaded.
 pub(crate) fn directory(session: &Session, scope: Scope) -> Result<Directory, CyberError> {
-    let entries = session.lumps_in(scope)?;
+    let (entries, analysis) = session.analyzed(scope)?;
     let lumps: Vec<Lump> = entries.iter().map(|entry| entry.lump.clone()).collect();
-    let analysis = analyze(&lumps);
     Ok(Directory {
         entries,
         lumps,

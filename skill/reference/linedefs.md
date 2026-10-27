@@ -68,6 +68,13 @@ maps** section.
 | `twosided` | 4 | `dontdraw` | 128 |
 | `dontpegtop` | 8 | `mapped` | 256 |
 | `dontpegbottom` | 16 | `passuse` | 512 (`Doom` family only) |
+| `blocklandmonsters` | 4096 (`MBF21`) | `blockplayers` | 8192 (`MBF21`) |
+
+The last two are `MBF21`'s addition to the `Boom` flags word: 4096 keeps
+walking monsters out (fliers pass) and 8192 keeps players out (monsters
+and projectiles pass). `check_playability` treats `blockplayers` as a wall
+on a `Doom`-family map, `blocklandmonsters` and `blockmonsters` as no
+obstacle to a player.
 
 `Hexen` family adds `repeatspecial` (512), `monsteractivate` (8192),
 `blockplayers` (16384), `blockeverything` (32768) and the **activation
@@ -76,7 +83,9 @@ field** — the 3-bit trigger type at bits 10-12 named by `playercross`
 and `missilecross` (5). An activation name writes the whole field (a
 later one replaces an earlier one, never combines); `playercross` is the
 all-clear value, so a `Hexen`-family line with `flags: 1` reads back as
-`["blocking", "playercross"]`.
+`["blocking", "playercross"]`. The two families' `blockplayers` are
+different bits, so the name never crosses the family boundary: 8192 is
+`monsteractivate` on a `Hexen`-family line.
 
 ## `add_linedef`
 

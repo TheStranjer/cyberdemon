@@ -3,7 +3,9 @@
 //! `Hexen` shape, its `passuse` bit moves to the line's `extra` bag and the
 //! trigger tag into the row's `tag` slot, and the trip home restores all of
 //! it, spending only that extra key; a binary `Hexen` target needs no line
-//! id carrier and a `UDMF` source stores its ids once. Back, the thing bits
+//! id carrier and a `UDMF` source stores its ids once, and the `Doom`
+//! family's two `MBF21` block bits stay outside the shared mask on both
+//! legs. Back, the thing bits
 //! fold to their `Doom` twins, `Line_SetIdentification` comes back as a
 //! trigger tag, a `UDMF` special no row carries is untranslated and the
 //! listed misses stop at [`UNTRANSLATED_LIMIT`] with the rest counted.
@@ -15,6 +17,7 @@ use crate::error::CyberError;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::common::fixtures::two_room_map;
 use crate::wad::map::convert::{KindCounts, UNTRANSLATED_LIMIT, convert_map, encodes, format_name};
+use crate::wad::map::flags::{DOOM_BLOCK_LAND_MONSTERS, DOOM_BLOCK_PLAYERS};
 use crate::wad::map::xlat::Untranslated;
 
 #[test]
@@ -84,6 +87,28 @@ fn a_forward_converted_map_comes_home_and_drops_its_passuse_extra() {
         format_name(back.format),
         "doom",
         "the line is home: only the passuse bit was spent on the trip"
+    );
+}
+
+#[test]
+fn a_forward_conversion_leaves_the_doom_mbf21_bits_behind() {
+    let mut map = two_room_map();
+    if let Some(step) = map.linedefs.get_mut(2) {
+        step.flags = 0x101_u32 | DOOM_BLOCK_LAND_MONSTERS | DOOM_BLOCK_PLAYERS;
+    }
+    convert_map(&mut map, &udmf("zdoom")).expect("the forward direction converts");
+    let step = map.linedefs.get(2).expect("the step line");
+    assert_eq!(
+        step.flags, 0x101_u32,
+        "only the bits the families share cross over: the MBF21 pair sits \
+         outside the shared mask, where Hexen reads repeat and monster bits"
+    );
+    let again = convert_map(&mut map, &udmf("doom")).expect("and comes home");
+    let home = map.linedefs.get(2).expect("the step line");
+    assert_eq!(
+        home.flags, 0x101_u32,
+        "with no MBF21 bit restored: {:?}",
+        again.warnings
     );
 }
 

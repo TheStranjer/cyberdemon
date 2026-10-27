@@ -1,5 +1,7 @@
 //! `edit_linedef` as an MCP client calls it: replacing and adjusting the flag
-//! bits, setting `special` and `tag` on a list of lines, the nothing-to-change
+//! bits, `MBF21`'s two `Doom`-family blocks stored by name with the `Hexen`
+//! names refused, setting `special` and `tag` on a list of lines, the
+//! nothing-to-change
 //! empty, conflicting and null requests refused with the missing references as
 //! `not_found` and the collapsed line refused, the family refusals with their
 //! format-aware advice, the flip verified through
@@ -59,6 +61,52 @@ async fn edit_linedef_replaces_and_adjusts_the_flag_bits() {
     .await;
     let stored = working_linedef(&client, "MAP01", 0).await;
     assert_eq!(stored["flag_names"], json!(["blocking"]), "read back");
+}
+
+#[tokio::test]
+async fn edit_linedef_stores_the_mbf21_bits_on_a_doom_map() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = doom_loaded(dir.path()).await;
+    let set = call(
+        &client,
+        "edit_linedef",
+        json!({"index": 0_i32, "set_flags": ["blockplayers", "blocklandmonsters"]}),
+    )
+    .await;
+    assert_eq!(
+        set["linedefs"][0]["flags"],
+        json!(1_i32 + 4_096_i32 + 8_192_i32),
+        "blocking plus the two MBF21 bits"
+    );
+    assert_eq!(
+        set["linedefs"][0]["flag_names"],
+        json!(["blocking", "blocklandmonsters", "blockplayers"]),
+        "named back in the Doom table's order"
+    );
+    let stored = working_linedef(&client, "MAP01", 0).await;
+    assert_eq!(
+        stored["flags"],
+        json!(12_289_i32),
+        "the binary u16 column holds both"
+    );
+    refuse(
+        &client,
+        "edit_linedef",
+        json!({"index": 0_i32, "set_flags": ["blockeverything"]}),
+    )
+    .await;
+    refuse(
+        &client,
+        "edit_linedef",
+        json!({"index": 0_i32, "set_flags": ["repeatspecial"]}),
+    )
+    .await;
+    let intact = working_linedef(&client, "MAP01", 0).await;
+    assert_eq!(
+        intact["flags"],
+        json!(12_289_i32),
+        "the two refusals changed nothing"
+    );
 }
 
 #[tokio::test]

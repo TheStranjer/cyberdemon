@@ -116,6 +116,12 @@ the `Hexen` family):
   `UDMF` target keeps the key; a binary target drops it, counted in
   `dropped_fields`. Nothing restores the bit, so run `edit_linedef` on the
   result if the line needs it.
+- `Doom`'s two `MBF21` bits (`blocklandmonsters` 4096, `blockplayers`
+  8192) keep no `Hexen` shape either — 4096 is part of the activation
+  field and 8192 is `monsteractivate` there — so both **drop** with every
+  other bit outside the nine the families share. Re-apply them by name on
+  the result if the map needs them (`edit_linedef`), or stay in the `Doom`
+  family.
 - Thing presence bits invert to their positive `Hexen` twins (all three
   class bits are set); the `tid`, `special` and `args` fields the `Doom`
   family never fills stay zero. Boom-style sector specials (bits 0-9)
@@ -143,10 +149,11 @@ the `Doom` family):
   range-checked only by the target's writer: an id beyond a binary `Doom`
   `u16` tag surfaces as `limit_exceeded` — use `dry_run` to check.
 - `Hexen`-only thing bits (`dormant`, `translucent`, `invisible`,
-  `standing`) and line bits (`blockplayers`, `blockeverything`) have no
-  `Doom` equivalent and drop, each named in one grouped warning. Thing
-  `tid`, `special` and `args` zero. `Hexen`-native sector types (not the
-  translated Boom range) clear to 0 with a grouped warning.
+  `standing`) and line bits (`blockplayers`, `blockeverything`) map to no
+  `Doom` bit and drop, each named in one grouped warning (`Doom`'s own
+  `blockplayers` is `MBF21`'s bit 8192, which this stage never writes).
+  Thing `tid`, `special` and `args` zero. `Hexen`-native sector types (not
+  the translated Boom range) clear to 0 with a grouped warning.
 
 ## Node data always goes
 

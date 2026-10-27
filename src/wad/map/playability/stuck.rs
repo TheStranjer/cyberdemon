@@ -329,8 +329,8 @@ mod tests {
     use crate::wad::game::Game;
     use crate::wad::map::common::fixtures::{name, room, side, solid_line, spawn, vertex};
     use crate::wad::map::flags::{
-        HEXEN_BLOCK_EVERYTHING, HEXEN_BLOCK_PLAYERS, Skill, THING_EASY, THING_HEXEN_SINGLE,
-        THING_MEDIUM, THING_SKILL_BITS, TWO_SIDED,
+        DOOM_BLOCK_LAND_MONSTERS, DOOM_BLOCK_PLAYERS, HEXEN_BLOCK_EVERYTHING, HEXEN_BLOCK_PLAYERS,
+        Skill, THING_EASY, THING_HEXEN_SINGLE, THING_MEDIUM, THING_SKILL_BITS, TWO_SIDED,
     };
     use crate::wad::map::{Map, Thing};
 
@@ -436,6 +436,28 @@ mod tests {
                 reason: StuckReason::InWall { line: 3 },
             }],
             "the walk and the placement already read blockplayers as a wall; so does this"
+        );
+    }
+
+    #[test]
+    fn a_mbf21_blockplayers_line_holds_a_doom_thing_in_wall() {
+        let mut map = room_map((0_i32, 128_i32));
+        map.things.clear();
+        open_west_wall(&mut map, DOOM_BLOCK_PLAYERS);
+        let imp = stand(&mut map, 3001, (4_i32, 128_i32), THING_SKILL_BITS);
+        assert_eq!(
+            stuck_things(&map, &defs(), Skill::Medium),
+            vec![Stuck {
+                thing: imp,
+                reason: StuckReason::InWall { line: 3 },
+            }],
+            "the Doom family's own blockplayers bit stops a body"
+        );
+        open_west_wall(&mut map, DOOM_BLOCK_LAND_MONSTERS);
+        let report = stuck_things(&map, &defs(), Skill::Medium);
+        assert!(
+            report.is_empty(),
+            "blocklandmonsters is not a wall to it: {report:?}"
         );
     }
 

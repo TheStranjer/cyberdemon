@@ -112,6 +112,45 @@ async fn linedef_flags_and_length_measure_the_walls() {
 }
 
 #[tokio::test]
+async fn a_doom_query_finds_the_mbf21_block_bits_by_name() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = plain_iwad(dir.path()).await;
+    call(
+        &client,
+        "edit_linedef",
+        json!({"index": 2_i32, "set_flags": ["blockplayers", "blocklandmonsters"]}),
+    )
+    .await;
+    let players = find(
+        &client,
+        json!({"kind": "linedefs", "where": one("flags", "has", &json!("blockplayers"))}),
+    )
+    .await;
+    assert_eq!(
+        indices(&players),
+        vec![2_u64],
+        "the step line now blocks the player"
+    );
+    let walkers = find(
+        &client,
+        json!({"kind": "linedefs", "where": one("flags", "has_not", &json!("blocklandmonsters"))}),
+    )
+    .await;
+    assert_eq!(
+        walkers["count"],
+        json!(6_i64),
+        "and six lines are open to walking monsters"
+    );
+    refuse(
+        &client,
+        json!({"kind": "linedefs", "where": one("flags", "has", &json!("blockeverything"))}),
+        "invalid_argument",
+        "unknown linedef flag 'blockeverything'",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn things_filter_by_type_and_name_glob() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = plain_iwad(dir.path()).await;

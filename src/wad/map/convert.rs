@@ -49,18 +49,21 @@
 //! and the `Line_SetIdentification` store never fire twice. Forward
 //! (`Doom` family → `Hexen` family): a `Doom` `passuse` bit moves to the
 //! line's `extra` bag (bit 512 is `repeatspecial` in the `Hexen` family),
-//! the line tag moves into the table row's `tag` argument slot, thing
-//! presence bits invert to their positive `Hexen` twins and Boom-style
-//! sector types sit behind 64. Back (`Hexen` family → `Doom` family): a
+//! the two `MBF21` block bits drop with every other bit outside the shared
+//! mask (`Hexen` owns 512 and 8192 for other words), the line tag moves
+//! into the table row's `tag` argument slot, thing presence bits invert
+//! to their positive `Hexen` twins and Boom-style sector types sit behind
+//! 64. Back (`Hexen` family → `Doom` family): a
 //! line matching a row restores its `Doom` special and the trigger tag
 //! from the row's `tag` slot (the lowest `Doom` special wins an ambiguous
 //! match) and a plain line's id becomes its `Doom` trigger tag;
 //! `Line_SetIdentification` from a binary source folds to its id first,
 //! while a literal special 121 from a `UDMF` source has no table row, so
 //! it clears to 0 with its id kept as the trigger tag. `Hexen`-only thing
-//! bits and the `blockplayers`/`blockeverything` line bits drop,
-//! `Hexen`-native sector types clear to 0, and every loss is counted or
-//! warned in [`Conversion`].
+//! bits and the `blockplayers`/`blockeverything` line bits drop (the
+//! `Doom` family's `MBF21` `blockplayers` sits at another bit, which no
+//! stage writes), `Hexen`-native sector types clear to 0, and every loss
+//! is counted or warned in [`Conversion`].
 //!
 //! Every conversion removes the block's generated node lumps: their layout
 //! is tied to the map format, so [`Map::other`] keeps none of `SEGS`,

@@ -1438,12 +1438,15 @@ src/
                   `query/tests/index.rs` (the index guard's spelled
                   plurals, range wording and hint).
                   `map/flags.rs` names the two families' flag bits once:
-                  every linedef and thing bit, activation field value and
-                  flag mask is a named constant there, the name tables
+                  every linedef and thing bit (the `Doom` family's ending
+                  in `Boom`'s `passuse` and `MBF21`'s `blocklandmonsters`
+                  and `blockplayers`), activation field value and flag
+                  mask is a named constant there, the name tables
                   are built from those constants, `blocks_players` is the
                   one family-aware answer to "does this line stop a
                   player", and the `Skill` whose bit a thing's presence is
-                  tested against lives here too.
+                  tested against lives here too, with that module's tests
+                  in `map/flags/tests.rs`.
 data/
   themes/         Per-game texture-theme TSV tables embedded in the binary
                   (`doom.tsv` also serves DOOM II and undetected sessions):

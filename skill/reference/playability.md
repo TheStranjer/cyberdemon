@@ -77,7 +77,7 @@ is the first failing rule at that line:
 
 | reason | meaning | hint says |
 |--------|---------|-----------|
-| `impassable` | the line carries the blocking flag (or a `Hexen` player-keeping bit) | clear the flag on line N (`edit_linedef`) |
+| `impassable` | the line carries the blocking flag (or its own family's player-keeping bit: `Hexen` `blockplayers`/`blockeverything`, `Doom` `MBF21` `blockplayers`) | clear the flag on line N (`edit_linedef`) |
 | `narrow {length?}` | the line is shorter than 32 units | widen the opening to at least 32 units (`move_vertex`) |
 | `locked {color}` | a locked door whose key the walk never reached | place a `<color>` key in a reachable area (`add_thing`) |
 | `door_never_opened` | a door no reachable trigger works | make the switch reachable or `add_door` style normal |
@@ -99,7 +99,8 @@ squares of side 2 r; the definition tables carry no heights, so 56 stands
 in for all) additionally get: `in_wall {line}` when a one-sided line, or a
 line whose flags block players in the map's own family (the shared
 `blocking` bit, plus `blockplayers`/`blockeverything` on `Hexen`-family
-maps), runs strictly through the square (touching is fine),
+maps and `MBF21`'s `blockplayers` on `Doom`-family ones), runs strictly
+through the square (touching is fine),
 `low_ceiling {height}` when the sector leaves it less than 56, and
 `overlaps {other}` when two bodies' squares strictly overlap - reported
 once, lower index first.
@@ -175,7 +176,10 @@ The neighbour `via` vocabulary - how a player gets through: `door` or
 `lift` when the neighbour sector wears that role; `window` when every
 shared line blocks yet leaves at least 16 units of light; `impassable`
 for any other boundary with a blocking line; otherwise `opening`,
-`step_up` or `step_down` by `floor_delta`.
+`step_up` or `step_down` by `floor_delta`. That blocking read is the raw
+`blocking` bit alone: a line wearing only a family player-block (`Hexen`
+`blockplayers`, `Doom`'s `MBF21` `blockplayers`) reads as an opening here
+even though `check_playability` keeps the player out of it.
 
 ### The `summary` object
 

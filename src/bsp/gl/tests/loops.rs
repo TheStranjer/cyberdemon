@@ -8,10 +8,13 @@
 //! covered edge and the `1/16`-unit snap that swallows a hairline gap.
 
 use super::{
-    UNIT, assert_loops_clockwise, assert_loops_close, assert_partner_symmetry, endpoint, l_room,
-    point, rows, run_of, seg, square_room, subsector_ranges, tree_of, two_rooms,
+    assert_loops_clockwise, assert_loops_close, assert_partner_symmetry, endpoint, rows, run_of,
+    subsector_ranges,
 };
 use crate::bsp::Point;
+use crate::bsp::fixtures::{
+    UNIT, l_room, point, square_room, tree_of, two_rooms, whole_seg as seg,
+};
 use crate::bsp::gl::regions::{GlSeg, close_region, push_gap};
 use crate::bsp::gl::{MAGIC_GND2, MINISEG_LINEDEF, NO_PARTNER, to_gl};
 

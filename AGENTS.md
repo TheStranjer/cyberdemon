@@ -128,23 +128,32 @@ src/
                   and seg cutting in i128, `bsp/choose.rs` candidate
                   lines, sampling and split cost, `bsp/tree.rs` the
                   recursion, convexity, bounding boxes, guards and
-                  `BspTree`, `bsp/vanilla.rs` the vanilla serialization:
-                  rounded split-vertex reuse/append, the three record
-                  writers and the i16/u16 limit refusals, and
-                  `bsp/extended.rs` the extended serialization: the
-                  fraction-precise vertex table, the four record
-                  sections, the zlib wrap and the limit refusals,
-                  `bsp/polygon.rs` Sutherland-Hodgman convex clipping of
-                  the map box by partition and seg lines, and
-                  `bsp/gl.rs` the glBSP v2 writer's root: the constants,
-                  `GlNodes`, `to_gl` and the refusal makers, on
-                  `gl/regions.rs` (the subsector region polygons and the
-                  miniseg-closed clockwise seg loops) and `gl/write.rs`
-                  (the vertex table, the seg pool, the partner pass and
-                  the `GL_*` record lumps), with that module's tests in
-                  `gl/tests.rs` plus `gl/tests/loops.rs` (the closed
+                  `BspTree`, `bsp/records.rs` the machinery the three
+                  writers share: `write_node` (the partition line,
+                  `write_box` twice and the two `ChildWidth` child words
+                  — 16 bits with `bit 15`, or 32 with `bit 31`), the
+                  deduped `VertexTable<K, V>` handing out total and
+                  append indices, `scaled`, `write_rows` and the
+                  `Refusals` maker every layout words its own refusals
+                  with, `bsp/vanilla.rs` the vanilla serialization over
+                  those records: its rounded `SplitVertices`
+                  reuse/append, the seg and subsector writers and the
+                  i16/u16 limit refusals, and `bsp/extended.rs` the
+                  extended serialization: its `LumpVertices`
+                  fraction-precise table, the four record sections, the
+                  zlib wrap and the limit refusals, `bsp/polygon.rs`
+                  Sutherland-Hodgman convex clipping of the map box by
+                  partition and seg lines, and `bsp/gl.rs` the glBSP v2
+                  writer's root: the constants, `GlNodes`, `to_gl` and
+                  the `Internal` refusal makers, on `gl/regions.rs` (the
+                  subsector region polygons and the miniseg-closed
+                  clockwise seg loops) and `gl/write.rs` (the flagged
+                  `VertexWords` table, the seg pool, the partner pass
+                  and the `GL_*` record lumps), with that module's tests
+                  in `gl/tests.rs` plus `gl/tests/loops.rs` (the closed
                   loops) and `gl/tests/records.rs` (the record layout
-                  and the refusals).
+                  and the refusals), and the maps, segs and trees every
+                  `bsp` test rides in the test-only `bsp/fixtures.rs`.
   music.rs        Music core module root: re-exports the converter and writer.
   music/          Music building blocks (no MCP concerns): `music/consts.rs`
                   the shared MUS and MIDI vocabulary the two converters mirror
@@ -1710,6 +1719,12 @@ tests/
                     usability.rs; shared_math.rs: the guard that the box
                     window, the tap blend and the `Rec. 601` luminance
                     weights are each defined once under `src/`;
+                    bsp_records.rs: the guard that the shared `BSP` node
+                    record, its `write_box` and `ChildWidth` child words,
+                    its `VertexTable` and its `Refusals` makers are defined
+                    only in `bsp/records.rs`, with the per-format copies
+                    CD-316 folded (`child_word`, `write_boxes`, `field_i16`
+                    and the rest) banned anywhere under `src/bsp/`;
                     map_writers.rs: the guard that the shared binary map
                     block passes and record codecs are defined only in
                     `wad/map/common.rs`, the `THINGS` and `LINEDEFS` codecs

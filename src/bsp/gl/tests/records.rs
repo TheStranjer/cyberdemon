@@ -6,13 +6,15 @@
 //! oversized vertex and child words, a tree pointing at a leaf it does not
 //! hold, a map with nothing to bound and a seg no region edge can keep.
 
-use alloc::collections::BTreeMap;
-
-use super::{point, run_of, seg, square_room, two_rooms, vertex};
+use super::run_of;
+use crate::bsp::fixtures::{
+    dangling_tree, leaf_tree, node_tree, point, square_room, two_rooms, vertex, whole_seg as seg,
+};
 use crate::bsp::gl::regions::close_region;
 use crate::bsp::gl::to_gl;
-use crate::bsp::gl::write::{VertexTable, child_word};
-use crate::bsp::{BBox, BspTree, BuiltNode, Child, Partition, Point};
+use crate::bsp::gl::write::VertexWords;
+use crate::bsp::records::{ChildWidth, Refusals};
+use crate::bsp::{Child, Point};
 use crate::wad::map::Map;
 
 #[test]
@@ -21,14 +23,7 @@ fn oversized_records_and_broken_trees_refuse() {
     for x in 0..0x8001_i64 {
         vertex(&mut huge, x, 0);
     }
-    let tree = BspTree {
-        segs: Vec::new(),
-        subsectors: vec![(0, 0)],
-        nodes: Vec::new(),
-        root: Child::Subsector(0),
-        warnings: Vec::new(),
-    };
-    let error = to_gl(&huge, &tree).unwrap_err();
+    let error = to_gl(&huge, &leaf_tree(Vec::new())).unwrap_err();
     assert_eq!(
         error.code(),
         "limit_exceeded",
@@ -39,29 +34,32 @@ fn oversized_records_and_broken_trees_refuse() {
         "the field: {error}"
     );
 
-    let mut table = VertexTable {
-        points: BTreeMap::new(),
-        added: vec![(0_i32, 0_i32); 0x8000_usize],
-    };
+    let mut table = VertexWords::over(0x8000_usize);
     let full = table.word(Point { x: 1, y: 1 }).unwrap_err();
     assert_eq!(full.code(), "limit_exceeded", "GL_VERT fills at 0x8000");
 
+    let mut fresh = VertexWords::over(0_usize);
+    let past = fresh
+        .word(Point {
+            x: 0x2000_0000_0000_0000,
+            y: 0,
+        })
+        .unwrap_err();
+    assert_eq!(past.code(), "limit_exceeded", "a row needs i32 fields");
+    assert!(
+        past.to_string().contains("coordinate"),
+        "the GL vertex field is named: {past}"
+    );
+
     let empty = Map::default();
-    let naked = to_gl(&empty, &tree).unwrap_err();
+    let naked = to_gl(&empty, &leaf_tree(Vec::new())).unwrap_err();
     assert_eq!(naked.code(), "internal", "no vertices to bound");
     assert!(
         naked.to_string().contains("no vertices"),
         "the hint: {naked}"
     );
 
-    let dangling = BspTree {
-        segs: Vec::new(),
-        subsectors: vec![(0, 0)],
-        nodes: Vec::new(),
-        root: Child::Subsector(7),
-        warnings: Vec::new(),
-    };
-    let broken = to_gl(&square_room(), &dangling).unwrap_err();
+    let broken = to_gl(&square_room(), &dangling_tree(7)).unwrap_err();
     assert_eq!(broken.code(), "internal", "a leaf that is not there");
     assert!(broken.to_string().contains('7'), "the index: {broken}");
 }
@@ -108,28 +106,22 @@ fn node_records_keep_the_vanilla_layout_and_flags() {
 
 #[test]
 fn an_oversized_child_word_refuses() {
-    let tree = BspTree {
-        segs: Vec::new(),
-        subsectors: vec![(0, 0)],
-        nodes: vec![BuiltNode {
-            partition: Partition::default(),
-            right_bbox: BBox::default(),
-            left_bbox: BBox::default(),
-            right: Child::Node(0x8000_usize),
-            left: Child::Subsector(0),
-        }],
-        root: Child::Node(0),
-        warnings: Vec::new(),
-    };
-    let error = child_word(Child::Node(0x8000_usize)).unwrap_err();
+    let tree = node_tree(|node| node.right = Child::Node(0x8000_usize));
+    let error = ChildWidth::Bits16
+        .word(Child::Node(0x8000_usize), Refusals::GL)
+        .unwrap_err();
     assert_eq!(
         error.code(),
         "limit_exceeded",
         "children share the flag bit"
     );
     assert!(
-        error.to_string().contains("node child"),
-        "the field: {error}"
+        error.to_string().contains("node 32768"),
+        "the child is named: {error}"
+    );
+    assert!(
+        error.to_string().contains("extended"),
+        "the fix is named: {error}"
     );
     let reached = to_gl(&square_room(), &tree).unwrap_err();
     assert_eq!(

@@ -350,111 +350,14 @@ mod tests {
     use super::{
         BBox, Builder, Child, MAX_CHILDREN, ceil_unit, check_limit, floor_unit, region_bbox,
     };
+    use crate::bsp::fixtures::{
+        l_room, linedef, point, sector, sidedef, square_room, two_rooms, vertex,
+    };
     use crate::bsp::seg::WorkSeg;
     use crate::bsp::side::Side;
     use crate::bsp::{BspTree, BuildOptions, BuildSeg, Partition, Point, build_tree, side};
     use crate::fixed::hypot;
-    use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
-
-    /// Append a vertex, returning its index.
-    fn vertex(map: &mut Map, x: i64, y: i64) -> usize {
-        let vx = i32::try_from(x).unwrap();
-        let vy = i32::try_from(y).unwrap();
-        map.vertices.push(Vertex {
-            x: vx,
-            y: vy,
-            ..Default::default()
-        });
-        map.vertices.len().checked_sub(1).unwrap()
-    }
-
-    /// Append a sidedef onto `sector`, returning its index.
-    fn sidedef(map: &mut Map, sector: usize) -> usize {
-        map.sidedefs.push(Sidedef {
-            sector,
-            ..Sidedef::default()
-        });
-        map.sidedefs.len().checked_sub(1).unwrap()
-    }
-
-    /// Append a linedef from `ends.0` to `ends.1` with the given sides.
-    fn linedef(map: &mut Map, ends: (usize, usize), sides: (Option<usize>, Option<usize>)) {
-        let (v1, v2) = ends;
-        let (front, back) = sides;
-        map.linedefs.push(Linedef {
-            v1,
-            v2,
-            front,
-            back,
-            ..Linedef::default()
-        });
-    }
-
-    /// One closed ring of one-sided walls (sector 0), in the order
-    /// given, with the interior to the right of each wall.
-    fn room(ring: &[(i64, i64)]) -> Map {
-        let mut map = Map::default();
-        map.sectors.push(Sector::default());
-        let side_index = sidedef(&mut map, 0);
-        let sides = (Some(side_index), None);
-        let indices: Vec<usize> = ring.iter().map(|&(x, y)| vertex(&mut map, x, y)).collect();
-        let back_to_front = indices.iter().skip(1).chain(indices.iter().take(1));
-        for (&from, &to) in indices.iter().zip(back_to_front) {
-            linedef(&mut map, (from, to), sides);
-        }
-        map
-    }
-
-    /// The unit square room: four walls, interior to the right.
-    fn square_room() -> Map {
-        room(&[(0, 256), (256, 256), (256, 0), (0, 0)])
-    }
-
-    /// Two 256-unit square rooms sharing the line `x = 256`.
-    fn two_rooms() -> Map {
-        let mut map = Map::default();
-        map.sectors.push(Sector::default());
-        map.sectors.push(Sector::default());
-        let west_side = sidedef(&mut map, 0);
-        let east_side = sidedef(&mut map, 1);
-        let shared_front = sidedef(&mut map, 1);
-        let shared_back = sidedef(&mut map, 0);
-        let sw = vertex(&mut map, 0, 0);
-        let mw = vertex(&mut map, 256, 0);
-        let se = vertex(&mut map, 512, 0);
-        let ne = vertex(&mut map, 512, 256);
-        let me = vertex(&mut map, 256, 256);
-        let nw = vertex(&mut map, 0, 256);
-        linedef(&mut map, (sw, nw), (Some(west_side), None));
-        linedef(&mut map, (nw, me), (Some(west_side), None));
-        linedef(&mut map, (mw, sw), (Some(west_side), None));
-        linedef(&mut map, (mw, me), (Some(shared_front), Some(shared_back)));
-        linedef(&mut map, (me, ne), (Some(east_side), None));
-        linedef(&mut map, (ne, se), (Some(east_side), None));
-        linedef(&mut map, (se, mw), (Some(east_side), None));
-        map
-    }
-
-    /// The six-vertex L-shaped room, interior to the right.
-    fn l_room() -> Map {
-        room(&[
-            (0, 256),
-            (128, 256),
-            (128, 128),
-            (256, 128),
-            (256, 0),
-            (0, 0),
-        ])
-    }
-
-    /// A fixed point at whole map units.
-    fn point(x: i64, y: i64) -> Point {
-        Point::from_vertex(&Vertex {
-            x: i32::try_from(x).unwrap(),
-            y: i32::try_from(y).unwrap(),
-            ..Default::default()
-        })
-    }
+    use crate::wad::map::{Linedef, Map};
 
     /// Wrap a seg into a work item with a default partition.
     fn work_of(seg: BuildSeg) -> WorkSeg {
@@ -657,10 +560,10 @@ mod tests {
     #[test]
     fn a_leaf_spanning_sectors_warns_but_builds() {
         let mut map = Map::default();
-        map.sectors.push(Sector::default());
-        map.sectors.push(Sector::default());
-        let low = sidedef(&mut map, 0);
-        let high = sidedef(&mut map, 1);
+        let low_sector = sector(&mut map);
+        let high_sector = sector(&mut map);
+        let low = sidedef(&mut map, low_sector);
+        let high = sidedef(&mut map, high_sector);
         let a = vertex(&mut map, 0, 0);
         let b = vertex(&mut map, 100, 0);
         let c = vertex(&mut map, 200, 0);

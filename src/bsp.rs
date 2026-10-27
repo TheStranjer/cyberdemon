@@ -17,12 +17,18 @@
 //! [`extended::to_extended`] as one `ZDoom` extended lump, and
 //! [`gl::to_gl`] as the `glBSP` v2 `GL_*` run, whose miniseg-closed
 //! subsector polygons `OpenGL` ports need (grown over the clipped
-//! polygons of [`polygon`]).
+//! polygons of [`polygon`]). The node record, the child-word encoding and
+//! the vertex table those three writers share live in `bsp/records.rs`;
+//! the maps, segs and trees they are tested against in the test-only
+//! `bsp/fixtures.rs`.
 
 pub mod choose;
 pub mod extended;
+#[cfg(test)]
+mod fixtures;
 pub mod gl;
 pub mod polygon;
+mod records;
 pub mod seg;
 pub mod side;
 pub mod split;
@@ -53,11 +59,9 @@ impl Point {
     #[must_use]
     #[inline]
     pub fn from_vertex(vertex: &Vertex) -> Self {
-        let x = i64::from(vertex.x).checked_shl(crate::fixed::FRACBITS);
-        let y = i64::from(vertex.y).checked_shl(crate::fixed::FRACBITS);
         Self {
-            x: x.unwrap_or(0_i64),
-            y: y.unwrap_or(0_i64),
+            x: records::scaled(vertex.x),
+            y: records::scaled(vertex.y),
         }
     }
 }

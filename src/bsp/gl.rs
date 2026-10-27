@@ -18,10 +18,12 @@
 //! classic run written alongside.
 //!
 //! The region polygons and the closed loops stretched over them are built
-//! in the private `regions` module; the vertex table, the partner pass and
-//! the record writers live in the private `write` module. The constants
-//! below and the refusals at the bottom of this file are shared by both,
-//! and [`GlNodes`] with [`to_gl`] are the whole outward face.
+//! in the private `regions` module; the seg pool, the partner pass and the
+//! record lumps live in the private `write` module, whose node record and
+//! vertex table are the shared `bsp/records.rs` ones. The constants
+//! below are shared by both, the `Internal` refusals at the bottom of this
+//! file belong to the run itself, and [`GlNodes`] with [`to_gl`] are the
+//! whole outward face.
 
 mod regions;
 mod write;
@@ -30,7 +32,7 @@ use crate::bsp::BspTree;
 use crate::error::CyberError;
 use crate::wad::map::Map;
 use regions::{close_region, region_polygons};
-use write::{SegPool, VertexTable, write_nodes, write_vertices};
+use write::{SegPool, VertexWords, write_nodes, write_vertices};
 
 /// Whole map units the bounding box is enlarged by.
 const MARGIN_UNITS: i64 = 64;
@@ -42,8 +44,6 @@ const COLLINEAR_SLACK: i128 = 4096_i128;
 const MAGIC_GND2: &[u8; 4] = b"gNd2";
 /// Flag marking a seg endpoint as an index into `GL_VERT`.
 const GL_VERTEX_FLAG: u16 = 0x8000_u16;
-/// Flag marking a `GL_NODES` child as a subsector leaf.
-const SUBSECTOR_FLAG: u16 = 0x8000_u16;
 /// `linedef` word of a miniseg.
 const MINISEG_LINEDEF: u16 = 0xFFFF_u16;
 /// Partner word of a seg with no partner.
@@ -97,7 +97,7 @@ pub struct GlNodes {
 #[inline]
 pub fn to_gl(map: &Map, tree: &BspTree) -> Result<GlNodes, CyberError> {
     let regions = region_polygons(map, tree)?;
-    let mut vertices = VertexTable::new(map)?;
+    let mut vertices = VertexWords::new(map)?;
     let mut run = SegPool::default();
     for (index, region) in regions.iter().enumerate() {
         let segs = tree.subsector_segs(index).ok_or_else(|| broken(index))?;
@@ -115,28 +115,6 @@ pub fn to_gl(map: &Map, tree: &BspTree) -> Result<GlNodes, CyberError> {
         minisegs: records.minisegs,
         new_vertices,
     })
-}
-
-/// The refusal for a value past a `GL` record field.
-fn oversized(what: &str, value: i64) -> CyberError {
-    CyberError::LimitExceeded(format!(
-        "the GL node records cannot store {what} {value}: the glBSP v2 words \
-         are 16 bits; shrink the map or build variant \"extended\""
-    ))
-}
-
-/// The `i64` display form of a counted index.
-fn shown(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-/// The `LimitExceeded` for a `16.16` coordinate past the `i32` vertex field.
-fn coordinate(value: i64) -> CyberError {
-    CyberError::LimitExceeded(format!(
-        "the GL vertex records cannot store the 16.16 coordinate {value}: it \
-         leaves the i32 field; keep the map inside the 32767-unit box every \
-         engine enforces"
-    ))
 }
 
 /// The `Internal` refusal for a map whose vertices are gone.

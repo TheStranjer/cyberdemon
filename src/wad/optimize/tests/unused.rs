@@ -10,6 +10,7 @@ use super::{
     animated_ranges, dropped, flat_map, lump, marker, name, patch_region, planned, pnames,
     pnames_of, rows, switch_pairs, targets, texture1,
 };
+use crate::named::Named as _;
 use crate::wad::archive::{Lump, Wad, WadKind};
 use crate::wad::optimize::{Action, Inputs, KeptForAnimation, Operation, Target, apply, plan};
 use crate::wad::textures::parse_texture_lump;
@@ -441,7 +442,7 @@ fn apply_drops_the_planned_entries_and_writes_the_rewrite_in_place() {
         pnames(&["WALLP1", "TALK"]),
         texture1(&[0]),
     ];
-    let outcome = planned(&working, &base, &Operation::ALL);
+    let outcome = planned(&working, &base, Operation::ALL);
     assert_eq!(
         outcome.bytes_saved(),
         12,

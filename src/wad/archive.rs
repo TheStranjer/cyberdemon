@@ -69,6 +69,18 @@ impl WadKind {
     }
 }
 
+impl crate::named::Named for WadKind {
+    const ALL: &'static [Self] = &[Self::Pwad, Self::Iwad];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Pwad => "PWAD",
+            Self::Iwad => "IWAD",
+        }
+    }
+}
+
 /// The kind the header bytes denote, `None` for any other magic.
 fn kind_of(magic: &[u8]) -> Option<WadKind> {
     if magic == WadKind::Iwad.magic().as_slice() {

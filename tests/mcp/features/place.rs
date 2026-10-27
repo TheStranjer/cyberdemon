@@ -356,7 +356,7 @@ async fn place_things_refuses_the_bad_counts_and_fields() {
         &client,
         json!({"thing": 3001_u64, "sectors": [0_i64], "count": 1_u64, "skills": ["nightmare"]}),
         "invalid_argument",
-        "not a skill",
+        "\"easy\", \"medium\", \"hard\"",
     )
     .await;
 }

@@ -16,6 +16,7 @@
 
 use crate::error::CyberError;
 use crate::geom::union::UnionFind;
+use crate::named::parse_named;
 use crate::wad::map::{Linedef, Map, Reject};
 
 /// Bits in one `REJECT` byte.
@@ -39,14 +40,7 @@ impl RejectMode {
     /// [`CyberError::InvalidArgument`] naming both accepted values.
     #[inline]
     pub fn parse(text: &str) -> Result<Self, CyberError> {
-        match text.to_ascii_lowercase().as_str() {
-            "zero" => Ok(Self::Zero),
-            "components" => Ok(Self::Components),
-            other => Err(CyberError::InvalidArgument(format!(
-                "reject mode {other:?} is neither \"zero\" nor \"components\"; pass one \
-                 of those two or leave the parameter out"
-            ))),
-        }
+        parse_named("mode", text)
     }
 
     /// The mode's wire name.
@@ -57,6 +51,15 @@ impl RejectMode {
             Self::Zero => "zero",
             Self::Components => "components",
         }
+    }
+}
+
+impl crate::named::Named for RejectMode {
+    const ALL: &'static [Self] = &[Self::Zero, Self::Components];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 

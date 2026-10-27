@@ -86,6 +86,15 @@ impl SwitchAction {
     }
 }
 
+impl crate::named::Named for SwitchAction {
+    const ALL: &'static [Self] = &Self::all();
+
+    #[inline]
+    fn name(self) -> &'static str {
+        action_name(self)
+    }
+}
+
 /// The [`DoorLineSetup`] a switch of `action` carries in flag family
 /// `family`, triggered `repeatable` times or once, acting on tag `tag`.
 ///

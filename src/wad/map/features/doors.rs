@@ -95,6 +95,23 @@ impl DoorStyle {
     }
 }
 
+impl crate::named::Named for DoorStyle {
+    const ALL: &'static [Self] = &Self::all();
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Fast => "fast",
+            Self::StayOpen => "stay_open",
+            Self::LockedRed => "locked_red",
+            Self::LockedBlue => "locked_blue",
+            Self::LockedYellow => "locked_yellow",
+            Self::Remote => "remote",
+        }
+    }
+}
+
 /// What [`apply_door`] writes into [`Linedef::special`], [`Linedef::tag`],
 /// [`Linedef::args`] and the `Hexen` activation bits of [`Linedef::flags`]
 /// of every room-facing door line.

@@ -213,6 +213,33 @@ pub enum ConnectionKind {
     },
 }
 
+impl crate::named::Named for ConnectionKind {
+    /// One representative per kind: the wire names a connection's `kind`
+    /// word, and the plan tools fill the row's fields from the parameter,
+    /// not from these sentinel payloads.
+    const ALL: &'static [Self] = &[
+        Self::Opening,
+        Self::Door {
+            style: DoorStyle::Normal,
+        },
+        Self::Window { sill: 0, lintel: 0 },
+        Self::Stairs {
+            step_height: 0,
+            step_depth: 0,
+        },
+    ];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Opening => "opening",
+            Self::Door { .. } => "door",
+            Self::Window { .. } => "window",
+            Self::Stairs { .. } => "stairs",
+        }
+    }
+}
+
 /// The door special behind [`ConnectionKind::Door`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,6 +254,33 @@ pub enum DoorStyle {
     Locked(KeyColor),
     /// Opens by a remote switch.
     Remote,
+}
+
+impl crate::named::Named for DoorStyle {
+    const ALL: &'static [Self] = &[
+        Self::Normal,
+        Self::Fast,
+        Self::StayOpen,
+        Self::Locked(KeyColor::Red),
+        Self::Locked(KeyColor::Blue),
+        Self::Locked(KeyColor::Yellow),
+        Self::Remote,
+    ];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Fast => "fast",
+            Self::StayOpen => "stay_open",
+            Self::Locked(color) => match color {
+                KeyColor::Red => "locked_red",
+                KeyColor::Blue => "locked_blue",
+                KeyColor::Yellow => "locked_yellow",
+            },
+            Self::Remote => "remote",
+        }
+    }
 }
 
 /// A key card colour for [`DoorStyle::Locked`].
@@ -336,6 +390,20 @@ pub enum Side {
     West,
 }
 
+impl crate::named::Named for Side {
+    const ALL: &'static [Self] = &[Self::North, Self::South, Self::East, Self::West];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::North => "north",
+            Self::South => "south",
+            Self::East => "east",
+            Self::West => "west",
+        }
+    }
+}
+
 /// How a [`Feature::Exit`] ends the level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -344,6 +412,18 @@ pub enum ExitStyle {
     Switch,
     /// Walking over the exit line ends the level.
     WalkOver,
+}
+
+impl crate::named::Named for ExitStyle {
+    const ALL: &'static [Self] = &[Self::Switch, Self::WalkOver];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Switch => "switch",
+            Self::WalkOver => "walk_over",
+        }
+    }
 }
 
 impl Shape {

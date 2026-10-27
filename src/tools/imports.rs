@@ -78,6 +78,7 @@ use rmcp::{ErrorData, tool, tool_router};
 
 use crate::error::CyberError;
 use crate::gfx::ops::{ImageOp, OpsReport, apply_ops};
+use crate::named::Named as _;
 use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::themes::Role;

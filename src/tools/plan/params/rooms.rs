@@ -12,10 +12,10 @@ use serde::Deserialize;
 
 use super::{
     DEFAULT_CEILING, DEFAULT_DOOR_STYLE, DEFAULT_FLOOR, DEFAULT_LIGHT, DEFAULT_SILL,
-    DEFAULT_STEP_DEPTH, DEFAULT_STEP_HEIGHT, DEFAULT_WIDTH, invalid_at,
+    DEFAULT_STEP_DEPTH, DEFAULT_STEP_HEIGHT, DEFAULT_WIDTH, invalid_at, named_at,
 };
 use crate::error::CyberError;
-use crate::plan::model::{Connection, ConnectionKind, DoorStyle, KeyColor, Room, Shape};
+use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Room, Shape};
 use crate::wad::map::consts::DEFAULT_LINTEL;
 use crate::wad::map::features::LightEffect;
 
@@ -202,59 +202,37 @@ impl ConnectionParam {
     /// [`CyberError::InvalidArgument`] naming `connections[index]` for
     /// an unknown kind or door style.
     fn kind(&self, index: usize) -> Result<ConnectionKind, CyberError> {
-        match self.kind.to_ascii_lowercase().as_str() {
-            "opening" => Ok(ConnectionKind::Opening),
-            "door" => Ok(ConnectionKind::Door {
+        let path = format!("connections[{index}]");
+        let named = named_at::<ConnectionKind>(&path, "kind", &self.kind)?;
+        match named {
+            ConnectionKind::Opening => Ok(ConnectionKind::Opening),
+            ConnectionKind::Door { .. } => Ok(ConnectionKind::Door {
                 style: self.door_style(index)?,
             }),
-            "window" => Ok(ConnectionKind::Window {
+            ConnectionKind::Window { .. } => Ok(ConnectionKind::Window {
                 sill: self.sill.unwrap_or(DEFAULT_SILL),
                 lintel: self.lintel.unwrap_or(DEFAULT_LINTEL),
             }),
-            "stairs" => Ok(ConnectionKind::Stairs {
+            ConnectionKind::Stairs { .. } => Ok(ConnectionKind::Stairs {
                 step_height: self.step_height.unwrap_or(DEFAULT_STEP_HEIGHT),
                 step_depth: self.step_depth.unwrap_or(DEFAULT_STEP_DEPTH),
             }),
-            other => Err(invalid_at(
-                &format!("connections[{index}]"),
-                &format!(
-                    "kind {other:?} is not a connection kind: pass one of opening, door, window, stairs"
-                ),
-            )),
         }
     }
 
     /// The [`DoorStyle`] the `style` name spells (`normal` by default).
     fn door_style(&self, index: usize) -> Result<DoorStyle, CyberError> {
-        let wanted = self
-            .style
-            .as_deref()
-            .unwrap_or(DEFAULT_DOOR_STYLE)
-            .to_ascii_lowercase();
-        let style = match wanted.as_str() {
-            "normal" => DoorStyle::Normal,
-            "fast" => DoorStyle::Fast,
-            "stay_open" => DoorStyle::StayOpen,
-            "locked_red" => DoorStyle::Locked(KeyColor::Red),
-            "locked_blue" => DoorStyle::Locked(KeyColor::Blue),
-            "locked_yellow" => DoorStyle::Locked(KeyColor::Yellow),
-            "remote" => DoorStyle::Remote,
-            other => {
-                return Err(invalid_at(
-                    &format!("connections[{index}]"),
-                    &format!(
-                        "style {other:?} is not a door style: pass one of normal, fast, \
-                         stay_open, locked_red, locked_blue, locked_yellow, remote"
-                    ),
-                ));
-            }
-        };
-        Ok(style)
+        let path = format!("connections[{index}]");
+        named_at(
+            &path,
+            "style",
+            self.style.as_deref().unwrap_or(DEFAULT_DOOR_STYLE),
+        )
     }
 }
 
 /// The room's `light_effect` name resolved case-insensitively against
-/// [`LightEffect::name`]; unset asks for no effect.
+/// [`LightEffect`]'s names; unset asks for no effect.
 ///
 /// # Errors
 ///
@@ -264,19 +242,5 @@ fn parse_light_effect(name: Option<&str>, path: &str) -> Result<Option<LightEffe
     let Some(text) = name else {
         return Ok(None);
     };
-    let found = LightEffect::all()
-        .into_iter()
-        .find(|effect| effect.name().eq_ignore_ascii_case(text));
-    found.map_or_else(
-        || {
-            Err(invalid_at(
-                path,
-                &format!(
-                    "light effect {text:?} is not one: pass none, flicker, strobe_fast, \
-                     strobe_slow, glow or random_off"
-                ),
-            ))
-        },
-        |effect| Ok(Some(effect)),
-    )
+    named_at::<LightEffect>(path, "light_effect", text).map(Some)
 }

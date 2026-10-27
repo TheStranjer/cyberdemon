@@ -2,10 +2,11 @@
 //! map, the lift styles and platform choice, and the teleporter spec
 //! that demands both points.
 
+use crate::named::Named as _;
 use serde_json::from_str;
 
 use crate::tools::features::lift::{
-    AddLiftParams, lift_platform_of, lift_style_name, lift_style_names, lift_style_of,
+    AddLiftParams, lift_platform_of, lift_style_name, lift_style_of,
 };
 use crate::tools::features::stairs::{AddStairsParams, stair_spec};
 use crate::tools::features::teleporter::{
@@ -141,11 +142,11 @@ fn lift_styles_round_trip_and_refuse_unknown_names() {
     }
     let message = refuse(&lift_style_of("press").unwrap_err());
     assert!(
-        message.contains("use_wall, walk_trigger"),
+        message.contains("\"use_wall\", \"walk_trigger\""),
         "the refusal lists both names: {message}"
     );
     assert_eq!(
-        lift_style_names().len(),
+        LiftStyle::names().len(),
         LiftStyle::all().len(),
         "one name each"
     );

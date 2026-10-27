@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
+use crate::named::{Named as _, parse_named};
 use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
@@ -112,32 +113,16 @@ pub(super) struct LiftReport {
     edit: JsonMap<String, Value>,
 }
 
-/// The canonical wire name of `style`.
-pub(super) const fn lift_style_name(style: LiftStyle) -> &'static str {
-    match style {
-        LiftStyle::UseWall => "use_wall",
-        LiftStyle::WalkTrigger => "walk_trigger",
-    }
-}
-
-/// Every style name, in [`LiftStyle::all`] order.
-pub(super) fn lift_style_names() -> Vec<&'static str> {
-    LiftStyle::all().map(lift_style_name).to_vec()
+/// The canonical wire name of `style` ([`Named::name`] of its
+/// [`LiftStyle`]).
+pub(super) fn lift_style_name(style: LiftStyle) -> &'static str {
+    style.name()
 }
 
 /// The [`LiftStyle`] `text` names (case-insensitive), or the refusal
 /// listing both.
 pub(super) fn lift_style_of(text: &str) -> Result<LiftStyle, CyberError> {
-    let wanted = text.to_ascii_lowercase();
-    LiftStyle::all()
-        .into_iter()
-        .find(|style| lift_style_name(*style) == wanted)
-        .ok_or_else(|| {
-            CyberError::invalid(&format!(
-                "style {text:?} is not a lift style: pass one of {}",
-                lift_style_names().join(", ")
-            ))
-        })
+    parse_named("style", text)
 }
 
 /// The `platform`/`sector` parameter pair as one [`LiftPlatform`]:

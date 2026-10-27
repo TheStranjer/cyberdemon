@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
+use crate::named::{Named as _, parse_named};
 use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::maps::common;
@@ -223,37 +224,16 @@ pub(super) struct DoorReport {
     edit: JsonMap<String, Value>,
 }
 
-/// The canonical wire name of `style`.
-pub(super) const fn style_name(style: DoorStyle) -> &'static str {
-    match style {
-        DoorStyle::Normal => "normal",
-        DoorStyle::Fast => "fast",
-        DoorStyle::StayOpen => "stay_open",
-        DoorStyle::LockedRed => "locked_red",
-        DoorStyle::LockedBlue => "locked_blue",
-        DoorStyle::LockedYellow => "locked_yellow",
-        DoorStyle::Remote => "remote",
-    }
-}
-
-/// Every style name, in [`DoorStyle::all`] order.
-pub(super) fn style_names() -> Vec<&'static str> {
-    DoorStyle::all().map(style_name).to_vec()
+/// The canonical wire name of `style` ([`Named::name`] of its
+/// [`DoorStyle`]).
+pub(super) fn style_name(style: DoorStyle) -> &'static str {
+    style.name()
 }
 
 /// The [`DoorStyle`] `text` names (case-insensitive), or the refusal
 /// listing every valid name.
 pub(super) fn style_of(text: &str) -> Result<DoorStyle, CyberError> {
-    let wanted = text.to_ascii_lowercase();
-    DoorStyle::all()
-        .into_iter()
-        .find(|style| style_name(*style) == wanted)
-        .ok_or_else(|| {
-            CyberError::invalid(&format!(
-                "style {text:?} is not a door style: pass one of {}",
-                style_names().join(", ")
-            ))
-        })
+    parse_named("style", text)
 }
 
 /// The theme role whose texture dresses `style`'s jambs: the coloured

@@ -5,6 +5,7 @@
 //! are none of those, the canonical request order and the empty request.
 
 use super::{dropped, flat_map, lump, marker, name, planned, rows};
+use crate::named::Named as _;
 use crate::wad::archive::Lump;
 use crate::wad::optimize::redundant::is_concatenated;
 use crate::wad::optimize::{CONCATENATED_NAMES, Operation};
@@ -12,7 +13,7 @@ use crate::wad::optimize::{CONCATENATED_NAMES, Operation};
 #[test]
 fn operation_names_round_trip_and_the_default_set_is_the_safe_four() {
     assert_eq!(Operation::ALL.len(), 6, "six sweeps exist");
-    for operation in Operation::ALL {
+    for operation in Operation::ALL.iter().copied() {
         assert_eq!(
             Operation::parse(operation.as_str()),
             Some(operation),
@@ -40,9 +41,13 @@ fn operation_names_round_trip_and_the_default_set_is_the_safe_four() {
         ],
         "the documented safe set"
     );
+    let joined = Operation::SAFE
+        .iter()
+        .map(|operation| operation.as_str())
+        .collect::<Vec<&str>>()
+        .join(", ");
     assert_eq!(
-        Operation::names(&Operation::SAFE),
-        "identical_overrides, empty_namespaces, shadowed_duplicates, unused_pnames",
+        joined, "identical_overrides, empty_namespaces, shadowed_duplicates, unused_pnames",
         "the join reads as documented"
     );
 }

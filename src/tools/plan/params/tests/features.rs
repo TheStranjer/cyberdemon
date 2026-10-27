@@ -150,15 +150,15 @@ fn feature_refusals_name_their_row_and_offer_the_vocabulary() {
         ),
         (
             r#"{"kind": "exit", "room": "a", "style": "lever"}"#,
-            "switch, walk_over",
+            "\"switch\", \"walk_over\"",
         ),
         (
             r#"{"kind": "lift", "room": "a", "style": "jump"}"#,
-            "use_wall, walk_trigger",
+            "\"use_wall\", \"walk_trigger\"",
         ),
         (
             r#"{"kind": "exit", "room": "a", "wall": "up"}"#,
-            "north, south, east, west",
+            "\"north\", \"south\", \"east\", \"west\"",
         ),
     ] {
         let args = features_request(&format!("[{row}]"));
@@ -194,7 +194,7 @@ fn a_rooms_secret_and_light_effect_land_in_the_model() {
     let message = refuse(&bad.to_model().expect_err("no such effect"));
     assert!(message.contains("rooms[0]"), "{message} names the room");
     assert!(
-        message.contains("flicker, strobe_fast, strobe_slow, glow or random_off"),
+        message.contains("\"flicker\", \"strobe_fast\", \"strobe_slow\", \"glow\", \"random_off\""),
         "the refusal lists the effects: {message}"
     );
 }

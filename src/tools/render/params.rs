@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::gfx::image::RgbaImage;
+use crate::named::Named;
 use crate::plan::Units;
 use crate::render::{Rgba, Switch, TopdownStyle};
 use crate::tools::plan::params::UnitsParam;
@@ -18,6 +19,15 @@ pub(super) enum Projection {
     Topdown,
     /// The `2:1` wireframe on the plane `(x - y, (x + y) / 2 - z)`.
     Isometric,
+}
+
+impl Named for Projection {
+    const ALL: &'static [Self] = &[Self::Topdown, Self::Isometric];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
+    }
 }
 
 impl Projection {

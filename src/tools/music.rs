@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::error::CyberError;
 use crate::music::{MusicKind, midi_to_mus, mus_to_midi, sniff_music};
+use crate::named::{Named, parse_named};
 use crate::server::Cyberdemon;
 use crate::state::AppState;
 use crate::tools::audio_common::{MUSIC, MediaLump, publish_playable};
@@ -75,6 +76,18 @@ enum StorageFormat {
     Passthrough,
 }
 
+impl Named for StorageFormat {
+    const ALL: &'static [Self] = &[Self::Mus, Self::Passthrough];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Mus => "mus",
+            Self::Passthrough => "passthrough",
+        }
+    }
+}
+
 /// Structured result of [`Cyberdemon::import_music`].
 #[derive(Serialize)]
 struct ImportMusicReport {
@@ -99,14 +112,7 @@ fn parse_format(text: Option<&str>) -> Result<Option<StorageFormat>, CyberError>
     let Some(raw) = text else {
         return Ok(None);
     };
-    match raw.to_ascii_lowercase().as_str() {
-        "mus" => Ok(Some(StorageFormat::Mus)),
-        "passthrough" => Ok(Some(StorageFormat::Passthrough)),
-        other => Err(CyberError::InvalidArgument(format!(
-            "unknown format {other:?}: use \"mus\" for a vanilla Doom MUS D_* lump or \
-             \"passthrough\" to store the original bytes"
-        ))),
-    }
+    parse_named::<StorageFormat>("format", raw).map(Some)
 }
 
 /// Validate [`Cyberdemon::import_music`]'s arguments before any fetching.

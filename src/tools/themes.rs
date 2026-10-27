@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
+use crate::named::Named as _;
+use crate::named::parse_named;
 use crate::server::Cyberdemon;
 use crate::session::map_edit::MapEditReport;
 use crate::session::{Scope, Session};
@@ -197,7 +199,7 @@ fn theme_view(session: &Session, theme_override: Option<&str>) -> Result<ThemeVi
     let stock = inventory(session)?;
     let overrides = &session.texture_theme().overrides;
     let mut roles = BTreeMap::new();
-    for role in Role::ALL {
+    for role in Role::ALL.iter().copied() {
         let resolved = overrides.get(&role).map_or_else(
             || themes::resolve(&selected, role, &stock.available),
             |name| Resolved {
@@ -488,14 +490,7 @@ struct AutoReport {
 
 /// Parse the `mode` parameter.
 fn parse_mode(text: Option<&str>) -> Result<AutoMode, CyberError> {
-    match text.unwrap_or("fill_missing").to_ascii_lowercase().as_str() {
-        "fill_missing" => Ok(AutoMode::FillMissing),
-        "retexture" => Ok(AutoMode::Retexture),
-        other => Err(CyberError::InvalidArgument(format!(
-            "unknown auto_texture mode {other:?}: \"fill_missing\" fixes what would render \
-             wrong, \"retexture\" repaints the selection with the theme"
-        ))),
-    }
+    parse_named("mode", text.unwrap_or("fill_missing"))
 }
 
 /// The sectors to dress: the request's list or every sector of the map.

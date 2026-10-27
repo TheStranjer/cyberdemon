@@ -14,6 +14,11 @@ src/
                   router and the non-nestable router (`run_batch` refuses the
                   batch and history groups by membership there).
   error.rs        CyberError: the domain error enum every tool reports through.
+  named.rs        The shared named-option parser: the `Named` trait (an enum's
+                  `ALL` values and their wire `name`) and `parse_named`, whose
+                  uniform `invalid_argument` names the field and lists every
+                  accepted choice; every hand-written "string to enum" option
+                  parse goes through it.
   fixed.rs        Float-free math core: 16.16 `Fixed`, `FRACBITS`/`FRACUNIT`,
                   `isqrt`, `mul_div_round`. Use this instead of f32/f64.
   fixed/          Math internals (no MCP concerns): `fixed/angle.rs` 32-bit

@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use super::{
     DEFAULT_ANGLE, DEFAULT_EXIT_STYLE, DEFAULT_LIFT_REPEATABLE, DEFAULT_LIFT_STYLE,
-    DEFAULT_SWITCH_REPEATABLE, invalid_at, required,
+    DEFAULT_SWITCH_REPEATABLE, invalid_at, named_at, required,
 };
 use crate::error::CyberError;
 use crate::plan::model::{ExitStyle, Feature, Side};
@@ -182,37 +182,21 @@ impl FeatureParam {
 
     /// The [`ExitStyle`] the `style` name spells (`switch` by default).
     fn exit_style(&self, path: &str) -> Result<ExitStyle, CyberError> {
-        let wanted = self
-            .style
-            .as_deref()
-            .unwrap_or(DEFAULT_EXIT_STYLE)
-            .to_ascii_lowercase();
-        match wanted.as_str() {
-            "switch" => Ok(ExitStyle::Switch),
-            "walk_over" => Ok(ExitStyle::WalkOver),
-            other => Err(invalid_at(
-                path,
-                &format!("style {other:?} is not an exit style: pass one of switch, walk_over"),
-            )),
-        }
+        named_at(
+            path,
+            "style",
+            self.style.as_deref().unwrap_or(DEFAULT_EXIT_STYLE),
+        )
     }
 
     /// The [`LiftStyle`] the `style` name spells (`use_wall` by
     /// default).
     fn lift_style(&self, path: &str) -> Result<LiftStyle, CyberError> {
-        let wanted = self
-            .style
-            .as_deref()
-            .unwrap_or(DEFAULT_LIFT_STYLE)
-            .to_ascii_lowercase();
-        match wanted.as_str() {
-            "use_wall" => Ok(LiftStyle::UseWall),
-            "walk_trigger" => Ok(LiftStyle::WalkTrigger),
-            other => Err(invalid_at(
-                path,
-                &format!("style {other:?} is not a lift style: pass one of use_wall, walk_trigger"),
-            )),
-        }
+        named_at(
+            path,
+            "style",
+            self.style.as_deref().unwrap_or(DEFAULT_LIFT_STYLE),
+        )
     }
 
     /// The optional `wall` [`Side`], case-insensitively.
@@ -220,21 +204,6 @@ impl FeatureParam {
         let Some(text) = self.wall.as_deref() else {
             return Ok(None);
         };
-        let side = match text.to_ascii_lowercase().as_str() {
-            "north" => Side::North,
-            "south" => Side::South,
-            "east" => Side::East,
-            "west" => Side::West,
-            other => {
-                return Err(invalid_at(
-                    path,
-                    &format!(
-                        "wall {other:?} is not a side: pass one of north, south, east, west, \
-                         or leave wall out"
-                    ),
-                ));
-            }
-        };
-        Ok(Some(side))
+        named_at(path, "wall", text).map(Some)
     }
 }

@@ -102,15 +102,6 @@ pub enum ElementKind {
 }
 
 impl ElementKind {
-    /// Every kind, in report order.
-    pub const ALL: [Self; 5] = [
-        Self::Sectors,
-        Self::Linedefs,
-        Self::Sidedefs,
-        Self::Things,
-        Self::Vertices,
-    ];
-
     /// The lowercase wire name of this kind.
     #[must_use]
     #[inline]
@@ -157,6 +148,22 @@ impl ElementKind {
             Self::Things => map.things.len(),
             Self::Vertices => map.vertices.len(),
         }
+    }
+}
+
+impl crate::named::Named for ElementKind {
+    /// Every kind, in report order.
+    const ALL: &'static [Self] = &[
+        Self::Sectors,
+        Self::Linedefs,
+        Self::Sidedefs,
+        Self::Things,
+        Self::Vertices,
+    ];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 

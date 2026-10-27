@@ -24,6 +24,7 @@ use crate::audio::{
     synthesize_pc_speaker,
 };
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::server::Cyberdemon;
 use crate::state::AppState;
 use crate::tools::audio_common::{MediaLump, SOUND, publish_playable};
@@ -107,6 +108,18 @@ enum SoundFormat {
     Passthrough,
 }
 
+impl Named for SoundFormat {
+    const ALL: &'static [Self] = &[Self::Doom, Self::Passthrough];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Doom => "doom",
+            Self::Passthrough => "passthrough",
+        }
+    }
+}
+
 /// Structured result of [`Cyberdemon::import_sound`].
 #[derive(Serialize)]
 struct ImportSoundReport {
@@ -144,14 +157,7 @@ fn parse_format(text: Option<&str>) -> Result<SoundFormat, CyberError> {
     let Some(raw) = text else {
         return Ok(SoundFormat::Doom);
     };
-    match raw.to_ascii_lowercase().as_str() {
-        "doom" => Ok(SoundFormat::Doom),
-        "passthrough" => Ok(SoundFormat::Passthrough),
-        other => Err(CyberError::InvalidArgument(format!(
-            "unknown format {other:?}: use \"doom\" for a vanilla DMX DS* lump or \
-             \"passthrough\" to store the original bytes"
-        ))),
-    }
+    parse_named("format", raw)
 }
 
 /// The `sample_rate` parameter, defaulting to [`DEFAULT_RATE`].
@@ -529,6 +535,7 @@ mod tests {
         parse_rate, sound_to_playable,
     };
     use crate::audio::{Pcm, decode_wav, encode_dmx, encode_wav};
+    use crate::named::Named as _;
     use crate::wad::classify::LumpKind;
     use crate::wad::name::LumpName;
 
@@ -674,7 +681,7 @@ mod tests {
             LumpKind::Mp3,
             LumpKind::Flac,
         ];
-        for kind in LumpKind::ALL {
+        for kind in LumpKind::ALL.iter().copied() {
             assert_eq!(
                 is_sound_kind(kind),
                 playable.contains(&kind),

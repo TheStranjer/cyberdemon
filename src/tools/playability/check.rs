@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::server::AssetRef;
 use crate::defs::Definitions;
 use crate::error::CyberError;
+use crate::named::parse_named;
 use crate::state::AppState;
 use crate::tools::render::{OverviewMarks, playability_overview};
 use crate::wad::map::Map;
@@ -62,12 +63,7 @@ pub(super) fn parse_skill(text: Option<&str>) -> Result<Skill, CyberError> {
     let Some(name) = text else {
         return Ok(Skill::Medium);
     };
-    Skill::parse(name).ok_or_else(|| {
-        CyberError::InvalidArgument(format!(
-            "skill {name:?} is not a difficulty: pass \"easy\", \"medium\" or \"hard\", or \
-             leave the parameter out for medium"
-        ))
-    })
+    parse_named("skill", name)
 }
 
 /// Everything one report is folded out of: the read inputs and the three

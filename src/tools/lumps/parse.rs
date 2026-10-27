@@ -13,6 +13,7 @@
 //! [`crate::tools::parse_limit`].
 
 use crate::error::CyberError;
+use crate::named::Named as _;
 use crate::tools::lumps::list::parse_pair;
 use crate::wad::classify::{LumpKind, Namespace};
 use crate::wad::name::LumpName;

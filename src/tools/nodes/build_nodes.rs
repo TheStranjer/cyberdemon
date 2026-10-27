@@ -20,6 +20,7 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::bsp::{BspTree, BuildOptions, build_tree, to_extended, to_vanilla};
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::session::{Scope, Session};
 use crate::tools::maps::params::edit_result_fragment;
 use crate::wad::classify::MapFormat;
@@ -83,6 +84,19 @@ pub(super) struct NodeBuildPlan {
     pub(super) compress: bool,
 }
 
+impl Named for Variant {
+    const ALL: &'static [Self] = &[Self::Classic, Self::Extended, Self::Gl];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Extended => "extended",
+            Self::Gl => "gl",
+        }
+    }
+}
+
 impl Variant {
     /// The layout a map of `format` gets when the caller names none:
     /// `"classic"` for a binary map, `"extended"` for a `UDMF` one, the
@@ -111,16 +125,10 @@ impl Variant {
     ///
     /// [`CyberError::InvalidArgument`] naming the three accepted values.
     pub(super) fn parse(text: &str) -> Result<Self, CyberError> {
-        let lowered = text.to_ascii_lowercase();
-        match lowered.as_str() {
-            "" | "classic" => Ok(Self::Classic),
-            "extended" => Ok(Self::Extended),
-            "gl" => Ok(Self::Gl),
-            other => Err(CyberError::InvalidArgument(format!(
-                "variant {other:?} is neither \"classic\", \"extended\" nor \"gl\"; \
-                 pass one of those three or leave the parameter out"
-            ))),
+        if text.is_empty() {
+            return Ok(Self::Classic);
         }
+        parse_named("variant", text)
     }
 }
 

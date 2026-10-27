@@ -155,7 +155,7 @@ fn unknown_kind_and_style_names_mention_their_paths() {
     let kind = refuse(&args.to_model().expect_err("no such kind"));
     assert!(kind.contains("connections[0]"), "{kind}");
     assert!(
-        kind.contains("opening, door, window, stairs"),
+        kind.contains("\"opening\", \"door\", \"window\", \"stairs\""),
         "the refusal lists the kinds: {kind}"
     );
 
@@ -164,7 +164,8 @@ fn unknown_kind_and_style_names_mention_their_paths() {
     let message = refuse(&styled.to_model().expect_err("no such style"));
     assert!(message.contains("connections[0]"), "{message}");
     assert!(
-        message.contains("normal, fast, stay_open, locked_red, locked_blue, locked_yellow, remote"),
+        message
+            .contains("\"normal\", \"fast\", \"stay_open\", \"locked_red\", \"locked_blue\", \"locked_yellow\", \"remote\""),
         "the refusal lists the styles: {message}"
     );
 }

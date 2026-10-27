@@ -62,6 +62,7 @@ use serde::Serialize;
 use crate::assets::server::AssetRef;
 use crate::assets::store::mime_for_extension;
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::server::Cyberdemon;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
@@ -97,6 +98,18 @@ enum Detail {
     Full,
 }
 
+impl Named for Detail {
+    const ALL: &'static [Self] = &[Self::Summary, Self::Full];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// One nodes tool call's resolved arguments.
 #[derive(Debug)]
 struct Request {
@@ -108,23 +121,15 @@ struct Request {
     detail: Detail,
 }
 
-/// The accepted `detail` text, `summary` being the default.
+/// The accepted `detail` text, `summary` being the default (and `""`).
 ///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] naming the two accepted values.
 fn parse_detail(text: Option<&str>) -> Result<Detail, CyberError> {
-    let lowered = match text {
-        None => return Ok(Detail::Summary),
-        Some(given) => given.to_ascii_lowercase(),
-    };
-    match lowered.as_str() {
-        "" | "summary" => Ok(Detail::Summary),
-        "full" => Ok(Detail::Full),
-        other => Err(CyberError::InvalidArgument(format!(
-            "detail {other:?} is neither \"summary\" nor \"full\"; pass one \
-             of those two or leave the parameter out"
-        ))),
+    match text {
+        None | Some("") => Ok(Detail::Summary),
+        Some(given) => parse_named("detail", given),
     }
 }
 

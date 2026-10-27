@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CyberError;
+use crate::named::{Named, parse_named};
 use crate::session::history::batch_open_conflict;
 use crate::session::merge::{MergeCounts, merge_counts, merge_into};
 use crate::session::{Layer, LayerRole, Session};
@@ -51,6 +52,18 @@ pub(super) enum MergeMode {
     Working,
 }
 
+impl Named for MergeMode {
+    const ALL: &'static [Self] = &[Self::Layer, Self::Working];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Layer => "layer",
+            Self::Working => "working",
+        }
+    }
+}
+
 /// The mode names the `merge_wad` `mode` parameter accepts, `None` for the
 /// default. Anything else is refused with a hint naming both forms.
 ///
@@ -62,17 +75,7 @@ fn parse_mode(text: Option<&str>) -> Result<MergeMode, CyberError> {
     let Some(raw) = text else {
         return Ok(MergeMode::Layer);
     };
-    let lowered = raw.to_ascii_lowercase();
-    if lowered == "layer" {
-        return Ok(MergeMode::Layer);
-    }
-    if lowered == "working" {
-        return Ok(MergeMode::Working);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown merge mode {raw:?}: use \"layer\" to stack the file read-only or \"working\" \
-         to merge its lumps into the working archive"
-    )))
+    parse_named("merge mode", raw)
 }
 
 /// Arguments for [`Cyberdemon::save_wad`].
@@ -112,6 +115,18 @@ pub(super) enum SaveMode {
     Full,
 }
 
+impl Named for SaveMode {
+    const ALL: &'static [Self] = &[Self::Pwad, Self::Full];
+
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Pwad => "pwad",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// The mode names the `save_wad` `mode` parameter accepts, `None` for the
 /// default. Anything else is refused with a hint naming both forms.
 ///
@@ -123,17 +138,7 @@ fn parse_save_mode(text: Option<&str>) -> Result<SaveMode, CyberError> {
     let Some(raw) = text else {
         return Ok(SaveMode::Pwad);
     };
-    let lowered = raw.to_ascii_lowercase();
-    if lowered == "pwad" {
-        return Ok(SaveMode::Pwad);
-    }
-    if lowered == "full" {
-        return Ok(SaveMode::Full);
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown save mode {raw:?}: use \"pwad\" to save the working archive or \"full\" to \
-         export the merged view as one standalone WAD"
-    )))
+    parse_named("save mode", raw)
 }
 
 /// The header magic the `save_wad` `kind` parameter selects, `None` for the
@@ -147,17 +152,7 @@ fn parse_kind(text: Option<&str>) -> Result<Option<WadKind>, CyberError> {
     let Some(raw) = text else {
         return Ok(None);
     };
-    let lowered = raw.to_ascii_lowercase();
-    if lowered == "pwad" {
-        return Ok(Some(WadKind::Pwad));
-    }
-    if lowered == "iwad" {
-        return Ok(Some(WadKind::Iwad));
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "unknown kind {raw:?}: use \"PWAD\" for a patch archive or \"IWAD\" for a full game \
-         archive, or leave the parameter out for the default magic"
-    )))
+    parse_named::<WadKind>("kind", raw).map(Some)
 }
 
 /// Structured result of [`Cyberdemon::merge_wad`], one shape per mode.

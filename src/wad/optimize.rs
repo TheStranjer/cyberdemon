@@ -32,6 +32,7 @@ use alloc::collections::BTreeSet;
 use serde::Serialize;
 
 use crate::error::CyberError;
+use crate::named::Named;
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpInfo, MapBlock, analyze};
 use crate::wad::lumps;
@@ -78,16 +79,6 @@ pub enum Operation {
 }
 
 impl Operation {
-    /// Every operation, in planning order.
-    pub const ALL: [Self; 6] = [
-        Self::IdenticalOverrides,
-        Self::EmptyNamespaces,
-        Self::ShadowedDuplicates,
-        Self::UnusedPnames,
-        Self::UnusedPatches,
-        Self::UnusedFlats,
-    ];
-
     /// The operations that run when the client names none: everything
     /// whose removal leaves what an engine sees unchanged.
     pub const SAFE: [Self; 4] = [
@@ -117,20 +108,24 @@ impl Operation {
     #[must_use]
     #[inline]
     pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|operation| operation.as_str().eq_ignore_ascii_case(text))
+        Self::by_name(text)
     }
+}
 
-    /// The names of `list`, comma-joined, for error messages.
-    #[must_use]
+impl Named for Operation {
+    /// Every operation, in planning order.
+    const ALL: &'static [Self] = &[
+        Self::IdenticalOverrides,
+        Self::EmptyNamespaces,
+        Self::ShadowedDuplicates,
+        Self::UnusedPnames,
+        Self::UnusedPatches,
+        Self::UnusedFlats,
+    ];
+
     #[inline]
-    pub fn names(list: &[Self]) -> String {
-        list.iter()
-            .map(|operation| operation.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
+    fn name(self) -> &'static str {
+        self.as_str()
     }
 }
 

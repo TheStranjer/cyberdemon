@@ -148,7 +148,10 @@ fn place_wires_refuse_the_area_and_count_violations() {
     );
     let nightmare =
         refused(r#"{"thing": 3001, "sectors": [0], "count": 1, "skills": ["nightmare"]}"#);
-    assert!(nightmare.to_string().contains("not a skill"), "{nightmare}");
+    assert!(
+        nightmare.to_string().contains("unknown skill"),
+        "{nightmare}"
+    );
     let blank = refused(r#"{"thing": 3001, "sectors": [0], "count": 1, "skills": []}"#);
     assert!(blank.to_string().contains("skills is empty"), "{blank}");
 }

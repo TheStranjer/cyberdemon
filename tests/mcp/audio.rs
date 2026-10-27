@@ -506,8 +506,12 @@ mod tests {
         assert_eq!(rate_code, "invalid_argument", "below the rate window");
         let mut format = source_arg(&good);
         format["format"] = json!("zdoom");
-        let (format_code, _, _) = call_err(&client, "import_sound", format).await;
+        let (format_code, format_message, _) = call_err(&client, "import_sound", format).await;
         assert_eq!(format_code, "invalid_argument", "not a storage format");
+        assert!(
+            format_message.contains("\"doom\"") && format_message.contains("\"passthrough\""),
+            "the message names both formats: {format_message}"
+        );
         let missing = dir.path().join("nowhere.wav");
         let (missing_code, _, _) = call_err(&client, "import_sound", source_arg(&missing)).await;
         assert_eq!(missing_code, "not_found", "fetch errors surface unchanged");

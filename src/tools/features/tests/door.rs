@@ -2,12 +2,13 @@
 //! `choose` resolutions, the touching-rooms carve, the recess record and
 //! its dressing, and the whole [`build_door`] runs on the fixture maps.
 
+use crate::named::Named as _;
 use serde_json::from_str;
 
 use crate::themes::Role;
 use crate::tools::features::door::{
     AddDoorParams, Chosen, DoorSkins, DoorSpec, Dress, Groups, Placed, Target, build_door,
-    door_groups, door_record, dress_door, style_name, style_names, style_of, target_of, track_role,
+    door_groups, door_record, dress_door, style_name, style_of, target_of, track_role,
 };
 use crate::tools::features::wall::{
     centroid, choose_between, choose_linedef, half_axis, outward_normal, recess_depth,
@@ -61,10 +62,14 @@ fn styles_round_trip_and_refuse_unknown_names() {
     }
     let message = refuse(&style_of("sliding").unwrap_err());
     assert!(
-        message.contains("normal, fast, stay_open, locked_red, locked_blue, locked_yellow, remote"),
+        message.contains("\"normal\", \"fast\", \"stay_open\", \"locked_red\", \"locked_blue\", \"locked_yellow\", \"remote\""),
         "the refusal lists every name: {message}"
     );
-    assert_eq!(style_names().len(), DoorStyle::all().len(), "one name each");
+    assert_eq!(
+        DoorStyle::names().len(),
+        DoorStyle::all().len(),
+        "one name each"
+    );
 }
 
 #[test]

@@ -177,6 +177,23 @@ fn a_hexen_door_close_special_is_ignored_in_silence() {
 }
 
 #[test]
+fn a_doom_door_close_special_is_ignored_in_silence_too() {
+    let mut map = hall(&[cell(0_i32), cell(0_i32)]);
+    wire(&mut map, 0, (50_i32, 0_i32, TWO_SIDED));
+    let found = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);
+    assert!(
+        notes_about(&found, "special 50").is_empty(),
+        "S1 Door Close is the Doom family's own shutter row: known, ignored, and \
+         never warned as unhandled or tagless: {:?}",
+        found.warnings
+    );
+    assert!(
+        found.doors_never_opened.is_empty(),
+        "and it opens nothing the walk waits for"
+    );
+}
+
+#[test]
 fn a_door_tag_that_lifts_a_sector_reports_the_platform() {
     let mut map = hall(&[cell(0_i32), slab(0_i32)]);
     map.sectors.get_mut(1).expect("the band").tag = 4_i32;

@@ -1,5 +1,6 @@
 //! Action-table tests: what [`door_specials`] installs for each style in each
-//! flag family, the track roles the locked styles name, and how
+//! flag family, how those installs read in the shared specials
+//! classification, the track roles the locked styles name, and how
 //! [`next_free_tag`] counts the tags a map already carries.
 
 use super::{SAMPLE_TAG, one_sided, sector, two_sided};
@@ -7,6 +8,40 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::features::doors::{DoorLineSetup, DoorStyle, door_specials, next_free_tag};
 use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::model::{Linedef, Map};
+use crate::wad::map::specials::is_door_action;
+
+/// Checks one style's written special of `family` against the shared
+/// classification: the remote style's zero is the only door without an
+/// action row, and every written action must read as a door.
+fn check_door_row(family: FlagFamily, style: DoorStyle) {
+    let setup = door_specials(family, style, SAMPLE_TAG);
+    if setup.special == 0_i32 {
+        assert!(
+            matches!(style, DoorStyle::Remote),
+            "{family:?} only zeroes the action for the remote style, got {style:?}"
+        );
+        assert!(
+            !is_door_action(setup.special, family),
+            "special 0 is never a door action"
+        );
+        return;
+    }
+    assert!(
+        is_door_action(setup.special, family),
+        "the {family:?} row of {style:?} (special {}) must classify as a door action, or \
+         auto_texture will repaint the door it just built",
+        setup.special
+    );
+}
+
+#[test]
+fn every_written_door_action_is_a_door_in_the_shared_classification() {
+    for family in [FlagFamily::Doom, FlagFamily::Hexen] {
+        for style in DoorStyle::all() {
+            check_door_row(family, style);
+        }
+    }
+}
 
 #[test]
 fn door_specials_matches_the_doom_table() {

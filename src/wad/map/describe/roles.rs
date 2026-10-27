@@ -17,10 +17,12 @@ use alloc::vec::Vec;
 
 use crate::defs::boom::{SectorFamily, SectorFlag, decode_sector_special};
 use crate::fixed::midpoint;
-use crate::wad::map::flags::{ACTIVATION_MASK, FlagFamily, PLAYER_USE_BITS};
+use crate::wad::map::flags::FlagFamily;
 use crate::wad::map::geometry::sector_boundary;
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::playability::MAX_STEP_UP;
+use crate::wad::map::specials::exit_for;
+use crate::wad::map::specials::tables::Trigger;
 
 use super::{
     Edge, NAME_DAMAGING, NAME_LIGHT_EFFECT, NAME_OPENING, NAME_SECRET, NAME_STEP_DOWN,
@@ -50,9 +52,6 @@ const HEXEN_DAMAGE_SPECIALS: [i32; 7] = [69_i32, 70_i32, 71_i32, 82_i32, 83_i32,
 /// The `Hexen` family's light-effect sector specials: the `Doom` numbers
 /// shifted by 64.
 const HEXEN_LIGHT_SPECIALS: [i32; 7] = [65_i32, 66_i32, 67_i32, 72_i32, 76_i32, 77_i32, 81_i32];
-/// The `Doom` family's walk-over level ends, as the playability exit
-/// table reads them.
-const DOOM_WALK_EXITS: [i32; 4] = [52_i32, 124_i32, 197_i32, 198_i32];
 /// The decoder's damage text for sectors that hurt nobody.
 const NO_DAMAGE: &str = "none";
 
@@ -128,13 +127,11 @@ pub(super) fn is_stair_step(area: u64, neighbours: &[Neighbour]) -> bool {
 }
 
 /// Whether the exit special on `line` ends the level by walking over it:
-/// a `Doom`-family touch special, or a `Hexen`-family portal on any
-/// activation but `playeruse`.
+/// the shared exit rule of [`crate::wad::map::specials`] answered with a
+/// [`Trigger::Walk`] side - the `Doom` family's touch specials and the
+/// `Hexen` family's portals on any activation but `playeruse`.
 pub(super) fn walk_over_exit(family: FlagFamily, line: &Linedef) -> bool {
-    match family {
-        FlagFamily::Doom => DOOM_WALK_EXITS.contains(&line.special),
-        FlagFamily::Hexen => line.flags & ACTIVATION_MASK != PLAYER_USE_BITS,
-    }
+    exit_for(family, line).is_some_and(|exit| exit.trigger == Trigger::Walk)
 }
 
 /// The world-space middle of `line`'s span, `None` when either vertex

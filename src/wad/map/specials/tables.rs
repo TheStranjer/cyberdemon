@@ -1,20 +1,28 @@
-//! The hand-written special tables the inventory read is built from.
+//! The hand-written special tables the whole server classifies actions
+//! through.
 //!
-//! Every `Doom` family door, lift, teleport and exit line and every `Hexen`
+//! Every `Doom` family door, lift and teleport line and every `Hexen`
 //! family action is one row here, with the argument slot or key colour it
-//! carries spelled out; [`KEY_THINGS`] names the thing types that hold a key.
-//! The row a line matches becomes a [`Plan`](super::Plan) in the reader,
-//! which is where the map's sectors are resolved.
+//! carries spelled out; [`KEY_THINGS`] names the thing types that hold a
+//! key. The rows are the engine's own, not a definition table's: no
+//! `DeHackEd` rename and no custom `DECORATE` title can move what this
+//! classification believes the game does. The playability walk folds them
+//! into a map's feature inventory through the lookups in
+//! [`super`](crate::wad::map::specials); [`special_class`](super::special_class)
+//! is the one classification every door detection and role naming reads.
 
-use super::KeyColor;
+use crate::wad::map::playability::KeyColor;
 
 /// What a table row says its special does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RowEffect {
+pub enum RowEffect {
     /// Raises the ceiling of the sector behind the line: a manual door.
     ManualDoor,
     /// Raises the ceiling of every sector carrying the line's tag.
     TaggedDoor,
+    /// Shuts every door the line addresses: a door action the reachability
+    /// walk never needs to open, so it is known and ignored in silence.
+    CloseDoor,
     /// Drops every sector carrying the line's tag to its lowest neighbour.
     Lift,
     /// Moves the player to a destination sector.
@@ -23,7 +31,7 @@ pub(super) enum RowEffect {
 
 /// How a player sets a line off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Trigger {
+pub enum Trigger {
     /// A use line: only the sector on its front side works it.
     Use,
     /// A walk or shoot line: either side works it.
@@ -32,15 +40,15 @@ pub(super) enum Trigger {
 
 /// One row of the `Doom` family's line-special table.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct DoomRow {
+pub struct DoomRow {
     /// The [`Linedef::special`](crate::wad::map::model::Linedef::special) the row answers for.
-    pub(super) special: i32,
+    pub special: i32,
     /// What the special does.
-    pub(super) effect: RowEffect,
+    pub effect: RowEffect,
     /// How the player sets it off.
-    pub(super) trigger: Trigger,
+    pub trigger: Trigger,
     /// The key colour the line demands.
-    pub(super) lock: Option<KeyColor>,
+    pub lock: Option<KeyColor>,
 }
 
 /// A `Doom` row: an unlocked special of `effect` worked `trigger`.
@@ -65,27 +73,27 @@ const fn doom_locked(special: i32, effect: RowEffect, trigger: Trigger, lock: Ke
 
 /// One row of the `Doom` family's exit table, reused for the `Hexen` portals
 /// whose numbers say whether they are the secret end.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ExitRow {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExitRow {
     /// The [`Linedef::special`](crate::wad::map::model::Linedef::special) that ends the level.
-    pub(super) special: i32,
+    pub special: i32,
     /// Whether it ends the level through the secret map.
-    pub(super) secret: bool,
+    pub secret: bool,
     /// How the player reaches it.
-    pub(super) trigger: Trigger,
+    pub trigger: Trigger,
 }
 
 /// One row of the `Hexen` family's action table.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct HexenRow {
+pub struct HexenRow {
     /// The [`Linedef::special`](crate::wad::map::model::Linedef::special) the row answers for.
-    pub(super) special: i32,
+    pub special: i32,
     /// What the special does.
-    pub(super) effect: RowEffect,
+    pub effect: RowEffect,
     /// The `args` slot holding the sector tag, or the destination `TID`.
-    pub(super) tag_arg: usize,
+    pub tag_arg: usize,
     /// The `args` slot holding a lock code, for a lockable action.
-    pub(super) lock_arg: Option<usize>,
+    pub lock_arg: Option<usize>,
 }
 
 /// A `Hexen` row: an unlocked action addressing `args[tag_arg]`.
@@ -119,8 +127,11 @@ const fn hexen_locked(
 /// answer a tag. `W1`/`WR` lines work from either side, `S1`/`SR` lines from
 /// the front only, and `G1` line 46 is shootable, which this model reads as
 /// "either side". The locked walkovers (99, 133 to 137) are tagged doors
-/// whose key the row names.
-pub(super) const DOOM_ROWS: &[DoomRow] = &[
+/// whose key the row names. The [`RowEffect::CloseDoor`] rows are the door
+/// shutters (`W1`/`S1`/`SR`/`WR` Door Close, and the DOOM II fast pairs that
+/// close, or close and reopen): a door action to a texture pass, and known
+/// but never opened by a player who wants through.
+pub const DOOM_ROWS: &[DoomRow] = &[
     // Press the wall: the sector behind it is the doorway.
     doom(1, RowEffect::ManualDoor, Trigger::Use),
     doom(31, RowEffect::ManualDoor, Trigger::Use),
@@ -156,6 +167,17 @@ pub(super) const DOOM_ROWS: &[DoomRow] = &[
     doom_locked(135, RowEffect::TaggedDoor, Trigger::Walk, KeyColor::Red),
     doom_locked(136, RowEffect::TaggedDoor, Trigger::Walk, KeyColor::Yellow),
     doom_locked(137, RowEffect::TaggedDoor, Trigger::Walk, KeyColor::Yellow),
+    // Shut every tagged door: a door action, never the way through.
+    doom(3, RowEffect::CloseDoor, Trigger::Walk),
+    doom(16, RowEffect::CloseDoor, Trigger::Walk),
+    doom(42, RowEffect::CloseDoor, Trigger::Use),
+    doom(50, RowEffect::CloseDoor, Trigger::Use),
+    doom(75, RowEffect::CloseDoor, Trigger::Walk),
+    doom(76, RowEffect::CloseDoor, Trigger::Walk),
+    doom(107, RowEffect::CloseDoor, Trigger::Walk),
+    doom(110, RowEffect::CloseDoor, Trigger::Walk),
+    doom(113, RowEffect::CloseDoor, Trigger::Use),
+    doom(116, RowEffect::CloseDoor, Trigger::Use),
     // Drop every tagged sector to its lowest neighbouring floor.
     doom(10, RowEffect::Lift, Trigger::Walk),
     doom(21, RowEffect::Lift, Trigger::Use),
@@ -171,7 +193,7 @@ pub(super) const DOOM_ROWS: &[DoomRow] = &[
 ];
 
 /// The `Doom` family's level ends.
-pub(super) const DOOM_EXITS: &[ExitRow] = &[
+pub const DOOM_EXITS: &[ExitRow] = &[
     ExitRow {
         special: 11,
         secret: false,
@@ -204,9 +226,11 @@ pub(super) const DOOM_EXITS: &[ExitRow] = &[
     },
 ];
 
-/// The `Hexen` family's door, lift and teleport actions. `Door_Close` is not
-/// among them: a line that shuts a door is never the way through.
-pub(super) const HEXEN_ROWS: &[HexenRow] = &[
+/// The `Hexen` family's door, lift and teleport actions. `Door_Close` (10)
+/// is a [`RowEffect::CloseDoor`] row: a door action to a texture pass, and
+/// never a way through for a walk.
+pub const HEXEN_ROWS: &[HexenRow] = &[
+    hexen(10, RowEffect::CloseDoor, 0),
     hexen(11, RowEffect::TaggedDoor, 0),
     hexen(12, RowEffect::TaggedDoor, 0),
     hexen_locked(13, RowEffect::TaggedDoor, 0, 3),
@@ -224,18 +248,14 @@ pub(super) const HEXEN_ROWS: &[HexenRow] = &[
     hexen(71, RowEffect::Teleport, 0),
 ];
 
-/// The `Hexen` specials the analysis knows and deliberately does not model.
-pub(super) const HEXEN_IGNORED: &[i32] = &[10_i32];
-
 /// The `Hexen` family's level ends: `Portal`, its instantaneous secret twin,
 /// and `Teleport_NewMap`. Each is a `(special, secret)` pair; the side the
 /// player reaches it from is the line's own activation field.
-pub(super) const HEXEN_EXITS: &[(i32, bool)] =
-    &[(243_i32, false), (244_i32, true), (74_i32, false)];
+pub const HEXEN_EXITS: &[(i32, bool)] = &[(243_i32, false), (244_i32, true), (74_i32, false)];
 
 /// The key items both families spawn: `ZDoom` keeps the `Doom` numbers. A
 /// colour's card and skull answer for each other.
-pub(super) const KEY_THINGS: &[(i32, KeyColor)] = &[
+pub const KEY_THINGS: &[(i32, KeyColor)] = &[
     (5_i32, KeyColor::Blue),
     (40_i32, KeyColor::Blue),
     (13_i32, KeyColor::Red),

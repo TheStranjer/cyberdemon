@@ -11,12 +11,14 @@
 //! folds the two-sided lines into a sector adjacency list and decides, from
 //! the player's shape ([`MIN_LINE_WIDTH`], [`PLAYER_HEIGHT`],
 //! [`MAX_STEP_UP`]) and the heights of the two sectors, whether a line lets
-//! the player through; the private `specials` module reads the map's line
-//! specials and things into the features a player can work - manual and
-//! tagged doors, lifts, teleporters and level exits, the keys each lock wants
-//! and the things that carry them; and the private `reach` module walks the
-//! graph from the player start, opening every feature whose trigger sector
-//! and key the walk has already reached, until the answer stops changing.
+//! the player through; the private `inventory` module reads the map's line
+//! specials (through the family-aware tables in
+//! [`specials`](crate::wad::map::specials)) and things into the features a
+//! player can work - manual and tagged doors, lifts, teleporters and level
+//! exits, the keys each lock wants and the things that carry them; and the
+//! private `reach` module walks the graph from the player start, opening
+//! every feature whose trigger sector and key the walk has already reached,
+//! until the answer stops changing.
 //! [`analyze_playability`] folds the two walks it needs (the strict one, and
 //! a wider one that lets the player squeeze through short lines to see what
 //! they would have connected) into [`Playability`]. [`blockers`] explains a
@@ -45,8 +47,8 @@
 
 mod explain;
 mod graph;
+mod inventory;
 mod reach;
-mod specials;
 mod stuck;
 
 use alloc::collections::BTreeSet;
@@ -62,12 +64,12 @@ use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::model::Map;
 
 use graph::World;
+use inventory::Effect;
+use inventory::Inventory;
+use inventory::LockLine;
 use reach::Run;
 use reach::fixpoint;
 use reach::touches;
-use specials::Effect;
-use specials::Inventory;
-use specials::LockLine;
 
 /// The highest ledge a player can walk up (the shared
 /// [`MAX_STEP_HEIGHT`](crate::wad::map::consts::MAX_STEP_HEIGHT)):
@@ -224,8 +226,8 @@ pub struct Playability {
 #[inline]
 pub fn analyze_playability(map: &Map, family: FlagFamily, skill: Skill) -> Playability {
     let mut warnings = Vec::new();
-    let start = specials::start_sector(map, family, skill, &mut warnings);
-    let inventory = specials::read_inventory(map, family, skill);
+    let start = inventory::start_sector(map, family, skill, &mut warnings);
+    let inventory = inventory::read_inventory(map, family, skill);
     let strict = World::new(map, family, &inventory, MIN_LINE_WIDTH);
     let squeezed = World::new(map, family, &inventory, 0_i32);
     let walk = fixpoint(&strict, &inventory, start);
@@ -249,7 +251,7 @@ pub fn analyze_playability(map: &Map, family: FlagFamily, skill: Skill) -> Playa
 #[must_use]
 #[inline]
 pub fn start_thing(map: &Map, family: FlagFamily, skill: Skill) -> Option<usize> {
-    specials::start_thing(map, family, skill)
+    inventory::start_thing(map, family, skill)
 }
 
 /// Whether a thing carrying `flags` spawns for a single player at `skill`
@@ -258,7 +260,7 @@ pub fn start_thing(map: &Map, family: FlagFamily, skill: Skill) -> Option<usize>
 #[must_use]
 #[inline]
 pub fn thing_spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
-    specials::spawns(flags, family, skill)
+    inventory::spawns(flags, family, skill)
 }
 
 /// The sectors and lines `map`'s door, lift and teleport actions work on,
@@ -278,7 +280,7 @@ pub fn thing_spawns(flags: u32, family: FlagFamily, skill: Skill) -> bool {
 #[must_use]
 #[inline]
 pub fn feature_targets(map: &Map, family: FlagFamily) -> FeatureTargets {
-    let inventory = specials::read_inventory(map, family, Skill::Medium);
+    let inventory = inventory::read_inventory(map, family, Skill::Medium);
     let mut found = FeatureTargets {
         doors: inventory.door_sectors.clone(),
         lifts: inventory.lift_sectors.clone(),

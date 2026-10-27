@@ -99,6 +99,7 @@ pub mod playability;
 pub mod query;
 pub mod reject;
 pub mod remove;
+pub mod specials;
 pub mod stats;
 pub mod transform;
 pub mod udmf_map;

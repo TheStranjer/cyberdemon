@@ -52,7 +52,8 @@
 //! luminance-weight duplication guard in `shared_math`, the big-endian-helper
 //! and `MUS`/`MIDI`-table single-owner guard in `single_owner`, the shared
 //! TSV-reader and category-word single-owner guard in `tsv_tables`, the
-//! imports-group shared-helper and one-quantization guard in
+//! line-special tables and family-aware classification single-owner guard
+//! in `specials_tables`, the imports-group shared-helper and one-quantization guard in
 //! `imports_shared`, the no-core-imports-the-tool-layer guard in `layering`, the
 //! music-group tests in `music`, the
 //! nodes-group shared helpers in `nodes` with its `nodes/read`,
@@ -234,6 +235,9 @@ mod single_owner;
 #[cfg(test)]
 #[path = "mcp/sketch.rs"]
 mod sketch;
+#[cfg(test)]
+#[path = "mcp/specials_tables.rs"]
+mod specials_tables;
 #[cfg(test)]
 #[path = "mcp/support.rs"]
 pub mod support;

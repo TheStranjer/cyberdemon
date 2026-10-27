@@ -39,7 +39,7 @@ pub use classify::{
 pub use diff::{
     Diff, LumpDiff, MapCounts, MapDiff, Mode, Status, Summary, diff, fnv1a64, same_content,
 };
-pub use game::{Game, detect_game};
+pub use game::{Game, detect_game, sky_flat};
 pub use name::LumpName;
 pub use textures::{
     PatchRef, TextureDef, TextureLayout, TextureLump, dropped_references, parse_pnames,

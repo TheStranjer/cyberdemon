@@ -232,6 +232,7 @@ mod tests {
 
     use super::{Blocker, BlockerReason, blockers};
     use crate::plan::compile::compile;
+    use crate::plan::emit::MapIdentity;
     use crate::plan::model::{Connection, ConnectionKind, Plan, Room, Shape};
     use crate::plan::textures::{TextureRole, TextureRoles};
     use crate::wad::classify::MapFormat;
@@ -312,8 +313,16 @@ mod tests {
             features: Vec::new(),
             wall_thickness: 16_i64,
         };
-        let mut compiled = compile(&blueprint, name("MAP01"), MapFormat::Doom, &FlatRoles)
-            .expect("the plan compiles");
+        let mut compiled = compile(
+            &blueprint,
+            MapIdentity {
+                name: name("MAP01"),
+                format: MapFormat::Doom,
+                sky_flat: crate::wad::map::consts::SKY_FLAT,
+            },
+            &FlatRoles,
+        )
+        .expect("the plan compiles");
         stand(&mut compiled.map, 1, middle(0), 7);
         let map = compiled.map;
         let found = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);

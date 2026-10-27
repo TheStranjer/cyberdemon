@@ -73,10 +73,11 @@ The two-sided line against sector 1 now shows an upper band — the
 
 ### Make a room outdoors
 
-**"I want to see the sky from the back room."** An `F_SKY1` ceiling is
-the sky in every engine — `bulk_edit` allows that name even though no
-WAD carries it. Give the room real height, and drop a wall's ceiling for
-a lip the sky sits behind.
+**"I want to see the sky from the back room."** The session's sky-flat
+ceiling is the sky in every engine — `F_SKY1` in DOOM, DOOM II, Heretic
+and Strife, `F_SKY` in Hexen — and `bulk_edit` allows that name even
+though no WAD carries it. Give the room real height, and drop a wall's
+ceiling for a lip the sky sits behind.
 
 ```json recipe
 {"fixture": true, "steps": [{"tool": "bulk_edit", "arguments": {"kind": "sectors", "within": {"sectors": [1]}, "set": {"ceiling_flat": "F_SKY1"}}}]}

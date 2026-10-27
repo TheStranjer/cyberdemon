@@ -12,6 +12,7 @@ use serde_json::{json, to_value};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::spawn;
+use crate::wad::map::consts::SKY_FLAT;
 use crate::wad::map::describe::{Describe, PlayerStart, sector_facts};
 use crate::wad::map::playability::{KeyColor, KeyInfo};
 
@@ -22,7 +23,7 @@ use super::{cell, doom_defs, doom2_defs, hall, row, slab, stand};
 fn one_describe_answers_every_sector_like_the_wrapper() {
     let map = hall(&[cell(0_i32), slab(0_i32), cell(0_i32)]);
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     assert_eq!(
         describe.sector(9),
         None,
@@ -31,7 +32,7 @@ fn one_describe_answers_every_sector_like_the_wrapper() {
     for index in [0_usize, 1, 2] {
         assert_eq!(
             describe.sector(index),
-            sector_facts(&map, &doom_defs(), index),
+            sector_facts(&map, &doom_defs(), SKY_FLAT, index),
             "the wrapper and the shared read agree on sector {index}"
         );
     }
@@ -40,7 +41,7 @@ fn one_describe_answers_every_sector_like_the_wrapper() {
 #[test]
 fn the_two_room_hall_overviews_counts_sizes_tallies_and_the_missing_exit() {
     let map = hall(&[cell(0_i32), cell(0_i32)]);
-    let overview = Describe::new(&map, &doom2_defs()).summary();
+    let overview = Describe::new(&map, &doom2_defs(), SKY_FLAT).summary();
     assert_eq!(overview.format, MapFormat::Doom, "the stored format");
     assert_eq!(
         overview.bounds,
@@ -92,8 +93,8 @@ fn the_two_room_hall_overviews_counts_sizes_tallies_and_the_missing_exit() {
 #[test]
 fn the_hall_overview_serialises_to_the_tickets_shape() {
     let map = hall(&[cell(0_i32), cell(0_i32)]);
-    let value =
-        to_value(Describe::new(&map, &doom2_defs()).summary()).expect("the overview serialises");
+    let value = to_value(Describe::new(&map, &doom2_defs(), SKY_FLAT).summary())
+        .expect("the overview serialises");
     assert_eq!(
         value,
         json!({
@@ -129,7 +130,7 @@ fn the_hall_overview_serialises_to_the_tickets_shape() {
 #[test]
 fn the_keyed_exit_plan_overviews_its_walk_and_playable_rows() {
     let (map, _) = crewed_plan();
-    let overview = Describe::new(&map, &doom2_defs()).summary();
+    let overview = Describe::new(&map, &doom2_defs(), SKY_FLAT).summary();
     assert!(
         overview.playable.ok,
         "the card in hand walks the whole map: {:?}",
@@ -175,7 +176,7 @@ fn the_keyed_exit_plan_overviews_its_walk_and_playable_rows() {
 #[test]
 fn the_keyed_exit_plan_overviews_its_crew_and_sizes() {
     let (map, rows) = crewed_plan();
-    let overview = Describe::new(&map, &doom2_defs()).summary();
+    let overview = Describe::new(&map, &doom2_defs(), SKY_FLAT).summary();
     let secret = *row(&rows, "secret")
         .sectors
         .first()
@@ -229,7 +230,7 @@ fn the_plan_without_its_key_stays_locked_and_lists_the_locks_anyway() {
     let (mut map, rows) = built(&keyed_exit_plan(), MapFormat::Doom);
     stand(&mut map, spawn(1, 128, 128, 0));
     stand(&mut map, spawn(5, 640, 64, 0));
-    let overview = Describe::new(&map, &doom2_defs()).summary();
+    let overview = Describe::new(&map, &doom2_defs(), SKY_FLAT).summary();
     assert!(
         !overview.locked_doors.is_empty() && overview.locked_doors.iter().all(|lock| !lock.opened),
         "the key in the far room opens none of them: {:?}",
@@ -272,7 +273,7 @@ fn the_plan_without_its_key_stays_locked_and_lists_the_locks_anyway() {
 #[test]
 fn the_empty_map_overviews_with_zeroes_and_the_no_start_note() {
     let map = Map::default();
-    let overview = Describe::new(&map, &doom_defs()).summary();
+    let overview = Describe::new(&map, &doom_defs(), SKY_FLAT).summary();
     assert_eq!(overview.bounds, None, "no vertices, no box");
     assert_eq!(overview.counts.vertices, 0, "and no elements at all");
     assert_eq!(overview.counts.things, 0, "not even a start");

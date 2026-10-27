@@ -16,6 +16,7 @@ use serde_json::from_str;
 
 use crate::plan::CompiledPlan;
 use crate::plan::compile;
+use crate::plan::emit::MapIdentity;
 use crate::plan::things::ThingSpot;
 use crate::tools::plan::PlanTheme;
 use crate::tools::plan::params::{BuildPlanParams, KindSource, ThingRequest};
@@ -75,6 +76,16 @@ pub(super) fn request(kind: KindSource, path: &str) -> ThingRequest {
     }
 }
 
+/// The identity a `Doom`-layout build test compiles into, with the
+/// vanilla sky flat.
+pub(super) fn doom_identity(name: LumpName) -> MapIdentity {
+    MapIdentity {
+        name,
+        format: MapFormat::Doom,
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
+    }
+}
+
 /// The one-room compiled plan both finalize tests grow a tree from.
 pub(super) fn compiled_room(format: MapFormat) -> CompiledPlan {
     let plan = args(
@@ -84,13 +95,12 @@ pub(super) fn compiled_room(format: MapFormat) -> CompiledPlan {
     );
     let model = plan.to_model().expect("the wire maps onto the model");
     let theme = PlanTheme { names: Vec::new() };
-    compile(
-        &model,
-        LumpName::parse("MAP05").expect("a valid name"),
+    let identity = MapIdentity {
+        name: LumpName::parse("MAP05").expect("a valid name"),
         format,
-        &theme,
-    )
-    .expect("one room compiles")
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
+    };
+    compile(&model, identity, &theme).expect("one room compiles")
 }
 
 /// An [`Issue`] row of `severity` carrying a numbered message.

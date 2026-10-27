@@ -10,6 +10,7 @@ use serde_json::{json, to_value};
 
 use crate::wad::map::Thing;
 use crate::wad::map::common::fixtures::{room, spawn};
+use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
 use crate::wad::map::describe::{SpecialInfo, ThingCount, sector_facts};
 use crate::wad::map::geometry::point_in_sector;
 
@@ -18,7 +19,7 @@ use super::{doom_defs, doom2_defs, elbow_map, retune, square_map, stand, switch_
 #[test]
 fn a_square_room_reports_area_box_centre_and_look() {
     let map = square_map();
-    let facts = sector_facts(&map, &doom2_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&map, &doom2_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(facts.sector, 0, "the index echoes");
     assert_eq!(facts.area, 0x0001_0000_u64, "256x256 of floor");
     assert_eq!(
@@ -55,7 +56,7 @@ fn a_square_room_reports_area_box_centre_and_look() {
 #[test]
 fn a_concave_room_reports_its_true_area_and_a_centre_in_the_foot() {
     let map = elbow_map();
-    let facts = sector_facts(&map, &doom2_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&map, &doom2_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(facts.area, 196_608_u64, "512x256 plus 256x256");
     assert_eq!(
         facts.bbox,
@@ -80,7 +81,7 @@ fn a_sky_ceiling_is_flagged_and_wears_the_sky_role() {
     let mut outdoor = room(0, 128, 160, 0);
     outdoor.ceiling_flat = "F_SKY1".to_owned();
     retune(&mut map, outdoor);
-    let facts = sector_facts(&map, &doom2_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&map, &doom2_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert!(facts.sky, "an `F_SKY1` ceiling is the sky");
     assert_eq!(facts.ceiling_flat, "F_SKY1", "and the name rides along");
     assert_eq!(facts.roles, vec!["sky".to_owned()], "and the role too");
@@ -89,9 +90,28 @@ fn a_sky_ceiling_is_flagged_and_wears_the_sky_role() {
     let mut floored = room(0, 128, 160, 0);
     floored.floor_flat = "F_SKY1".to_owned();
     retune(&mut indoors, floored);
-    let under = sector_facts(&indoors, &doom2_defs(), 0).expect("sector 0 exists");
+    let under = sector_facts(&indoors, &doom2_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert!(!under.sky, "an `F_SKY1` floor is nobody's sky");
     assert!(under.roles.is_empty(), "and it earns no role either");
+}
+
+#[test]
+fn the_sky_field_follows_the_sky_flat_it_is_read_with() {
+    let mut map = square_map();
+    let mut hexen_sky = room(0, 128, 160, 0);
+    hexen_sky.ceiling_flat = "F_SKY".to_owned();
+    retune(&mut map, hexen_sky);
+    let as_hexen = sector_facts(&map, &doom2_defs(), HEXEN_SKY_FLAT, 0)
+        .expect("a Hexen read of the same ceiling");
+    assert!(as_hexen.sky, "an `F_SKY` ceiling is the sky for `Hexen`");
+    assert_eq!(as_hexen.roles, vec!["sky".to_owned()], "and earns the role");
+    let as_vanilla =
+        sector_facts(&map, &doom2_defs(), SKY_FLAT, 0).expect("a vanilla read of the same ceiling");
+    assert!(
+        !as_vanilla.sky,
+        "`F_SKY` is just a flat name to a vanilla read"
+    );
+    assert!(as_vanilla.roles.is_empty(), "and it earns no role there");
 }
 
 #[test]
@@ -100,7 +120,7 @@ fn sector_specials_are_named_through_the_definitions() {
     let mut secret = room(0, 128, 160, 0);
     secret.special = 9_i32;
     retune(&mut map, secret);
-    let facts = sector_facts(&map, &doom_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&map, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         facts.special,
         Some(SpecialInfo {
@@ -114,7 +134,7 @@ fn sector_specials_are_named_through_the_definitions() {
     let mut odd = room(0, 128, 160, 0);
     odd.special = 42_i32;
     retune(&mut unassigned, odd);
-    let unnamed = sector_facts(&unassigned, &doom_defs(), 0).expect("sector 0 exists");
+    let unnamed = sector_facts(&unassigned, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         unnamed.special,
         Some(SpecialInfo {
@@ -128,7 +148,7 @@ fn sector_specials_are_named_through_the_definitions() {
     let mut below = room(0, 128, 160, 0);
     below.special = -3_i32;
     retune(&mut negative, below);
-    let off_table = sector_facts(&negative, &doom_defs(), 0).expect("sector 0 exists");
+    let off_table = sector_facts(&negative, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         off_table.special,
         Some(SpecialInfo {
@@ -142,7 +162,7 @@ fn sector_specials_are_named_through_the_definitions() {
 #[test]
 fn wall_textures_count_both_faces_of_every_side_opening_here() {
     let map = switch_map();
-    let facts = sector_facts(&map, &doom2_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&map, &doom2_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         to_value(&facts.wall_textures).expect("counts serialise"),
         json!({ "SWITCH1": 1_u64, "WALL1": 6_u64 }),
@@ -169,7 +189,7 @@ fn things_are_counted_by_name_sorted_by_size_and_all_skills_count() {
     stand(&mut map, spawn(2001, 192, 192, 0));
     stand(&mut map, spawn(9999, 128, 192, 0));
     stand(&mut map, spawn(3001, 4_000, 4_000, 7));
-    let facts = sector_facts(&map, &doom2_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&map, &doom2_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         facts.things,
         vec![
@@ -195,12 +215,12 @@ fn things_are_counted_by_name_sorted_by_size_and_all_skills_count() {
 fn a_missing_sector_describes_as_nothing_and_an_empty_one_as_zeroes() {
     let map = square_map();
     assert!(
-        sector_facts(&map, &doom2_defs(), 9).is_none(),
+        sector_facts(&map, &doom2_defs(), SKY_FLAT, 9).is_none(),
         "no sector 9 in a one-sector map"
     );
     let mut lonelier = square_map();
     lonelier.sectors.push(room(0, 0, 0, 0));
-    let bare = sector_facts(&lonelier, &doom2_defs(), 1).expect("sector 1 exists");
+    let bare = sector_facts(&lonelier, &doom2_defs(), SKY_FLAT, 1).expect("sector 1 exists");
     assert_eq!(bare.area, 0, "a sector with no boundary has no area");
     assert_eq!(bare.bbox, None, "and no box");
     assert_eq!(bare.center, None, "and no centre");
@@ -212,8 +232,9 @@ fn a_missing_sector_describes_as_nothing_and_an_empty_one_as_zeroes() {
 
 #[test]
 fn the_row_serialises_to_the_tickets_shape() {
-    let value = to_value(sector_facts(&square_map(), &doom2_defs(), 0).expect("sector 0"))
-        .expect("facts serialise");
+    let value =
+        to_value(sector_facts(&square_map(), &doom2_defs(), SKY_FLAT, 0).expect("sector 0"))
+            .expect("facts serialise");
     assert_eq!(
         value,
         json!({

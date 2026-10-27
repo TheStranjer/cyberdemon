@@ -223,6 +223,7 @@ mod tests {
             definitions: &doom,
             hexen_specials: &hexen,
             resources: &resources,
+            sky_flat: crate::wad::map::consts::SKY_FLAT,
         };
         let mut map = map_with(vec![thing_at(1, 64, 64), thing_at(3001, 384, 128)]);
         assert!(

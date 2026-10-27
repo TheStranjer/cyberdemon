@@ -170,7 +170,7 @@ The `roles` vocabulary - what a sector *is*:
 | `secret` / `damaging` / `light_effect` | the family's sector-special read (vanilla numbers, `Boom` bits, the `Hexen` family's own) |
 | `exit_room` | a level-end line touches it on either side, or a walk-over end crosses into it |
 | `stair_step` | a footprint of at most 64x256 square units with a neighbour 1 to 24 units up and another the same span down |
-| `sky` | an `F_SKY1` ceiling |
+| `sky` | a ceiling wearing the session's sky flat: `F_SKY1`, or `F_SKY` in a `Hexen` session |
 
 The neighbour `via` vocabulary - how a player gets through: `door` or
 `lift` when the neighbour sector wears that role; `window` when every

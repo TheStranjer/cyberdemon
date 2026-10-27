@@ -12,6 +12,7 @@ use crate::plan::model::{
 };
 use crate::wad::map::MapFormat;
 use crate::wad::map::common::fixtures::room;
+use crate::wad::map::consts::SKY_FLAT;
 use crate::wad::map::describe::{Describe, sector_facts};
 use crate::wad::map::features::LiftStyle;
 use crate::wad::map::flags::{BLOCKING, PLAYER_USE_BITS};
@@ -43,7 +44,7 @@ fn a_plan_built_door_band_wears_the_door_role_and_offers_its_doors() {
     let (map, rows) = built(&blueprint, MapFormat::Doom);
     let band = *row(&rows, "door").sectors.first().expect("the band");
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let band_facts = describe.sector(band).expect("the band exists");
     assert!(has_role(&band_facts, "door"), "the band is a door");
     for column in [0_usize, 1] {
@@ -80,7 +81,7 @@ fn a_plan_built_lift_is_a_lift_and_rides_up_from_its_low_neighbour() {
     let (map, rows) = built(&lifts, MapFormat::Doom);
     let platform = *row(&rows, "lift").sectors.first().expect("the platform");
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let pad = describe.sector(platform).expect("the platform exists");
     assert!(has_role(&pad, "lift"), "the platform is a lift");
     let low_index = room_sector(&map, 0);
@@ -106,7 +107,7 @@ fn a_plan_built_secret_room_wears_the_secret_role() {
         .first()
         .expect("the secret room");
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let facts = describe.sector(secret).expect("the secret room exists");
     assert!(has_role(&facts, "secret"), "the flagged room is a secret");
     let open_index = room_sector(&map, 0);
@@ -133,7 +134,7 @@ fn a_walk_over_exit_room_is_an_exit_room() {
     );
     let (map, _) = built(&blueprint, MapFormat::Doom);
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let exit_room = describe
         .sector(room_sector(&map, 1))
         .expect("the exit room exists");
@@ -154,7 +155,7 @@ fn a_walk_over_exit_room_is_an_exit_room() {
 fn a_walk_over_exit_line_sweeps_its_midpoint_sector_in() {
     let defs = doom_defs();
     let crossed = nested_exit_map(MapFormat::Doom, 52_i32, BLOCKING);
-    let describe = Describe::new(&crossed, &defs);
+    let describe = Describe::new(&crossed, &defs, SKY_FLAT);
     let outer = describe.sector(0).expect("the outer sector exists");
     assert!(
         has_role(&outer, "exit_room"),
@@ -167,7 +168,7 @@ fn a_walk_over_exit_line_sweeps_its_midpoint_sector_in() {
     );
 
     let pressed = nested_exit_map(MapFormat::Doom, 11_i32, BLOCKING);
-    let by_use = Describe::new(&pressed, &defs);
+    let by_use = Describe::new(&pressed, &defs, SKY_FLAT);
     assert!(
         !has_role(&by_use.sector(1).expect("inner"), "exit_room"),
         "a use line sweeps nothing into the inner square"
@@ -182,13 +183,13 @@ fn a_walk_over_exit_line_sweeps_its_midpoint_sector_in() {
 fn hexen_exits_follow_their_activation_field() {
     let defs = doom_defs();
     let portal = nested_exit_map(MapFormat::Hexen, 243_i32, 0_u32);
-    let describe = Describe::new(&portal, &defs);
+    let describe = Describe::new(&portal, &defs, SKY_FLAT);
     assert!(
         has_role(&describe.sector(1).expect("inner"), "exit_room"),
         "a playercross portal walks over into the inner square"
     );
     let used = nested_exit_map(MapFormat::Hexen, 243_i32, PLAYER_USE_BITS);
-    let pressed = Describe::new(&used, &defs);
+    let pressed = Describe::new(&used, &defs, SKY_FLAT);
     assert!(
         !has_role(&pressed.sector(1).expect("inner"), "exit_room"),
         "and a playeruse one sweeps nothing"
@@ -220,7 +221,7 @@ fn stepped_floors_flag_the_middle_step_only() {
     );
     let (map, _) = built(&climb, MapFormat::Doom);
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let stepped: Vec<usize> = (0..map.sectors.len())
         .filter_map(|index| describe.sector(index))
         .filter(|facts| has_role(facts, "stair_step"))
@@ -259,7 +260,7 @@ fn a_plan_built_teleporter_marks_its_destination_square() {
     let pad = *squares.first().expect("the pad square");
     let square = *squares.get(1).expect("the destination square");
     let defs = doom_defs();
-    let describe = Describe::new(&map, &defs);
+    let describe = Describe::new(&map, &defs, SKY_FLAT);
     let landing = describe.sector(square).expect("the square exists");
     assert!(
         has_role(&landing, "teleport_destination"),
@@ -278,14 +279,14 @@ fn doom_sector_specials_state_their_vanilla_and_boom_roles() {
     let mut damaging = room(0, 128, 160, 0);
     damaging.special = 4_i32;
     retune(&mut hurt, damaging);
-    let facts = sector_facts(&hurt, &doom_defs(), 0).expect("sector 0 exists");
+    let facts = sector_facts(&hurt, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(facts.roles, vec!["damaging".to_owned()], "20% and strobe");
 
     let mut lit = square_map();
     let mut flickering = room(0, 128, 160, 0);
     flickering.special = 1_i32;
     retune(&mut lit, flickering);
-    let lit_facts = sector_facts(&lit, &doom_defs(), 0).expect("sector 0 exists");
+    let lit_facts = sector_facts(&lit, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         lit_facts.roles,
         vec!["light_effect".to_owned()],
@@ -296,7 +297,7 @@ fn doom_sector_specials_state_their_vanilla_and_boom_roles() {
     let mut flagged = room(0, 128, 160, 0);
     flagged.special = 133_i32;
     retune(&mut boom, flagged);
-    let boom_facts = sector_facts(&boom, &doom_defs(), 0).expect("sector 0 exists");
+    let boom_facts = sector_facts(&boom, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         boom_facts.roles,
         vec!["damaging".to_owned(), "secret".to_owned()],
@@ -307,7 +308,8 @@ fn doom_sector_specials_state_their_vanilla_and_boom_roles() {
     let mut hidden = room(0, 128, 160, 0);
     hidden.special = 128_i32;
     retune(&mut plain_secret, hidden);
-    let hidden_facts = sector_facts(&plain_secret, &doom_defs(), 0).expect("sector 0 exists");
+    let hidden_facts =
+        sector_facts(&plain_secret, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert_eq!(
         hidden_facts.roles,
         vec!["secret".to_owned()],
@@ -318,7 +320,7 @@ fn doom_sector_specials_state_their_vanilla_and_boom_roles() {
     let mut below = room(0, 128, 160, 0);
     below.special = -3_i32;
     retune(&mut negative, below);
-    let off_table = sector_facts(&negative, &doom_defs(), 0).expect("sector 0 exists");
+    let off_table = sector_facts(&negative, &doom_defs(), SKY_FLAT, 0).expect("sector 0 exists");
     assert!(
         off_table.roles.is_empty(),
         "a negative special states nothing"

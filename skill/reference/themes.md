@@ -15,8 +15,9 @@ Twenty roles: `wall`, `wall_alt`, `floor`, `ceiling`, `light_ceiling`,
 
 The eight flat roles (`floor`, `ceiling`, `light_ceiling`,
 `outdoor_ceiling`, `door_floor`, `lift_floor`, `teleport_floor`,
-`liquid_floor`) resolve against the merged view's flats namespace
-(`F_SKY1` is always available); every other role is a wall texture and
+`liquid_floor`) resolve against the merged view's flats namespace (the
+session's sky flat — `F_SKY1`, or `F_SKY` in `Hexen` — is always
+available); every other role is a wall texture and
 resolves against the `TEXTURE1`/`TEXTURE2` definitions plus `TX_` lumps.
 
 ## How a role resolves
@@ -72,8 +73,9 @@ default theme filling a role the theme omits.
 
   `roles` covers all twenty roles; see above for the `matched` kinds.
   An empty session answers every wall role `{"texture": "-", "matched":
-  "default"}` and every flat role `F_SKY1` (the one flat always in the
-  view) — not an error; the drawing and feature tools then substitute
+  "default"}` and every flat role with the session's sky flat (the one
+  flat always in the view: `F_SKY1`, or `F_SKY` in `Hexen`) — not an
+  error; the drawing and feature tools then substitute
   their documented vanilla fallbacks where a dash would not do.
 - Errors: `invalid_argument` only when the session's stored theme name is
   not one the current game offers (possible after opening a different
@@ -102,7 +104,8 @@ default theme filling a role the theme omits.
   edit. Two modes:
   - `fill_missing` (the default) changes only what would render wrong:
     a one-sided line with an empty middle gets `wall`; a visible upper gap
-    (back ceiling below the front's, both sides not `F_SKY1`) with an
+    (back ceiling below the front's, both sides not the session's sky
+    flat) with an
     empty upper gets `wall`, or `door` when the back sector is a closed
     door (ceiling equals floor); a visible lower gap with an empty lower
     gets `step` for a step of at most 24 units, else `wall`; flats that do
@@ -113,7 +116,8 @@ default theme filling a role the theme omits.
     and take the `door` texture, their plain two-sided middle-textured
     neighbours (the jambs) take `door_track`, other special-carrying lines
     keep their textures, and every floor/ceiling becomes the theme flat —
-    `F_SKY1` is kept. A door action is read in the map's own special
+    a ceiling wearing the session's sky flat (`F_SKY1`, `F_SKY` in
+    `Hexen`) is kept. A door action is read in the map's own special
     family, not the session's game: the `Doom` family's table rows (open,
     raise, locked or closing doors) plus its `Boom` generalized doors, or
     the `Hexen` family's `Door_*` actions on a `Hexen`-format or

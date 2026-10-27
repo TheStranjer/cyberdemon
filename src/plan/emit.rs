@@ -8,11 +8,11 @@
 //! exactly one [`Linedef`](crate::wad::map::Linedef) whose front (`Doom`
 //! right) side faces a sector. Texture roles are out
 //! of scope: every side texture is `"-"`, room flats are the room's own
-//! overrides or `"-"` (`outdoor` rooms fall back to `"F_SKY1"`), and the
-//! textures slice fills the role names later. [`compiled_plan`] wraps an
-//! emission together with the room and connector bookkeeping later
-//! slices report. Nothing here touches archives, sessions or `MCP`
-//! types.
+//! overrides or `"-"` (`outdoor` rooms fall back to the [`MapIdentity`]'s
+//! sky flat), and the textures slice fills the role names later.
+//! [`compiled_plan`] wraps an emission together with the room and
+//! connector bookkeeping later slices report. Nothing here touches
+//! archives, sessions or `MCP` types.
 
 mod lines;
 mod sectors;
@@ -26,20 +26,26 @@ use crate::plan::connectors::{ConnectorGeometry, final_layers};
 use crate::plan::model::{ConnectionKind, Plan};
 use crate::plan::walls::Walls;
 use crate::wad::classify::MapFormat;
-use crate::wad::map::consts::{NO_TEXTURE, SKY_FLAT};
+use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::{Map, Sector};
 use crate::wad::name::LumpName;
 use lines::{connector_info, push_linedefs, room_sector_map};
 use sectors::{connector_sector, room_sector};
 
-/// The identity of the map [`emit`] produces: the block-header name and
-/// the layout its rows will be written in.
+/// The identity of the map [`emit`] produces: the block-header name, the
+/// layout its rows will be written in, and the sky flat `outdoor` rooms
+/// fall back to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapIdentity {
     /// The `LumpName` of the emitted map block.
     pub name: LumpName,
     /// The layout class of the emitted map.
     pub format: MapFormat,
+    /// The sky flat of the caller's game
+    /// ([`crate::wad::game::sky_flat`]): `outdoor` rooms without a ceiling
+    /// override wear this name, `F_SKY1` in the `Doom` family and `F_SKY`
+    /// in `Hexen`.
+    pub sky_flat: &'static str,
 }
 
 /// What [`emit`] built: the fresh map, the label-to-sector index and the
@@ -166,7 +172,7 @@ pub fn emit(
     let layers = final_layers(plan, walls, connectors);
     let pieces = arrange(&layers, &[], &LayerLabeler::new(&layers))?;
     let surviving = surviving_regions(&pieces);
-    let allocation = new_sectors(plan, connectors, &surviving)?;
+    let allocation = new_sectors(plan, connectors, &surviving, identity.sky_flat)?;
     let mut map = Map::new_empty(identity.name, identity.format);
     map.sectors = allocation.sectors;
     let mut seen = BTreeMap::new();
@@ -219,7 +225,8 @@ fn surviving_regions(pieces: &[Piece]) -> BTreeSet<Label> {
 }
 
 /// Build the sector rows: one per surviving region label, rooms in plan
-/// order first, then every connector's layers in allocator order.
+/// order first, then every connector's layers in allocator order. `sky`
+/// is the ceiling default of an `outdoor` room without an override.
 ///
 /// # Errors
 ///
@@ -229,9 +236,10 @@ fn new_sectors(
     plan: &Plan,
     connectors: &[ConnectorGeometry],
     surviving: &BTreeSet<Label>,
+    sky: &str,
 ) -> Result<Allocation, CyberError> {
     let mut allocation = Allocation::default();
-    add_room_sectors(plan, surviving, &mut allocation)?;
+    add_room_sectors(plan, surviving, sky, &mut allocation)?;
     add_connector_sectors(plan, connectors, surviving, &mut allocation)?;
     check_allocated(surviving, &allocation)?;
     Ok(allocation)
@@ -241,12 +249,13 @@ fn new_sectors(
 fn add_room_sectors(
     plan: &Plan,
     surviving: &BTreeSet<Label>,
+    sky: &str,
     allocation: &mut Allocation,
 ) -> Result<(), CyberError> {
     for (index, room) in plan.rooms.iter().enumerate() {
         let label = region_label(index);
         if surviving.contains(&label) {
-            allocation.take(label, room_sector(room))?;
+            allocation.take(label, room_sector(room, sky))?;
         }
     }
     Ok(())

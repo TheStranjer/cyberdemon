@@ -5,7 +5,10 @@
 
 use serde_json::{Value, json};
 
-use super::{boxed, diagonal_map, field_query, filter, flaggy_map, hits, query, roley_map};
+use super::{
+    boxed, defs, diagonal_map, doom_ctx, field_query, filter, flaggy_map, hexen_sky_ctx, hits,
+    query, roley_map, run_hits,
+};
 use crate::wad::map::common::fixtures::two_room_map;
 use crate::wad::map::query::{ElementKind, Op, Within};
 
@@ -127,6 +130,33 @@ fn has_tests_named_sector_roles() {
         filter("roles", Op::HasNot, json!("sky")),
     );
     assert_eq!(hits(&map, &not_sky), vec![0], "sector 0 stays closed");
+}
+
+#[test]
+fn the_sky_role_filter_reads_the_context_sky_flat() {
+    let map = roley_map();
+    let sky = field_query(ElementKind::Sectors, filter("roles", Op::Has, json!("sky")));
+    let defs = defs();
+    let hits_hexen = run_hits(&map, &sky, &hexen_sky_ctx(&defs));
+    assert!(
+        hits_hexen.is_empty(),
+        "a vanilla `F_SKY1` ceiling is not the sky when the context reads `F_SKY`"
+    );
+    let mut hexen_map = roley_map();
+    hexen_map
+        .sectors
+        .get_mut(1)
+        .expect("the fixture has 2 sectors")
+        .ceiling_flat = "F_SKY".to_owned();
+    assert_eq!(
+        run_hits(&hexen_map, &sky, &hexen_sky_ctx(&defs)),
+        vec![1],
+        "the same ceiling opens sector 1 for a `Hexen` sky context"
+    );
+    assert!(
+        run_hits(&hexen_map, &sky, &doom_ctx(&defs)).is_empty(),
+        "and nothing to the vanilla context"
+    );
 }
 
 #[test]

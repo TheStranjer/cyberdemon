@@ -7,11 +7,10 @@
 use super::compile;
 use super::{
     TestRoles, assert_door_line, assert_no_bare_flats, assert_no_gaps, assert_valid,
-    assert_window_line, compiled, connection, faces, is_riser, issues_for, lower_row,
-    lower_sides_with, map_name, opening, two_rooms, wall_faces,
+    assert_window_line, compiled, connection, faces, identity, is_riser, issues_for, lower_row,
+    lower_sides_with, opening, two_rooms, wall_faces,
 };
 use crate::plan::model::{ConnectionKind, DoorStyle};
-use crate::wad::classify::MapFormat;
 use crate::wad::map::Sidedef;
 use crate::wad::map::validate::Severity;
 
@@ -176,13 +175,7 @@ fn a_window_too_tall_for_the_gap_fails_the_compile() {
         lintel: 100_i32,
     };
     let plan = two_rooms(16, vec![connection("a", "b", kind)]);
-    let error = compile(
-        &plan,
-        map_name("MAP01"),
-        MapFormat::Doom,
-        &TestRoles::full(),
-    )
-    .expect_err("there is no glass left");
+    let error = compile(&plan, identity(), &TestRoles::full()).expect_err("there is no glass left");
     assert_eq!(error.code(), "invalid_argument", "the span is an argument");
     assert!(
         error.to_string().contains("glass"),
@@ -242,13 +235,8 @@ fn missing_roles_leave_the_dressed_map_bare_without_erroring() {
         style: DoorStyle::Fast,
     };
     let plan = two_rooms(16, vec![connection("a", "b", kind)]);
-    let out = compile(
-        &plan,
-        map_name("MAP01"),
-        MapFormat::Doom,
-        &TestRoles::missing(),
-    )
-    .expect("a theme that answers nothing is not an error");
+    let out = compile(&plan, identity(), &TestRoles::missing())
+        .expect("a theme that answers nothing is not an error");
     for row in &out.map.sidedefs {
         assert_eq!(
             (row.upper.as_str(), row.lower.as_str(), row.middle.as_str()),

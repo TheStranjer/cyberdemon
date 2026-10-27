@@ -146,6 +146,7 @@ fn geometry_errors(map: &Map) -> Vec<String> {
         definitions: &definitions,
         hexen_specials: &definitions,
         resources: &resources,
+        sky_flat: crate::wad::map::consts::SKY_FLAT,
     };
     let enabled: BTreeSet<&'static str> = [
         "vertex_out_of_range",

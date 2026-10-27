@@ -90,7 +90,7 @@ impl<'map, 'req> Engine<'map, 'req> {
             bounds,
             describe: (query.kind == ElementKind::Sectors
                 && (bounded_by_box || mentions(&query.r#where, &["area", "roles"])))
-            .then(|| Describe::new(map, ctx.defs)),
+            .then(|| Describe::new(map, ctx.defs, ctx.sky_flat)),
             owners: (query.kind == ElementKind::Sidedefs
                 && (bounded_by_box || mentions(&query.r#where, &["linedef"])))
             .then(|| build_owners(map)),

@@ -165,7 +165,8 @@ shape, one undoable step labelled `replace_flat <FROM> -> <TO>`.
   names any of `"floor"` and `"ceiling"` (case-insensitive; absent
   means both). A stray name is `invalid_argument` listing the two.
 - `to` must exist as a flat in the merged view — `list_flats` shows
-  them and `F_SKY1` is always available. There is no clearing `"-"`
+  them and the session's sky flat (`F_SKY1`, or `F_SKY` in `Hexen`) is
+  always available. There is no clearing `"-"`
   here: a flat field always names a flat, so `"-"` takes the ordinary
   unknown-name `not_found`.
 - Heights, light levels, specials and tags come out byte-identical.

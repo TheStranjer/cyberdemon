@@ -19,6 +19,7 @@ use crate::defs::{Definitions, definitions_for};
 use crate::wad::game::Game;
 use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::{solid_line, two_room_map};
+use crate::wad::map::consts::{HEXEN_SKY_FLAT, SKY_FLAT};
 use crate::wad::map::flags::FlagFamily;
 
 /// The built-in `DOOM II` rows, naming the fixture's things.
@@ -26,14 +27,20 @@ pub(super) fn defs() -> Definitions {
     definitions_for(Game::Doom2).expect("the embedded Doom II table is valid")
 }
 
-/// A `Doom`-family context over `defs`.
+/// A `Doom`-family context over `defs`, with the vanilla sky flat.
 pub(super) fn doom_ctx(defs: &Definitions) -> QueryContext<'_> {
-    QueryContext::new(FlagFamily::Doom, defs)
+    QueryContext::new(FlagFamily::Doom, defs, SKY_FLAT)
 }
 
-/// A `Hexen`-family context over `defs`.
+/// A `Hexen`-family context over `defs`, with the vanilla sky flat.
 pub(super) fn hexen_ctx(defs: &Definitions) -> QueryContext<'_> {
-    QueryContext::new(FlagFamily::Hexen, defs)
+    QueryContext::new(FlagFamily::Hexen, defs, SKY_FLAT)
+}
+
+/// A `Doom`-family context reading the `Hexen` sky flat, for the tests
+/// that check which ceiling name a `roles has sky` filter matches.
+pub(super) fn hexen_sky_ctx(defs: &Definitions) -> QueryContext<'_> {
+    QueryContext::new(FlagFamily::Doom, defs, HEXEN_SKY_FLAT)
 }
 
 /// One filter row.
@@ -70,6 +77,11 @@ pub(super) fn assert_mentions(message: &str, needles: &[&str]) {
 pub(super) fn hits(map: &Map, q: &Query) -> Vec<usize> {
     let defs = defs();
     run_query(map, &doom_ctx(&defs), q).expect("test queries are valid")
+}
+
+/// Run `q` over `map` through `ctx`, expecting success.
+pub(super) fn run_hits(map: &Map, q: &Query, ctx: &QueryContext<'_>) -> Vec<usize> {
+    run_query(map, ctx, q).expect("test queries are valid")
 }
 
 /// The two rooms plus a `secret`-special and `F_SKY1` role marker on

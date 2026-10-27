@@ -337,8 +337,14 @@ pub fn iwad_heretic(dir: &Path) -> PathBuf {
 }
 
 /// The lump directory of the Hexen `IWAD` fixture: palettes, the `TITLE`
-/// and `WINNOWR` signature lumps Hexen detection looks for, and one `MAP01`
-/// block.
+/// and `WINNOWR` signature lumps Hexen detection looks for, one `MAP01`
+/// block and a flats region.
+///
+/// The flats region carries `FLOOR1` (the two-room map's own flats) and
+/// the solid colour `SKY1` flat the `render_view` sky tests sample, but
+/// deliberately no `F_SKY` and no `F_SKY1`: the sky markers are the
+/// engine's own names, and their absence is what lets the sky tests watch
+/// the per-game sky flat exempt one name and not the other.
 fn hexen_lumps() -> Vec<Lump> {
     let mut lumps = vec![
         lump("PLAYPAL", playpal()),
@@ -347,12 +353,16 @@ fn hexen_lumps() -> Vec<Lump> {
         lump("WINNOWR", vec![b'W'; 64]),
     ];
     lumps.extend(map_block("MAP01"));
+    lumps.push(marker("F_START"));
+    lumps.push(lump("FLOOR1", vec![1_u8; FLAT_BYTES]));
+    lumps.push(lump("SKY1", vec![200_u8; FLAT_BYTES]));
+    lumps.push(marker("F_END"));
     lumps
 }
 
 /// A minimal `Hexen` style `IWAD`: the same palettes as the `DOOM II`
-/// fixture, one `MAP01` block, and the `TITLE` plus `WINNOWR` lumps that
-/// make a session detect Hexen.
+/// fixture, one `MAP01` block, a small flats region (see [`hexen_lumps`]),
+/// and the `TITLE` plus `WINNOWR` lumps that make a session detect Hexen.
 ///
 /// # Panics
 ///

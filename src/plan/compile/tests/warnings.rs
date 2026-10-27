@@ -6,13 +6,12 @@
 
 use super::compile;
 use super::{
-    TestRoles, assert_no_gaps, assert_valid, compiled, connection, map_name, opening, rect_room,
+    TestRoles, assert_no_gaps, assert_valid, compiled, connection, identity, opening, rect_room,
     two_rooms,
 };
 use crate::geom::label::{Label, Labeler as _, LayerLabeler, SAMPLE_SCALE};
 use crate::plan::model::{ConnectionKind, Plan, Room, Shape};
 use crate::plan::walls::room_layers;
-use crate::wad::classify::MapFormat;
 
 #[test]
 fn a_later_room_paints_over_the_l_shaped_one() {
@@ -81,13 +80,8 @@ fn rooms_that_do_not_touch_cannot_be_connected() {
         features: Vec::new(),
         wall_thickness: 16_i64,
     };
-    let error = compile(
-        &plan,
-        map_name("MAP01"),
-        MapFormat::Doom,
-        &TestRoles::full(),
-    )
-    .expect_err("nothing joins the two rooms");
+    let error =
+        compile(&plan, identity(), &TestRoles::full()).expect_err("nothing joins the two rooms");
     assert_eq!(error.code(), "invalid_argument", "placement is an argument");
     assert!(
         error.to_string().contains("do not touch"),

@@ -8,7 +8,7 @@ use super::super::{
 };
 use super::{
     BAND, FOUR_JAMBS, MONSTER, PLAYER_USE, REPEAT, TAG_ONE, TWO_DOOR_LINES, TestRoles, UseAction,
-    assert_use_line, door, door_plan, dress, front_sector, line_at, map_name, two_rooms, wired,
+    assert_use_line, door, door_plan, dress, front_sector, line_at, two_rooms, wired,
     wired_dressed,
 };
 use crate::plan::compile::compile;
@@ -163,7 +163,7 @@ fn the_run_records_each_doors_tag_under_its_connector_id() {
         door("second", DoorStyle::Normal, (128_i64, 96_i64)),
     ]);
     let mut compiled =
-        compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+        compile(&plan, super::identity(MapFormat::Doom), &TestRoles).expect("it compiles");
     let mut run = FeatureRun::default();
     doors(&mut compiled, &dress(), &mut run).expect("the doors wire");
     assert_eq!(
@@ -255,7 +255,7 @@ fn non_door_connectors_install_nothing() {
 fn a_door_band_painted_over_earns_no_row_and_stays_untouched() {
     let plan = door_plan(DoorStyle::Normal);
     let mut compiled =
-        compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+        compile(&plan, super::identity(MapFormat::Doom), &TestRoles).expect("it compiles");
     if let Some(info) = compiled.connector_sectors.first_mut() {
         info.sectors.clear();
     }
@@ -269,7 +269,7 @@ fn a_door_band_painted_over_earns_no_row_and_stays_untouched() {
 fn a_band_the_compiled_map_does_not_hold_refuses_the_run() {
     let plan = door_plan(DoorStyle::Fast);
     let mut compiled =
-        compile(&plan, map_name("MAP01"), MapFormat::Doom, &TestRoles).expect("it compiles");
+        compile(&plan, super::identity(MapFormat::Doom), &TestRoles).expect("it compiles");
     if let Some(info) = compiled.connector_sectors.first_mut() {
         info.sectors = vec![99_usize];
     }

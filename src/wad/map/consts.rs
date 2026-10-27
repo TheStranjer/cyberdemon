@@ -1,12 +1,12 @@
 //! Names and limits the whole map layer shares.
 //!
-//! The `"-"` none-texture marker, the sky flat and the two picture-name
-//! readers built from them ([`normalized_picture`] and [`is_sky_flat`]),
-//! beside the player's body and step limits the movement, stair,
-//! connector and dressing passes quote, and the player-start thing
-//! types. Every former per-module copy of one of these values reads from
-//! here; error and hint texts that quote a number format it from the
-//! constant.
+//! The `"-"` none-texture marker, the vanilla and `Hexen` sky flats and
+//! the two picture-name readers built from them
+//! ([`normalized_picture`] and [`is_sky_flat`]), beside the player's body
+//! and step limits the movement, stair, connector and dressing passes
+//! quote, and the player-start thing types. Every former per-module copy
+//! of one of these values reads from here; error and hint texts that
+//! quote a number format it from the constant.
 
 use alloc::string::String;
 
@@ -14,16 +14,27 @@ use alloc::string::String;
 /// store for a blank field and the writers emit for an unset one.
 pub const NO_TEXTURE: &str = "-";
 
-/// The flat every port draws the sky with. (The per-game sky flat is a
-/// separate concern; this is the vanilla marker.)
+/// The vanilla sky flat every `Doom`-family port draws the sky with, and
+/// the resting name for a session whose game is not `Hexen` (see
+/// [`crate::wad::game::sky_flat`]).
 pub const SKY_FLAT: &str = "F_SKY1";
 
-/// Whether a texture or flat name is [`SKY_FLAT`]: trimmed and
+/// The sky flat `Hexen` draws with: the engine's marker name without the
+/// trailing `1`. [`crate::wad::game::sky_flat`] answers it for
+/// [`Game::Hexen`](crate::wad::game::Game::Hexen) sessions.
+pub const HEXEN_SKY_FLAT: &str = "F_SKY";
+
+/// Whether a texture or flat name is the sky flat `sky`: trimmed and
 /// case-insensitive, the way every stored name is read.
+///
+/// `sky` comes from [`crate::wad::game::sky_flat`], so `Hexen` maps pass
+/// [`HEXEN_SKY_FLAT`] and every other game [`SKY_FLAT`]. (ZDoom-family
+/// ports can redefine the sky flat per map through `MAPINFO`, which this
+/// server does not read.)
 #[must_use]
 #[inline]
-pub fn is_sky_flat(name: &str) -> bool {
-    name.trim().eq_ignore_ascii_case(SKY_FLAT)
+pub fn is_sky_flat(name: &str, sky: &str) -> bool {
+    name.trim().eq_ignore_ascii_case(sky)
 }
 
 /// The scene key of a texture or flat name: uppercased and trimmed,
@@ -89,8 +100,8 @@ pub const PLAYER1_START_U32: u32 = PLAYER1_START.unsigned_abs();
 #[cfg(test)]
 mod tests {
     use super::{
-        COORD_MAX, COORD_MIN, DEFAULT_LINTEL, MAX_STEP_HEIGHT, MIN_LINE_WIDTH, NO_TEXTURE,
-        PLAYER_HEIGHT, PLAYER_START_TYPES, PLAYER1_START, PLAYER1_START_U32, SKY_FLAT,
+        COORD_MAX, COORD_MIN, DEFAULT_LINTEL, HEXEN_SKY_FLAT, MAX_STEP_HEIGHT, MIN_LINE_WIDTH,
+        NO_TEXTURE, PLAYER_HEIGHT, PLAYER_START_TYPES, PLAYER1_START, PLAYER1_START_U32, SKY_FLAT,
         UNKNOWN_THING_RADIUS, is_sky_flat, normalized_picture,
     };
 
@@ -98,6 +109,7 @@ mod tests {
     fn the_shared_names_hold_their_values() {
         assert_eq!(NO_TEXTURE, "-");
         assert_eq!(SKY_FLAT, "F_SKY1");
+        assert_eq!(HEXEN_SKY_FLAT, "F_SKY");
         assert_eq!(MAX_STEP_HEIGHT, 24_i32);
         assert_eq!(DEFAULT_LINTEL, 24_i32);
         assert_eq!(PLAYER_HEIGHT, 56_i32);
@@ -125,13 +137,38 @@ mod tests {
 
     #[test]
     fn sky_flat_reads_case_insensitively_and_trimmed() {
-        assert!(is_sky_flat("F_SKY1"));
-        assert!(is_sky_flat("f_sky1"), "lowercase is the same flat");
-        assert!(is_sky_flat("F_SKY1 "), "a trailing space is stored noise");
-        assert!(is_sky_flat(" f_sKy1 "), "both ends trim");
-        assert!(!is_sky_flat("F_SKY2"), "another flat is nobody's sky");
-        assert!(!is_sky_flat(""), "the empty name is not the sky");
-        assert!(!is_sky_flat("-"), "the none-marker is not the sky");
+        assert!(is_sky_flat("F_SKY1", SKY_FLAT));
+        assert!(
+            is_sky_flat("f_sky1", SKY_FLAT),
+            "lowercase is the same flat"
+        );
+        assert!(
+            is_sky_flat("F_SKY1 ", SKY_FLAT),
+            "a trailing space is stored noise"
+        );
+        assert!(is_sky_flat(" f_sKy1 ", SKY_FLAT), "both ends trim");
+        assert!(
+            !is_sky_flat("F_SKY2", SKY_FLAT),
+            "another flat is nobody's sky"
+        );
+        assert!(!is_sky_flat("", SKY_FLAT), "the empty name is not the sky");
+        assert!(
+            !is_sky_flat("-", SKY_FLAT),
+            "the none-marker is not the sky"
+        );
+        assert!(
+            is_sky_flat("F_SKY", HEXEN_SKY_FLAT),
+            "the Hexen marker is the Hexen sky"
+        );
+        assert!(is_sky_flat("f_sky ", HEXEN_SKY_FLAT), "read the same way");
+        assert!(
+            !is_sky_flat("F_SKY1", HEXEN_SKY_FLAT),
+            "the vanilla marker is not the Hexen sky"
+        );
+        assert!(
+            !is_sky_flat("F_SKY", SKY_FLAT),
+            "and the Hexen marker is not the vanilla sky"
+        );
     }
 
     #[test]

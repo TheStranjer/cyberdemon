@@ -97,6 +97,10 @@ pub struct Scene<'plan> {
     /// The emission being dressed: its [`Emitted::pieces`] label every
     /// face and its [`Emitted::sector_of_label`] owns every sector.
     pub emitted: &'plan Emitted,
+    /// The sky flat of the game the map was emitted for
+    /// ([`crate::wad::game::sky_flat`], the [`MapIdentity`](crate::plan::emit::MapIdentity)
+    /// it carries): the ceiling name the dressing keeps as sky.
+    pub sky_flat: &'static str,
 }
 
 /// Dress `map` — the emission behind `scene` — in the textures `roles`
@@ -151,6 +155,7 @@ mod tests {
     use crate::plan::model::{Connection, ConnectionKind, Plan, Room, Shape};
     use crate::plan::walls::build_walls;
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::consts::HEXEN_SKY_FLAT;
     use crate::wad::map::{Linedef, Map};
     use crate::wad::name::LumpName;
 
@@ -187,6 +192,7 @@ mod tests {
         MapIdentity {
             name: LumpName::parse("MAP01").expect("test names are valid"),
             format: MapFormat::Doom,
+            sky_flat: crate::wad::map::consts::SKY_FLAT,
         }
     }
 
@@ -216,14 +222,23 @@ mod tests {
     /// [`Scene`].
     #[track_caller]
     fn dress(plan: &Plan, roles: &dyn TextureRoles) -> Map {
+        dress_sky(plan, roles, crate::wad::map::consts::SKY_FLAT)
+    }
+
+    /// [`dress`] reading the sky flat `sky` through the scene.
+    #[track_caller]
+    fn dress_sky(plan: &Plan, roles: &dyn TextureRoles, sky: &'static str) -> Map {
         let walls = build_walls(plan).expect("the fixture walls build");
         let connectors = plan_connectors(plan, &walls).expect("the fixture connectors place");
-        let mut emitted = emit(plan, &walls, &connectors, identity()).expect("the fixture emits");
+        let mut identity = identity();
+        identity.sky_flat = sky;
+        let mut emitted = emit(plan, &walls, &connectors, identity).expect("the fixture emits");
         let mut map = core::mem::take(&mut emitted.map);
         let scene = Scene {
             plan,
             connectors: &connectors,
             emitted: &emitted,
+            sky_flat: sky,
         };
         apply_textures(&mut map, &scene, roles).expect("dressing succeeds");
         map
@@ -281,6 +296,19 @@ mod tests {
         let map = dress(&solo(vec![yard]), &FixedRoles);
         let space = map.sectors.first().expect("one sector");
         assert_eq!(space.ceiling_flat, "F_SKY1", "the sky stays the sky");
+        assert_eq!(space.floor_flat, "FLOROLE", "the floor still gets its role");
+    }
+
+    #[test]
+    fn an_outdoor_rooms_ceiling_wears_the_scenes_sky_flat() {
+        let mut yard = room("yard", None);
+        yard.outdoor = true;
+        let map = dress_sky(&solo(vec![yard]), &FixedRoles, HEXEN_SKY_FLAT);
+        let space = map.sectors.first().expect("one sector");
+        assert_eq!(
+            space.ceiling_flat, "F_SKY",
+            "a `Hexen` dressing emits and keeps the `Hexen` sky"
+        );
         assert_eq!(space.floor_flat, "FLOROLE", "the floor still gets its role");
     }
 
@@ -441,6 +469,7 @@ mod tests {
             plan: &plan,
             connectors: &connectors,
             emitted: &foreign,
+            sky_flat: crate::wad::map::consts::SKY_FLAT,
         };
         let error = apply_textures(&mut Map::default(), &scene, &NoRoles)
             .expect_err("four pieces cannot back an empty map");
@@ -468,6 +497,7 @@ mod tests {
             plan: &plan,
             connectors: &connectors,
             emitted: &foreign,
+            sky_flat: crate::wad::map::consts::SKY_FLAT,
         };
         let mut dressed = Map::default();
         let error = apply_textures(&mut dressed, &scene, &NoRoles)

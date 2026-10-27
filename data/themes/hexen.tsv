@@ -4,7 +4,7 @@ forest	wall_alt	FOREST02|FOREST*	wall
 forest	floor	F_010|F_009|F_0*	-
 forest	ceiling	F_011|F_001|F_0*	-
 forest	light_ceiling	F_011|F_0*	ceiling
-forest	outdoor_ceiling	F_SKY1	ceiling
+forest	outdoor_ceiling	F_SKY	ceiling
 forest	door	D_WD07|D_WD01|D_*|*DOOR*	wall
 forest	door_track	D_END1|D_METL1|METL*	wall
 forest	door_floor	F_010|F_0*	floor

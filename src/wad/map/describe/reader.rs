@@ -65,16 +65,18 @@ const ITEM_GROUPS: [Category; 5] = [
 ];
 
 impl<'map> Describe<'map> {
-    /// Fold `map` for describing: read its own flag family once, then the
+    /// Fold `map` for describing against the game definitions `defs` and
+    /// the sky flat `sky_flat`: read its own flag family once, then the
     /// feature targets and the [`Skill::Medium`] playability walk over it.
     #[must_use]
     #[inline]
-    pub fn new(map: &'map Map, defs: &'map Definitions) -> Self {
+    pub fn new(map: &'map Map, defs: &'map Definitions, sky_flat: &'static str) -> Self {
         let family = map.flag_family();
         Self {
             map,
             defs,
             family,
+            sky_flat,
             targets: feature_targets(map, family),
             play: analyze_playability(map, family, Skill::Medium),
         }
@@ -104,7 +106,7 @@ impl<'map> Describe<'map> {
             light: row.light,
             floor_flat: row.floor_flat.clone(),
             ceiling_flat: row.ceiling_flat.clone(),
-            sky: is_sky_flat(&row.ceiling_flat),
+            sky: is_sky_flat(&row.ceiling_flat, self.sky_flat),
             special: special_info(row.special, self.defs),
             tag: row.tag,
             wall_textures: wall_textures(self.map, sector),
@@ -242,7 +244,7 @@ impl<'map> Describe<'map> {
         if self.exits_here(sector) {
             found.insert(NAME_EXIT_ROOM.to_owned());
         }
-        if is_sky_flat(&row.ceiling_flat) {
+        if is_sky_flat(&row.ceiling_flat, self.sky_flat) {
             found.insert(NAME_SKY.to_owned());
         }
         if is_stair_step(area, neighbours) {

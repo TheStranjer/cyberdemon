@@ -27,7 +27,8 @@
 //! touches the sector on either side, or a walk-over end line crosses
 //! into it), `stair_step` (a footprint of at most 64 x 256 square units
 //! with a neighbour one to 24 units up and another the same span down)
-//! and `sky` (an `F_SKY1` ceiling).
+//! and `sky` (a ceiling wearing the session's sky flat: `F_SKY1`, `F_SKY`
+//! in `Hexen`).
 //!
 //! The neighbour `via` names, in precedence order: `door` and `lift`
 //! when the neighbour sector wears that role; `window` when every shared
@@ -201,7 +202,8 @@ pub struct SectorFacts {
     pub floor_flat: String,
     /// The ceiling flat name.
     pub ceiling_flat: String,
-    /// Whether the ceiling is the `F_SKY1` sky flat.
+    /// Whether the ceiling is the session's sky flat (`F_SKY1`, `F_SKY`
+    /// in `Hexen`).
     pub sky: bool,
     /// The sector effect named through the definitions, `None` for
     /// special `0`.
@@ -320,6 +322,9 @@ pub struct Describe<'map> {
     defs: &'map Definitions,
     /// The flag family the map's lines and sectors store their bits in.
     family: FlagFamily,
+    /// The sky flat of the caller's game ([`crate::wad::game::sky_flat`]):
+    /// the ceiling name that reads as the `sky` field and role.
+    sky_flat: &'static str,
     /// The sectors and lines the map's door, lift and teleport actions
     /// work on, read once.
     targets: FeatureTargets,
@@ -331,7 +336,8 @@ pub struct Describe<'map> {
 }
 
 /// Describe sector `sector` of `map`, naming its sector special and its
-/// things' types through the game definitions `defs`.
+/// things' types through the game definitions `defs` and reading its
+/// ceiling against the sky flat `sky_flat`.
 ///
 /// A thin wrapper over [`Describe`]: the per-map feature and playability
 /// reads are folded for this one answer, so a caller describing a whole
@@ -339,6 +345,11 @@ pub struct Describe<'map> {
 /// sector with that index.
 #[must_use]
 #[inline]
-pub fn sector_facts(map: &Map, defs: &Definitions, sector: usize) -> Option<SectorFacts> {
-    Describe::new(map, defs).sector(sector)
+pub fn sector_facts(
+    map: &Map,
+    defs: &Definitions,
+    sky_flat: &'static str,
+    sector: usize,
+) -> Option<SectorFacts> {
+    Describe::new(map, defs, sky_flat).sector(sector)
 }

@@ -67,7 +67,8 @@ Both or neither fails `invalid_argument` naming the plan path
 `ceiling` (default `128`), `light` (default `160`), `floor_flat`,
 `ceiling_flat` and `wall_texture` (the theme's roles answer unset
 ones), `outdoor` (default `false`; an outdoor room's ceiling is the
-sky unless it names a flat), `secret` (default `false`) and
+sky unless it names a flat — the session's sky flat, so `F_SKY` in a
+`Hexen` session and `F_SKY1` in every other game), `secret` (default `false`) and
 `light_effect` (unset by default; one of `none`, `flicker`,
 `strobe_fast`, `strobe_slow`, `glow` or `random_off`,
 case-insensitive). The feature run installs both: `light_effect`

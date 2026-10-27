@@ -31,7 +31,7 @@ mod tests {
     use rmcp::service::RunningService;
     use serde_json::{Value, json};
 
-    use crate::fixtures::iwad_features;
+    use crate::fixtures::{iwad_features, iwad_hexen};
     use crate::support::{call, call_err, connect, http_get};
 
     /// A connected client for one test.
@@ -41,6 +41,20 @@ mod tests {
     async fn features_loaded(dir: &Path) -> Client {
         let client = connect().await;
         let base = iwad_features(dir);
+        call(
+            &client,
+            "open_iwad",
+            json!({"path": base.display().to_string()}),
+        )
+        .await;
+        client
+    }
+
+    /// Open the Hexen `IWAD` fixture (plain two-room `MAP01`, detected
+    /// `Hexen`) as layer 0.
+    async fn hexen_loaded(dir: &Path) -> Client {
+        let client = connect().await;
+        let base = iwad_hexen(dir);
         call(
             &client,
             "open_iwad",
@@ -720,6 +734,38 @@ mod tests {
         expect_fixture_neighbours(&report);
         expect_fixture_contents(&report);
         expect_served_overview(&report).await;
+    }
+
+    #[tokio::test]
+    async fn describe_map_reads_the_hexen_sky_flat_for_a_hexen_session() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = hexen_loaded(dir.path()).await;
+        call(
+            &client,
+            "edit_sector",
+            json!({ "map": "MAP01", "index": 1_i32, "ceiling_flat": "F_SKY" }),
+        )
+        .await;
+        let report = call(
+            &client,
+            "describe_map",
+            json!({ "map": "MAP01", "render": false }),
+        )
+        .await;
+        let raised = sector_row(&report, 1);
+        assert_eq!(
+            raised["sky"],
+            json!(true),
+            "an `F_SKY` ceiling is the `Hexen` session's sky: {raised}"
+        );
+        assert!(wears(raised, "sky"), "and it wears the role: {raised}");
+        let hall = sector_row(&report, 0);
+        assert_eq!(
+            hall["sky"],
+            json!(false),
+            "the plain `FLOOR1` ceiling does not read as sky: {hall}"
+        );
+        assert!(!wears(hall, "sky"), "nor wears the role");
     }
 
     /// The two wired door bands read as doors, and their rooms reach

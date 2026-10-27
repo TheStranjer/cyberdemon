@@ -156,6 +156,7 @@ mod tests {
             definitions: &tables.doom,
             hexen_specials: &tables.hexen,
             resources: &tables.resources,
+            sky_flat: crate::wad::map::consts::SKY_FLAT,
         }
     }
 

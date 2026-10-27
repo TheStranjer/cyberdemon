@@ -73,7 +73,8 @@ pub(super) struct Side<'scene> {
 pub(super) enum Surface<'scene> {
     /// The flat's image, sampled at the world point the row lands on.
     Flat(&'scene IndexedImage),
-    /// The sky texture: an `F_SKY1` plane with the sky switch on.
+    /// The sky texture: a plane wearing [`Scene::sky_flat`] with the sky
+    /// switch on.
     Sky,
 }
 
@@ -87,10 +88,10 @@ pub(super) struct Plane<'scene> {
     /// Sector light level.
     pub(super) light: i32,
     /// The floor's picture, `None` when there is nothing to draw (no
-    /// flat, or the sky switch off on an `F_SKY1` floor).
+    /// flat, or the sky switch off on a sky-flat floor).
     pub(super) floor_surface: Option<Surface<'scene>>,
-    /// The ceiling's picture, the same rules; an `F_SKY1` ceiling with
-    /// the sky on draws [`Surface::Sky`].
+    /// The ceiling's picture, the same rules; a ceiling wearing
+    /// [`Scene::sky_flat`] with the sky on draws [`Surface::Sky`].
     pub(super) ceil_surface: Option<Surface<'scene>>,
     /// Whether the ceiling flat names the sky; the upper-wall sky hack
     /// reads this even when the sky switch is off.
@@ -124,20 +125,20 @@ impl<'scene> Plane<'scene> {
             light: sector.light,
             floor_surface,
             ceil_surface: plane_surface(scene, ceiling_flat, sky),
-            ceil_sky: is_sky_flat(ceiling_flat),
+            ceil_sky: is_sky_flat(ceiling_flat, &scene.sky_flat),
         }
     }
 }
 
-/// The surface a plane named `name` draws: the sky for an `F_SKY1` name
-/// (only when the sky switch offers `sky`), the named flat's image when
-/// the scene loaded one, and nothing otherwise.
+/// The surface a plane named `name` draws: the sky for a name the scene's
+/// sky flat matches (only when the sky switch offers `sky`), the named
+/// flat's image when the scene loaded one, and nothing otherwise.
 fn plane_surface<'scene>(
     scene: &'scene Scene,
     name: &str,
     sky: Option<Surface<'scene>>,
 ) -> Option<Surface<'scene>> {
-    if is_sky_flat(name) {
+    if is_sky_flat(name, &scene.sky_flat) {
         return sky;
     }
     normalized_picture(name).and_then(|key| scene.flats.get(&key).map(Surface::Flat))

@@ -23,7 +23,7 @@ use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportSpec, build_teleporter
 use crate::wad::map::geometry::{point_in_sector, sector_bbox};
 use crate::wad::map::ops::Point;
 
-use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sectors_of};
+use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, room_sectors_of};
 
 /// The units by which the plan teleporter's fit rule insets the square's
 /// corners: every corner of the 64-unit square shrunk by this much must
@@ -273,7 +273,7 @@ pub(super) fn to_map_point(point: Pt) -> Option<Point> {
 
 /// The refusal for a wire centre past the map coordinate range.
 fn centre_out_of_range(point: Pt, role: &str) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "the teleporter {role} point {}, {} is outside the map coordinate range: keep \
          plan points and the units transform inside the map grid",
         point.0, point.1
@@ -283,7 +283,7 @@ fn centre_out_of_range(point: Pt, role: &str) -> CyberError {
 /// The refusal for a teleporter square its room cannot hold, attributed
 /// to that room row.
 fn square_too_big(square: &TeleportSquare<'_>, x: i32, y: i32) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "the teleporter {} does not fit inside room '{}' with {TELEPORT_CLEARANCE} units \
          of clearance: the square corner at {x}, {y} lands outside the room; pass an \
          explicit {} point nearer the room's middle or move the rooms apart",

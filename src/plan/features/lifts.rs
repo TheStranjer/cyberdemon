@@ -15,7 +15,7 @@ use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{Connection, ConnectionKind, Feature, Plan};
 use crate::wad::map::features::{LiftPlatform, LiftSpec, build_lift};
 
-use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sectors_of};
+use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, room_sectors_of};
 
 /// The lift step: dress every `lift` row's room sector as a platform,
 /// in plan order.
@@ -73,7 +73,7 @@ pub(super) fn lifts(
 fn single_platform_sector(sectors: &[usize], room: &str) -> Result<usize, CyberError> {
     match sectors {
         &[only] => Ok(only),
-        many => Err(invalid(&format!(
+        many => Err(CyberError::invalid(&format!(
             "lift room '{room}' owns {} sectors: the plan lift dresses a whole room as \
              one platform; give the room a single sector, or lift one of them directly \
              with add_lift",
@@ -128,7 +128,7 @@ fn joins_lower_room(plan: &Plan, neighbour: &str, floor: i32) -> bool {
 /// The refusal for a lift room joined to a lower room by anything but
 /// an opening.
 fn lift_join_refusal(room: &str, neighbour: &str, connection: &Connection) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "lift room '{room}' joins lower room '{neighbour}' through connection '{}' of \
          kind {}: a lift needs openings to the lower rooms; make the connection an \
          opening, raise the lower room's floor, or move the lift",

@@ -76,14 +76,9 @@ use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::DoorStyle;
 use crate::wad::name::LumpName;
 
-/// The `InvalidArgument` with an actionable `message`.
-fn invalid(message: &str) -> CyberError {
-    CyberError::InvalidArgument(message.to_owned())
-}
-
 /// The refusal for a wall with no room within reach behind it.
 fn no_room() -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "no room behind this wall within {MAX_DEPTH} units; move the rooms closer or give \
          a larger depth"
     ))

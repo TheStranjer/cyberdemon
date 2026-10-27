@@ -4,10 +4,12 @@
 //!
 //! [`Prepared::new`] takes that view and runs the request checks that
 //! need the map as it stands, so [`apply_overlay`](super::apply_overlay)
-//! can be refused before anything is written. [`Prepared::replaced_sectors`]
-//! then probes which sectors `keep_interior` spares, [`Prepared::arrange_pieces`]
-//! runs the arrangement under the labeler of [`super::labeler`], and
-//! [`Prepared::rebuild`] writes the pieces up as the rows of
+//! can be refused before anything is written. [`Prepared::cut`] runs the
+//! arrangement's labeler-independent half once; within it
+//! [`Prepared::replaced_sectors`] labels that cut under nothing-kept
+//! rules to probe which sectors `keep_interior` spares,
+//! [`Prepared::arrange_pieces`] labels it again under the request's own
+//! rules, and [`Prepared::rebuild`] writes the pieces up as the rows of
 //! [`super::rebuilt`], reporting them as an
 //! [`OverlayResult`](super::OverlayResult).
 
@@ -16,14 +18,14 @@ use alloc::slice;
 
 use crate::error::CyberError;
 use crate::geom::label::Label;
-use crate::geom::segment::{ExternalSegment, delta, dot};
-use crate::geom::{Layer, Piece, Pt, arrange};
+use crate::geom::segment::{ExternalSegment, delta, distance_point_segment, dot, widen};
+use crate::geom::{Cut, Layer, Piece, Pt, arrange};
 use crate::wad::map::model::{Linedef, Map, Sector, Sidedef};
 
 use super::geometry::{
-    ceiling_height, check_outside, collect_replaced, dangling_ends, distance_point_segment,
-    external_segments, first_external, floor_height, midpoint, nearer, plan_vertices, region_of,
-    sector_id, segment_of, unit_length, void_front,
+    ceiling_height, check_outside, collect_replaced, dangling_ends, external_segments,
+    first_external, floor_height, midpoint, nearer, plan_vertices, region_of, sector_id,
+    segment_of, unit_length, void_front,
 };
 use super::labeler::{OverlayLabeler, sector_shapes};
 use super::rebuilt::{
@@ -138,36 +140,46 @@ impl<'req, 'src> Prepared<'req, 'src> {
         }
     }
 
-    /// The sectors touching the polygon boundary from inside, found by
-    /// arranging the paint once with nothing kept and sampling the
-    /// inside of every boundary piece in the original map.
-    ///
-    /// # Errors
-    ///
-    /// [`apply_overlay`](super::apply_overlay)'s arrangement errors.
-    pub(super) fn replaced_sectors(&self) -> Result<Vec<u32>, CyberError> {
-        let layer = Layer {
-            label: self.new_label,
-            polygon: self.request.polygon.clone(),
-        };
+    /// The original sectors touching the polygon boundary from inside,
+    /// found by labelling the shared cut once with nothing kept and
+    /// sampling the inside of every boundary piece in the original map.
+    pub(super) fn replaced_sectors(&self, cut: &Cut) -> Vec<u32> {
         let probe = self.labeler(false, &[], OutsideRule::Original);
-        let pieces = arrange(slice::from_ref(&layer), &self.external, &probe)?;
-        Ok(collect_replaced(&pieces, &self.shapes, &self.polygon))
+        let pieces = cut.label(&probe);
+        collect_replaced(&pieces, &self.shapes, &self.polygon)
     }
 
-    /// The final arrangement of the paint over the original lines.
+    /// The final labelling of the shared cut: the paint over the
+    /// original lines under this request's rules.
     ///
     /// # Errors
     ///
     /// [`apply_overlay`](super::apply_overlay)'s arrangement errors.
-    pub(super) fn arrange_pieces(&self, replaced: &[u32]) -> Result<Vec<Piece>, CyberError> {
+    pub(super) fn arrange_pieces(
+        &self,
+        cut: &Cut,
+        replaced: &[u32],
+    ) -> Result<Vec<Piece>, CyberError> {
+        let outside = self.outside_rule()?;
+        let labeler = self.labeler(self.request.keep_interior, replaced, outside);
+        Ok(cut.label(&labeler))
+    }
+
+    /// The labeler-independent cut: every paint edge and original line
+    /// split at the other's crossings, T-junctions and overlaps, ready
+    /// to be labelled once for the `keep_interior` probe and once for
+    /// the final arrangement.
+    ///
+    /// # Errors
+    ///
+    /// [`apply_overlay`](super::apply_overlay)'s polygon validation and
+    /// segment-limit refusals.
+    pub(super) fn cut(&self) -> Result<Cut, CyberError> {
         let layer = Layer {
             label: self.new_label,
             polygon: self.request.polygon.clone(),
         };
-        let outside = self.outside_rule()?;
-        let labeler = self.labeler(self.request.keep_interior, replaced, outside);
-        arrange(slice::from_ref(&layer), &self.external, &labeler)
+        arrange::cut(slice::from_ref(&layer), &self.external)
     }
 
     /// Rebuild the map's vertices, linedefs and sidedefs from `pieces`.
@@ -297,9 +309,16 @@ impl<'req, 'src> Prepared<'req, 'src> {
 
     /// The wall candidates with their distance from `at`.
     fn wall_claims(&self, sector: usize, at: Pt) -> Vec<WallClaim> {
+        let point = widen(at);
         self.wall_candidates(sector)
             .into_iter()
-            .map(|(ends, name)| (ends, distance_point_segment(at, ends.0, ends.1), name))
+            .map(|(ends, name)| {
+                (
+                    ends,
+                    distance_point_segment(point, widen(ends.0), widen(ends.1)),
+                    name,
+                )
+            })
             .collect()
     }
 

@@ -44,10 +44,6 @@ use apply::{
 
 pub use select::expand_selection;
 
-/// Lowest coordinate an `i16` binary vertex column holds.
-pub(super) const COORD_MIN: i32 = -0x8000_i32;
-/// Highest coordinate an `i16` binary vertex column holds.
-pub(super) const COORD_MAX: i32 = 0x7FFF_i32;
 /// Whole degrees in one turn, for thing-facing normalisation.
 pub(super) const DEGREES: i64 = 360;
 /// Millidegrees in one degree.

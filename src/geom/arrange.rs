@@ -7,23 +7,29 @@
 //! pieces are deduped with their origins merged, each side is sampled
 //! and labelled, pieces whose sides agree are dropped, and collinear
 //! neighbours are stitched back together where nothing else touches
-//! between them.
+//! between them. `cut` stops after the dedupe and hands back the
+//! labeler-independent [`Cut`] its [`Cut::label`] runs the same final
+//! half of the pipeline on, so a caller labelling one geometry under
+//! several rules cuts it once.
 //!
 //! The layer checks, the shared constants and the geometry hint stay
-//! here beside [`arrange`]; cutting every segment at the points that lie
-//! on it and collecting the resulting pieces by endpoint pair is the
-//! private `split` module, sampling both sides of a piece, dropping the
-//! interior ones and stitching collinear runs together the private
-//! `merge` module. Both are implementation details of the one entry
-//! point below.
+//! here beside [`arrange`] and [`cut`]; cutting every segment at the
+//! points that lie on it and collecting the resulting pieces by endpoint
+//! pair is the private `split` module, sampling both sides of a piece,
+//! dropping the interior ones and stitching collinear runs together the
+//! private `merge` module. Both are implementation details of the two
+//! entry points below.
 
 mod merge;
 mod split;
 
 use crate::error::CyberError;
 use crate::geom::label::{Label, Labeler};
-use crate::geom::segment::{self, ExternalSegment, PointMerge, cross, opposite, orient};
+use crate::geom::segment::{
+    self, ExternalSegment, PointMerge, SegmentOrigin, cross, opposite, orient,
+};
 use crate::geom::{Layer, Piece, Pt};
+use alloc::collections::BTreeMap;
 use merge::{label_pieces, merge_collinear};
 use split::{collect_segments, dedupe_segments};
 
@@ -66,14 +72,54 @@ pub fn arrange(
     external: &[ExternalSegment],
     labeler: &dyn Labeler,
 ) -> Result<Vec<Piece>, CyberError> {
+    Ok(cut(layers, external)?.label(labeler))
+}
+
+/// The cut arrangement of one set of inputs: every layer edge and
+/// external segment split at every crossing, T-junction and overlap,
+/// deduped into one table of pieces with their merged sources.
+///
+/// The table is the arrangement's labeler-independent half, so a caller
+/// that must try several labelling rules over one geometry
+/// ([`crate::wad::map::overlay`]'s `keep_interior` probe and final
+/// arrangement) pays for the cut finding, the point merge and the
+/// dedupe once. [`Cut::label`] reproduces exactly what [`arrange`]
+/// returns for the same labeler.
+#[derive(Clone, Debug)]
+pub struct Cut {
+    /// The deduped piece table: endpoint pair to merged origins.
+    table: BTreeMap<(Pt, Pt), Vec<SegmentOrigin>>,
+}
+
+/// Cut every layer edge and external segment at every other, without
+/// labelling: the shared geometry half of [`arrange`], returned as the
+/// [`Cut`] one can label under as many rules as needed.
+///
+/// # Errors
+///
+/// [`arrange`]'s layer-validation and segment-limit refusals.
+#[inline]
+pub fn cut(layers: &[Layer], external: &[ExternalSegment]) -> Result<Cut, CyberError> {
     let segs = collect_segments(layers, external)?;
     let cuts = segment::find_cuts(&segs);
     let merged = PointMerge::from_segments(&segs, &cuts);
-    let table = dedupe_segments(&segs, &cuts, &merged);
-    let mut pieces = label_pieces(table, labeler);
-    merge_collinear(&mut pieces);
-    pieces.sort_by_key(|piece| (piece.a, piece.b));
-    Ok(pieces)
+    Ok(Cut {
+        table: dedupe_segments(&segs, &cuts, &merged),
+    })
+}
+
+impl Cut {
+    /// Ask `labeler` for both sides of every piece, drop the interior
+    /// ones, stitch collinear runs and sort by `(a, b)` — the labelling
+    /// half of [`arrange`], repeatable on one cut.
+    #[must_use]
+    #[inline]
+    pub fn label(&self, labeler: &dyn Labeler) -> Vec<Piece> {
+        let mut pieces = label_pieces(self.table.clone(), labeler);
+        merge_collinear(&mut pieces);
+        pieces.sort_by_key(|piece| (piece.a, piece.b));
+        pieces
+    }
 }
 
 /// Drop repeated neighbours and an explicit closing vertex so every edge

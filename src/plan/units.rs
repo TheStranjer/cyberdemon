@@ -501,9 +501,10 @@ fn field(path: &str, name: &str) -> String {
 }
 
 /// The refusal of a plan coordinate the transform cannot carry, naming
-/// where in the plan it sits.
+/// where in the plan it sits. The plan thing rows carry their point
+/// fields through the same wording.
 #[inline]
-fn range_error(path: &str) -> CyberError {
+pub(super) fn range_error(path: &str) -> CyberError {
     CyberError::InvalidArgument(format!(
         "{path} leaves the supported range under the plan transform; \
          reduce scale_num, the origin or the coordinates"

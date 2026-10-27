@@ -31,7 +31,7 @@ use crate::wad::map::ops::Point;
 
 use super::checks::remote_door;
 use super::teleporters::to_map_point;
-use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, invalid, room_sectors_of};
+use super::{FeatureDress, FeatureRow, FeatureRun, NO_TEXTURE, room_sectors_of};
 
 /// The switch step: mount every `switch` row's panel on its room's wall
 /// — the one its `wall` side and `at` point pick — firing the remote
@@ -285,7 +285,7 @@ fn walk_over_exit(
 fn wall_at(at: Option<Pt>, kind: &str) -> Result<Option<Point>, CyberError> {
     at.map(|point| {
         to_map_point(point).ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "the {kind} at point {}, {} is outside the map coordinate range: keep \
                  plan points and the units transform inside the map grid",
                 point.0, point.1
@@ -472,7 +472,7 @@ fn no_switch_wall(room: &str, wall: Option<Side>) -> CyberError {
         || "no one-sided wall".to_owned(),
         |side| format!("no one-sided wall facing {}", side_name(side)),
     );
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "room '{room}' has {facing} to mount a switch on: every boundary line is shared \
          with another sector; pick another room, leave `wall` unset, or give the plan a \
          wall thickness"

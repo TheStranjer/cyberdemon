@@ -15,9 +15,11 @@ use alloc::collections::BTreeMap;
 use crate::error::CyberError;
 use crate::fixed::midpoint;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
+use crate::wad::map::convert::format_name;
 
 use super::super::model::Map;
-use super::{COORD_MAX, COORD_MIN, DEGREES, Move, Operations, Point, Selection, ThingMove};
+use super::{DEGREES, Move, Operations, Point, Selection, ThingMove};
 
 /// The planned vertex destinations keyed by index, for the checks that
 /// compare positions after the move.
@@ -157,15 +159,6 @@ fn fit(label: &str, at: Point, format: MapFormat) -> Result<(i32, i32), CyberErr
         )));
     }
     Ok((stored_x, stored_y))
-}
-
-/// The format's name as map tools spell it.
-const fn format_name(format: MapFormat) -> &'static str {
-    match format {
-        MapFormat::Doom => "Doom",
-        MapFormat::Hexen => "Hexen",
-        MapFormat::Udmf => "UDMF",
-    }
 }
 
 /// Refuse any linedef whose moved endpoints collapse onto each other,

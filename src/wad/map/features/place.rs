@@ -37,7 +37,7 @@ pub use strip::void_strip;
 
 use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};
 use crate::geom::Pt;
-use crate::geom::segment::{Delta, cross, delta, dot};
+use crate::geom::segment::{Delta, distance_point_segment};
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::Point;
 
@@ -159,27 +159,16 @@ fn vector(point: Point) -> Delta {
 /// The squared distance from `at` to segment `from`-`to` as an exact
 /// fraction `num / den` with `den` positive.
 ///
-/// Clamped endpoint distances use `1`, the perpendicular interior
-/// distance the squared run length. Two of them compare by
+/// This is [`crate::geom`]'s exact point-to-segment measure lifted from
+/// the map's `i32` points into the `i128` space; that engine owns the
+/// clamping and fraction rules. Two of them compare by
 /// cross-multiplication, which is how [`nearest_boundary`] and the
 /// [`crate::plan`] feature engine's wall choice rank their candidates
 /// without a float.
 #[must_use]
 #[inline]
 pub fn distance_fraction(at: Point, from: Point, to: Point) -> (i128, i128) {
-    let run = delta(wide(from), wide(to));
-    let offset = delta(wide(from), wide(at));
-    let squared = dot(run, run);
-    let along = dot(offset, run);
-    if squared == 0_i128 || along <= 0_i128 {
-        return (dot(offset, offset), 1_i128);
-    }
-    if along >= squared {
-        let back = delta(wide(to), wide(at));
-        return (dot(back, back), 1_i128);
-    }
-    let perpendicular = cross(run, offset);
-    (perpendicular.saturating_mul(perpendicular), squared)
+    distance_point_segment(vector(at), vector(from), vector(to))
 }
 
 /// The floored integer length of an `i128` delta vector, saturated into

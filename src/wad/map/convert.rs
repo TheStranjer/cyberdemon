@@ -187,15 +187,11 @@ pub struct KindCounts {
 }
 
 /// The lowercase name of one map layout, spelled as the tool results and
-/// `list_maps` spell it.
+/// `list_maps` spell it: [`MapFormat::as_str`]'s wire name, owned there.
 #[must_use]
 #[inline]
 pub const fn format_name(format: MapFormat) -> &'static str {
-    match format {
-        MapFormat::Doom => "doom",
-        MapFormat::Hexen => "hexen",
-        MapFormat::Udmf => "udmf",
-    }
+    format.as_str()
 }
 
 /// Whether `name` is a generated node lump, whose layout is tied to the map

@@ -44,7 +44,7 @@ use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Pai
 use crate::wad::map::{Linedef, Map, Sector};
 
 use super::wall::{carve_strip, choose_wall, place_rect, strip_face_lost, strip_wall, to_pts};
-use super::{NO_TEXTURE, current_map, invalid, sector_lost, theme_skin, wall_lost};
+use super::{NO_TEXTURE, current_map, sector_lost, theme_skin, wall_lost};
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
 pub(super) const DEFAULT_WIDTH: i32 = 64_i32;
@@ -249,7 +249,7 @@ pub(super) fn style_of(text: &str) -> Result<DoorStyle, CyberError> {
         .into_iter()
         .find(|style| style_name(*style) == wanted)
         .ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "style {text:?} is not a door style: pass one of {}",
                 style_names().join(", ")
             ))
@@ -282,7 +282,7 @@ pub(super) fn target_of(
     match (between, linedef) {
         (Some([a, b]), None) => Ok(Target::Between { a, b }),
         (None, Some(line)) => Ok(Target::Linedef(line)),
-        _ => Err(invalid(&format!(
+        _ => Err(CyberError::invalid(&format!(
             "pass exactly one of between ([sectorA, sectorB] for the two rooms {joins}) \
              and linedef (the wall to cut)",
         ))),

@@ -27,7 +27,7 @@ use crate::tools::maps::params::ElementKind;
 use crate::wad::map::query::{check_index, missing_index};
 
 use super::door::{Chosen, DoorSpec, MAX_DEPTH, Placed, Target};
-use super::{invalid, no_room, wall_lost};
+use super::{no_room, wall_lost};
 
 /// The void strip `add_door` and `add_window` carve between touching
 /// rooms, in map units.
@@ -102,7 +102,7 @@ pub(super) fn choose_between(
     check_index(ElementKind::Sectors, a, map.sectors.len())?;
     check_index(ElementKind::Sectors, b, map.sectors.len())?;
     let boundary = longest_boundary(map, a, b).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "sectors {a} and {b} share no two-sided boundary: draw the rooms touching (or \
              give the door wall's linedef index); get_map_summary lists each sector's \
              neighbours"
@@ -114,7 +114,7 @@ pub(super) fn choose_between(
             |point| nearest_boundary(map, a, b, point),
         )
         .ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "no line of the shared boundary of sectors {a} and {b} has resolvable \
                  vertices: repair the dangling vertex references first"
             ))
@@ -164,7 +164,7 @@ pub(super) fn choose_linedef(
             centre: project_onto_line(map, line, at),
             touching: true,
         }),
-        (Some(a), Some(_)) => Err(invalid(&format!(
+        (Some(a), Some(_)) => Err(CyberError::invalid(&format!(
             "both sides of linedef {line} face sector {a}: a door wall separates two \
              sectors or bounds the space behind it, not one sector twice"
         ))),
@@ -175,11 +175,11 @@ pub(super) fn choose_linedef(
             centre: project_onto_line(map, line, at),
             touching: false,
         }),
-        (None, Some(b)) => Err(invalid(&format!(
+        (None, Some(b)) => Err(CyberError::invalid(&format!(
             "linedef {line} has only a back side (sector {b}): flip it or give it a \
              front sidedef before cutting a door into it (see add_sidedef)"
         ))),
-        (None, None) => Err(invalid(&format!(
+        (None, None) => Err(CyberError::invalid(&format!(
             "linedef {line} has no usable sidedef: a door wall needs a front side \
              facing its room (see add_sidedef)"
         ))),
@@ -237,7 +237,7 @@ pub(super) fn carve_strip(
 ) -> Result<Vec<String>, CyberError> {
     let (a, b) = (chosen.room_a, chosen.room_b);
     let boundary = longest_boundary(map, a, b).ok_or_else(|| {
-        invalid(&format!(
+        CyberError::invalid(&format!(
             "sectors {a} and {b} share no two-sided boundary to carve; re-read the map \
              and pass current indices"
         ))
@@ -273,7 +273,7 @@ pub(super) fn strip_wall(map: &Map, room: usize, near: Point) -> Option<usize> {
 
 /// The refusal when the strip carve left room `room` unfaceable.
 pub(super) fn strip_face_lost(room: usize) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "sector {room} has no wall facing the carved strip: the void carve removed its \
          boundary; check the two sectors' shared boundary and re-read the map"
     ))
@@ -284,7 +284,7 @@ pub(super) fn strip_face_lost(room: usize) -> CyberError {
 pub(super) fn recess_depth(map: &Map, wall: &DoorWall, spec: &DoorSpec) -> Result<i32, CyberError> {
     match spec.depth {
         Some(depth) if depth > 0_i32 => Ok(depth),
-        Some(_) => Err(invalid(
+        Some(_) => Err(CyberError::invalid(
             "the door depth must be a positive number of map units (the recess the \
              door slides into)",
         )),

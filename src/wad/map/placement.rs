@@ -35,6 +35,7 @@ use alloc::vec::Vec;
 use crate::defs::Definitions;
 use crate::fixed::midpoint;
 use crate::geom::Pt;
+use crate::geom::segment::distance_point_segment;
 use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{FlagFamily, blocks_players};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
@@ -72,32 +73,15 @@ pub fn thing_clearance(definitions: &Definitions, kind: u32, unknown_radius: i64
 }
 
 /// Whether `point` keeps at least `min` distance from the segment
-/// `from`-`to`, exact in `i128`: squared distances are compared as
-/// integers, the perpendicular case as `cross^2 >= min^2 * len^2`.
+/// `from`-`to`, exact in `i128`.
+///
+/// [`crate::geom`]'s point-to-segment fraction against `min * min`, the
+/// perpendicular case working out to `cross^2 >= min^2 * len^2`.
 #[must_use]
 #[inline]
 pub const fn keeps_distance(from: End, to: End, point: End, min: i128) -> bool {
-    let (ax, ay) = from;
-    let (bx, by) = to;
-    let (px, py) = point;
-    let dx = bx.saturating_sub(ax);
-    let dy = by.saturating_sub(ay);
-    let wx = px.saturating_sub(ax);
-    let wy = py.saturating_sub(ay);
-    let len2 = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
-    let near2 = wx.saturating_mul(wx).saturating_add(wy.saturating_mul(wy));
-    let need = min.saturating_mul(min);
-    let dot = wx.saturating_mul(dx).saturating_add(wy.saturating_mul(dy));
-    if len2 == 0_i128 || dot <= 0_i128 {
-        return near2 >= need;
-    }
-    if dot >= len2 {
-        let ex = px.saturating_sub(bx);
-        let ey = py.saturating_sub(by);
-        return ex.saturating_mul(ex).saturating_add(ey.saturating_mul(ey)) >= need;
-    }
-    let cross = dx.saturating_mul(wy).saturating_sub(dy.saturating_mul(wx));
-    cross.saturating_mul(cross) >= need.saturating_mul(len2)
+    let (num, den) = distance_point_segment(point, from, to);
+    num >= min.saturating_mul(min).saturating_mul(den)
 }
 
 /// Both endpoints of `linedef` widened to `i128`, when they resolve.

@@ -20,8 +20,8 @@ use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Feature, KeyColo
 use crate::wad::map::Map;
 use crate::wad::map::model::Thing;
 
+use super::FeatureRun;
 use super::lifts::connection_name;
-use super::{FeatureRun, invalid};
 
 /// The lower-case colour word the key check finds in a key definition's
 /// name; skull keys carry the same word, so they count alike.
@@ -208,7 +208,7 @@ pub(super) fn remote_door(
 /// The refusal for a switch whose `opens` names no wired remote door,
 /// attributed to the feature row that carried the reference.
 fn not_remote(opens: &str) -> CyberError {
-    invalid(&format!(
+    CyberError::invalid(&format!(
         "switch opens {opens} which is not a remote door: point it at a door connection \
          of style remote, or leave the door for its own trigger"
     ))

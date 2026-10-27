@@ -221,6 +221,9 @@ enum OutsideRule {
 /// record and reports it in [`OverlayResult::sector`]. Lines the polygon
 /// touches mid-span are split, lines it crosses are cut, and lines or
 /// line pieces whose two sides end up with the same label are dropped.
+/// The cut runs once; a `keep_interior` request labels it a second time,
+/// so the probe of the sectors the paint replaces does not pay for the
+/// whole arrangement twice.
 ///
 /// # Errors
 ///
@@ -234,12 +237,13 @@ enum OutsideRule {
 #[inline]
 pub fn apply_overlay(map: &mut Map, request: &OverlayRequest) -> Result<OverlayResult, CyberError> {
     let prepared = Prepared::new(map, request)?;
+    let cut = prepared.cut()?;
     let replaced = if request.keep_interior {
-        prepared.replaced_sectors()?
+        prepared.replaced_sectors(&cut)
     } else {
         Vec::new()
     };
-    let pieces = prepared.arrange_pieces(&replaced)?;
+    let pieces = prepared.arrange_pieces(&cut, &replaced)?;
     let rebuilt = prepared.rebuild(&pieces)?;
     let result = rebuilt.result.clone();
     rebuilt.apply_to(map);

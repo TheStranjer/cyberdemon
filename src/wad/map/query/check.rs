@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use crate::error::CyberError;
 use crate::wad::map::describe::ROLE_NAMES;
-use crate::wad::map::flags::{FlagFamily, FlagKind, names, to_names};
+use crate::wad::map::flags::{FlagFamily, FlagKind, check_flag, to_names};
 use crate::wad::name::glob_match;
 
 use super::engine::Prepared;
@@ -222,20 +222,6 @@ fn check_name(family: FlagFamily, spec: &FieldSpec, filter: &Filter) -> Result<(
         FieldType::Roles => check_role(spec, wanted),
         FieldType::Number | FieldType::Text | FieldType::Boolean => Ok(()),
     }
-}
-
-/// Refuse a flag name the family's table does not carry.
-fn check_flag(kind: FlagKind, family: FlagFamily, wanted: &str) -> Result<(), CyberError> {
-    if names(kind, family).iter().any(|entry| entry.0 == wanted) {
-        return Ok(());
-    }
-    let valid: Vec<&str> = names(kind, family).iter().map(|entry| entry.0).collect();
-    Err(CyberError::InvalidArgument(format!(
-        "unknown {} flag '{wanted}' for the {} family: valid names are {}",
-        kind.as_str(),
-        family.as_str(),
-        valid.join(", "),
-    )))
 }
 
 /// Refuse a role name the describe classification never answers with.

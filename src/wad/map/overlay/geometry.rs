@@ -7,17 +7,18 @@
 //! [`plan_vertices`] lays out the rebuilt vertex rows and [`plan_point`]
 //! reads one back. [`collect_replaced`] finds the sectors `keep_interior`
 //! spares and [`region_of`] reads a piece's two labels. The rest are the
-//! arithmetic: [`grid_length`] and [`unit_length`] for lengths,
-//! [`midpoint`] and [`distance_point_segment`] for positions, [`widen_box`]
-//! and [`box_area`] for the containment boxes, and the `s_`-prefixed
-//! helpers for the arrangement's scaled sample coordinates.
+//! arithmetic: [`grid_length`] and [`unit_length`] for lengths, [`midpoint`]
+//! for positions (the exact point-to-segment distance the wall claims rank
+//! by is [`distance_point_segment`](crate::geom::segment) in [`crate::geom`]),
+//! [`widen_box`] and [`box_area`] for the containment boxes, and the
+//! `s_`-prefixed helpers for the arrangement's scaled sample coordinates.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::error::CyberError;
 use crate::fixed::{self, hypot, isqrt};
 use crate::geom::label::{Label, ScaledPt, contains_point};
-use crate::geom::segment::{ExternalSegment, SourceId, cross, delta, dot};
+use crate::geom::segment::{ExternalSegment, SourceId, delta, dot};
 use crate::geom::{Piece, Pt};
 use crate::wad::map::model::{Linedef, Map, Sector, Vertex};
 use crate::wad::map::query::{ElementKind, check_index};
@@ -251,31 +252,13 @@ pub(super) fn box_area((min_x, min_y, max_x, max_y): (i64, i64, i64, i64)) -> i1
     width.saturating_mul(height)
 }
 
-/// The squared distance from a grid point to a grid segment, as an
-/// exact fraction `(numerator, denominator)`.
-pub(super) fn distance_point_segment(point: Pt, from: Pt, to: Pt) -> (i128, i128) {
-    let direction = delta(from, to);
-    let offset = delta(from, point);
-    let squared = dot(direction, direction);
-    let along = dot(direction, offset);
-    if squared <= 0 || along <= 0 {
-        return (dot(offset, offset), 1_i128);
-    }
-    if along >= squared {
-        let far = delta(to, point);
-        return (dot(far, far), 1_i128);
-    }
-    let cross = cross(direction, offset);
-    (cross.saturating_mul(cross), squared)
-}
-
 /// Whether fraction `left` is strictly below fraction `right` (saturated
 /// products; equal or indistinguishable counts as not closer).
 const fn closer(left: Distance, right: Distance) -> bool {
     left.0.saturating_mul(right.1) < right.0.saturating_mul(left.1)
 }
 
-/// The nearer of two wall claims, keeping the first on ties.
+/// The nearest of two wall claims, keeping the first on ties.
 pub(super) fn nearer(best: WallClaim, claim: WallClaim) -> WallClaim {
     if closer(claim.1, best.1) { claim } else { best }
 }

@@ -27,7 +27,7 @@ use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::fixed::midpoint;
 use crate::geom::Pt;
-use crate::plan::units::Units;
+use crate::plan::units::{Units, range_error};
 /// A difficulty skill a planned thing can be limited to: the flag tables'
 /// own [`Skill`], re-exported where the plan writers read it.
 pub use crate::wad::map::flags::Skill;
@@ -232,13 +232,10 @@ fn transform_point(
     point: Pt,
 ) -> Result<Pt, CyberError> {
     let (x, y) = point;
-    context.units.point(context.grid, x, y).ok_or_else(|| {
-        CyberError::InvalidArgument(format!(
-            "{}: x/y leaves the supported range under the plan transform; reduce scale_num, the \
-             origin or the coordinates",
-            spec.path
-        ))
-    })
+    context
+        .units
+        .point(context.grid, x, y)
+        .ok_or_else(|| range_error(&format!("{}: x/y", spec.path)))
 }
 
 /// The first sector the plan room `id` owns, refused with the row's

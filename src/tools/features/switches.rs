@@ -23,8 +23,8 @@ use crate::wad::map::features::{
     build_walk_over_exit,
 };
 
+use super::current_map;
 use super::door::point_of;
-use super::{current_map, invalid};
 use crate::tools::maps::params::PointParam;
 
 /// Arguments for [`Cyberdemon::add_switch`].
@@ -95,7 +95,7 @@ pub(super) fn action_of(text: &str) -> Result<SwitchAction, CyberError> {
         .into_iter()
         .find(|action| action_name(*action) == wanted)
         .ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "action {text:?} is not a switch action: pass one of {}",
                 action_names().join(", ")
             ))
@@ -189,7 +189,7 @@ pub(super) fn kind_of(text: &str) -> Result<ExitKind, CyberError> {
         .into_iter()
         .find(|kind| kind_name(*kind) == wanted)
         .ok_or_else(|| {
-            invalid(&format!(
+            CyberError::invalid(&format!(
                 "kind {text:?} is not an exit kind: pass \"switch\" (an exit switch on \
                  linedef) or \"walk_over\" (every two-sided boundary of sector)"
             ))
@@ -216,7 +216,7 @@ pub(super) struct ExitReport {
 /// exit action on the required `linedef`.
 fn exit_via_switch(session: &mut Session, args: &AddExitParams) -> Result<ExitReport, CyberError> {
     let Some(linedef) = args.linedef else {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "kind \"switch\" requires linedef: the index of the wall to mount the exit \
              switch on (assemble_map lists the linedefs)",
         ));
@@ -252,7 +252,7 @@ fn exit_via_walkover(
     args: &AddExitParams,
 ) -> Result<ExitReport, CyberError> {
     let Some(sector) = args.sector else {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "kind \"walk_over\" requires sector: the index of the sector whose two-sided \
              boundaries the player crosses to end the level (get_map_summary lists the \
              sectors)",

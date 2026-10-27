@@ -32,7 +32,6 @@ use crate::wad::map::query::check_indices;
 use crate::wad::map::{Map, Thing};
 use crate::wad::name::LumpName;
 
-use super::invalid;
 use super::place_params::{
     NeedSpec, PLACE_NEXT_STEPS, PLACE_UNKNOWN_RADIUS, PlaceRequest, PlaceThingsParams, WhereSpec,
     place_request, thing_bit,
@@ -145,7 +144,7 @@ pub(super) fn place_on(
     definitions: &Definitions,
 ) -> Result<PlacedStep, CyberError> {
     if request.facing == Facing::PlayerStart && player_start(map).is_none() {
-        return Err(invalid(
+        return Err(CyberError::invalid(
             "the map holds no player 1 start (thing type 1): add one with add_thing or choose \
              another angle",
         ));

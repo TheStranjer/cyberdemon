@@ -6,7 +6,9 @@ use super::{CountingLabeler, assert_clean, find_piece, piece_claims, rect, room}
 use crate::fixed::gcd;
 use crate::geom::Pt;
 use crate::geom::arrange::split::normalize_fraction;
-use crate::geom::arrange::{arrange, normalize_polygon, polygon_area2, ring_edges, self_crossing};
+use crate::geom::arrange::{
+    arrange, cut, normalize_polygon, polygon_area2, ring_edges, self_crossing,
+};
 use crate::geom::label::Label;
 use crate::geom::segment::{ExternalSegment, SourceId};
 use crate::geom::{Layer, LayerLabeler};
@@ -313,4 +315,35 @@ fn more_than_the_limit_of_segments_is_rejected() {
         .collect();
     let error = arrange(&[], &external, &LayerLabeler::new(&[])).unwrap_err();
     assert_eq!(error.code(), "limit_exceeded", "segment cap");
+}
+
+#[test]
+fn one_cut_labelled_repeats_what_every_full_arrange_produces() {
+    let rooms = vec![room(1, rect(0, 0, 32, 20)), room(2, rect(28, 10, 60, 30))];
+    let external = vec![ExternalSegment {
+        a: (10, -5),
+        b: (10, 40),
+    }];
+    let cut = cut(&rooms, &external).expect("the stack cuts");
+    let relabelled = cut.label(&CountingLabeler::default());
+    let fresh = arrange(&rooms, &external, &CountingLabeler::default()).expect("arranges");
+    assert_eq!(relabelled, fresh, "cut once, label, is the whole arrange");
+    assert_clean(&cut.label(&LayerLabeler::new(&rooms)));
+}
+
+#[test]
+fn a_cut_holds_its_pieces_unlabelled_for_several_rules() {
+    let rooms = vec![room(1, rect(0, 0, 10, 10))];
+    let cut = cut(&rooms, &[]).expect("the room cuts");
+    let painter = cut.label(&LayerLabeler::new(&rooms));
+    let counted = CountingLabeler::default();
+    let every_side = cut.label(&counted);
+    assert_eq!(painter.len(), 4, "the ring's four walls");
+    assert_eq!(
+        every_side.len(),
+        4,
+        "a pointwise labeler gives every side its own region: all four kept"
+    );
+    let again = cut.label(&LayerLabeler::new(&rooms));
+    assert_eq!(again, painter, "one cut, relabelled, unchanged");
 }

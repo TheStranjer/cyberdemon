@@ -20,7 +20,7 @@ pub mod arrange;
 pub mod label;
 pub mod segment;
 
-pub use arrange::arrange;
+pub use arrange::{Cut, arrange, cut};
 pub use label::{Label, Labeler, LayerLabeler, SAMPLE_SCALE, ScaledPt};
 pub use segment::{ExternalSegment, SegmentOrigin, SourceId};
 

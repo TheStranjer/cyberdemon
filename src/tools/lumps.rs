@@ -12,7 +12,8 @@
 //! beside them - [`list`] is the browsing pair, built on the shared rows in
 //! [`rows`] and the filters in [`parse`], [`get`] is the one-lump read on the
 //! shared selector in [`select`], [`extract`] is the same selector writing
-//! bytes to a file, and [`add`] is `add_lump` and the two import tools. The
+//! bytes to a file, and [`add`] is `add_lump` and the two import tools on
+//! the shared payload picker in [`payload`]. The
 //! rewriting tools are [`edit`], the move of a whole run is [`reorder`], and
 //! both share the placement in [`place`].
 //!
@@ -26,6 +27,7 @@ mod extract;
 mod get;
 mod list;
 mod parse;
+mod payload;
 pub(in crate::tools) mod place;
 mod reorder;
 pub(in crate::tools) mod rows;
@@ -45,7 +47,7 @@ use crate::tools::lumps::get::{GetLumpParams, deliver, parse_get_options, run_ge
 use crate::tools::lumps::list::{
     ListLumpsParams, SearchLumpsParams, list_run, parse_listing, parse_search, search_run,
 };
-use crate::tools::lumps::parse::{hex_bytes, parse_namespace};
+use crate::tools::lumps::parse::parse_namespace;
 use crate::tools::lumps::reorder::ReorderLumpsParams;
 use crate::tools::{fail, ok, reply};
 use crate::wad::archive::write_file_atomic;
@@ -62,6 +64,10 @@ const MAX_HEX_LENGTH: usize = 4_096;
 const HEX_PREVIEW_BYTES: usize = 64;
 /// Default character cap for a `get_lump` `text` body.
 const DEFAULT_MAX_CHARS: usize = 100_000;
+
+/// The documentation shared by [`Cyberdemon::import_asset`] and its alias
+/// [`Cyberdemon::import_file_as_lump`], spelled once.
+const IMPORT_TOOL_DESCRIPTION: &str = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset URL) and inserts its bytes into the working archive without conversion, as one undoable edit. name defaults to the fetched file's stem uppercased to 8 characters; placement works as in add_lump. Use it for ready-made lumps; import_image_as_raw checks images first.";
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -171,9 +177,7 @@ impl Cyberdemon {
     }
 
     /// Fetches a source and inserts its bytes as a new lump.
-    #[tool(
-        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset URL) and inserts its bytes into the working archive without conversion, as one undoable edit. name defaults to the fetched file's stem uppercased to 8 characters; placement works as in add_lump. Use it for ready-made lumps; import_image_as_raw checks images first."
-    )]
+    #[tool(description = IMPORT_TOOL_DESCRIPTION)]
     async fn import_asset(
         &self,
         Parameters(args): Parameters<ImportParams>,
@@ -182,9 +186,7 @@ impl Cyberdemon {
     }
 
     /// Fetches a file and inserts its bytes as a new lump.
-    #[tool(
-        description = "Fetches source (absolute path, file:// URI, http(s):// URL or this server's asset URL) and inserts its bytes into the working archive without conversion, as one undoable edit. name defaults to the fetched file's stem uppercased to 8 characters; placement works as in add_lump. Use it for ready-made lumps; import_image_as_raw checks images first."
-    )]
+    #[tool(description = IMPORT_TOOL_DESCRIPTION)]
     async fn import_file_as_lump(
         &self,
         Parameters(args): Parameters<ImportParams>,

@@ -4,12 +4,15 @@
 //!
 //! [`parse_search`] checks the shared argument parsers and a search's name
 //! and content criteria; [`get`] runs the `get_lump` formats, bodies and
-//! asset names beside the `extract_lump` path checks; [`add`] runs the
-//! payload rules, the plans, the derived import name and the insert itself.
+//! asset names beside the `extract_lump` path checks; [`payload`] runs the
+//! shared payload picker's two rules and the bytes each payload form
+//! resolves to; [`add`] runs the plans, the derived import name and the
+//! insert itself.
 
 mod add;
 mod get;
 mod parse_search;
+mod payload;
 
 use crate::error::CyberError;
 use crate::session::Source;

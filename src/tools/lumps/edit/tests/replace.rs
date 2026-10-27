@@ -8,15 +8,21 @@ use super::{
     carrying, code, loaded, marker, name, names, pwad, replace_args, report_of_flat, seed,
     selector_for, with_payloads,
 };
+use crate::error::CyberError;
 use crate::session::Scope;
-use crate::state::AppState;
 use crate::tools::lumps::edit::replace::{
-    NewData, Replacement, Target, fetch_data, overwrite, pick_new_data, run_replace,
+    ReplaceLumpParams, Replacement, Target, overwrite, payload_of, run_replace,
 };
 use crate::tools::lumps::edit::{edit_selector, in_region, region_text, working_match};
+use crate::tools::lumps::payload::{Payload, PayloadRule, pick_payload};
 use crate::tools::lumps::rows::build_rows;
 use crate::wad::archive::Wad;
 use crate::wad::classify::Namespace;
+
+/// The shared picker's verdict on a `replace_lump` argument set.
+fn pick(args: &ReplaceLumpParams) -> Result<Payload, CyberError> {
+    pick_payload("replace_lump", PayloadRule::ExactlyOne, payload_of(args))
+}
 
 #[test]
 fn selectors_parse_names_and_regions_or_refuse() {
@@ -93,31 +99,31 @@ fn region_filters_match_the_same_region_only() {
 }
 
 #[test]
-fn replace_needs_exactly_one_payload_field() {
+fn replace_arguments_feed_the_shared_exactly_one_picker() {
     assert!(
-        matches!(pick_new_data(&replace_args(Some("t"), None)).expect("text"), NewData::Text(body) if body == "t"),
+        matches!(pick(&replace_args(Some("t"), None)).expect("text"), Payload::Text(body) if body == "t"),
         "text alone"
     );
     assert!(
         matches!(
-            pick_new_data(&replace_args(None, Some("4D55"))).expect("hex"),
-            NewData::Hex(_)
+            pick(&replace_args(None, Some("4D55"))).expect("hex"),
+            Payload::Hex(_)
         ),
         "hex alone"
     );
     let mut sourced = replace_args(None, None);
     sourced.source = Some("/x/y.bin".to_owned());
     assert!(
-        matches!(pick_new_data(&sourced).expect("source"), NewData::Source(raw) if raw == "/x/y.bin"),
+        matches!(pick(&sourced).expect("source"), Payload::Source(raw) if raw == "/x/y.bin"),
         "source alone"
     );
-    let none = pick_new_data(&replace_args(None, None)).expect_err("no payload");
+    let none = pick(&replace_args(None, None)).expect_err("no payload");
     assert_eq!(code(&none), "invalid_argument", "no payload code");
     assert!(
         none.to_string().contains("exactly one"),
         "the message states the rule: {none}"
     );
-    let both = pick_new_data(&replace_args(Some("t"), Some("4D55"))).expect_err("two fields");
+    let both = pick(&replace_args(Some("t"), Some("4D55"))).expect_err("two fields");
     assert_eq!(code(&both), "invalid_argument", "two payload fields code");
     assert!(
         both.to_string().contains("exactly one"),
@@ -126,36 +132,9 @@ fn replace_needs_exactly_one_payload_field() {
     let mut all_three = replace_args(Some("t"), Some("4D55"));
     all_three.source = Some("/x/y.bin".to_owned());
     assert_eq!(
-        code(&pick_new_data(&all_three).expect_err("three fields")),
+        code(&pick(&all_three).expect_err("three fields")),
         "invalid_argument",
         "three payload fields code"
-    );
-}
-
-#[tokio::test]
-async fn payload_bytes_come_from_text_or_hex_and_report_bad_hex() {
-    let state = AppState::default();
-    assert_eq!(
-        fetch_data(&state, NewData::Text("hi".to_owned()))
-            .await
-            .expect("text is taken as-is"),
-        vec![b'h', b'i'],
-        "the text's bytes"
-    );
-    assert_eq!(
-        fetch_data(&state, NewData::Hex("4D 55".to_owned()))
-            .await
-            .expect("hex decodes"),
-        vec![0x4D_u8, 0x55],
-        "spaces ignored"
-    );
-    let error = fetch_data(&state, NewData::Hex("4Z".to_owned()))
-        .await
-        .expect_err("not hex");
-    assert_eq!(code(&error), "invalid_argument", "bad hex code");
-    assert!(
-        error.to_string().starts_with("hex "),
-        "the message names the field: {error}"
     );
 }
 

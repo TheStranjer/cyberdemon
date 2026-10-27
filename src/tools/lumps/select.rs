@@ -6,7 +6,10 @@
 //! the scope's [`LumpRow`]s through [`build_rows`], keeps the same-name
 //! matches (inside `namespace` when given) and picks one. The default
 //! `occurrence` is the **last** match in directory order, the copy an
-//! engine's lookup of that name reaches for.
+//! engine's lookup of that name reaches for. [`nth_match`] is that pick on
+//! its own, shared with the working-archive tools in
+//! [`crate::tools::lumps::edit`] so one refusal text names the count
+//! everywhere.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -37,6 +40,33 @@ pub(in crate::tools) struct LumpSelector {
     pub(in crate::tools) occurrence: Option<usize>,
 }
 
+/// The match `occurrence` numbers out of the directory-ordered `matches`,
+/// the last when it is `None`. `matches` must hold at least one row:
+/// every caller refuses an empty set in its own words, since which
+/// message names what is missing differs per tool.
+///
+/// # Errors
+///
+/// [`CyberError::NotFound`] naming how many matched and the valid range
+/// when `occurrence` reaches past them; `place` says where the refusal
+/// found them.
+pub(in crate::tools::lumps) fn nth_match<T>(
+    matches: Vec<T>,
+    occurrence: Option<usize>,
+    name: LumpName,
+    place: &str,
+) -> Result<T, CyberError> {
+    let count = matches.len();
+    let last = count.saturating_sub(1);
+    let wanted = occurrence.unwrap_or(last);
+    matches.into_iter().nth(wanted).ok_or_else(|| {
+        CyberError::NotFound(format!(
+            "only {count} lumps named {name} in {place}: occurrence {wanted} is out of range \
+             (0 to {last})"
+        ))
+    })
+}
+
 /// The [`LumpRow`] the selector picks.
 ///
 /// # Errors
@@ -58,43 +88,20 @@ pub(in crate::tools) fn resolve(
             row.name == name && namespace.is_none_or(|wanted| row.namespace == Some(wanted))
         })
         .collect();
-    choose(matched, name, scope, selector.occurrence)
-}
-
-/// Take `occurrence` out of `matched` (directory order), the last match
-/// when it is `None`.
-///
-/// # Errors
-///
-/// [`CyberError::NotFound`] naming the scope when nothing matched, or
-/// naming how many lumps matched when `occurrence` is past the end.
-fn choose(
-    matched: Vec<LumpRow>,
-    name: LumpName,
-    scope: Scope,
-    occurrence: Option<usize>,
-) -> Result<LumpRow, CyberError> {
-    let count = matched.len();
-    let Some(last) = count.checked_sub(1) else {
+    if matched.is_empty() {
         return Err(
             CyberError::NotFound(format!("lump {name} not found in {scope}"))
                 .with_hint("search_lumps finds lumps by pattern"),
         );
-    };
-    let wanted = occurrence.unwrap_or(last);
-    matched.into_iter().nth(wanted).ok_or_else(|| {
-        CyberError::NotFound(format!(
-            "only {count} lumps named {name} in {scope}: occurrence {wanted} is out of range \
-             (0 to {last})"
-        ))
-    })
+    }
+    nth_match(matched, selector.occurrence, name, &scope.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{LumpSelector, resolve};
+    use super::{LumpSelector, nth_match, resolve};
     use crate::error::CyberError;
     use crate::session::{Layer, LayerRole, Scope, Session};
     use crate::wad::archive::{Lump, Wad, WadKind};
@@ -172,6 +179,36 @@ mod tests {
     fn mark(selector: &LumpSelector) -> u8 {
         let row = resolve(&session(), selector).expect("the fixture lumps exist");
         *row.lump.data.first().expect("one-byte payloads")
+    }
+
+    #[test]
+    fn nth_match_numbers_the_matches_and_refuses_past_the_end() {
+        assert_eq!(
+            nth_match(vec![7_usize, 8], None, name("TWIN"), "merged").expect("the default"),
+            8,
+            "the default is the last match"
+        );
+        assert_eq!(
+            nth_match(vec![7_usize, 8], Some(0), name("TWIN"), "merged").expect("the first"),
+            7,
+            "an explicit occurrence numbers from the front"
+        );
+        let error =
+            nth_match(vec![7_usize, 8], Some(2), name("TWIN"), "merged").expect_err("past the end");
+        assert_eq!(code(&error), "not_found", "past the end code");
+        assert_eq!(
+            error.to_string(),
+            "only 2 lumps named TWIN in merged: occurrence 2 is out of range (0 to 1)",
+            "the one refusal names the count, the place and the range"
+        );
+        let working = nth_match(vec![7_usize], Some(1), name("TWIN"), "the working archive")
+            .expect_err("one copy only");
+        assert_eq!(
+            working.to_string(),
+            "only 1 lumps named TWIN in the working archive: occurrence 1 is out of range \
+             (0 to 0)",
+            "the same text locates the working matches"
+        );
     }
 
     #[test]

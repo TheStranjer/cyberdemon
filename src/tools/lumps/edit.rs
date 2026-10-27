@@ -34,12 +34,17 @@ mod replace;
 use crate::error::CyberError;
 use crate::session::{Scope, Session};
 use crate::tools::lumps::rows::{LumpRow, build_rows};
+use crate::tools::lumps::select::nth_match;
 use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
 pub(super) use remove::{RemoveLumpParams, remove_lump};
 pub(super) use rename::{RenameLumpParams, rename_lump};
 pub(super) use replace::{ReplaceLumpParams, replace_lump};
+
+/// Where the editing tools' occurrence refusals say they found the
+/// matches.
+const WORKING_ARCHIVE: &str = "the working archive";
 
 /// The name, region and occurrence the lump-editing tools select on.
 #[derive(Clone, Copy, Debug)]
@@ -107,33 +112,10 @@ pub(super) fn working_match(
         .filter(|row| selector.accepts(row))
         .map(|row| row.index)
         .collect();
-    pick_occurrence(&matched, selector)
-}
-
-/// The one match `occurrence` selects, the last when it is `None`; `None`
-/// only when nothing matched.
-///
-/// # Errors
-///
-/// [`CyberError::NotFound`] naming how many copies exist.
-fn pick_occurrence(
-    matched: &[usize],
-    selector: &EditSelector,
-) -> Result<Option<usize>, CyberError> {
     if matched.is_empty() {
         return Ok(None);
     }
-    let count = matched.len();
-    let last = count.saturating_sub(1);
-    let wanted = selector.occurrence.unwrap_or(last);
-    let Some(&index) = matched.get(wanted) else {
-        return Err(CyberError::NotFound(format!(
-            "only {count} lumps named {} in the working archive: occurrence {wanted} is out of \
-             range (0 to {last})",
-            selector.name
-        )));
-    };
-    Ok(Some(index))
+    nth_match(matched, selector.occurrence, selector.name, WORKING_ARCHIVE).map(Some)
 }
 
 #[cfg(test)]

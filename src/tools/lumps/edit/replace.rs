@@ -1,8 +1,10 @@
 //! `replace_lump`: the copy-on-write payload swap in the working archive.
 //!
-//! [`replace_lump`] validates the selector and the payload fields,
-//! [`fetch_data`] resolves the new bytes *before* the session lock is taken
-//! and [`run_replace`] commits exactly one [`crate::session::Session::edit`]:
+//! [`replace_lump`] validates the selector and the payload fields through
+//! the shared [`crate::tools::lumps::payload`] picker (its `ExactlyOne`
+//! rule) and [`payload_bytes`] resolves the new bytes *before* the session
+//! lock is taken, then [`run_replace`] commits exactly one
+//! [`crate::session::Session::edit`]:
 //! an overwrite of the lump the working archive holds, or the copy-in of an
 //! override for a lump only the `IWAD` or a resource layer owns, which is
 //! what [`Target`] and [`Replacement`] spell out. [`not_working_message`] is
@@ -18,7 +20,7 @@ use crate::error::CyberError;
 use crate::session::cow;
 use crate::session::{MergedLump, Scope, Session};
 use crate::state::AppState;
-use crate::tools::lumps::hex_bytes;
+use crate::tools::lumps::payload::{PayloadFields, PayloadRule, payload_bytes, pick_payload};
 use crate::tools::lumps::place::{self, Placement};
 use crate::tools::lumps::rows::build_rows;
 use crate::wad::archive::{Lump, Wad};
@@ -168,54 +170,14 @@ pub(super) fn overwrite(
     Ok(index)
 }
 
-/// Where an editing call's new bytes come from.
-#[derive(Debug)]
-pub(super) enum NewData {
-    /// The `text` argument, kept as UTF-8 bytes.
-    Text(String),
-    /// The `hex` argument, waiting to be decoded.
-    Hex(String),
-    /// A `source` to fetch.
-    Source(String),
-}
-
-/// The one payload field `replace_lump` was given, refusing none and many.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] when no payload field or more than one is
-/// present.
-pub(super) fn pick_new_data(args: &ReplaceLumpParams) -> Result<NewData, CyberError> {
-    match (
+/// The payload fields of a `replace_lump` call, ready for the shared
+/// [`pick_payload`].
+pub(super) fn payload_of(args: &ReplaceLumpParams) -> PayloadFields<'_> {
+    PayloadFields::new(
         args.text.as_deref(),
         args.hex.as_deref(),
         args.source.as_deref(),
-    ) {
-        (Some(body), None, None) => Ok(NewData::Text(body.to_owned())),
-        (None, Some(digits), None) => Ok(NewData::Hex(digits.to_owned())),
-        (None, None, Some(raw)) => Ok(NewData::Source(raw.to_owned())),
-        (None, None, None) => Err(CyberError::InvalidArgument(
-            "replace_lump needs a new payload: pass exactly one of text, hex and source".to_owned(),
-        )),
-        _ => Err(CyberError::InvalidArgument(
-            "replace_lump takes exactly one of text, hex and source: pick one payload form"
-                .to_owned(),
-        )),
-    }
-}
-
-/// The new bytes: text as-is, hex decoded, or the fetched source's bytes.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] for malformed hex; [`AppState::fetch_source`]
-/// reports every other fetch failure.
-pub(super) async fn fetch_data(state: &AppState, data: NewData) -> Result<Vec<u8>, CyberError> {
-    match data {
-        NewData::Text(body) => Ok(body.into_bytes()),
-        NewData::Hex(digits) => hex_bytes("hex", &digits),
-        NewData::Source(raw) => state.fetch_source(&raw).await.map(|got| got.bytes),
-    }
+    )
 }
 
 /// The `not_found` text for a name no loaded archive holds.
@@ -311,13 +273,14 @@ fn merged_target(session: &Session, selector: &EditSelector) -> Result<Target, C
 ///
 /// # Errors
 ///
-/// Whatever [`edit_selector`], [`pick_new_data`], [`fetch_data`] or
+/// Whatever [`edit_selector`], [`pick_payload`], [`payload_bytes`] or
 /// [`run_replace`] reports.
 pub(in crate::tools::lumps) async fn replace_lump(
     state: &AppState,
     args: &ReplaceLumpParams,
 ) -> Result<ReplaceReport, CyberError> {
     let selector = edit_selector(&args.name, args.namespace.as_deref(), args.occurrence)?;
-    let data = fetch_data(state, pick_new_data(args)?).await?;
+    let payload = pick_payload("replace_lump", PayloadRule::ExactlyOne, payload_of(args))?;
+    let (data, _filename) = payload_bytes(state, payload).await?;
     state.with_session(|session| run_replace(session, &selector, &data))
 }

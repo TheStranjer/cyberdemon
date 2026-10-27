@@ -3,9 +3,10 @@
 //!
 //! [`AddLumpParams`] and [`ImportParams`] are the wire forms;
 //! [`plan_add`] and [`plan_import`] validate them into a [`PendingEdit`]
-//! whose bytes [`prepare`] brings in (a `Payload::Source` is fetched *before*
-//! any session lock, an import's [`chosen_name`] derived from the fetched
-//! file name). [`apply`] then runs exactly one
+//! whose bytes [`prepare`] brings in through the shared
+//! [`crate::tools::lumps::payload`] (a `Payload::Source` is fetched
+//! *before* any session lock, an import's [`chosen_name`] derived from
+//! the fetched file name). [`apply`] then runs exactly one
 //! [`crate::session::Session::edit`] through
 //! [`crate::tools::lumps::place`], refusing a same-name twin with
 //! [`clash_message`] unless `allow_duplicate` says otherwise; [`commit`] and
@@ -20,7 +21,9 @@ use crate::assets::fetch::derive_lump_name;
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::lumps::parse::hex_bytes;
+use crate::tools::lumps::payload::{
+    Payload, PayloadFields, PayloadRule, payload_bytes, pick_payload,
+};
 use crate::tools::lumps::place::{self, Placement, PlacementParams, parse_placement};
 use crate::tools::{fail, reply};
 use crate::wad::archive::Lump;
@@ -80,19 +83,6 @@ pub(super) struct ImportParams {
     pub(super) allow_duplicate: bool,
 }
 
-/// How the caller supplied a new lump's bytes.
-#[derive(Debug)]
-pub(super) enum Payload {
-    /// No data field: the lump will be an empty marker.
-    Empty,
-    /// The `text` argument, kept as UTF-8 bytes.
-    Text(String),
-    /// The `hex` argument, waiting to be decoded.
-    Hex(String),
-    /// A `source` to fetch.
-    Source(String),
-}
-
 /// A validated editing call whose payload may still need fetching.
 #[derive(Debug)]
 pub(super) struct PendingEdit {
@@ -143,27 +133,6 @@ pub(super) struct EditReport {
     pub(super) source: Option<String>,
 }
 
-/// The at-most-one-of rule for the three `add_lump` payload fields.
-///
-/// # Errors
-///
-/// [`CyberError::InvalidArgument`] when more than one is given.
-pub(super) fn pick_payload(
-    text: Option<&str>,
-    hex: Option<&str>,
-    source: Option<&str>,
-) -> Result<Payload, CyberError> {
-    match (text, hex, source) {
-        (None, None, None) => Ok(Payload::Empty),
-        (Some(body), None, None) => Ok(Payload::Text(body.to_owned())),
-        (None, Some(digits), None) => Ok(Payload::Hex(digits.to_owned())),
-        (None, None, Some(raw)) => Ok(Payload::Source(raw.to_owned())),
-        _ => Err(CyberError::InvalidArgument(
-            "add_lump takes at most one of text, hex and source: pick one payload form".to_owned(),
-        )),
-    }
-}
-
 /// Validate [`Cyberdemon::add_lump`]'s arguments before any fetching.
 ///
 /// # Errors
@@ -175,9 +144,13 @@ pub(super) fn plan_add(args: &AddLumpParams) -> Result<PendingEdit, CyberError> 
         verb: "add_lump",
         name: Some(LumpName::parse(&args.name)?),
         payload: pick_payload(
-            args.text.as_deref(),
-            args.hex.as_deref(),
-            args.source.as_deref(),
+            "add_lump",
+            PayloadRule::AtMostOne,
+            PayloadFields::new(
+                args.text.as_deref(),
+                args.hex.as_deref(),
+                args.source.as_deref(),
+            ),
         )?,
         placement: parse_placement(&args.placement)?,
         allow_duplicate: args.allow_duplicate,
@@ -225,8 +198,8 @@ pub(super) fn chosen_name(
     })
 }
 
-/// Bring the payload bytes in, fetching a `source` before the session lock
-/// is ever taken.
+/// Bring the payload bytes in through [`payload_bytes`], fetching a
+/// `source` before the session lock is ever taken.
 ///
 /// # Errors
 ///
@@ -241,15 +214,7 @@ async fn prepare(state: &AppState, pending: PendingEdit) -> Result<Prepared, Cyb
         allow_duplicate,
         source,
     } = pending;
-    let (data, filename) = match payload {
-        Payload::Empty => (Vec::new(), None),
-        Payload::Text(body) => (body.into_bytes(), None),
-        Payload::Hex(digits) => (hex_bytes("hex", &digits)?, None),
-        Payload::Source(raw) => {
-            let fetched = state.fetch_source(&raw).await?;
-            (fetched.bytes, Some(fetched.filename))
-        }
-    };
+    let (data, filename) = payload_bytes(state, payload).await?;
     Ok(Prepared {
         verb,
         name: chosen_name(name, filename.as_deref())?,

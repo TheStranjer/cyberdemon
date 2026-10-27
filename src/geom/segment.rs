@@ -1,16 +1,21 @@
 //! Integer segment geometry for the arrangement.
 //!
-//! Orientation and rounding primitives, the shared exact point-to-segment
-//! distance, the per-pair discovery of where segments meet (proper
-//! crossings rounded to the nearest integer point, endpoint T-junctions
-//! and collinear overlaps), the bounding-box sort-and-prune sweep along
-//! x, and the point merge union-find that collapses candidate points
-//! registered closer than one unit apart.
+//! Orientation and rounding primitives, generic over the [`Point`] trait
+//! so every coordinate space in the crate shares one implementation, the
+//! shared exact point-to-segment distance, the exact segment-meeting
+//! tests (proper crossings, endpoint touches), the per-pair discovery of
+//! where segments meet (crossings rounded to the nearest integer point,
+//! endpoint T-junctions and collinear overlaps), the bounding-box
+//! sort-and-prune sweep along x, the point merge union-find that
+//! collapses candidate points registered closer than one unit apart, and
+//! the side-sample geometry the arrangement and the overlay labelers ask
+//! a piece's two sides about.
 
 use alloc::collections::BTreeMap;
 
-use crate::fixed::div_round;
-use crate::geom::Pt;
+use crate::fixed::{div_round, hypot, isqrt};
+use crate::geom::label::{SAMPLE_HALF, SAMPLE_OFFSET, ScaledPt};
+use crate::geom::{Point, Pt, union::UnionFind};
 
 /// At or above this many segments, `find_cuts` sweeps instead of
 /// comparing every pair.
@@ -98,10 +103,10 @@ impl Seg {
 
 /// `to - from` as an `i128` vector (saturating at the extremes).
 #[inline]
-pub(crate) fn delta(from: Pt, to: Pt) -> Delta {
+pub(crate) fn delta<P: Point>(from: P, to: P) -> Delta {
     (
-        i128::from(to.0).saturating_sub(i128::from(from.0)),
-        i128::from(to.1).saturating_sub(i128::from(from.1)),
+        i128::from(to.x()).saturating_sub(i128::from(from.x())),
+        i128::from(to.y()).saturating_sub(i128::from(from.y())),
     )
 }
 
@@ -121,10 +126,24 @@ pub(crate) const fn dot(u: Delta, v: Delta) -> i128 {
         .saturating_add(u.1.saturating_mul(v.1))
 }
 
+/// The squared length of an exact vector.
+#[must_use]
+#[inline]
+pub(crate) const fn squared_length(u: Delta) -> i128 {
+    dot(u, u)
+}
+
+/// The squared distance between two points, exact in `i128`.
+#[must_use]
+#[inline]
+pub(crate) fn distance_squared<P: Point>(a: P, b: P) -> i128 {
+    squared_length(delta(a, b))
+}
+
 /// The sign of `(b - a) x (c - a)`: positive with `c` left of `a`→`b`,
 /// zero on the line, negative right.
 #[inline]
-pub(crate) fn orient(a: Pt, b: Pt, c: Pt) -> i128 {
+pub(crate) fn orient<P: Point>(a: P, b: P, c: P) -> i128 {
     cross(delta(a, b), delta(a, c))
 }
 
@@ -136,7 +155,52 @@ pub(crate) fn opposite(left: i128, right: i128) -> bool {
         .is_some_and(|product| product < 0)
 }
 
-/// `(low, high)` sorted.
+/// Whether the two closed segments cross at a point strictly inside
+/// both: every endpoint of one is on the opposite strict side of the
+/// other's line (a shared or touching endpoint, a T-junction and a
+/// collinear touch all answer `false`).
+#[must_use]
+pub(crate) fn crosses_properly<P: Point>(first: &(P, P), second: &(P, P)) -> bool {
+    let (head, tail) = *first;
+    let (other_head, other_tail) = *second;
+    opposite(
+        orient(head, tail, other_head),
+        orient(head, tail, other_tail),
+    ) && opposite(
+        orient(other_head, other_tail, head),
+        orient(other_head, other_tail, tail),
+    )
+}
+
+/// Whether `point` lies on the closed segment `from`→`to`: collinear and
+/// inside the segment's bounding box (endpoints included).
+#[must_use]
+fn endpoint_on<P: Point>(from: P, to: P, point: P) -> bool {
+    if orient(from, to, point) != 0 {
+        return false;
+    }
+    point.x() >= from.x().min(to.x())
+        && point.x() <= from.x().max(to.x())
+        && point.y() >= from.y().min(to.y())
+        && point.y() <= from.y().max(to.y())
+}
+
+/// Whether the two closed segments meet at any point: a proper crossing,
+/// or an endpoint of either lying on the other. The strict simplicity
+/// test walks with this predicate; the arrangement's own validation uses
+/// the weaker [`crosses_properly`].
+#[must_use]
+pub(crate) fn segments_meet<P: Point>(first: &(P, P), second: &(P, P)) -> bool {
+    let (head, tail) = *first;
+    let (other_head, other_tail) = *second;
+    crosses_properly(first, second)
+        || endpoint_on(head, tail, other_head)
+        || endpoint_on(head, tail, other_tail)
+        || endpoint_on(other_head, other_tail, head)
+        || endpoint_on(other_head, other_tail, tail)
+}
+
+/// `low` and `high` sorted.
 #[must_use]
 #[inline]
 const fn ordered(low: i64, high: i64) -> (i64, i64) {
@@ -150,20 +214,21 @@ const fn ordered(low: i64, high: i64) -> (i64, i64) {
 /// Whether `point`'s dominant-axis coordinate lies strictly between the
 /// segment ends (call only after a collinearity test).
 #[must_use]
-pub(crate) const fn between(point: Pt, from: Pt, to: Pt) -> bool {
-    if from.0 == to.0 {
-        let (low, high) = ordered(from.1, to.1);
-        point.1 > low && point.1 < high
+#[inline]
+pub(crate) fn between<P: Point>(point: P, from: P, to: P) -> bool {
+    if from.x() == to.x() {
+        let (low, high) = ordered(from.y(), to.y());
+        point.y() > low && point.y() < high
     } else {
-        let (low, high) = ordered(from.0, to.0);
-        point.0 > low && point.0 < high
+        let (low, high) = ordered(from.x(), to.x());
+        point.x() > low && point.x() < high
     }
 }
 
 /// Whether `point` lies on segment `from`→`to`, strictly between the
 /// ends, within half a unit perpendicular: squared distance <= 1/4, i.e.
 /// `4 * cross^2 <= len^2`.
-pub(crate) fn on_segment_tol(from: Pt, to: Pt, point: Pt) -> bool {
+pub(crate) fn on_segment_tol<P: Point>(from: P, to: P, point: P) -> bool {
     let direction = delta(from, to);
     let length_squared = dot(direction, direction);
     if length_squared <= 0 {
@@ -181,8 +246,28 @@ pub(crate) fn on_segment_tol(from: Pt, to: Pt, point: Pt) -> bool {
 /// `point` widened from the `i64` grid into the exact `i128` vector space.
 #[must_use]
 #[inline]
-pub(crate) fn widen(point: Pt) -> Delta {
-    (i128::from(point.0), i128::from(point.1))
+pub(crate) fn widen<P: Point>(point: P) -> Delta {
+    (i128::from(point.x()), i128::from(point.y()))
+}
+
+/// The floored `hypot` length of the grid segment `from`→`to`.
+#[must_use]
+#[inline]
+pub(crate) fn grid_hypot<P: Point>(from: P, to: P) -> u64 {
+    hypot(
+        to.x().saturating_sub(from.x()),
+        to.y().saturating_sub(from.y()),
+    )
+}
+
+/// The integer length of `start`→`end`: the `isqrt` of the exact squared
+/// delta, at least one.
+#[must_use]
+pub(crate) fn integer_length<P: Point>(start: P, end: P) -> i128 {
+    let direction = delta(start, end);
+    let length_squared = dot(direction, direction);
+    let magnitude = u64::try_from(length_squared).unwrap_or(u64::MAX);
+    i128::from(isqrt(magnitude)).max(1)
 }
 
 /// The squared distance from `point` to the segment `from`→`to` as an
@@ -210,6 +295,47 @@ pub(crate) const fn distance_point_segment(point: Delta, from: Delta, to: Delta)
     }
     let perpendicular = cross(run, offset);
     (perpendicular.saturating_mul(perpendicular), squared)
+}
+
+/// The unit normal of `start`→`end` scaled to [`SAMPLE_OFFSET`] sample
+/// units, left positive.
+fn side_offset(start: Pt, end: Pt) -> ScaledPt {
+    let direction = delta(start, end);
+    let length = integer_length(start, end);
+    (
+        div_round(
+            direction.1.saturating_neg().saturating_mul(SAMPLE_OFFSET),
+            length,
+        )
+        .unwrap_or(0_i128),
+        div_round(direction.0.saturating_mul(SAMPLE_OFFSET), length).unwrap_or(0_i128),
+    )
+}
+
+/// The arrangement's two side samples of the piece `start`→`end`: the
+/// points an eighth of a unit just left and just right of its midpoint,
+/// in [`SAMPLE_SCALE`](crate::geom::label::SAMPLE_SCALE) coordinates.
+#[must_use]
+pub(crate) fn side_samples(start: Pt, end: Pt) -> [ScaledPt; 2] {
+    let centre = (
+        i128::from(start.0)
+            .saturating_add(i128::from(end.0))
+            .saturating_mul(SAMPLE_HALF),
+        i128::from(start.1)
+            .saturating_add(i128::from(end.1))
+            .saturating_mul(SAMPLE_HALF),
+    );
+    let offset = side_offset(start, end);
+    [
+        (
+            centre.0.saturating_add(offset.0),
+            centre.1.saturating_add(offset.1),
+        ),
+        (
+            centre.0.saturating_sub(offset.0),
+            centre.1.saturating_sub(offset.1),
+        ),
+    ]
 }
 
 /// The point where the two segment lines cross, rounded to the nearest
@@ -358,12 +484,12 @@ pub(crate) fn find_cuts(segs: &[Seg]) -> Vec<Vec<Pt>> {
 /// when found), and distinct integer points are at least one unit apart,
 /// so "closer than one unit" merges exactly the duplicates: each class
 /// keeps its lexicographically smallest point as the canonical
-/// representative.
+/// representative, nominated through the shared [`UnionFind`].
 pub(crate) struct PointMerge {
     /// One slot per registration.
     nodes: Vec<Pt>,
-    /// Union-find parent links, indexed like `nodes`.
-    parent: Vec<usize>,
+    /// Class links over the registration ids.
+    classes: UnionFind,
     /// First registration id of each distinct point.
     seen: BTreeMap<Pt, usize>,
 }
@@ -373,7 +499,7 @@ impl PointMerge {
     pub(crate) fn from_segments(segs: &[Seg], cuts: &[Vec<Pt>]) -> Self {
         let mut merge = Self {
             nodes: Vec::new(),
-            parent: Vec::new(),
+            classes: UnionFind::with_len(0),
             seen: BTreeMap::new(),
         };
         for seg in segs {
@@ -388,9 +514,8 @@ impl PointMerge {
 
     /// Register one candidate, uniting it with its earlier copies.
     fn register(&mut self, point: Pt) {
-        let id = self.nodes.len();
+        let id = self.classes.push();
         self.nodes.push(point);
-        self.parent.push(id);
         let Some(first) = self.seen.get(&point).copied() else {
             self.seen.insert(point, id);
             return;
@@ -400,7 +525,7 @@ impl PointMerge {
 
     /// Union two classes; the class of the smaller point wins.
     fn link(&mut self, first: usize, second: usize) {
-        let (left, right) = (self.root(first), self.root(second));
+        let (left, right) = (self.classes.find(first), self.classes.find(second));
         if left == right {
             return;
         }
@@ -409,36 +534,22 @@ impl PointMerge {
             .get(left)
             .zip(self.nodes.get(right))
             .is_some_and(|(low, high)| low <= high);
-        let (winner, loser) = if keep_left {
-            (left, right)
-        } else {
-            (right, left)
-        };
-        if let Some(slot) = self.parent.get_mut(loser) {
-            *slot = winner;
-        }
-    }
-
-    /// The class root of one registration. Classes stay shallow: a link
-    /// always points a non-root straight at the winner.
-    fn root(&self, id: usize) -> usize {
-        let mut current = id;
-        while self.parent.get(current).copied().unwrap_or(current) != current {
-            current = self.parent.get(current).copied().unwrap_or(current);
-        }
-        current
+        let winner = if keep_left { left } else { right };
+        self.classes.unite_keeping(first, second, winner);
     }
 
     /// The canonical representative of a registered point.
     pub(crate) fn canonical(&self, point: Pt) -> Option<Pt> {
         let first = self.seen.get(&point).copied()?;
-        self.nodes.get(self.root(first)).copied()
+        self.nodes.get(self.classes.find(first)).copied()
     }
 
     /// Every distinct merged point, sorted by `(x, y)`.
     pub(crate) fn points(&self) -> Vec<Pt> {
-        let mut list: Vec<Pt> = (0..self.nodes.len())
-            .filter(|id| self.root(*id) == *id)
+        let mut list: Vec<Pt> = self
+            .classes
+            .roots()
+            .into_iter()
             .filter_map(|id| self.nodes.get(id).copied())
             .collect();
         list.sort_unstable();
@@ -450,8 +561,9 @@ impl PointMerge {
 #[cfg(test)]
 mod tests {
     use super::{
-        PointMerge, Seg, between, cross, delta, distance_point_segment, dot, on_segment_tol,
-        opposite, orient, sweep_cuts, widen,
+        PointMerge, Seg, between, cross, crosses_properly, delta, distance_point_segment,
+        distance_squared, dot, grid_hypot, integer_length, on_segment_tol, opposite, orient,
+        segments_meet, side_samples, squared_length, sweep_cuts, widen,
     };
     use crate::geom::Pt;
     use crate::geom::segment::SourceId;
@@ -485,6 +597,158 @@ mod tests {
             "len squared"
         );
         assert_eq!(cross((0, 5), (0, -5)), 0, "parallel cross is zero");
+    }
+
+    #[test]
+    fn the_primitives_read_non_tuple_points_through_the_trait() {
+        let from = crate::bsp::Point { x: 0, y: 0 };
+        let to = crate::bsp::Point { x: 10, y: 0 };
+        let left = crate::bsp::Point { x: 5, y: 5 };
+        assert_eq!(
+            orient(from, to, left),
+            50,
+            "the fixed point space orients alike"
+        );
+        assert_eq!(distance_squared(from, to), 100, "and measures alike");
+        assert_eq!(integer_length(from, to), 10, "and rounds its root alike");
+        assert_eq!(
+            widen(to),
+            (i128::from(10_i64), 0_i128),
+            "and widens axis by axis"
+        );
+    }
+
+    #[test]
+    fn distance_squared_and_lengths_measure_the_grid() {
+        assert_eq!(distance_squared((0, 0), (3, 4)), 25, "the 3-4-5 hypotenuse");
+        assert_eq!(distance_squared((0, 0), (0, 0)), 0, "same point");
+        assert_eq!(
+            distance_squared((-3, -4), (0, 0)),
+            25,
+            "negatives square positive"
+        );
+        assert_eq!(grid_hypot((0, 0), (3, 4)), 5, "floored hypot");
+        assert_eq!(grid_hypot((2, 2), (2, 2)), 0, "a point's own length");
+        assert_eq!(integer_length((0, 0), (3, 4)), 5, "exact root");
+        assert_eq!(integer_length((0, 0), (0, 0)), 1, "clamped to one");
+        assert_eq!(integer_length((0, 0), (1, 1)), 1, "sqrt(2) floors to one");
+        assert_eq!(
+            squared_length(delta((0, 0), (i64::MAX, i64::MAX))),
+            {
+                let max = i128::from(i64::MAX);
+                max.saturating_mul(max)
+                    .saturating_add(max.saturating_mul(max))
+            },
+            "the whole-range diagonal squares exactly inside i128"
+        );
+    }
+
+    #[test]
+    fn extreme_deltas_saturate_and_never_wrap() {
+        assert_eq!(
+            orient((i64::MIN, i64::MIN), (i64::MAX, i64::MIN), (0, i64::MAX)),
+            i128::MAX,
+            "the huge left turn saturates up"
+        );
+        assert_eq!(
+            orient((i64::MIN, i64::MAX), (i64::MAX, i64::MAX), (0, i64::MIN)),
+            i128::MIN,
+            "and the huge right turn down"
+        );
+        assert_eq!(
+            orient((i64::MIN, 0), (i64::MAX, 0), (i64::MIN, 0)),
+            0,
+            "collinear"
+        );
+        assert_eq!(
+            distance_squared((i64::MIN, i64::MIN), (i64::MAX, i64::MAX)),
+            i128::MAX,
+            "the extreme distance saturates, never wraps"
+        );
+    }
+
+    #[test]
+    fn crosses_properly_demands_strict_interior_meeting() {
+        assert!(
+            crosses_properly(&((0, 0), (10, 10)), &((0, 9), (9, 0))),
+            "an X crosses"
+        );
+        assert!(
+            !crosses_properly(&((0, 0), (10, 0)), &((10, 0), (10, 10))),
+            "a shared endpoint is not a crossing"
+        );
+        assert!(
+            !crosses_properly(&((0, 0), (10, 0)), &((4, 0), (4, 6))),
+            "a T-junction touches, not crosses"
+        );
+        assert!(
+            !crosses_properly(&((0, 0), (10, 0)), &((5, 0), (15, 0))),
+            "collinear overlap never crosses"
+        );
+        assert!(
+            !crosses_properly(&((0, 0), (10, 0)), &((20, 0), (30, 0))),
+            "parallel runs never cross"
+        );
+        assert!(
+            crosses_properly(&((-5, -5), (5, 5)), &((-5, 4), (4, -5))),
+            "negatives cross the same"
+        );
+    }
+
+    #[test]
+    fn segments_meet_adds_the_endpoint_touches() {
+        assert!(
+            segments_meet(&((0, 0), (10, 10)), &((0, 9), (9, 0))),
+            "crossing"
+        );
+        assert!(
+            segments_meet(&((0, 0), (10, 0)), &((10, 0), (10, 10))),
+            "shared end"
+        );
+        assert!(
+            segments_meet(&((0, 0), (10, 0)), &((4, 0), (4, 6))),
+            "T-junction"
+        );
+        assert!(
+            segments_meet(&((0, 0), (10, 0)), &((5, 0), (15, 0))),
+            "collinear overlap"
+        );
+        assert!(
+            !segments_meet(&((0, 0), (1, 0)), &((5, 5), (6, 6))),
+            "disjoint"
+        );
+        assert!(
+            !segments_meet(&((0, 0), (10, 0)), &((5, 1), (5, 6))),
+            "a point a whole unit off the line touches nothing"
+        );
+    }
+
+    #[test]
+    fn side_samples_sit_an_eighth_left_and_right_of_the_midpoint() {
+        let [east_left, east_right] = side_samples((0, 0), (10, 0));
+        assert_eq!(
+            east_left,
+            (0x50_0000, 0x2_0000),
+            "a left-facing eighth above"
+        );
+        assert_eq!(east_right, (0x50_0000, -0x2_0000), "and its mirror below");
+        let [west_left, west_right] = side_samples((10, 0), (0, 0));
+        assert_eq!(
+            west_left,
+            (0x50_0000, -0x2_0000),
+            "west walks put left south"
+        );
+        assert_eq!(west_right, (0x50_0000, 0x2_0000), "and right north");
+        let [degenerate_left, degenerate_right] = side_samples((5, 5), (5, 5));
+        assert_eq!(
+            degenerate_left, degenerate_right,
+            "a degenerate piece samples its own point"
+        );
+        assert_eq!(
+            degenerate_left,
+            (0x50_0000, 0x50_0000),
+            "the scaled midpoint stands"
+        );
     }
 
     #[test]

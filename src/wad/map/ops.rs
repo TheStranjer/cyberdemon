@@ -49,6 +49,18 @@ pub struct Point {
     pub y: i32,
 }
 
+impl crate::geom::Point for Point {
+    #[inline]
+    fn x(self) -> i64 {
+        i64::from(self.x)
+    }
+
+    #[inline]
+    fn y(self) -> i64 {
+        i64::from(self.y)
+    }
+}
+
 /// A side whose anchor vertex moved: its index and new `x_offset`.
 pub(super) type SideShift = Option<(usize, i32)>;
 
@@ -239,27 +251,6 @@ pub(super) fn sidedef_of<'model>(
              hold: fix the reference with edit_linedef first"
         ))
     })
-}
-
-/// The vector from `from` to `to` as `i64` deltas; `i32` coordinates never
-/// wrap the wider difference.
-pub(super) fn delta(from: Point, to: Point) -> (i64, i64) {
-    (
-        i64::from(to.x).wrapping_sub(i64::from(from.x)),
-        i64::from(to.y).wrapping_sub(i64::from(from.y)),
-    )
-}
-
-/// The `i128` product of two `i64` deltas (map coordinates square far
-/// inside `i128`; saturation is defensive).
-pub(super) fn wide(first: i64, second: i64) -> i128 {
-    i128::from(first).saturating_mul(i128::from(second))
-}
-
-/// The squared length of the `from` to `to` segment, in `i128`.
-pub(super) fn length_squared(from: Point, to: Point) -> i128 {
-    let (dx, dy) = delta(from, to);
-    wide(dx, dx).saturating_add(wide(dy, dy))
 }
 
 /// The midpoint of `from` and `to`, each coordinate rounded to nearest

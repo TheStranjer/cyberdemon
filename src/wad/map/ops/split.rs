@@ -12,11 +12,11 @@
 //! in the plan, never in the writes.
 
 use crate::error::CyberError;
-use crate::fixed::hypot;
+use crate::geom::segment::{delta, distance_squared, dot, grid_hypot, orient};
 
 use super::{
-    Linedef, Map, Point, SideShift, Sidedef, SplitPlan, SplitResult, check_offset, delta, endpoint,
-    length_squared, midpoint, off_segment, place_vertex, push_sidedef, sidedef_of, wide,
+    Linedef, Map, Point, SideShift, Sidedef, SplitPlan, SplitResult, check_offset, endpoint,
+    midpoint, off_segment, place_vertex, push_sidedef, sidedef_of,
 };
 
 /// The split point: `at` as given, else the midpoint (each coordinate
@@ -41,21 +41,19 @@ pub(super) fn split_point(at: Option<Point>, from: Point, to: Point) -> Point {
 /// [`CyberError::InvalidArgument`] for a zero-length segment, a point off
 /// the line, or a point whose projection falls on or past an endpoint.
 pub(super) fn require_on_segment(point: Point, from: Point, to: Point) -> Result<(), CyberError> {
-    let squared = length_squared(from, to);
+    let squared = distance_squared(from, to);
     if squared == 0_i128 {
         return Err(off_segment("the linedef is zero-length"));
     }
-    let (dx, dy) = delta(from, to);
-    let (px, py) = delta(from, point);
-    let cross = wide(dx, py).saturating_sub(wide(dy, px));
-    if cross.saturating_mul(cross) > squared {
+    let perpendicular = orient(from, to, point);
+    if perpendicular.saturating_mul(perpendicular) > squared {
         return Err(off_segment(&format!(
             "the point {}, {} is more than one map unit off the line",
             point.x, point.y
         )));
     }
-    let dot = wide(dx, px).saturating_add(wide(dy, py));
-    if dot <= 0_i128 || dot >= squared {
+    let along = dot(delta(from, to), delta(from, point));
+    if along <= 0_i128 || along >= squared {
         return Err(off_segment(&format!(
             "the point {}, {} is not strictly between the endpoints",
             point.x, point.y
@@ -72,8 +70,7 @@ pub(super) fn require_on_segment(point: Point, from: Point, to: Point) -> Result
 /// [`CyberError::InvalidArgument`] when the piece is longer than
 /// `i32::MAX` map units.
 pub(super) fn piece_length(from: Point, to: Point) -> Result<i32, CyberError> {
-    let (dx, dy) = delta(from, to);
-    let length = hypot(dx, dy);
+    let length = grid_hypot(from, to);
     i32::try_from(length).map_err(|_error| {
         CyberError::InvalidArgument(format!(
             "the split piece is {length} units long, past what an x_offset can shift by"

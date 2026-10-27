@@ -253,7 +253,7 @@ fn add_room_sectors(
     allocation: &mut Allocation,
 ) -> Result<(), CyberError> {
     for (index, room) in plan.rooms.iter().enumerate() {
-        let label = region_label(index);
+        let label = Label::region(index);
         if surviving.contains(&label) {
             allocation.take(label, room_sector(room, sky))?;
         }
@@ -304,13 +304,6 @@ fn check_allocated(surviving: &BTreeSet<Label>, allocation: &Allocation) -> Resu
         }
     }
     Ok(())
-}
-
-/// The region label of plan index `index`, matching the room numbering
-/// of [`room_layers`](crate::plan::walls::room_layers); indices always
-/// come from the validated plan's own length.
-fn region_label(index: usize) -> Label {
-    Label::Region(u32::try_from(index).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]

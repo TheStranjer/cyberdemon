@@ -8,11 +8,11 @@
 //! middle, the dropped painted-over pieces, the sector `keep_interior`
 //! spares and the one a plain paint buries.
 
+use crate::geom::ring::normalize_ring;
 use crate::wad::map::common::fixtures::two_room_map;
 use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::overlay::apply_overlay;
 use crate::wad::map::overlay::geometry::midpoint;
-use crate::wad::map::overlay::rebuilt::normalize_ring;
 
 use super::{assert_clean, empty_map, line_between, rect, room_request, side_of};
 

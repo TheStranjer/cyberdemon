@@ -11,16 +11,16 @@
 //! piece count reported for the caller's warnings.
 //!
 //! [`is_simple`] is the validation predicate for the polygons the rest of
-//! the vectoriser produces: no two non-adjacent edges may meet, decided
-//! with integer orientation tests only.
+//! the vectoriser produces: it asks `geom::ring`'s simplicity walk, so the
+//! exact non-adjacent-edge meeting tests (orientation, bounding box, the
+//! shared crossing walk) are the arrangement's, read with no integer
+//! copies of its own.
 
 use crate::sketch::components::{Component, Connectivity, Labels, label_components};
 use crate::sketch::mask::Mask;
 
-use super::simplify::cross;
-
 /// A polygon vertex in pixel-corner coordinates.
-type Point = (i64, i64);
+type Point = crate::geom::Pt;
 
 /// The traced outer boundary of one region label.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,86 +128,7 @@ pub fn trace_outline(labels: &Labels, id: u32) -> Option<Outline> {
 #[must_use]
 #[inline]
 pub fn is_simple(points: &[Point]) -> bool {
-    let edges = ring_edges(points);
-    edges.len() < 3 || !has_crossing(&edges)
-}
-
-/// Whether any pair of non-adjacent ring edges meets.
-fn has_crossing(edges: &[(Point, Point)]) -> bool {
-    for (one, first) in edges.iter().enumerate() {
-        if crosses_any_later(edges, one, *first) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether edge `one` meets a later non-adjacent edge of the ring.
-fn crosses_any_later(edges: &[(Point, Point)], one: usize, first: (Point, Point)) -> bool {
-    let count = edges.len();
-    edges
-        .iter()
-        .enumerate()
-        .skip(one.saturating_add(1))
-        .any(|(two, second)| !shares_vertex(one, two, count) && segments_cross(first, *second))
-}
-
-/// Whether ring edges `one` and `two` share an endpoint (`two > one`).
-fn shares_vertex(one: usize, two: usize, count: usize) -> bool {
-    let consecutive = two.checked_sub(1) == Some(one);
-    let closes_ring = one == 0 && two.checked_add(1) == Some(count);
-    consecutive || closes_ring
-}
-
-/// Whether two closed segments meet at any point.
-fn segments_cross(one: (Point, Point), two: (Point, Point)) -> bool {
-    let (head_one, tail_one) = one;
-    let (head_two, tail_two) = two;
-    let side_a = cross(head_one, tail_one, head_two);
-    let side_b = cross(head_one, tail_one, tail_two);
-    let side_c = cross(head_two, tail_two, head_one);
-    let side_d = cross(head_two, tail_two, tail_one);
-    if strict_sides(side_a, side_b) && strict_sides(side_c, side_d) {
-        return true;
-    }
-    touches(head_one, tail_one, head_two, side_a)
-        || touches(head_one, tail_one, tail_two, side_b)
-        || touches(head_two, tail_two, head_one, side_c)
-        || touches(head_two, tail_two, tail_one, side_d)
-}
-
-/// The edge list of a ring: edge `i` joins vertex `i` to vertex
-/// `i + 1 (mod n)`; a ring with fewer than two vertices has no edges.
-fn ring_edges(points: &[Point]) -> Vec<(Point, Point)> {
-    let mut edges = Vec::with_capacity(points.len());
-    let Some(first) = points.first().copied() else {
-        return edges;
-    };
-    if points.len() < 2 {
-        return edges;
-    }
-    let mut previous = first;
-    for &point in points.iter().skip(1) {
-        edges.push((previous, point));
-        previous = point;
-    }
-    edges.push((previous, first));
-    edges
-}
-
-/// The two orientation signs are strictly opposite (no zero).
-const fn strict_sides(one: i128, two: i128) -> bool {
-    (one > 0 && two < 0) || (one < 0 && two > 0)
-}
-
-/// A zero-orientation point lying within the segment's bounding box.
-fn touches(head: Point, tail: Point, spot: Point, orientation: i128) -> bool {
-    let (hx, hy) = head;
-    let (tx, ty) = tail;
-    let (sx, sy) = spot;
-    orientation == 0
-        && (hx.min(tx)..=hx.max(tx)).contains(&sx)
-        && (hy.min(ty)..=hy.max(ty)).contains(&sy)
+    crate::geom::ring::is_simple(points)
 }
 
 /// The 4-connected pieces of label `id`: the piece-labelled raster (pixels
@@ -378,20 +299,8 @@ mod tests {
         );
         assert_eq!(outline.points.len(), 6, "six vertices");
         assert!(is_simple(&outline.points), "an L outline is simple");
-        let twice_area = twice_signed_area(&outline.points);
+        let twice_area = crate::geom::ring::area2(&outline.points);
         assert!(twice_area > 0, "positive shoelace is clockwise with y down");
-    }
-
-    /// Twice the signed shoelace area of a closed ring, `i64` only.
-    fn twice_signed_area(points: &[(i64, i64)]) -> i64 {
-        let rotated = points.iter().skip(1).chain(points.first());
-        points
-            .iter()
-            .zip(rotated)
-            .map(|(&(ax, ay), &(bx, by))| {
-                ax.saturating_mul(by).saturating_sub(bx.saturating_mul(ay))
-            })
-            .sum()
     }
 
     #[test]

@@ -18,6 +18,7 @@ use alloc::slice;
 
 use crate::error::CyberError;
 use crate::geom::label::Label;
+use crate::geom::ring::normalize_ring;
 use crate::geom::segment::{ExternalSegment, delta, distance_point_segment, dot, widen};
 use crate::geom::{Cut, Layer, Piece, Pt, arrange};
 use crate::wad::map::model::{Linedef, Map, Sector, Sidedef};
@@ -29,8 +30,7 @@ use super::geometry::{
 };
 use super::labeler::{OverlayLabeler, sector_shapes};
 use super::rebuilt::{
-    Built, LineCtx, Plan, Rebuilt, normalize_ring, orient_piece, reconcile_textures, shell_of,
-    transition_face,
+    Built, LineCtx, Plan, Rebuilt, orient_piece, reconcile_textures, shell_of, transition_face,
 };
 use super::{
     NO_TEXTURE, Outside, OutsideRule, OverlayRequest, OverlayResult, Paint, Shape, Source,

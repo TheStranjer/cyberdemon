@@ -53,6 +53,18 @@ pub struct Point {
     pub y: i64,
 }
 
+impl crate::geom::Point for Point {
+    #[inline]
+    fn x(self) -> i64 {
+        self.x
+    }
+
+    #[inline]
+    fn y(self) -> i64 {
+        self.y
+    }
+}
+
 impl Point {
     /// The vertex as a 16.16 [`Point`]; the shift of an `i32` into `i64`
     /// cannot fail.

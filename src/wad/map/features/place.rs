@@ -37,7 +37,7 @@ pub use strip::void_strip;
 
 use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};
 use crate::geom::Pt;
-use crate::geom::segment::{Delta, distance_point_segment};
+use crate::geom::segment::{Delta, distance_point_segment, widen};
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::ops::Point;
 
@@ -151,11 +151,6 @@ fn wide(point: Point) -> Pt {
     (i64::from(point.x), i64::from(point.y))
 }
 
-/// An exact [`Delta`] from [`Point`] axes.
-fn vector(point: Point) -> Delta {
-    (i128::from(point.x), i128::from(point.y))
-}
-
 /// The squared distance from `at` to segment `from`-`to` as an exact
 /// fraction `num / den` with `den` positive.
 ///
@@ -168,7 +163,7 @@ fn vector(point: Point) -> Delta {
 #[must_use]
 #[inline]
 pub fn distance_fraction(at: Point, from: Point, to: Point) -> (i128, i128) {
-    distance_point_segment(vector(at), vector(from), vector(to))
+    distance_point_segment(widen(at), widen(from), widen(to))
 }
 
 /// The floored integer length of an `i128` delta vector, saturated into

@@ -12,7 +12,8 @@
 
 use alloc::collections::BTreeMap;
 
-use super::simplify::{clean_ring, dist2, rounded_mean};
+use super::simplify::{clean_ring, rounded_mean};
+use crate::geom::segment::distance_squared;
 
 /// A polygon vertex in pixel-corner coordinates.
 type Point = (i64, i64);
@@ -217,7 +218,7 @@ fn snap_shape(shape: &mut [Point], anchors: &[Point], limit2: i128) {
 
 /// Whether the vertex lies within the squared tolerance of the anchor.
 fn within(anchor: Point, vertex: Point, limit2: i128) -> bool {
-    dist2(anchor, vertex) <= limit2
+    distance_squared(anchor, vertex) <= limit2
 }
 
 #[cfg(test)]

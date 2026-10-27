@@ -9,7 +9,7 @@
 
 use alloc::collections::BTreeMap;
 
-use super::{ConnectorInfo, Emitted, NO_TEXTURE, region_label};
+use super::{ConnectorInfo, Emitted, NO_TEXTURE};
 use crate::error::CyberError;
 use crate::geom::label::Label;
 use crate::geom::{Piece, Pt};
@@ -162,7 +162,7 @@ fn side(sector: usize) -> Sidedef {
 pub(super) fn room_sector_map(plan: &Plan, emitted: &Emitted) -> BTreeMap<String, Vec<usize>> {
     let mut rooms = BTreeMap::new();
     for (index, room) in plan.rooms.iter().enumerate() {
-        if let Some(sector) = emitted.sector_of_label.get(&region_label(index)).copied() {
+        if let Some(sector) = emitted.sector_of_label.get(&Label::region(index)).copied() {
             rooms.insert(room.id.clone(), vec![sector]);
         }
     }
@@ -192,7 +192,7 @@ pub(super) fn connector_info(connector: &ConnectorGeometry, emitted: &Emitted) -
 fn connector_room_sectors(connector: &ConnectorGeometry, emitted: &Emitted) -> Vec<usize> {
     [connector.from, connector.to]
         .into_iter()
-        .filter_map(|index| emitted.sector_of_label.get(&region_label(index)).copied())
+        .filter_map(|index| emitted.sector_of_label.get(&Label::region(index)).copied())
         .collect()
 }
 

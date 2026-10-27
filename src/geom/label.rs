@@ -28,11 +28,37 @@ impl Label {
             Self::Region(id) => format!("region {id}"),
         }
     }
+
+    /// The id of a [`Label::Region`], `None` for [`Label::Void`].
+    #[must_use]
+    #[inline]
+    pub const fn region_id(self) -> Option<u32> {
+        match self {
+            Self::Region(id) => Some(id),
+            Self::Void => None,
+        }
+    }
+
+    /// The region label of a plan or map index, saturating at `u32::MAX`
+    /// (an index that far past any real plan is unreachable anyway).
+    #[must_use]
+    #[inline]
+    pub fn region(index: usize) -> Self {
+        Self::Region(u32::try_from(index).unwrap_or(u32::MAX))
+    }
 }
 
 /// Scale factor for side-sample coordinates: `2^20` units per map unit,
 /// so a sample can sit a fraction of a unit off the piece.
 pub const SAMPLE_SCALE: i128 = 0x10_0000;
+
+/// Half of [`SAMPLE_SCALE`]: turns an endpoint sum into the scaled
+/// midpoint.
+pub(crate) const SAMPLE_HALF: i128 = SAMPLE_SCALE >> 1;
+
+/// Side samples sit an eighth of a unit off the piece, along the unit
+/// normal, in [`SAMPLE_SCALE`] units.
+pub(crate) const SAMPLE_OFFSET: i128 = SAMPLE_SCALE >> 3;
 
 /// A point in [`SAMPLE_SCALE`]-scaled integer coordinates.
 pub type ScaledPt = (i128, i128);
@@ -155,6 +181,33 @@ mod tests {
     fn describe_names_void_and_region() {
         assert_eq!(Label::Void.describe(), "void", "void wording");
         assert_eq!(Label::Region(7).describe(), "region 7", "region wording");
+    }
+
+    #[test]
+    fn region_id_reads_the_label_or_voids() {
+        assert_eq!(
+            Label::Region(7).region_id(),
+            Some(7),
+            "region carries its id"
+        );
+        assert_eq!(Label::Void.region_id(), None, "void has no id");
+    }
+
+    #[test]
+    fn region_labels_an_index_and_saturates_past_u32() {
+        assert_eq!(Label::region(0), Label::Region(0), "zeroth region");
+        assert_eq!(Label::region(9), Label::Region(9), "counted region");
+        let top = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+        assert_eq!(
+            Label::region(top),
+            Label::Region(u32::MAX),
+            "the boundary index survives intact"
+        );
+        assert_eq!(
+            Label::region(usize::MAX),
+            Label::Region(u32::MAX),
+            "a past-range index saturates rather than wrapping"
+        );
     }
 
     #[test]

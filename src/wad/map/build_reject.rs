@@ -15,6 +15,7 @@
 //! or MCP.
 
 use crate::error::CyberError;
+use crate::geom::union::UnionFind;
 use crate::wad::map::{Linedef, Map, Reject};
 
 /// Bits in one `REJECT` byte.
@@ -95,19 +96,26 @@ pub fn build(map: &Map, mode: RejectMode) -> Result<RejectBuild, CyberError> {
     })
 }
 
-/// The components matrix: bits for every ordered pair of sectors in
-/// different connected components, and the pair count. `sectors²` must
-/// be addressable ([`build`] checks before calling).
-fn component_bits(map: &Map, sectors: usize) -> (Vec<u8>, usize) {
-    let parents = components(map, sectors);
-    let roots: Vec<usize> = (0..sectors).map(|sector| find(&parents, sector)).collect();
-    let want = Reject::expected_bytes(sectors);
-    let mut bits = vec![0_u8; want];
-    let mut rejected = 0_usize;
-    for row in 0_usize..sectors {
-        rejected = rejected.saturating_add(set_row(&mut bits, &roots, sectors, row));
+/// The component root of every sector: the sector graph runs through the
+/// shared [`UnionFind`], and every linedef with two resolving sides over
+/// different sectors joins those two sectors.
+fn components(map: &Map, sectors: usize) -> Vec<usize> {
+    let mut graph = UnionFind::with_len(sectors);
+    for line in &map.linedefs {
+        if let Some((front, back)) = joined_pair(map, line) {
+            graph.unite(front, back);
+        }
     }
-    (bits, rejected)
+    (0..sectors).map(|sector| graph.find(sector)).collect()
+}
+
+/// The two sectors `line` joins: present on both sides, resolving, and
+/// different.
+fn joined_pair(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
+    let (Some(front), Some(back)) = map.line_sectors(line) else {
+        return None;
+    };
+    (front != back).then_some((front, back))
 }
 
 /// Rejects in `row` every sector outside its own component, counting the
@@ -157,66 +165,23 @@ fn set_bit(bits: &mut [u8], index: usize) -> bool {
     true
 }
 
-/// The union-find parents of the sector graph: every linedef with two
-/// resolving sides over different sectors joins those two sectors.
-fn components(map: &Map, sectors: usize) -> Vec<usize> {
-    let mut parents: Vec<usize> = (0..sectors).collect();
-    let mut sizes = vec![1_usize; sectors];
-    for line in &map.linedefs {
-        if let Some((front, back)) = joined_pair(map, line) {
-            unite(&mut parents, &mut sizes, front, back);
-        }
+/// The components matrix: bits for every ordered pair of sectors in
+/// different connected components, and the pair count. `sectors²` must
+/// be addressable ([`build`] checks before calling).
+fn component_bits(map: &Map, sectors: usize) -> (Vec<u8>, usize) {
+    let roots = components(map, sectors);
+    let want = Reject::expected_bytes(sectors);
+    let mut bits = vec![0_u8; want];
+    let mut rejected = 0_usize;
+    for row in 0_usize..sectors {
+        rejected = rejected.saturating_add(set_row(&mut bits, &roots, sectors, row));
     }
-    parents
-}
-
-/// The two sectors `line` joins: present on both sides, resolving, and
-/// different.
-fn joined_pair(map: &Map, line: &Linedef) -> Option<(usize, usize)> {
-    let (Some(front), Some(back)) = map.line_sectors(line) else {
-        return None;
-    };
-    (front != back).then_some((front, back))
-}
-
-/// The root of `node`'s component. The trees stay shallow because
-/// [`unite`] balances them by size, so no path compression is needed.
-fn find(parents: &[usize], mut node: usize) -> usize {
-    while let Some(&parent) = parents.get(node) {
-        if parent == node {
-            return node;
-        }
-        node = parent;
-    }
-    node
-}
-
-/// Joins the components of `a` and `b`, attaching the smaller under the
-/// bigger so every walk stays logarithmic.
-fn unite(parents: &mut [usize], sizes: &mut [usize], a: usize, b: usize) {
-    let root_a = find(parents, a);
-    let root_b = find(parents, b);
-    if root_a == root_b {
-        return;
-    }
-    let size_a = sizes.get(root_a).copied().unwrap_or(1_usize);
-    let size_b = sizes.get(root_b).copied().unwrap_or(1_usize);
-    let (small, big) = if size_a <= size_b {
-        (root_a, root_b)
-    } else {
-        (root_b, root_a)
-    };
-    if let Some(slot) = parents.get_mut(small) {
-        *slot = big;
-    }
-    if let Some(slot) = sizes.get_mut(big) {
-        *slot = size_a.saturating_add(size_b);
-    }
+    (bits, rejected)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RejectMode, build, find};
+    use super::{RejectMode, build, components};
     use crate::wad::map::common::fixtures::{room, side, solid_line, two_room_map, vertex};
     use crate::wad::map::{Map, Reject};
 
@@ -363,15 +328,14 @@ mod tests {
     }
 
     #[test]
-    fn union_find_roots_walk_to_the_representative() {
-        let parents = vec![0_usize, 0, 1, 3];
-        assert_eq!(find(&parents, 0), 0, "a root is its own parent");
-        assert_eq!(find(&parents, 2), 0, "through the chain");
-        assert_eq!(find(&parents, 3), 3, "another root");
+    fn components_returns_each_sector_representative() {
+        let map = two_room_map();
+        let roots = components(&map, map.sectors.len());
+        assert_eq!(roots.len(), map.sectors.len(), "one root per sector");
         assert_eq!(
-            find(&parents, 9),
-            9,
-            "a node outside the table stands alone"
+            roots.first().copied(),
+            roots.get(1).copied(),
+            "the two rooms sharing a line are one component"
         );
     }
 }

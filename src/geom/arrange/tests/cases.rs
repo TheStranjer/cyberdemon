@@ -6,43 +6,10 @@ use super::{CountingLabeler, assert_clean, find_piece, piece_claims, rect, room}
 use crate::fixed::gcd;
 use crate::geom::Pt;
 use crate::geom::arrange::split::normalize_fraction;
-use crate::geom::arrange::{
-    arrange, cut, normalize_polygon, polygon_area2, ring_edges, self_crossing,
-};
+use crate::geom::arrange::{arrange, cut};
 use crate::geom::label::Label;
 use crate::geom::segment::{ExternalSegment, SourceId};
 use crate::geom::{Layer, LayerLabeler};
-
-#[test]
-fn polygon_helpers_normalize_ring_and_area() {
-    let closed = vec![(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)];
-    assert_eq!(normalize_polygon(&closed).len(), 4, "closing vertex drops");
-    let open = vec![(0, 0), (5, 5), (5, 5), (10, 0), (10, 0)];
-    assert_eq!(
-        normalize_polygon(&open).len(),
-        3,
-        "consecutive repeats drop"
-    );
-    assert_eq!(
-        ring_edges(&[(1, 2)]).len(),
-        1,
-        "a lone point loops to itself"
-    );
-    assert_eq!(ring_edges(&[]).len(), 0, "empty ring");
-    assert_eq!(polygon_area2(&rect(0, 0, 10, 10)), 200, "twice the area");
-    assert_eq!(
-        polygon_area2(&rect(0, 0, 10, 10).into_iter().rev().collect::<Vec<_>>()),
-        -200,
-        "winding flips sign"
-    );
-    assert_eq!(polygon_area2(&[(0, 0), (5, 0), (10, 0)]), 0, "flat");
-    assert_eq!(self_crossing(&rect(0, 0, 10, 10)), None, "simple");
-    assert_eq!(
-        self_crossing(&[(0, 0), (10, 10), (10, 0), (0, 5)]),
-        Some((0, 2)),
-        "crossed quadrilateral: edges 0 and 2"
-    );
-}
 
 #[test]
 fn fraction_helpers_reduce_and_sign() {

@@ -11,7 +11,7 @@
 
 use core::ops::RangeInclusive;
 
-use crate::fixed::{isqrt, narrow_i64};
+use crate::fixed::isqrt;
 use crate::gfx::image::RgbaImage;
 use crate::gfx::{
     BYTES_PER_PIXEL, MAX_DIMENSION, clamp_dimension, pixel_count, pixel_index, to_pixel,
@@ -590,40 +590,11 @@ fn ordered(a: i64, b: i64) -> (i64, i64) {
     (a.min(b), a.max(b))
 }
 
-/// `base + delta * num / den` in exact `i128`, rounded down, saturating
-/// back to `i64`; a zero `den` (a degenerate segment) answers `base`.
-fn scale_down(base: i64, delta: i64, num: i128, den: i128) -> i64 {
-    if den == 0 {
-        return base;
-    }
-    let (n, d) = if den < 0 {
-        (
-            i128::from(delta).saturating_neg().saturating_mul(num),
-            den.saturating_neg(),
-        )
-    } else {
-        (i128::from(delta).saturating_mul(num), den)
-    };
-    let drawn = i128::from(base)
-        .saturating_mul(d)
-        .saturating_add(n)
-        .div_euclid(d);
-    narrow_i64(drawn)
-}
-
-/// The column where the `start`-`end` line crosses row `y`, floor-rounded.
-pub(crate) fn intersect_x(start: Pt, end: Pt, y: i64) -> i64 {
-    let rise = i128::from(y).saturating_sub(i128::from(start.1));
-    let span = i128::from(end.1).saturating_sub(i128::from(start.1));
-    scale_down(start.0, end.0.saturating_sub(start.0), rise, span)
-}
-
-/// The row where the `start`-`end` line crosses column `x`, floor-rounded.
-fn intersect_y(start: Pt, end: Pt, x: i64) -> i64 {
-    let run = i128::from(x).saturating_sub(i128::from(start.0));
-    let span = i128::from(end.0).saturating_sub(i128::from(start.0));
-    scale_down(start.1, end.1.saturating_sub(start.1), run, span)
-}
+/// The column where the `start`-`end` line crosses row `y`, and the row
+/// where it crosses column `x`: [`crate::geom`]'s floor-rounded exact
+/// line crossings, re-exported for this module's clipping walk and the
+/// render tools' overlay checks.
+pub(crate) use crate::geom::ring::{intersect_x, intersect_y};
 
 /// One alpha-over channel mix, rounded by [`ALPHA_HALF`].
 fn blend_channel(dst: u8, src: u8, alpha: u8) -> u8 {

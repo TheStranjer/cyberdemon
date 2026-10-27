@@ -4,7 +4,6 @@
 //! the [`Scene`] [`super::paint`] prepares.
 
 use crate::fixed::{Angle, midpoint, rotate_point};
-use crate::render::canvas::intersect_x;
 use crate::render::{Edge, Pt, Rgba, Stroke, TextStyle, draw_text, thing_visual};
 use crate::wad::map::geometry;
 use crate::wad::map::{Linedef, Thing, Vertex};
@@ -215,52 +214,13 @@ fn paint_thing_labels(scene: &mut Scene<'_>, request: &Request) {
 }
 
 /// A point guaranteed inside the sector polygon drawn as pixel `edges`:
-/// the middle row of the bounding box is scanned with the even-odd rule,
-/// the longest inside interval wins and its midpoint is the anchor; a
-/// polygon the row misses entirely falls back to its first vertex. An
-/// empty edge list has no anchor.
+/// [`crate::geom`]'s one label-point scan — the middle row of the
+/// bounding box is even-odd crossed and the widest inside interval's
+/// midpoint answers, falling back to the first vertex — so the top-down
+/// labels and [`crate::wad::map::describe`]'s sector centres are
+/// identical by construction. An empty edge list has no anchor.
 pub(super) fn sector_label_point(edges: &[Edge]) -> Option<Pt> {
-    let (min_y, max_y) = edge_rows(edges)?;
-    let row = midpoint(min_y, max_y);
-    let mut crossings: Vec<i64> = edges
-        .iter()
-        .filter(|edge| (edge.0.1 > row) != (edge.1.1 > row))
-        .map(|edge| intersect_x(edge.0, edge.1, row))
-        .collect();
-    crossings.sort_unstable();
-    longest_interval(&crossings)
-        .map(|(lo, hi)| (midpoint(lo, hi), row))
-        .or_else(|| edges.first().map(|edge| edge.0))
-}
-
-/// The `(lowest, highest)` endpoint rows over `edges`, `None` when empty.
-fn edge_rows(edges: &[Edge]) -> Option<(i64, i64)> {
-    let rows = edges.iter().flat_map(|edge| [edge.0.1, edge.1.1]);
-    let min = rows.clone().min()?;
-    Some((min, rows.max()?))
-}
-
-/// The widest `(lo, hi)` interval between consecutive pairs of the sorted
-/// `crossings`, `None` when fewer than two of them exist.
-fn longest_interval(crossings: &[i64]) -> Option<(i64, i64)> {
-    let mut best: Option<(i64, i64)> = None;
-    for pair in crossings.chunks_exact(2) {
-        let Ok(&[lo, hi]) = <&[i64; 2]>::try_from(pair) else {
-            continue;
-        };
-        if wider_than((lo, hi), best) {
-            best = Some((lo, hi));
-        }
-    }
-    best
-}
-
-/// Whether the interval `one` is wider than `best` (or `best` is unset).
-const fn wider_than(one: (i64, i64), best: Option<(i64, i64)>) -> bool {
-    match best {
-        None => true,
-        Some((b_lo, b_hi)) => one.1.saturating_sub(one.0) > b_hi.saturating_sub(b_lo),
-    }
+    crate::geom::ring::label_point(edges)
 }
 
 /// Draws every annotation's text centred on its world position.

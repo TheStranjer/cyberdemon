@@ -11,10 +11,9 @@ mod properties;
 
 use core::cell::RefCell;
 
-use super::segments_cross;
 use crate::geom::Pt;
 use crate::geom::label::{Label, Labeler, ScaledPt};
-use crate::geom::segment::{SourceId, orient};
+use crate::geom::segment::{SourceId, crosses_properly, orient};
 use crate::geom::{Layer, Piece};
 
 /// A counter labeler: every side sample gets its own region, so no
@@ -108,7 +107,7 @@ fn ordered(low: i64, high: i64) -> (i64, i64) {
 fn pair_is_clean(first: &Piece, second: &Piece) -> bool {
     let one = (first.a, first.b);
     let two = (second.a, second.b);
-    !segments_cross(&one, &two) && !collinear_overlap(one, two)
+    !crosses_properly(&one, &two) && !collinear_overlap(one, two)
 }
 
 /// Check `first` against every piece after `index`.

@@ -18,6 +18,8 @@ use alloc::vec::Vec;
 
 use super::{Issue, Severity};
 use crate::fixed::gcd;
+use crate::geom::Pt;
+use crate::geom::segment::{cross, crosses_properly};
 use crate::wad::map::model::{Linedef, Map};
 
 /// Linedef count past which [`crossing_lines`] declines to sweep and
@@ -25,25 +27,16 @@ use crate::wad::map::model::{Linedef, Map};
 /// but a pathological one can still make its candidate pairs quadratic.
 const MAX_SWEEP_LINEDEFS: usize = 20_000_usize;
 
-/// A map point with its coordinates widened to `i64`.
-#[derive(Clone, Copy, Debug)]
-struct P {
-    /// `X` in map units.
-    x: i64,
-    /// `Y` in map units.
-    y: i64,
-}
-
 /// A linedef with both endpoints resolved, for the crossing and overlap
-/// sweeps.
+/// sweeps, on the shared [`Pt`] grid.
 #[derive(Clone, Copy, Debug)]
 struct Line {
     /// Index of the linedef in [`Map::linedefs`].
     index: usize,
     /// The start vertex.
-    a: P,
+    a: Pt,
     /// The end vertex.
-    b: P,
+    b: Pt,
 }
 
 /// One collinear group member: the linedef index and the stretch it
@@ -66,15 +59,15 @@ type LineKey = (i64, i64, i128);
 /// The left and right `X` of a line's bounding box.
 const fn x_span(line: &Line) -> (i64, i64) {
     (
-        if line.a.x < line.b.x {
-            line.a.x
+        if line.a.0 < line.b.0 {
+            line.a.0
         } else {
-            line.b.x
+            line.b.0
         },
-        if line.a.x < line.b.x {
-            line.b.x
+        if line.a.0 < line.b.0 {
+            line.b.0
         } else {
-            line.a.x
+            line.a.0
         },
     )
 }
@@ -82,15 +75,15 @@ const fn x_span(line: &Line) -> (i64, i64) {
 /// The bottom and top `Y` of a line's bounding box.
 const fn y_span(line: &Line) -> (i64, i64) {
     (
-        if line.a.y < line.b.y {
-            line.a.y
+        if line.a.1 < line.b.1 {
+            line.a.1
         } else {
-            line.b.y
+            line.b.1
         },
-        if line.a.y < line.b.y {
-            line.b.y
+        if line.a.1 < line.b.1 {
+            line.b.1
         } else {
-            line.a.y
+            line.a.1
         },
     )
 }
@@ -110,20 +103,14 @@ const fn ordered_pair(a: usize, b: usize) -> (usize, usize) {
     (if a < b { a } else { b }, if a < b { b } else { a })
 }
 
-/// One resolved linedef: both endpoints as [`P`]s, or `None` when either
+/// One resolved linedef: both endpoints as [`Pt`]s, or `None` when either
 /// vertex index dangles.
 fn resolved_line(map: &Map, index: usize, line: &Linedef) -> Option<Line> {
     let ((ax, ay), (bx, by)) = map.line_endpoints(line)?;
     Some(Line {
         index,
-        a: P {
-            x: i64::from(ax),
-            y: i64::from(ay),
-        },
-        b: P {
-            x: i64::from(bx),
-            y: i64::from(by),
-        },
+        a: (i64::from(ax), i64::from(ay)),
+        b: (i64::from(bx), i64::from(by)),
     })
 }
 
@@ -244,47 +231,11 @@ pub(super) fn ceiling_below_floor(map: &Map) -> Vec<Issue> {
         .collect()
 }
 
-/// The exact `i128` product of two widened coordinates.
-fn wide(a: i64, b: i64) -> i128 {
-    i128::from(a)
-        .checked_mul(i128::from(b))
-        .unwrap_or(i128::MAX)
-}
-
-/// The sign of the cross product `(b − a) × (p − a)`: which side of the
-/// directed line `a` → `b` the point `p` sits on, `0` for exactly on it.
-fn side_of(a: P, b: P, p: P) -> i8 {
-    let dx = b.x.checked_sub(a.x).unwrap_or(i64::MAX);
-    let dy = b.y.checked_sub(a.y).unwrap_or(i64::MAX);
-    let px = p.x.checked_sub(a.x).unwrap_or(i64::MAX);
-    let py = p.y.checked_sub(a.y).unwrap_or(i64::MAX);
-    match wide(px, dy).cmp(&wide(py, dx)) {
-        core::cmp::Ordering::Less => -1_i8,
-        core::cmp::Ordering::Equal => 0_i8,
-        core::cmp::Ordering::Greater => 1_i8,
-    }
-}
-
-/// Whether `a` and `b` cross properly: their infinite lines meet inside
-/// both open segments (strictly opposite sides at every endpoint, so a
-/// shared or touching endpoint, a T-junction and a collinear touch all
-/// read false).
-fn proper_crossing(a: &Line, b: &Line) -> bool {
-    let s1 = side_of(a.a, a.b, b.a);
-    let s2 = side_of(a.a, a.b, b.b);
-    if s1 == 0 || s2 == 0 || s1 == s2 {
-        return false;
-    }
-    let s3 = side_of(b.a, b.b, a.a);
-    let s4 = side_of(b.a, b.b, a.b);
-    s3 != 0 && s4 != 0 && s3 != s4
-}
-
 /// One sweep step: test the entering line against every active line and
 /// keep the pairs that cross properly.
 fn sweep_active(line: &Line, active: &[Line], pairs: &mut Vec<(usize, usize)>) {
     for other in active {
-        if boxes_touch(line, other) && proper_crossing(line, other) {
+        if boxes_touch(line, other) && crosses_properly(&(line.a, line.b), &(other.a, other.b)) {
             pairs.push(ordered_pair(line.index, other.index));
         }
     }
@@ -370,17 +321,20 @@ fn reduced_direction(dx: i64, dy: i64) -> Option<(i64, i64)> {
 /// the direction, `y` on a vertical line); `None` for a zero-length
 /// line, which [`super::structure`] already reports.
 fn line_key(line: &Line) -> Option<(LineKey, Span)> {
-    let dx = line.b.x.checked_sub(line.a.x)?;
-    let dy = line.b.y.checked_sub(line.a.y)?;
+    let dx = line.b.0.checked_sub(line.a.0)?;
+    let dy = line.b.1.checked_sub(line.a.1)?;
     if dx == 0 && dy == 0 {
         return None;
     }
     let (ndx, ndy) = reduced_direction(dx, dy)?;
-    let c = wide(ndy, line.a.x).checked_add(wide(ndx.checked_neg()?, line.a.y))?;
+    let c = cross(
+        (i128::from(ndy), i128::from(ndx)),
+        (i128::from(line.a.1), i128::from(line.a.0)),
+    );
     let (t1, t2) = if ndx == 0 {
-        (line.a.y, line.b.y)
+        (line.a.1, line.b.1)
     } else {
-        (line.a.x, line.b.x)
+        (line.a.0, line.b.0)
     };
     Some((
         (ndx, ndy, c),
@@ -455,10 +409,10 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{
-        MAX_SWEEP_LINEDEFS, P, ceiling_below_floor, check_skipped, crossing_lines, ordered_pair,
-        overlapping_lines, proper_crossing, resolved_line, resolved_lines, side_of,
-        unclosed_sector,
+        MAX_SWEEP_LINEDEFS, ceiling_below_floor, check_skipped, crossing_lines, ordered_pair,
+        overlapping_lines, resolved_line, resolved_lines, unclosed_sector,
     };
+    use crate::geom::segment::{crosses_properly, orient};
     use crate::wad::map::common::fixtures::{name, side, solid_line, vertex};
     use crate::wad::map::validate::{Issue, Severity};
     use crate::wad::map::{Map, MapFormat, Sector};
@@ -645,7 +599,7 @@ mod tests {
         Later: Iterator<Item = &'lines super::Line>,
     {
         later
-            .filter(|other| proper_crossing(line_i, other))
+            .filter(|other| crosses_properly(&(line_i.a, line_i.b), &(other.a, other.b)))
             .map(|other| ordered_pair(line_i.index, other.index))
             .collect()
     }
@@ -791,26 +745,19 @@ mod tests {
         );
         let lines = resolved_lines(&crossed);
         let first = lines.first().expect("two resolved lines");
-        let above = P {
-            x: 0_i64,
-            y: 128_i64,
-        };
-        let below = P {
-            x: 128_i64,
-            y: 0_i64,
-        };
-        assert_eq!(
-            side_of(first.a, first.b, above),
-            -1,
-            "along the (1, 1) direction, (0, 128) is on the negative side"
-        );
-        assert_eq!(
-            side_of(first.a, first.b, below),
-            1,
-            "and (128, 0) on the positive"
+        let above = (0_i64, 128_i64);
+        let below = (128_i64, 0_i64);
+        assert!(
+            orient(first.a, first.b, above) > 0,
+            "along the (1, 1) direction, (0, 128) is on the positive (left) side"
         );
         assert!(
-            proper_crossing(first, lines.get(1).expect("the second line")),
+            orient(first.a, first.b, below) < 0,
+            "and (128, 0) on the negative (right)"
+        );
+        let second = lines.get(1).expect("the second line");
+        assert!(
+            crosses_properly(&(first.a, first.b), &(second.a, second.b)),
             "the X properly crosses"
         );
         let mut dangling = crossed;

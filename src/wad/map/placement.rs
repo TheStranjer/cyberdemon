@@ -35,7 +35,7 @@ use alloc::vec::Vec;
 use crate::defs::Definitions;
 use crate::fixed::midpoint;
 use crate::geom::Pt;
-use crate::geom::segment::distance_point_segment;
+use crate::geom::segment::{distance_point_segment, widen};
 use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{FlagFamily, blocks_players};
 use crate::wad::map::geometry::{point_in_sector, sector_bbox, sector_boundary};
@@ -100,7 +100,7 @@ pub fn line_clear(map: &Map, linedef: usize, at: Pt, clearance: i64) -> bool {
     let Some((from, to)) = segment_endpoints(map, linedef) else {
         return true;
     };
-    keeps_distance(from, to, wide(at), i128::from(clearance))
+    keeps_distance(from, to, widen(at), i128::from(clearance))
 }
 
 /// Whether every boundary line of `sector` keeps at least `clearance`
@@ -252,18 +252,6 @@ fn within_circle(centre: Pt, radius: i64, at: Pt) -> bool {
     let dy = i128::from(at.1).saturating_sub(i128::from(centre.1));
     let wide = i128::from(radius);
     dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) <= wide.saturating_mul(wide)
-}
-
-/// The squared distance from `at` to `centre`, for the ordering.
-pub(super) fn distance_squared(centre: Pt, at: Pt) -> i128 {
-    let dx = i128::from(at.0).saturating_sub(i128::from(centre.0));
-    let dy = i128::from(at.1).saturating_sub(i128::from(centre.1));
-    dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
-}
-
-/// The `point` widened into the exact `i128` test space.
-pub(super) fn wide(point: Pt) -> End {
-    (i128::from(point.0), i128::from(point.1))
 }
 
 /// Whether `line` is a wall to placement: one-sided, or carrying a bit

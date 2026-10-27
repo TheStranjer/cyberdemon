@@ -32,9 +32,11 @@ use crate::tools::maps::common::Directory;
 use crate::tools::{fail, reply};
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{LumpKind, MapBlock, MapFormat};
+use crate::wad::lumps;
 use crate::wad::map::read_map;
 use crate::wad::map::stats::{MapSummary, summarize};
 use crate::wad::name::LumpName;
+use crate::wad::udmf::leading_namespace;
 
 /// Asset file extension for published raw map lumps.
 const LUMP_EXTENSION: &str = "lmp";
@@ -263,8 +265,9 @@ struct MapRow {
     name: LumpName,
     /// The layout its member lumps use.
     format: MapFormat,
-    /// The namespace a UDMF `TEXTMAP` declares; `null` for binary blocks
-    /// and for blocks that do not decode.
+    /// The namespace a UDMF `TEXTMAP` declares as its leading statement;
+    /// `null` for binary blocks and for blocks whose `TEXTMAP` opens with
+    /// anything else.
     udmf_namespace: Option<String>,
     /// Where the scope took the block's header from; set for every listed
     /// block.
@@ -286,27 +289,34 @@ struct ListMapsReport {
     maps: Vec<MapRow>,
 }
 
-/// The namespace a UDMF block declares, read by decoding it through
-/// [`common::load_map`]; a block that does not decode reports `null`
-/// instead of failing the listing.
+/// The namespace a UDMF block declares: the leading `namespace = "..."`
+/// statement of its `TEXTMAP`, read by [`leading_namespace`] without
+/// parsing the rest of the document or decoding the map. A block that
+/// holds no `TEXTMAP`, carries no `UTF-8` or opens with anything else
+/// reports `null` instead of failing the listing.
 ///
-/// Binary blocks are never decoded: they have no namespace.
-fn udmf_namespace(session: &Session, block: &MapBlock, scope: Scope) -> Option<String> {
+/// Binary blocks are never read: they have no namespace.
+///
+/// [`leading_namespace`]: crate::wad::udmf::leading_namespace
+fn udmf_namespace(dir: &Directory, block: &MapBlock) -> Option<String> {
     if block.format != MapFormat::Udmf {
         return None;
     }
-    common::load_map(session, block.name, scope)
-        .ok()
-        .and_then(|map| map.udmf_namespace)
+    let members = block.header.saturating_add(1)..block.end;
+    let lump = members
+        .filter_map(|position| dir.lumps.get(position))
+        .find(|lump| lump.name == lumps::TEXTMAP)?;
+    let text = core::str::from_utf8(&lump.data).ok()?;
+    leading_namespace(text)
 }
 
-/// One block as a row: the classified listing plus the decoded namespace
+/// One block as a row: the classified listing plus the declared namespace
 /// and node presence.
-fn map_row(session: &Session, dir: &Directory, block: &MapBlock, scope: Scope) -> MapRow {
+fn map_row(dir: &Directory, block: &MapBlock) -> MapRow {
     MapRow {
         name: block.name,
         format: block.format,
-        udmf_namespace: udmf_namespace(session, block, scope),
+        udmf_namespace: udmf_namespace(dir, block),
         source: dir.entries.get(block.header).map(|entry| entry.source),
         lumps: dir.block_lump_names(block),
         has_nodes: dir.block_has_nodes(block),
@@ -321,7 +331,7 @@ fn list_run(session: &Session, scope: Scope) -> Result<ListMapsReport, CyberErro
         .analysis
         .maps
         .iter()
-        .map(|block| map_row(session, &dir, block, scope))
+        .map(|block| map_row(&dir, block))
         .collect();
     Ok(ListMapsReport { maps })
 }

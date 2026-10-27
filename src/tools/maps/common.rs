@@ -7,7 +7,8 @@
 //! keeps reaching it at [`crate::tools::maps::common`]. On top of those,
 //! `load` adds [`crate::session::Session::definitions`] in the same lock
 //! and answers with the `Prepared` pair the analysing tools
-//! (`find_elements`, `check_playability`, `describe_map`) read from.
+//! (`find_elements`) read from; the `playability` group pairs the same
+//! read with the render settings under its own `load`.
 
 use crate::defs::Definitions;
 use crate::error::CyberError;
@@ -20,8 +21,7 @@ use crate::state::AppState;
 use crate::wad::map::Map;
 
 /// The map and the session's definitions, read together out of one
-/// session lock: what the analysing tools (`find_elements`,
-/// `check_playability`, `describe_map`) run on.
+/// session lock: what the analysing tool (`find_elements`) runs on.
 #[derive(Debug)]
 pub(crate) struct Prepared {
     /// The map to read, decoded from the merged view; its `name` carries

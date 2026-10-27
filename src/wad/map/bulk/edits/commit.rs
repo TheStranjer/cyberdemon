@@ -98,7 +98,7 @@ fn queue_number(
     value: &Value,
 ) -> Result<(), CyberError> {
     let planned = number_of(job, spec.name, value)?;
-    pending.nums.push((spec.name, planned));
+    pending.nums.insert(spec.name, planned);
     Ok(())
 }
 
@@ -110,7 +110,7 @@ fn queue_text(
     value: &Value,
 ) -> Result<(), CyberError> {
     let name = text_value(job, spec.name, value)?;
-    pending.texts.push((spec.name, name));
+    pending.texts.insert(spec.name, name);
     Ok(())
 }
 
@@ -129,7 +129,7 @@ pub(super) fn plan_add(job: &Job<'_>, map: &Map, pending: &mut Pending) -> Resul
                  integers: pass a smaller amount or set the value"
             )));
         };
-        pending.nums.push((field, planned));
+        pending.nums.insert(field, planned);
     }
     Ok(())
 }
@@ -147,20 +147,22 @@ pub(super) fn check_numbers(job: &Job<'_>, map: &Map, pending: &Pending) -> Resu
 }
 
 /// Writes one fully validated pending row back onto the map.
+///
+/// The `set` and `add` field names are disjoint (`check_overlap` refuses a
+/// clash), so the keyed plans' field order never decides what a column ends
+/// holding.
 pub(super) fn commit(job: &Job<'_>, map: &mut Map, pending: &Pending) -> Result<(), CyberError> {
-    for planned in &pending.nums {
-        let value = planned.1;
-        let number = i32::try_from(value).map_err(|error| {
+    for (field, value) in &pending.nums {
+        let number = i32::try_from(*value).map_err(|error| {
             CyberError::Internal(format!(
-                "bulk edits: the planned value {value} for '{}' left the column's \
+                "bulk edits: the planned value {value} for '{field}' left the column's \
                  range: {error}",
-                planned.0
             ))
         })?;
-        (job.plan.write_num)(map, pending.index, planned.0, number);
+        (job.plan.write_num)(map, pending.index, field, number);
     }
-    for planned in &pending.texts {
-        (job.plan.write_text)(map, pending.index, planned.0, &planned.1);
+    for (field, name) in &pending.texts {
+        (job.plan.write_text)(map, pending.index, field, name);
     }
     if let Some(bits) = pending.flags {
         (job.plan.write_flags)(map, pending.index, bits);
@@ -230,14 +232,14 @@ fn flags_pair(job: &Job<'_>, map: &Map, pending: &Pending) -> Option<(Value, Val
 
 /// The before/after pair of a planned numeric field, if this row plans one.
 fn number_pair(job: &Job<'_>, map: &Map, pending: &Pending, field: &str) -> Option<(Value, Value)> {
-    let planned = pending.nums.iter().find(|planned| planned.0 == field)?.1;
+    let planned = pending.nums.get(field).copied()?;
     let current = i64::from(job.current(map, pending.index, field)?);
     Some((Value::from(current), Value::from(planned)))
 }
 
 /// The before/after pair of a planned text field, if this row plans one.
 fn text_pair(job: &Job<'_>, map: &Map, pending: &Pending, field: &str) -> Option<(Value, Value)> {
-    let planned = &pending.texts.iter().find(|planned| planned.0 == field)?.1;
+    let planned = pending.texts.get(field)?;
     let current = (job.plan.get_text)(map, pending.index, field)?;
     Some((Value::String(current), Value::String(planned.clone())))
 }

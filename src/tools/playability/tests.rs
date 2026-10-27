@@ -198,6 +198,76 @@ async fn check_run_refuses_a_bad_skill_and_the_empty_session() {
     );
 }
 
+/// A base layer holding `lumps`, and a minimal decodable binary block.
+mod seeded {
+    use std::path::PathBuf;
+
+    use crate::session::{Layer, LayerRole};
+    use crate::wad::archive::{Lump, Wad, WadKind};
+    use crate::wad::name::LumpName;
+
+    /// An empty marker lump named `text`.
+    pub(super) fn marker(text: &str) -> Lump {
+        let name = LumpName::parse(text).expect("test names are valid");
+        Lump::marker(name)
+    }
+
+    /// A minimal decodable binary `Doom` block named `text`.
+    pub(super) fn doom_block(text: &str) -> Vec<Lump> {
+        vec![
+            marker(text),
+            marker("THINGS"),
+            marker("LINEDEFS"),
+            marker("SIDEDEFS"),
+            marker("VERTEXES"),
+            marker("SECTORS"),
+            marker("NODES"),
+        ]
+    }
+
+    /// A base layer holding `lumps`.
+    pub(super) fn base(lumps: Vec<Lump>) -> Layer {
+        Layer::new(
+            PathBuf::from("base.wad"),
+            LayerRole::Iwad,
+            Wad {
+                kind: WadKind::Iwad,
+                lumps,
+            },
+        )
+    }
+}
+
+#[test]
+fn load_carries_map_definitions_and_settings_from_one_lock() {
+    use seeded::{base, doom_block};
+
+    let state = AppState::default();
+    state
+        .with_session(|session| {
+            session
+                .set_iwad(base(doom_block("MAP01")))
+                .expect("no batch is open");
+            session.render_settings_mut().set_gamma(2_u8)?;
+            Ok(())
+        })
+        .expect("seeding the base layer and the gamma");
+    let prepared = super::load(&state, None).expect("the one map resolves");
+    assert_eq!(prepared.map.name, test_name(), "the resolved map");
+    assert_eq!(
+        prepared.defs.game,
+        Game::Doom2,
+        "the definitions rode along"
+    );
+    assert_eq!(prepared.settings.gamma, 2, "and the render settings");
+    let missing = super::load(&state, Some("MAP09")).expect_err("no MAP09 here");
+    assert_eq!(
+        missing.code(),
+        "not_found",
+        "the missing-map refusal surfaces"
+    );
+}
+
 #[test]
 fn parse_limit_defaults_to_a_page_and_names_the_range_when_refusing() {
     let shared = |value| parse_limit(value, DESCRIBE_DEFAULT_LIMIT, DESCRIBE_MAX_LIMIT, "limit");

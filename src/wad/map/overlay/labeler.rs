@@ -102,7 +102,7 @@ impl OverlayLabeler<'_> {
 
 /// One sector's boundary segments and box area, `None` when it bounds
 /// nothing the map can place or its index leaves the labeler's range.
-fn shape_for(source: &Source, sector: usize) -> Option<Shape> {
+fn shape_for(source: &Source<'_>, sector: usize) -> Option<Shape> {
     let mut edges: Vec<(Pt, Pt)> = Vec::new();
     let mut bbox: Option<(i64, i64, i64, i64)> = None;
     for line in &source.map.linedefs {
@@ -125,7 +125,7 @@ fn shape_for(source: &Source, sector: usize) -> Option<Shape> {
 }
 
 /// The containment shapes of every original sector, ascending.
-pub(super) fn sector_shapes(source: &Source) -> Vec<Shape> {
+pub(super) fn sector_shapes(source: &Source<'_>) -> Vec<Shape> {
     (0..source.map.sectors.len())
         .filter_map(|sector| shape_for(source, sector))
         .collect()

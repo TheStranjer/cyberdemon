@@ -4,7 +4,9 @@
 
 use super::{error_of, global, parse};
 use crate::error::CyberError;
-use crate::wad::udmf::{MAX_UDMF_TEXT, UdmfBlock, UdmfDoc, UdmfValue, parse_udmf};
+use crate::wad::udmf::{
+    MAX_UDMF_TEXT, UdmfBlock, UdmfDoc, UdmfValue, leading_namespace, parse_udmf,
+};
 
 #[test]
 fn reads_every_value_kind() {
@@ -140,6 +142,56 @@ fn reads_globals_after_blocks() {
     let names: Vec<&str> = doc.globals.iter().map(|field| field.0.as_str()).collect();
     assert_eq!(names, ["a", "namespace", "b"], "globals keep their order");
     assert_eq!(doc.blocks.len(), 1, "the block stays where it was");
+}
+
+#[test]
+fn leading_namespace_reads_only_the_opening_statement() {
+    assert_eq!(
+        leading_namespace("namespace = \"zdoom\"; vertex { x = 1; broken"),
+        Some("zdoom".to_owned()),
+        "a body the full parser would reject still answers"
+    );
+    assert_eq!(
+        leading_namespace("  // a comment\n/* and a block */\nNAMESPACE = \"glbdoom\";"),
+        Some("glbdoom".to_owned()),
+        "trivia before it, and the identifier lowercases like the parser's"
+    );
+    assert_eq!(
+        leading_namespace("namespace = \"a\\\"b\";"),
+        Some("a\"b".to_owned()),
+        "string escapes resolve"
+    );
+    assert_eq!(
+        leading_namespace("namespace = \"zdoom\""),
+        None,
+        "the statement needs its semicolon"
+    );
+    assert_eq!(leading_namespace(""), None, "empty text declares nothing");
+    assert_eq!(
+        leading_namespace("vertex {} namespace = \"zdoom\";"),
+        None,
+        "a block first is not a leading namespace"
+    );
+    assert_eq!(
+        leading_namespace("skypear = 1; namespace = \"zdoom\";"),
+        None,
+        "a later global is not leading"
+    );
+    assert_eq!(
+        leading_namespace("namespace = 3;"),
+        None,
+        "a non-string value declares nothing"
+    );
+    assert_eq!(
+        leading_namespace("namespace { x = 1; }"),
+        None,
+        "a block named namespace is no global"
+    );
+    assert_eq!(
+        leading_namespace("// /* unterminated"),
+        None,
+        "broken trivia answers nothing"
+    );
 }
 
 #[test]

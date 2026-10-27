@@ -446,7 +446,8 @@ src/
                   `directory`/`resolve_map_name`/`missing_map`/`load_map`, the
                   map-block lookup and decode every map tool and the 3D scene
                   builder read through.
-  state.rs        AppState: session and asset store behind mutexes; with_session
+  state.rs        AppState: session and asset store behind mutexes, with one
+                  lazily built HTTP client shared by every fetch; with_session
                   and with_assets are the only access; publish, fetch_source,
                   asset_base_url and asset_id_from_url bridge tools and asset URLs.
   themes.rs       Texture themes: the twenty texture `Role`s, the deterministic
@@ -768,15 +769,16 @@ src/
                   `sector_selection`, `page_rows`, `DescribeReport` and
                   `describe_run` in `playability/describe.rs` and the group's
                   unit tests in `playability/tests.rs`; the first parses
-                  `skill`, reads the map and the session's definitions
-                  under one lock, runs the pure
+                  `skill`, reads the map, the session's definitions and the
+                  render settings under one lock, runs the pure
                   `wad::map::playability` walk with
                   its `blockers` and `stuck_things` readings, folds the
                   reason-keyed hints and the plain summary, and sends
                   `render: true` over the `tools/render.rs` overview
                   machinery (`playability_overview`, the shared
                   `render_topdown` internals with the report's problems
-                  highlighted); the second parses `sectors`/`offset`/
+                  highlighted, painted from the very loaded inputs and
+                  never a second session read); the second parses `sectors`/`offset`/
                   `limit` (validate first, dedupe and sort, `not_found`
                   naming the valid range), reads through the same one-lock
                   path, pages the pure `wad::map::describe` rows beside
@@ -1070,7 +1072,8 @@ src/
                   renumbering, and `wad/udmf.rs` the `UDMF` `TEXTMAP`
                   grammar's root: the constants, `UdmfValue`, `UdmfBlock`
                   and `UdmfDoc`, the `parse_udmf`, `write_udmf`,
-                  `decimal_to_rounded_int` and `has_fraction` entry points,
+                  `leading_namespace`, `decimal_to_rounded_int` and
+                  `has_fraction` entry points,
                   `Pos`, `err_at` and the writer helpers, over
                   `udmf/cursor.rs` (the line-and-column character cursor:
                   trivia, comments and quoted strings), `udmf/parser.rs`
@@ -1151,7 +1154,7 @@ src/
                   `Source`, `Shape` and `OutsideRule` reads of the original
                   map and `apply_overlay` in the root, the `OverlayLabeler`
                   and the containment shapes it answers from in
-                  `overlay/labeler.rs`, the `Prepared` snapshot, the
+                  `overlay/labeler.rs`, the `Prepared` borrowed view of the original map, the
                   arrangement runs and the side dressing in
                   `overlay/prepared.rs`, the `Rebuilt`, `Plan`, `Built` and
                   `LineCtx` rows with their flag, orientation and texture

@@ -11,10 +11,9 @@
 //! at or above its floor, so the whole selection is known good before
 //! [`commit`](super::commit::commit) writes any of it.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 use serde_json::Value;
 
@@ -49,13 +48,17 @@ pub(super) struct Job<'req> {
 }
 
 /// One selected row's planned values, computed before anything is written.
+///
+/// The planned numbers and names are keyed by field name so every
+/// per-field read — [`Job::resulting`]'s and the report's before/after
+/// pairs — is one lookup instead of a scan of the plan.
 pub(super) struct Pending {
     /// Row position in the block.
     pub(super) index: usize,
     /// Planned integers by field name.
-    pub(super) nums: Vec<(&'static str, i64)>,
+    pub(super) nums: BTreeMap<&'static str, i64>,
     /// Planned names (uppercase, stock-checked) by field name.
-    pub(super) texts: Vec<(&'static str, String)>,
+    pub(super) texts: BTreeMap<&'static str, String>,
     /// Planned flag bits, `None` when this request leaves flags alone.
     pub(super) flags: Option<u32>,
 }
@@ -197,8 +200,8 @@ impl Job<'_> {
     pub(super) fn propose(&self, map: &Map, index: usize) -> Result<Pending, CyberError> {
         let mut pending = Pending {
             index,
-            nums: Vec::new(),
-            texts: Vec::new(),
+            nums: BTreeMap::new(),
+            texts: BTreeMap::new(),
             flags: None,
         };
         plan_set(self, &mut pending)?;
@@ -266,13 +269,7 @@ impl Job<'_> {
     /// The resulting row's value for a numeric field: planned or current.
     pub(super) fn resulting(&self, map: &Map, pending: &Pending, field: &str) -> Option<i64> {
         let current = i64::from(self.current(map, pending.index, field)?);
-        Some(
-            pending
-                .nums
-                .iter()
-                .find(|planned| planned.0 == field)
-                .map_or(current, |planned| planned.1),
-        )
+        Some(pending.nums.get(field).copied().unwrap_or(current))
     }
 
     /// The row's stored value for one numeric field.

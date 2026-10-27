@@ -1,13 +1,14 @@
 //! `describe_map`'s side of the playability group: the measured per-sector
 //! picture of a whole map.
 //!
-//! [`load`](super::load) reads the map and the session's definitions under one
-//! lock exactly like [`check_run`](super::check::check_run) does, the pure
+//! [`load`](super::load) reads the map, the session's definitions and the
+//! render settings under one lock exactly like
+//! [`check_run`](super::check::check_run) does, the pure
 //! [`crate::wad::map::describe`] module answers the facts and this module
 //! deduplicates and filters the requested sectors, pages the rows by
 //! `offset`/`limit`, keeps the always-whole [`MapOverview`] summary beside them
 //! whatever the paging says and publishes the labelled overview with plain
-//! marks.
+//! marks from those very loaded inputs.
 //!
 //! [`MapOverview`]: crate::wad::map::describe::MapOverview
 
@@ -109,10 +110,11 @@ pub(super) struct DescribeReport {
 }
 
 /// `describe_map`'s work: check the limit before the session is touched,
-/// read the map and the session's definitions under one lock exactly like
-/// [`check_run`](super::check::check_run) does, select and page the sector
-/// rows, fold the always-whole map summary, and publish the labelled overview
-/// through the render group's own machinery.
+/// read the map, the session's definitions and the render settings under one
+/// lock exactly like [`check_run`](super::check::check_run) does, select and
+/// page the sector rows, fold the always-whole map summary, and publish the
+/// labelled overview from the inputs that same lock loaded, through the
+/// render group's own machinery.
 ///
 /// # Errors
 ///
@@ -142,7 +144,7 @@ pub(super) async fn describe_run(
         .collect();
     let summary = describe.summary();
     let image = if args.render.unwrap_or(true) {
-        Some(playability_overview(state, args.map.as_deref(), OverviewMarks::default()).await?)
+        Some(playability_overview(state, &prepared, OverviewMarks::default()).await?)
     } else {
         None
     };

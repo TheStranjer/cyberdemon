@@ -1,12 +1,13 @@
 //! `check_playability`'s side of the playability group: one walk of the map
 //! folded into the report a calling model acts on.
 //!
-//! [`load`](super::load) reads the map and the session's definitions under one
-//! lock, the pure [`crate::wad::map::playability`] module walks them and
-//! explains the result, [`super::hints`] words each fix and [`viewed`] folds
-//! both into [`PlayabilityReport`]: `ok`, the plain `summary`, the sector
-//! counts, the blocker, exit, key, lock, stuck and unreachable rows, the
-//! highlights [`marks`] hands the render group's overview and the first three
+//! [`load`](super::load) reads the map, the session's definitions and the
+//! render settings under one lock, the pure [`crate::wad::map::playability`]
+//! module walks them and explains the result, [`super::hints`] words each
+//! fix and [`viewed`] folds both into [`PlayabilityReport`]: `ok`, the plain
+//! `summary`, the sector counts, the blocker, exit, key, lock, stuck and
+//! unreachable rows, the highlights [`marks`] hands the render group's
+//! overview — painted from those very loaded inputs — and the first three
 //! `next_steps` hints. A map with no player start is a normal `ok: false`
 //! report, never an error.
 
@@ -399,7 +400,8 @@ fn marks(a: &Analysis<'_>) -> OverviewMarks {
 
 /// `check_playability`'s work: resolve the skill before the session is
 /// touched, walk the map under one lock, and publish the optional overview
-/// through the render group's own machinery.
+/// from the inputs that same lock loaded, through the render group's own
+/// machinery.
 ///
 /// # Errors
 ///
@@ -427,7 +429,7 @@ pub(super) async fn check_run(
         start,
     };
     let render = if args.render.unwrap_or(false) {
-        Some(playability_overview(state, args.map.as_deref(), marks(&analysis)).await?)
+        Some(playability_overview(state, &prepared, marks(&analysis)).await?)
     } else {
         None
     };

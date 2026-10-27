@@ -130,7 +130,7 @@ impl LineCtx<'_> {
     /// the line's end, whichever way the new line runs.
     pub(super) fn copied_side(
         &self,
-        source: &Source,
+        source: &Source<'_>,
         sector: usize,
         front_slot: bool,
     ) -> Option<(Sidedef, i32)> {

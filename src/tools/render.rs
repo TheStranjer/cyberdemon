@@ -72,9 +72,11 @@ use crate::tools::render::topdown::topdown_report;
 use crate::tools::render::view::{RenderViewParams, view_report};
 use crate::tools::reply;
 
-// The marks and the overview run the `playability` group drives, kept at
-// the paths it already imports; both live in `topdown`.
-pub(in crate::tools) use crate::tools::render::topdown::{OverviewMarks, playability_overview};
+// The marks, the loaded inputs and the overview run the `playability`
+// group drives, kept at the paths it already imports; all live in `topdown`.
+pub(in crate::tools) use crate::tools::render::topdown::{
+    OverviewMarks, Prepared, playability_overview,
+};
 
 /// Arguments for [`Cyberdemon::set_render_resolution`].
 #[derive(Debug, Deserialize, JsonSchema)]

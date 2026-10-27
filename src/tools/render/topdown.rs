@@ -68,13 +68,18 @@ pub(super) fn paint_map(map: &Map, defs: &Definitions, request: &Request) -> Pai
 /// The session half of one `render_topdown` call: the map, its thing
 /// definitions and the settings it defaults from, all read under the
 /// session lock and cloned out so encoding and publishing never hold it.
-struct Prepared {
+///
+/// The `playability` group reads its own through `playability`'s `load`
+/// and hands it to [`playability_overview`], so an overview is painted
+/// from the very inputs the analysis walked — one lock, one revision.
+#[derive(Debug)]
+pub(in crate::tools) struct Prepared {
     /// The map to render, from the merged view.
-    map: Map,
+    pub(in crate::tools) map: Map,
     /// The session's thing definitions.
-    defs: Definitions,
+    pub(in crate::tools) defs: Definitions,
     /// The session's render settings.
-    settings: RenderSettings,
+    pub(in crate::tools) settings: RenderSettings,
 }
 
 /// [`Cyberdemon::render_topdown`]'s result: the fitted `transform` (null
@@ -192,6 +197,19 @@ pub(super) async fn topdown_report(
         None => None,
     };
     let prepared = load_scene(state, args.map.as_deref())?;
+    published_report(state, &prepared, args, underlay)
+}
+
+/// The lock-free tail of one `render_topdown`: resolve the request against
+/// the already-loaded `prepared` inputs, paint, gamma-correct, encode and
+/// publish. Shared by [`topdown_report`] and [`playability_overview`] so
+/// neither paints a different revision than it resolved.
+fn published_report(
+    state: &AppState,
+    prepared: &Prepared,
+    args: &RenderTopdownParams,
+    underlay: Option<Underlay>,
+) -> Result<TopdownReport, CyberError> {
     let request = resolve_request(&prepared.settings, args, &prepared.map, underlay)?;
     let mut painted = paint_map(&prepared.map, &prepared.defs, &request);
     painted
@@ -229,21 +247,24 @@ pub(in crate::tools) struct OverviewMarks {
 }
 
 /// The `check_playability` overview: the top-down drawing internals behind
-/// [`Cyberdemon::render_topdown`] run over `map` with `marks` highlighted,
-/// thing markers and sector fills on and sector labels on, published as a
-/// `PNG` asset.
+/// [`Cyberdemon::render_topdown`] run over the map, definitions and
+/// settings already held in `prepared`, with `marks` highlighted, thing
+/// markers and sector fills on and sector labels on, published as a
+/// `PNG` asset. No session lock is taken again: the picture is the very
+/// revision the caller analysed.
 ///
 /// # Errors
 ///
-/// [`topdown_report`]'s errors: the same map-resolution refusals the
-/// standalone render gives, plus its encode and publish failures.
+/// [`resolve_request`]'s errors plus [`encode_png`]' and
+/// [`AppState::publish`]' failures — the standalone render's, minus its
+/// map resolution.
 pub(in crate::tools) async fn playability_overview(
     state: &AppState,
-    map: Option<&str>,
+    prepared: &Prepared,
     marks: OverviewMarks,
 ) -> Result<AssetRef, CyberError> {
     let args = RenderTopdownParams {
-        map: map.map(str::to_owned),
+        map: None,
         width: None,
         height: None,
         projection: None,
@@ -267,5 +288,5 @@ pub(in crate::tools) async fn playability_overview(
         annotations: None,
         label_scale: None,
     };
-    Ok(topdown_report(state, &args).await?.asset)
+    Ok(published_report(state, prepared, &args, None)?.asset)
 }

@@ -21,7 +21,8 @@
 //! `TEXTMAP line:column: ` of the offending token.
 //!
 //! The value, block and document shapes, the [`parse_udmf`], [`write_udmf`],
-//! [`decimal_to_rounded_int`] and [`has_fraction`] entry points with the
+//! [`leading_namespace`], [`decimal_to_rounded_int`] and [`has_fraction`]
+//! entry points with the
 //! failures they report, the token position and the writer helpers stay
 //! here; reading the characters is the private `cursor` module, running the
 //! grammar over them the private `parser` one and the decimal literal
@@ -31,6 +32,8 @@
 mod cursor;
 mod decimal;
 mod parser;
+
+pub use parser::leading_namespace;
 
 use crate::error::CyberError;
 use crate::wad::udmf::decimal::{normalize, rounded_magnitude, split_decimal};

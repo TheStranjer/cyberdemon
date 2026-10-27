@@ -3,17 +3,19 @@
 //! measured per-sector picture of a whole map.
 //!
 //! The analysis is the pure [`crate::wad::map::playability`] module's; the
-//! group resolves the parameters, reads the map and the session's definitions
-//! (custom `DECORATE`/`DEHACKED` things included) under one lock, and folds
-//! the walk, its [`blockers`] explanations and the [`stuck_things`] body
-//! tests into the one answer the calling model acts on: `ok`, a plain
-//! `summary`, the reachable/unreachable sector counts, per-blocker `reason`
-//! and `hint` rows naming the tool that fixes each, the exits, keys and
-//! locks as the walk saw them, the stuck and unreachable things, and
-//! `next_steps` with the first three hints. `render: true` additionally
-//! publishes a [`render_topdown`](Cyberdemon::render_topdown) overview with
-//! the unreachable sectors, blocker lines and stuck things highlighted and
-//! the sector labels on. A map with no player start is a normal
+//! group resolves the parameters, reads the map, the session's definitions
+//! (custom `DECORATE`/`DEHACKED` things included) and the render settings
+//! under one lock, and folds the walk, its [`blockers`] explanations and
+//! the [`stuck_things`] body tests into the one answer the calling model
+//! acts on: `ok`, a plain `summary`, the reachable/unreachable sector
+//! counts, per-blocker `reason` and `hint` rows naming the tool that fixes
+//! each, the exits, keys and locks as the walk saw them, the stuck and
+//! unreachable things, and `next_steps` with the first three hints.
+//! `render: true` additionally publishes a
+//! [`render_topdown`](Cyberdemon::render_topdown) overview with the
+//! unreachable sectors, blocker lines and stuck things highlighted and
+//! the sector labels on, painted from the very inputs the analysis walked
+//! — never a second session read. A map with no player start is a normal
 //! `ok: false` result, never an error.
 //!
 //! `describe_map` folds the pure [`crate::wad::map::describe`] module's
@@ -22,7 +24,7 @@
 //! deduplicated, filtered and paged as the parameters ask, the whole-map
 //! [`MapOverview`] summary beside them whatever the paging says, and the
 //! same labelled [`playability_overview`] PNG with plain marks as the
-//! `render` flag asks for (default on).
+//! `render` flag asks for (default on), off the same loaded inputs.
 //!
 //! The work itself is in three private submodules: `check` holds
 //! `check_playability`'s parameters, the analysis a report is folded out of,
@@ -49,12 +51,40 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
 
+use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::tools::maps::common::load;
+use crate::session::Scope;
+use crate::state::AppState;
+use crate::tools::maps::common::{load_map, resolve_map_name};
 use crate::tools::playability::check::{CheckPlayabilityParams, check_run};
 use crate::tools::playability::describe::{DescribeMapParams, describe_run};
+use crate::tools::render::Prepared;
 use crate::tools::reply;
 use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
+
+/// The map, the session's definitions and the session's render settings,
+/// read together out of one session lock: what the two tools analyse and
+/// what [`playability_overview`] then paints, so a rendered overview is
+/// the very revision the call walked and never a second read that could
+/// have moved under the caller.
+///
+/// [`playability_overview`]: crate::tools::render::playability_overview
+///
+/// # Errors
+///
+/// [`resolve_map_name`] and [`load_map`]'s errors and
+/// [`crate::session::Session::definitions`]' collection errors.
+pub(super) fn load(state: &AppState, requested: Option<&str>) -> Result<Prepared, CyberError> {
+    state.with_session(|session| {
+        let name = resolve_map_name(session, requested)?;
+        let map = load_map(session, name, Scope::Merged)?;
+        Ok(Prepared {
+            map,
+            defs: session.definitions()?,
+            settings: session.render_settings().clone(),
+        })
+    })
+}
 
 #[expect(
     clippy::multiple_inherent_impl,

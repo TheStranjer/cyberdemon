@@ -1,8 +1,8 @@
-//! One overlay's prepared inputs: the snapshot of the original map every
-//! read of it goes through, and the steps that turn the paint request into
-//! rebuilt rows.
+//! One overlay's prepared inputs: the borrowed view of the original map
+//! every read of it goes through, and the steps that turn the paint
+//! request into rebuilt rows.
 //!
-//! [`Prepared::new`] takes that snapshot and runs the request checks that
+//! [`Prepared::new`] takes that view and runs the request checks that
 //! need the map as it stands, so [`apply_overlay`](super::apply_overlay)
 //! can be refused before anything is written. [`Prepared::replaced_sectors`]
 //! then probes which sectors `keep_interior` spares, [`Prepared::arrange_pieces`]
@@ -35,11 +35,11 @@ use super::{
     WallClaim, WallEnds,
 };
 
-/// Everything one overlay works from: the original map, the derived
-/// containment shapes and the paint's own label.
-pub(super) struct Prepared<'req> {
-    /// The map as it stood.
-    source: Source,
+/// Everything one overlay works from: the borrowed original map, the
+/// derived containment shapes and the paint's own label.
+pub(super) struct Prepared<'req, 'src> {
+    /// The map as it stood, borrowed for the whole prepare phase.
+    source: Source<'src>,
     /// The request being applied.
     request: &'req OverlayRequest,
     /// The polygon without repeated neighbours or a closing repeat.
@@ -62,16 +62,16 @@ pub(super) struct Prepared<'req> {
     unresolved: Vec<usize>,
 }
 
-impl<'req> Prepared<'req> {
-    /// Take the snapshot and run every request check that needs the map
-    /// as it stands.
+impl<'req, 'src> Prepared<'req, 'src> {
+    /// Borrow `map` as the original and run every request check that
+    /// needs the map as it stands.
     ///
     /// # Errors
     ///
     /// [`CyberError::NotFound`] for an unknown [`Outside::Face`] sector
     /// and [`CyberError::LimitExceeded`] when the sector count leaves the
     /// labeler's range.
-    pub(super) fn new(map: &Map, request: &'req OverlayRequest) -> Result<Self, CyberError> {
+    pub(super) fn new(map: &'src Map, request: &'req OverlayRequest) -> Result<Self, CyberError> {
         check_outside(request, map)?;
         let count = map.sectors.len();
         let paint = request.paint.clone();
@@ -83,7 +83,7 @@ impl<'req> Prepared<'req> {
             Some(_) => Label::Region(sector_id(count)?),
             None => Label::Void,
         };
-        let source = Source::snapshot(map);
+        let source = Source { map };
         let shapes = sector_shapes(&source);
         let (external, unresolved) = external_segments(&source);
         let walls = external

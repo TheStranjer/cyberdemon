@@ -12,6 +12,7 @@ use super::{
     DEFAULT_SWITCH_REPEATABLE, invalid_at, named_at, required,
 };
 use crate::error::CyberError;
+use crate::geom::Pt;
 use crate::plan::model::{ExitStyle, Feature, Side};
 use crate::wad::map::features::LiftStyle;
 
@@ -119,7 +120,7 @@ impl FeatureParam {
             style: self.exit_style(path)?,
             secret: self.secret,
             wall: self.side(path)?,
-            at: self.at.map(<(i64, i64)>::from),
+            at: self.at.map(Pt::from),
         })
     }
 
@@ -139,7 +140,7 @@ impl FeatureParam {
             )?,
             wall: self.side(path)?,
             repeatable: self.repeatable.unwrap_or(DEFAULT_SWITCH_REPEATABLE),
-            at: self.at.map(<(i64, i64)>::from),
+            at: self.at.map(Pt::from),
         })
     }
 
@@ -173,8 +174,8 @@ impl FeatureParam {
                 "a teleporter feature needs a to_room: the id of the room the destination \
                  stands in",
             )?,
-            pad: self.pad.map(<(i64, i64)>::from),
-            destination: self.destination.map(<(i64, i64)>::from),
+            pad: self.pad.map(Pt::from),
+            destination: self.destination.map(Pt::from),
             angle: self.angle.unwrap_or(DEFAULT_ANGLE),
             two_way: self.two_way,
         })

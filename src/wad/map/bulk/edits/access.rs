@@ -106,7 +106,7 @@ pub(super) fn number_of(job: &Job<'_>, field: &str, value: &Value) -> Result<i64
     value.as_i64().ok_or_else(|| {
         CyberError::InvalidArgument(format!(
             "{} field '{field}' needs an integer value, got {value}",
-            job.plan.thing
+            job.kind.singular()
         ))
     })
 }
@@ -116,7 +116,7 @@ pub(super) fn text_value(job: &Job<'_>, field: &str, value: &Value) -> Result<St
     value.as_str().map(str::to_ascii_uppercase).ok_or_else(|| {
         CyberError::InvalidArgument(format!(
             "{} field '{field}' needs a name string, got {value}",
-            job.plan.thing
+            job.kind.singular()
         ))
     })
 }

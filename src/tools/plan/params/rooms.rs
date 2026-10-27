@@ -15,6 +15,7 @@ use super::{
     DEFAULT_STEP_DEPTH, DEFAULT_STEP_HEIGHT, DEFAULT_WIDTH, invalid_at, named_at,
 };
 use crate::error::CyberError;
+use crate::geom::Pt;
 use crate::plan::model::{Connection, ConnectionKind, DoorStyle, Room, Shape};
 use crate::wad::map::consts::DEFAULT_LINTEL;
 use crate::wad::map::features::LightEffect;
@@ -167,7 +168,7 @@ impl RoomParam {
                 h: rect.h,
             }),
             (None, Some(points)) => Ok(Shape::Polygon {
-                points: points.iter().copied().map(<(i64, i64)>::from).collect(),
+                points: points.iter().copied().map(Pt::from).collect(),
             }),
             (Some(_), Some(_)) => Err(invalid_at(
                 &at,
@@ -189,7 +190,7 @@ impl ConnectionParam {
             from: self.from.clone(),
             to: self.to.clone(),
             kind: self.kind(index)?,
-            at: self.at.map(<(i64, i64)>::from),
+            at: self.at.map(Pt::from),
             width: self.width.unwrap_or(DEFAULT_WIDTH),
         })
     }

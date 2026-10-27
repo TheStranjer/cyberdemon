@@ -135,10 +135,10 @@ const THING_FIELDS: &[FieldSpec] = &[
 
 /// The block-specific plumbing one [`apply`](super::apply) run drives.
 /// The field reads and writes are not here: they dispatch on the
-/// [`Field`](super::fields::Field) every planned value is keyed by.
+/// [`Field`](super::fields::Field) every planned value is keyed by. The
+/// element's own name in a message is [`ElementKind::singular`], read
+/// off the [`Job`](super::job::Job)'s kind, never repeated here.
 pub(super) struct KindPlan {
-    /// Singular element name for the messages ("sector").
-    pub(super) thing: &'static str,
     /// The fields this kind edits.
     pub(super) fields: &'static [FieldSpec],
     /// The kind's flag table, `None` for the kinds without a `flags`
@@ -149,35 +149,30 @@ pub(super) struct KindPlan {
 
 /// The sector block's plan.
 const SECTOR_PLAN: KindPlan = KindPlan {
-    thing: "sector",
     fields: SECTOR_FIELDS,
     flag_kind: None,
 };
 
 /// The sidedef block's plan.
 const SIDEDEF_PLAN: KindPlan = KindPlan {
-    thing: "sidedef",
     fields: SIDEDEF_FIELDS,
     flag_kind: None,
 };
 
 /// The vertex block's plan.
 const VERTEX_PLAN: KindPlan = KindPlan {
-    thing: "vertex",
     fields: VERTEX_FIELDS,
     flag_kind: None,
 };
 
 /// The `Doom`-family linedef plan.
 const LINEDEF_DOOM_PLAN: KindPlan = KindPlan {
-    thing: "linedef",
     fields: LINEDEF_DOOM_FIELDS,
     flag_kind: Some(FlagKind::Linedef),
 };
 
 /// The `Hexen`-family linedef plan.
 const LINEDEF_HEXEN_PLAN: KindPlan = KindPlan {
-    thing: "linedef",
     fields: LINEDEF_HEXEN_FIELDS,
     flag_kind: Some(FlagKind::Linedef),
 };
@@ -185,7 +180,6 @@ const LINEDEF_HEXEN_PLAN: KindPlan = KindPlan {
 /// The thing plan, shared by both families (only the flag table differs,
 /// and that read goes through the scope's family).
 const THING_PLAN: KindPlan = KindPlan {
-    thing: "thing",
     fields: THING_FIELDS,
     flag_kind: Some(FlagKind::Thing),
 };

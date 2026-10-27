@@ -4,8 +4,8 @@
 //! [`Room::polygon`](crate::plan::model::Room::polygon) answers for both
 //! shapes.
 
-use super::room_with;
-use crate::plan::model::{ConnectionKind, ExitStyle, Feature, Plan, Shape, Side};
+use super::{opening, room_with};
+use crate::plan::model::{Connection, ConnectionKind, ExitStyle, Feature, Plan, Shape, Side};
 use crate::wad::map::features::{LiftStyle, LightEffect};
 
 #[test]
@@ -275,4 +275,26 @@ fn polygon_room_returns_the_points_as_given() {
         },
     );
     assert_eq!(room.polygon(), points, "the ring passes through");
+}
+
+#[test]
+fn a_connection_labels_by_its_id_or_the_arrow_between_its_rooms() {
+    assert_eq!(
+        opening("a", "b").label(),
+        "a->b",
+        "unnamed answers by the arrow"
+    );
+    let mut named = opening("a", "b");
+    named.id = Some("d1".to_owned());
+    assert_eq!(named.label(), "d1", "a carried id wins");
+    assert_eq!(
+        Connection::label_for(None, "hall", "cellar"),
+        "hall->cellar",
+        "the shared formatter spells the same arrow for the wire rows",
+    );
+    assert_eq!(
+        Connection::label_for(Some("x9"), "hall", "cellar"),
+        "x9",
+        "and keeps a given id",
+    );
 }

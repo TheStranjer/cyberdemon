@@ -279,7 +279,7 @@ impl<'map, 'req> Engine<'map, 'req> {
             ElementKind::Sectors => self
                 .facts(index)
                 .and_then(|facts| facts.center)
-                .is_some_and(|[x, y]| in_box(bbox, x, y)),
+                .is_some_and(|(x, y)| in_box(bbox, x, y)),
             ElementKind::Things => self
                 .map
                 .things

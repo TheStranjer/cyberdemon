@@ -15,6 +15,7 @@ use super::{NO_TEXTURE, Removal};
 use crate::error::CyberError;
 use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 use crate::wad::map::model::{Linedef, Map, Sidedef};
+use crate::wad::map::query::ElementKind;
 
 /// The old-to-new indices a surviving linedef's fields renumber through.
 pub(super) struct Numbering {
@@ -68,8 +69,14 @@ pub(super) fn keep_sidedefs(
             continue;
         }
         let mut moved = side.clone();
-        moved.sector = live(sector_map, side.sector)
-            .ok_or_else(|| refusal("sector", side.sector, "sidedef", old))?;
+        moved.sector = live(sector_map, side.sector).ok_or_else(|| {
+            refusal(
+                ElementKind::Sectors,
+                side.sector,
+                ElementKind::Sidedefs,
+                old,
+            )
+        })?;
         kept.push(moved);
     }
     Ok(kept)
@@ -108,8 +115,22 @@ fn remap_ends(
     numbering: &[Option<usize>],
 ) -> Result<(usize, usize), CyberError> {
     Ok((
-        live(numbering, line.v1).ok_or_else(|| refusal("vertex", line.v1, "linedef", holder))?,
-        live(numbering, line.v2).ok_or_else(|| refusal("vertex", line.v2, "linedef", holder))?,
+        live(numbering, line.v1).ok_or_else(|| {
+            refusal(
+                ElementKind::Vertices,
+                line.v1,
+                ElementKind::Linedefs,
+                holder,
+            )
+        })?,
+        live(numbering, line.v2).ok_or_else(|| {
+            refusal(
+                ElementKind::Vertices,
+                line.v2,
+                ElementKind::Linedefs,
+                holder,
+            )
+        })?,
     ))
 }
 
@@ -157,14 +178,22 @@ fn move_texture_to_middle(side: &mut Sidedef) {
     }
 }
 
-/// The `Internal` saying surviving `holder_kind` `holder` references
-/// `target_kind` `target`, which the removal deletes or the map does not
-/// hold.
-fn refusal(target_kind: &str, target: usize, holder_kind: &str, holder: usize) -> CyberError {
+/// The `Internal` saying a surviving `holder_kind` `holder` references a
+/// `target_kind` `target` the removal deletes or the map does not hold.
+/// The kind names come from [`ElementKind::singular`], the one enum every
+/// element name is spelled from.
+fn refusal(
+    target_kind: ElementKind,
+    target: usize,
+    holder_kind: ElementKind,
+    holder: usize,
+) -> CyberError {
     CyberError::Internal(format!(
-        "cannot apply the removal: {holder_kind} {holder} references {target_kind} {target}, \
+        "cannot apply the removal: {} {holder} references {} {target}, \
          which the removal deletes or the map does not hold: apply the \
-         expand_cascade result instead"
+         expand_cascade result instead",
+        holder_kind.singular(),
+        target_kind.singular(),
     ))
 }
 

@@ -14,7 +14,7 @@ use crate::geom::label::{Label, LayerLabeler};
 use crate::plan::connectors::final_layers;
 use crate::plan::connectors::frame::{Frame, rounded_unit};
 use crate::plan::connectors::pass::{distance_squared, midpoint};
-use crate::plan::connectors::{LabelAllocator, connection_label, measure, plan_connectors};
+use crate::plan::connectors::{LabelAllocator, measure, plan_connectors};
 use crate::plan::model::{ConnectionKind, DoorStyle};
 use crate::plan::walls::{WallKey, build_walls};
 
@@ -342,7 +342,7 @@ fn helpers_round_measure_and_clamp() {
     let mut allocator = LabelAllocator::new(3_usize);
     assert_eq!(allocator.take(2_usize), 3, "first pair of labels");
     assert_eq!(allocator.take(1_usize), 5, "continues past them");
-    assert_eq!(connection_label(&opening("a", "b")), "a->b", "unnamed");
+    assert_eq!(opening("a", "b").label(), "a->b", "unnamed");
     let piece = Piece {
         a: (128, 0),
         b: (128, 128),

@@ -17,7 +17,7 @@ use crate::defs::Definitions;
 use crate::error::CyberError;
 use crate::named::parse_named;
 use crate::plan::things::resolve_thing_kind;
-use crate::wad::map::flags::{self, FlagFamily, FlagKind, Skill};
+use crate::wad::map::flags::Skill;
 use crate::wad::map::placement::{Area, Facing, snap_angle};
 
 use super::specials::sector_selection;
@@ -395,10 +395,7 @@ pub(super) fn facing_of(param: Option<&AngleParam>, seed: u32) -> Result<Facing,
     }
 }
 
-/// The `Thing` flag bit `wanted` names in `family`' table, `0` when none.
-pub(super) fn thing_bit(family: FlagFamily, wanted: &str) -> u32 {
-    flags::names(FlagKind::Thing, family)
-        .iter()
-        .find(|entry| entry.0 == wanted)
-        .map_or(0_u32, |entry| entry.1)
-}
+/// The `Thing` flag bit `wanted` names in `family`' table, `0` when none:
+/// the flag tables' own lookup, re-exported for the group's presence
+/// builder and its tests.
+pub(super) use crate::wad::map::flags::thing_bit;

@@ -160,9 +160,10 @@ pub fn plan_connectors(plan: &Plan, walls: &Walls) -> Result<Vec<ConnectorGeomet
     };
     let mut placed = Vec::with_capacity(plan.connections.len());
     for (index, connection) in plan.connections.iter().enumerate() {
-        placed.push(pass.place(connection, index).map_err(|problem| {
-            problem.at_plan(PlanRef::connection(&connection_label(connection)))
-        })?);
+        placed.push(
+            pass.place(connection, index)
+                .map_err(|problem| problem.at_plan(PlanRef::connection(&connection.label())))?,
+        );
     }
     Ok(placed)
 }
@@ -296,7 +297,7 @@ fn resolve_target<'plan>(
     plan: &'plan Plan,
     connection: &'plan Connection,
 ) -> Result<Target<'plan>, CyberError> {
-    let label = connection_label(connection);
+    let label = connection.label();
     let (from, from_room) = find_room(plan, &connection.from, &label)?;
     let (to, to_room) = find_room(plan, &connection.to, &label)?;
     Ok(Target {
@@ -325,14 +326,6 @@ fn find_room<'plan>(
                 "connection '{label}' names unknown room '{id}'; add the room or fix the connection"
             ))
         })
-}
-
-/// The display name of a connection: its id, or `from->to`.
-fn connection_label(connection: &Connection) -> String {
-    connection
-        .id
-        .clone()
-        .unwrap_or_else(|| format!("{}->{}", connection.from, connection.to))
 }
 
 /// The computed vertical span of an opening or door: the higher floor

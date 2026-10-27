@@ -27,10 +27,10 @@ fn a_square_room_reports_area_box_centre_and_look() {
         Some([0_i32, 0_i32, 256_i32, 256_i32]),
         "the box spans the walls"
     );
-    assert_eq!(facts.center, Some([128_i64, 128_i64]), "the square's heart");
+    assert_eq!(facts.center, Some((128_i64, 128_i64)), "the square's heart");
     let at = facts.center.expect("the asserted centre");
     assert_eq!(
-        point_in_sector(&map, at[0], at[1]),
+        point_in_sector(&map, at.0, at.1),
         Some(0),
         "and the point really stands in the sector"
     );
@@ -65,7 +65,7 @@ fn a_concave_room_reports_its_true_area_and_a_centre_in_the_foot() {
     );
     assert_eq!(
         facts.center,
-        Some([128_i64, 256_i64]),
+        Some((128_i64, 256_i64)),
         "the middle row's widest inside interval is the tower's base"
     );
     assert_eq!(

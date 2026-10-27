@@ -11,6 +11,7 @@
 //! [`build_lift`]: crate::wad::map::features::build_lift
 
 use crate::error::{CyberError, PlanRef};
+use crate::named::Named as _;
 use crate::plan::emit::CompiledPlan;
 use crate::plan::model::{Connection, ConnectionKind, Feature, Plan};
 use crate::wad::map::features::{LiftPlatform, LiftSpec, build_lift};
@@ -132,29 +133,10 @@ fn lift_join_refusal(room: &str, neighbour: &str, connection: &Connection) -> Cy
         "lift room '{room}' joins lower room '{neighbour}' through connection '{}' of \
          kind {}: a lift needs openings to the lower rooms; make the connection an \
          opening, raise the lower room's floor, or move the lift",
-        connection_name(connection),
-        connection_kind_name(connection.kind),
+        connection.label(),
+        connection.kind.name(),
     ))
     .at_plan(PlanRef::room(room))
-}
-
-/// The label `connection` answers to in messages: its `id`, or
-/// `from->to` when unnamed.
-pub(super) fn connection_name(connection: &Connection) -> String {
-    connection
-        .id
-        .clone()
-        .unwrap_or_else(|| format!("{}->{}", connection.from, connection.to))
-}
-
-/// The wire class of `connection`'s kind.
-const fn connection_kind_name(kind: ConnectionKind) -> &'static str {
-    match kind {
-        ConnectionKind::Opening => "opening",
-        ConnectionKind::Door { .. } => "door",
-        ConnectionKind::Window { .. } => "window",
-        ConnectionKind::Stairs { .. } => "stairs",
-    }
 }
 
 /// The texture a plan lift's platform side wears: the theme's `step`

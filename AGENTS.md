@@ -324,7 +324,10 @@ src/
                   compiler and its stages (pure; no archive I/O, no tools).
   plan/           Compiler building blocks (no MCP concerns):
                   `plan/model.rs` the `Plan`/`Room`/`Connection` data model
-                  on `plan/model/validate.rs` (the `impl Plan` validation
+                  (plan points are `geom::Pt` and `Connection::label` is
+                  the one `from->to` label every connector message and
+                  plan path reads) on `plan/model/validate.rs` (the
+                  `impl Plan` validation
                   pass: the size and thickness budgets and the room,
                   connection and feature checks), with that module's tests
                   in `plan/model/tests.rs` plus `plan/model/tests/wire.rs`
@@ -1511,7 +1514,10 @@ src/
                   are built from those constants, `blocks_players` is the
                   one family-aware answer to "does this line stop a
                   player", and the `Skill` whose bit a thing's presence is
-                  tested against lives here too, with that module's tests
+                  tested against lives here too, beside `thing_bit`, the
+                  one thing-table name-to-bit read its `Skill::bit`, the
+                  plan's `presence_flags` and the `place_things` tool all
+                  run through, with that module's tests
                   in `map/flags/tests.rs`.
 data/
   themes/         Per-game texture-theme TSV tables embedded in the binary
@@ -1816,9 +1822,18 @@ tests/
                     skill/ and README.md layout and tool/doc consistency
                     checks, the guide and `README.md`
                     line budgets and the 1000-line budget on every Rust file
-                    in the repository; and flag_names.rs: the guard that
+                    in the repository; flag_names.rs: the guard that
                     every linedef/thing flag-bit `const` is defined once,
-                    in `wad/map/flags.rs`, and nowhere else under `src/`.
+                    in `wad/map/flags.rs`, and nowhere else under `src/`;
+                    and point_labels.rs: the guard that `geom::Pt` is the
+                    map-unit point (no second `type Point = (i64, i64)`
+                    outside the kept `sketch` pixels, no `[i64; 2]` centre
+                    in `describe.rs`, no `(i64, i64)` field in
+                    `plan/model.rs`), that the connection `from->to` label
+                    formats once in `plan/model.rs` with the folded
+                    `derived_label`/`connection_name` gone and the
+                    thing-table `thing_bit` read defined once, in
+                    `wad/map/flags.rs`.
 scripts/ci.sh     Runs fmt, clippy, tests and docs. Exit 0 only if everything passes.
 skill/            LLM-facing documentation for using the MCP server (see below).
 skill/reference/  Per-tool-group documentation, indexed by skill/SKILL.md.

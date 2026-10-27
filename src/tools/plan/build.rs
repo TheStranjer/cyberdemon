@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::defs::Definitions;
 use crate::error::{CyberError, PlanKind, PlanRef};
+use crate::named::Named as _;
 use crate::plan::CompiledPlan;
 use crate::plan::compile;
 use crate::plan::emit::MapIdentity;
@@ -30,7 +31,7 @@ use crate::tools::maps::{parse_format, resolve_namespace, write_block};
 use crate::tools::nodes::{AllPlan, apply_all};
 use crate::tools::plan::params::{BuildPlanParams, KindSource, ThingRequest};
 use crate::tools::plan::{
-    NEXT_STEPS, VALIDATION_ERROR_CAP, connection_label, feature_names, kind_name, plan_theme,
+    NEXT_STEPS, VALIDATION_ERROR_CAP, connection_label, feature_names, plan_theme,
 };
 use crate::tools::validate::{Counts, resource_index, session_tables};
 use crate::wad::classify::MapFormat;
@@ -324,7 +325,7 @@ pub(super) fn reporting(
             .iter()
             .map(|info| ConnectionReport {
                 id: info.id.clone(),
-                kind: kind_name(info.kind),
+                kind: info.kind.name(),
                 sectors: info.sectors.clone(),
             })
             .collect(),

@@ -171,7 +171,7 @@ impl Job<'_> {
                 "field '{key}' is not addable on {}: {} numbers are set, never \
                  added to",
                 self.kind.as_str(),
-                self.plan.thing
+                self.kind.singular()
             ));
         }
         CyberError::InvalidArgument(format!(
@@ -295,7 +295,7 @@ impl Job<'_> {
         }
         Err(CyberError::InvalidArgument(format!(
             "{} {index} {} would become {value}; {} must stay within {low}..={high}",
-            self.plan.thing,
+            self.kind.singular(),
             spec.field.name(),
             spec.field.name()
         )))
@@ -320,7 +320,8 @@ impl Job<'_> {
         Err(CyberError::InvalidArgument(format!(
             "{} {} would end with floor {floor} above ceiling {ceiling}: keep the \
              ceiling at or above the floor (equal is a closed door)",
-            self.plan.thing, pending.index
+            self.kind.singular(),
+            pending.index
         )))
     }
 
@@ -329,7 +330,7 @@ impl Job<'_> {
     pub(super) fn vanished(&self, field: &str) -> CyberError {
         CyberError::Internal(format!(
             "bulk edits: the {} field '{field}' disappeared under the selection",
-            self.plan.thing
+            self.kind.singular()
         ))
     }
 }

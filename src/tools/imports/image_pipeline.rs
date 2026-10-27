@@ -82,8 +82,10 @@ pub(in crate::tools) struct ImageImportParams {
     pub(in crate::tools) replace: bool,
 }
 
-/// The `transparency` object of [`ImageImportParams`].
-#[derive(Debug, Deserialize, JsonSchema)]
+/// The `transparency` object of [`ImageImportParams`]. `Clone` so the
+/// patch lifecycle tools can fold their picture fields into the shared
+/// parameters with a plain copy.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 pub(in crate::tools) struct TransparencyParams {
     /// Which rule drops pixels: `"alpha"` (default, alpha below
     /// `threshold`), `"color"` (the pixel equals `color` exactly) or

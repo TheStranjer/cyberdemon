@@ -11,9 +11,9 @@
 //! [`require_target`] adds the shared name validation around that check
 //! and [`parse_terms`] folds a `parts` or `surfaces` list through the
 //! pure passes' parsers. `resolve_thing_ref` reads a [`ThingRef`] into
-//! the stored thing-type number through the session's definitions and
-//! `require_defined_thing` checks a resolved target against the same
-//! tables.
+//! the stored thing-type number through the caller's one read of the
+//! session's definitions and `require_defined_thing` checks a resolved
+//! target against the same tables.
 
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -199,9 +199,11 @@ fn stored_kind(number: u32) -> Result<i32, CyberError> {
 }
 
 /// Resolve one [`ThingRef`] to the stored type number: a doomednum
-/// passes through after a range check, a name resolves through the
-/// session's definitions — an exact case-insensitive name first, then
-/// a unique case-insensitive substring.
+/// passes through after a range check, a name resolves through
+/// `definitions` — an exact case-insensitive name first, then a unique
+/// case-insensitive substring. The caller reads the session's
+/// definitions once and hands the same tables to both sides and to
+/// [`require_defined_thing`], so one call builds them at most once.
 ///
 /// # Errors
 ///
@@ -211,14 +213,13 @@ fn stored_kind(number: u32) -> Result<i32, CyberError> {
 /// names, and the caller prefixes them with the failing parameter.
 #[inline]
 pub(in crate::tools) fn resolve_thing_ref(
-    session: &Session,
+    definitions: &Definitions,
     value: &ThingRef,
 ) -> Result<i32, CyberError> {
     match value.clone() {
         ThingRef::Number(number) => stored_kind(number),
         ThingRef::Name(text) => {
-            let definitions = session.definitions()?;
-            let resolved = resolve_thing_kind(&definitions, &text).map_err(|problem| {
+            let resolved = resolve_thing_kind(definitions, &text).map_err(|problem| {
                 CyberError::InvalidArgument(problem).with_hint("get_thing_types with a search term")
             })?;
             stored_kind(resolved)

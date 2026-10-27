@@ -1,8 +1,8 @@
 //! The `search_lumps` tool: name globs with the save-layout offset each row
 //! carries, the kind and namespace criteria, the text and hex content needles
 //! with the lowest match winning when both hit, the at-least-one-criterion and
-//! bad-hex refusals, the truncation flag at the limit and the scope argument
-//! reading one archive instead of the merged view.
+//! bad-hex refusals, the `offset`/`next_offset` paging of the hits and the
+//! scope argument reading one archive instead of the merged view.
 
 use serde_json::{Value, json};
 
@@ -18,7 +18,8 @@ async fn search_lumps_matches_name_globs() {
     let flats = call(&client, "search_lumps", json!({ "pattern": "F*" })).await;
     assert_eq!(flats["scope"], json!("merged"), "the default scope");
     assert_eq!(flats["count"].as_u64(), Some(3), "the flats region");
-    assert_eq!(flats["truncated"], json!(false), "well below the limit");
+    assert_eq!(flats["total"].as_u64(), Some(3), "nothing paged out");
+    assert_eq!(flats["next_offset"], Value::Null, "well below the limit");
     assert_eq!(
         names(&flats),
         vec!["F_START", "FLOOR1", "F_END"],
@@ -153,25 +154,64 @@ async fn search_lumps_rejects_bad_hex() {
 }
 
 #[tokio::test]
-async fn search_lumps_flags_truncation_at_the_limit() {
+async fn search_lumps_pages_the_hits_with_offset_and_next_offset() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = iwad_plus_pwad(dir.path()).await;
-    let page = call(
+    let whole = call(&client, "search_lumps", json!({ "pattern": "*" })).await;
+    assert_eq!(whole["offset"].as_u64(), Some(0), "the default offset");
+    assert_eq!(whole["next_offset"], Value::Null, "one page held every hit");
+    let first = call(
         &client,
         "search_lumps",
         json!({ "pattern": "*", "limit": 2_u64 }),
     )
     .await;
-    assert_eq!(page["count"].as_u64(), Some(2), "capped at the limit");
-    assert_eq!(page["truncated"], json!(true), "more matched than returned");
-    assert_eq!(names(&page).len(), 2, "two rows");
+    assert_eq!(first["count"].as_u64(), Some(2), "capped at the limit");
+    assert_eq!(
+        first["total"], whole["total"],
+        "total counts every match whatever the page"
+    );
+    assert_eq!(
+        first["next_offset"].as_u64(),
+        Some(2),
+        "the hits continue at the row after this page"
+    );
+    assert_eq!(
+        names(&first),
+        vec![names(&whole)[0].clone(), names(&whole)[1].clone()],
+        "the leading page, in order"
+    );
+    let second = call(
+        &client,
+        "search_lumps",
+        json!({ "pattern": "*", "offset": 2_u64, "limit": 2_u64 }),
+    )
+    .await;
+    assert_eq!(second["offset"].as_u64(), Some(2), "the offset echoes");
+    assert_eq!(
+        names(&second),
+        vec![names(&whole)[2].clone(), names(&whole)[3].clone()],
+        "the second page follows the first"
+    );
+    let past = call(
+        &client,
+        "search_lumps",
+        json!({ "pattern": "*", "offset": whole["total"].as_u64().expect("a total") }),
+    )
+    .await;
+    assert_eq!(
+        past["count"].as_u64(),
+        Some(0),
+        "an offset past the end is empty"
+    );
+    assert_eq!(past["next_offset"], Value::Null, "and has no continuation");
     let small = call(
         &client,
         "search_lumps",
         json!({ "pattern": "?LOOR1", "limit": 2_u64 }),
     )
     .await;
-    assert_eq!(small["truncated"], json!(false), "one match, not truncated");
+    assert_eq!(small["next_offset"], Value::Null, "one match, nothing left");
     assert_eq!(small["count"].as_u64(), Some(1), "one row");
 }
 

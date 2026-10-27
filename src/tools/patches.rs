@@ -157,20 +157,10 @@ impl PatchSourceParams {
             source: self.source.clone(),
             name: Some(name.to_owned()),
             palette: self.palette,
-            transparency: self.transparency.as_ref().map(copy_transparency),
+            transparency: self.transparency.clone(),
             offsets: self.offsets.clone(),
             replace: false,
         }
-    }
-}
-
-/// A copy of one transparency parameter set (the shared pipeline type
-/// carries no `Clone`).
-fn copy_transparency(params: &TransparencyParams) -> TransparencyParams {
-    TransparencyParams {
-        mode: params.mode.clone(),
-        threshold: params.threshold,
-        color: params.color.clone(),
     }
 }
 

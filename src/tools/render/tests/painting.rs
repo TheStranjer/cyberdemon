@@ -13,8 +13,10 @@ use crate::tools::render::marks::LABEL_COLOUR;
 use crate::tools::render::paint::{
     GRID_MAJOR, GRID_MINOR, GridLine, Scene, grid_frame, paint_grid_line,
 };
-use crate::tools::render::params::{Annotation, Bounds, Labels, RenderTopdownParams};
-use crate::tools::render::resolve::resolve_request;
+use crate::tools::render::params::{
+    Annotation, Bounds, Call, Labels, Projection, RenderTopdownParams,
+};
+use crate::tools::render::resolve::{check_overlays, parse_projection, resolve_request};
 use crate::tools::render::topdown::paint_map;
 
 use super::overlays::test_underlay;
@@ -212,8 +214,17 @@ fn resolve_request_carries_the_overlays_and_the_empty_map_gains_a_frame() {
         "annotations": [{"x": 0_i64, "y": 0_i64, "text": "a"}],
     }))
     .expect("the overlay call");
-    let request =
-        resolve_request(&settings, &args, &map, Some(test_underlay(50))).expect("overlays resolve");
+    let projection = parse_projection(args.projection.as_deref()).expect("top-down default");
+    let request = resolve_request(
+        &settings,
+        &Call {
+            args: &args,
+            projection,
+        },
+        &map,
+        Some(test_underlay(50)),
+    )
+    .expect("overlays resolve");
     assert_eq!(request.grid, Some(64_i64), "the grid carries");
     assert!(
         request.labels.sectors.is_on() && !request.labels.vertices.is_on(),
@@ -235,12 +246,19 @@ fn resolve_request_carries_the_overlays_and_the_empty_map_gains_a_frame() {
     );
     assert_eq!(request.bounds.min_y, -352, "the underlay joined the frame");
     assert_eq!(request.label_scale, 1_u32, "the narrow default");
+}
 
+#[test]
+fn the_run_checks_the_overlays_before_resolving_an_isometric_grid() {
+    // `resolve_request` takes the projection the run already parsed, and
+    // the overlay veto is the separate `check_overlays` the run calls with
+    // it before anything is fetched; this is the documented refusal.
     let iso: RenderTopdownParams =
         serde_json::from_value(json!({"projection": "isometric", "grid": 64_i64}))
             .expect("one field");
-    let error =
-        resolve_request(&settings, &iso, &map, None).expect_err("isometric refuses the grid");
+    let projection = parse_projection(iso.projection.as_deref()).expect("isometric parses");
+    assert_eq!(projection, Projection::Isometric, "the parsed projection");
+    let error = check_overlays(&iso, projection).expect_err("isometric refuses the grid");
     assert!(
         error
             .to_string()

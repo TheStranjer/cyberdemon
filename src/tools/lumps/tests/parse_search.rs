@@ -3,7 +3,9 @@
 //! `AND` of all the criteria together and the hint text that names them.
 
 use crate::session::Scope;
-use crate::tools::lumps::list::{Match, Needle, Search, find_needle, parse_pair};
+use crate::tools::lumps::list::{
+    Match, Needle, Search, SearchLumpsParams, find_needle, parse_pair, parse_search,
+};
 use crate::tools::lumps::parse::{
     kind_names, namespace_names, parse_hex, parse_kind, parse_map, parse_namespace,
 };
@@ -250,6 +252,43 @@ fn judge_combines_every_criterion_with_and() {
     assert!(
         matches!(missing_hex.judge(&dehacked), Match::Miss),
         "one absent needle drops the row"
+    );
+}
+
+#[test]
+fn search_paging_defaults_and_honours_the_offset_and_limit() {
+    let default: SearchLumpsParams =
+        serde_json::from_value(serde_json::json!({ "pattern": "FLOOR*" })).expect("one criterion");
+    let (scope, page, _) = parse_search(&default).expect("a parsed search");
+    assert_eq!(scope, Scope::Merged, "the default scope");
+    assert_eq!(
+        (page.offset, page.limit),
+        (0, 200),
+        "the documented defaults"
+    );
+    let given: SearchLumpsParams = serde_json::from_value(serde_json::json!({
+        "pattern": "FLOOR*",
+        "offset": 300_u64,
+        "limit": 50_u64,
+    }))
+    .expect("paged args");
+    let (_, paged, _) = parse_search(&given).expect("a parsed paged search");
+    assert_eq!(
+        (paged.offset, paged.limit),
+        (300_usize, 50_usize),
+        "both pass through"
+    );
+    let bad_limit: SearchLumpsParams = serde_json::from_value(serde_json::json!({
+        "pattern": "FLOOR*",
+        "limit": 0_u64,
+    }))
+    .expect("zero limit arg");
+    assert_eq!(
+        parse_search(&bad_limit)
+            .expect_err("zero is no page")
+            .code(),
+        "invalid_argument",
+        "a zero limit is refused"
     );
 }
 

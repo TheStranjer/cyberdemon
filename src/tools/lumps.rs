@@ -101,13 +101,13 @@ impl Cyberdemon {
         &self,
         Parameters(args): Parameters<SearchLumpsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (scope, limit, search) = match parse_search(&args) {
+        let (scope, page, search) = match parse_search(&args) {
             Ok(parsed) => parsed,
             Err(error) => return fail(&error),
         };
         let report = self
             .state()
-            .with_session(|session| search_run(session, scope, limit, &search));
+            .with_session(|session| search_run(session, scope, &page, &search));
         reply(report)
     }
 

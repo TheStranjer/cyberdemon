@@ -66,6 +66,25 @@ pub(crate) fn batch_open_conflict(what: &str) -> CyberError {
     )
 }
 
+/// Which way [`History::step`] walks the two stacks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction {
+    /// Back one entry: pop the undo stack, push onto the redo stack.
+    Undo,
+    /// Forward one entry: pop the redo stack, push onto the undo stack.
+    Redo,
+}
+
+impl Direction {
+    /// The operation name the refusal and the empty-stack error carry.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Undo => "undo",
+            Self::Redo => "redo",
+        }
+    }
+}
+
 /// One point on the undo or the redo stack.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -243,22 +262,7 @@ impl History {
     /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn undo(&mut self, working: &mut Wad) -> Result<String, CyberError> {
-        if self.batch_open() {
-            return Err(batch_open_conflict("undo"));
-        }
-        let entry = self
-            .undo
-            .pop_back()
-            .ok_or_else(|| CyberError::NotFound("nothing to undo".to_owned()))?;
-        let label = entry.label;
-        let left = mem::replace(working, entry.wad);
-        self.redo.push_back(Entry {
-            label: label.clone(),
-            wad: left,
-            revision: self.revision,
-        });
-        self.revision = entry.revision;
-        Ok(label)
+        self.step(working, Direction::Undo)
     }
 
     /// Re-applies the most recently undone edit and returns its label.
@@ -269,19 +273,37 @@ impl History {
     /// is empty, [`CyberError::Conflict`] while a batch scope is open.
     #[inline]
     pub fn redo(&mut self, working: &mut Wad) -> Result<String, CyberError> {
+        self.step(working, Direction::Redo)
+    }
+
+    /// Steps the two stacks one entry in `direction`: the newest entry of
+    /// the stack `direction` names becomes the working archive, the state it
+    /// replaces goes onto the other stack under the same label, and the
+    /// revision bookkeeping follows the restored entry.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::Conflict`] while a batch scope is open,
+    /// [`CyberError::NotFound`] with `"nothing to undo"` or
+    /// `"nothing to redo"` when the walked stack is empty.
+    fn step(&mut self, working: &mut Wad, direction: Direction) -> Result<String, CyberError> {
         if self.batch_open() {
-            return Err(batch_open_conflict("redo"));
+            return Err(batch_open_conflict(direction.name()));
         }
-        let entry = self
-            .redo
+        let (back, forth) = match direction {
+            Direction::Undo => (&mut self.undo, &mut self.redo),
+            Direction::Redo => (&mut self.redo, &mut self.undo),
+        };
+        let entry = back
             .pop_back()
-            .ok_or_else(|| CyberError::NotFound("nothing to redo".to_owned()))?;
+            .ok_or_else(|| CyberError::NotFound(format!("nothing to {}", direction.name())))?;
         let label = entry.label;
         let left = mem::replace(working, entry.wad);
-        self.undo.push_back(Entry {
+        let revision = self.revision;
+        forth.push_back(Entry {
             label: label.clone(),
             wad: left,
-            revision: self.revision,
+            revision,
         });
         self.revision = entry.revision;
         Ok(label)
@@ -443,6 +465,18 @@ mod tests {
         assert_eq!(history.redo(&mut working).expect("replay two"), "edit-2");
         assert_eq!(only(&working), "TWO", "the whole branch is back");
         assert!(history.redo(&mut working).is_err(), "nothing left to redo");
+    }
+
+    #[test]
+    fn an_empty_stack_refuses_with_its_own_direction_wording() {
+        let mut working = wad("START");
+        let mut history = History::default();
+        let undo = history.undo(&mut working).expect_err("nothing recorded");
+        assert_eq!(undo.code(), "not_found", "empty undo code");
+        assert_eq!(undo.to_string(), "nothing to undo", "the undo wording");
+        let redo = history.redo(&mut working).expect_err("nothing undone");
+        assert_eq!(redo.code(), "not_found", "empty redo code");
+        assert_eq!(redo.to_string(), "nothing to redo", "the redo wording");
     }
 
     #[test]

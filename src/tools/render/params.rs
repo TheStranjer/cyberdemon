@@ -90,6 +90,19 @@ pub(super) struct RenderTopdownParams {
     pub(super) label_scale: Option<u32>,
 }
 
+/// One `render_topdown` call's arguments with the projection parsed out of
+/// the `projection` field. The run parses it and checks the overlays once,
+/// before the underlay fetch and the session lock, and hands that settled
+/// choice to [`super::resolve::resolve_request`] with these same arguments,
+/// so the projection is never parsed or checked twice.
+pub(super) struct Call<'call> {
+    /// The wire arguments as given.
+    pub(super) args: &'call RenderTopdownParams,
+    /// The parsed projection, already run through
+    /// [`super::resolve::check_overlays`].
+    pub(super) projection: Projection,
+}
+
 /// Arguments for `render_topdown`' `underlay` parameter: the reference
 /// picture to draw under the map. It is sampled only within its own edges,
 /// so it is drawn once and never repeated past one: output pixels clear of

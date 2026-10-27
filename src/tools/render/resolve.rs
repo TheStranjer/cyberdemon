@@ -1,7 +1,9 @@
-//! `render_topdown`' argument resolution: the projection, bounds,
-//! highlight and overlay parsing [`resolve_request`] folds into a
-//! [`Request`], the [`load_underlay`] fetch-and-decode that runs before
-//! any session lock, and the range checks behind them.
+//! `render_topdown`' argument resolution: [`parse_projection`] reads the
+//! call's projection once and [`check_overlays`] judges it before anything
+//! is fetched, [`resolve_request`] folds the bounds, highlight and overlay
+//! parsing into a [`Request`] over that already-settled [`Call`], and
+//! [`load_underlay`] is the fetch-and-decode that runs before any session
+//! lock, beside the range checks behind them.
 
 use crate::error::CyberError;
 use crate::gfx::codec::decode_image;
@@ -16,7 +18,7 @@ use crate::wad::map::Map;
 
 use super::MAX_OPACITY;
 use super::params::{
-    Annotation, AnnotationParams, Bounds, BoundsParams, HighlightParams, Highlights, Labels,
+    Annotation, AnnotationParams, Bounds, BoundsParams, Call, HighlightParams, Highlights, Labels,
     LabelsParams, Projection, Rect, RenderTopdownParams, Request, Underlay, UnderlayParams,
 };
 
@@ -400,25 +402,27 @@ fn checked_indices(
     Ok(indices.to_vec())
 }
 
-/// The call's resolved arguments: projection, resolution and style through
-/// the render settings' own validators, bounds and highlights against the
-/// map, and the overlay parameters checked and normalised.
+/// The call's resolved arguments: the already-parsed projection from the
+/// [`Call`], resolution and style through the render settings' own
+/// validators, bounds and highlights against the map, and the overlay
+/// parameters checked and normalised. The caller parses `projection` and
+/// runs [`check_overlays`] on it once before fetching or loading anything;
+/// this folds the rest.
 ///
 /// # Errors
 ///
-/// [`parse_projection`], [`RenderSettings::set_resolution`],
-/// [`RenderSettings::set_topdown_style`], [`resolve_bounds`] and
-/// [`resolve_highlight`]'s errors, plus the [`check_overlays`],
+/// [`RenderSettings::set_resolution`], [`RenderSettings::set_topdown_style`],
+/// [`resolve_bounds`] and [`resolve_highlight`]'s errors, plus the
 /// [`resolve_grid`], [`resolve_label_scale`] and [`resolve_annotations`]
 /// refusals.
 pub(super) fn resolve_request(
     settings: &RenderSettings,
-    args: &RenderTopdownParams,
+    call: &Call<'_>,
     map: &Map,
     underlay: Option<Underlay>,
 ) -> Result<Request, CyberError> {
-    let projection = parse_projection(args.projection.as_deref())?;
-    check_overlays(args, projection)?;
+    let args = call.args;
+    let projection = call.projection;
     let mut probe = settings.clone();
     probe.set_resolution(
         args.width.unwrap_or(settings.width),

@@ -25,16 +25,19 @@ use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{PointParam, edit_result_fragment, validate_texture_name};
+use crate::tools::maps::params::{
+    PointParam, edit_result_fragment, fits_coord, validate_texture_name,
+};
 use crate::tools::themes::{Surfaces, surfaces, theme_wall};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::query::{ElementKind, missing_index};
 use crate::wad::map::{Map, Sector};
 
 use super::{
-    COORD_MAX, COORD_MIN, DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_HEIGHT, DEFAULT_LIGHT, OUTER_AUTO,
-    OUTER_NONE, check_sector, flat_or_default,
+    DEFAULT_CEILING_HEIGHT, DEFAULT_FLOOR_HEIGHT, DEFAULT_LIGHT, OUTER_AUTO, OUTER_NONE,
+    check_sector, flat_or_default,
 };
 
 /// Arguments for [`Cyberdemon::create_sector_from_loop`].
@@ -228,15 +231,16 @@ fn vertices_of(map: &Map, indices: &[usize]) -> Result<Vec<Pt>, CyberError> {
 /// Refuses every point corner an `i16` binary `VERTEXES` column cannot hold.
 fn check_points(points: &[PointParam]) -> Result<(), CyberError> {
     for corner in points {
-        fits_coord("x", corner.x)?;
-        fits_coord("y", corner.y)?;
+        loop_point_fits("x", corner.x)?;
+        loop_point_fits("y", corner.y)?;
     }
     Ok(())
 }
 
-/// Refuses a loop coordinate an `i16` binary `VERTEXES` column cannot hold.
-fn fits_coord(field: &str, value: i32) -> Result<(), CyberError> {
-    if (COORD_MIN..=COORD_MAX).contains(&value) {
+/// One loop corner through the shared [`fits_coord`] checker, its refusal
+/// worded as a drawn loop's: the rejected coordinate is named a loop point.
+fn loop_point_fits(field: &str, value: i32) -> Result<(), CyberError> {
+    if fits_coord(field, value).is_ok() {
         return Ok(());
     }
     Err(CyberError::InvalidArgument(format!(

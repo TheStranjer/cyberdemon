@@ -3,8 +3,9 @@
 //! methods on [`crate::server::Cyberdemon`]).
 //!
 //! This file keeps what the five tools share: the constants, the reported
-//! [`LinedefDetail`], the flag adjustments [`EditBits`] resolves, the checks
-//! every resulting linedef faces, the outcome wrapper and the router. The
+//! [`LinedefDetail`], the [`flags_given`] check behind the shared
+//! [`EditBits`] adjustments `edit_linedef` resolves, the checks every
+//! resulting linedef faces, the outcome wrapper and the router. The
 //! tools' own wire parameters, report rows and one-step work live beside
 //! them: [`add`] is `add_linedef` with its endpoints resolved in
 //! [`endpoints`], [`edit`] is `edit_linedef` with its inline texture changes
@@ -15,10 +16,10 @@
 //! one undo entry moves the whole call. The parameter shapes
 //! ([`IndexSelector`], [`FlagsInput`]) and validators ([`check_index`],
 //! [`validate_texture_name`], [`edit_result_fragment`]) come from
-//! [`crate::tools::maps::params`]; removal runs through
-//! [`crate::wad::map::remove`] with the linedef set seeded and the pruning
-//! [`crate::wad::map::remove::CascadeOptions`] from the call. The split and
-//! join geometry itself lives in the pure [`crate::wad::map::ops`].
+//! [`crate::tools::maps::params`]; removal walks the shared scaffold of
+//! [`crate::tools::maps::remove`] with the linedef set seeded and the
+//! pruning [`crate::wad::map::remove::CascadeOptions`] from the call. The
+//! split and join geometry itself lives in the pure [`crate::wad::map::ops`].
 //!
 //! The orientation rule: walk from `v1` to `v2`, the front sidedef is on
 //! your right, the back sidedef on your left. `edit_linedef`'s `flip` keeps
@@ -38,6 +39,8 @@
 //! `Hexen` `special` as `u8`.
 //!
 //! [`IndexSelector`]: crate::tools::maps::params::IndexSelector
+//! [`FlagsInput`]: crate::tools::maps::params::FlagsInput
+//! [`EditBits`]: crate::tools::maps::params::EditBits
 //! [`check_index`]: crate::tools::maps::params::check_index
 //! [`edit_result_fragment`]: crate::tools::maps::params::edit_result_fragment
 
@@ -59,12 +62,12 @@ use crate::tools::edit_linedefs::edit::{EditLinedefParams, edit_run};
 use crate::tools::edit_linedefs::remove::{
     JoinLinedefsParams, RemoveLinedefParams, SplitLinedefParams, join_run, remove_run, split_run,
 };
-use crate::tools::maps::params::{FlagsInput, validate_texture_name};
+use crate::tools::maps::params::{fits_coord, fits_field, fits_offset, validate_texture_name};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{self, BLOCKING, TWO_SIDED};
-use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map, Sidedef};
+use crate::wad::map::{FlagFamily, FlagKind, Linedef, Sidedef};
 
 /// The all-zero script argument list of a `Doom`-family linedef.
 const ZERO_ARGS: [i32; 5] = [0_i32; 5];
@@ -76,14 +79,6 @@ const U16_MAX: i32 = 0xFFFF_i32;
 /// The highest value a binary `Hexen` `special` or `arg` column holds
 /// (`u8::MAX`).
 const SCRIPT_MAX: i32 = 0xFF_i32;
-/// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
-const COORD_MIN: i32 = -0x8000_i32;
-/// The highest coordinate an `i16` binary `VERTEXES` column holds (`i16::MAX`).
-const COORD_MAX: i32 = 0x7FFF_i32;
-/// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
-const OFFSET_MIN: i32 = -0x8000_i32;
-/// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
-const OFFSET_MAX: i32 = 0x7FFF_i32;
 
 /// One linedef's fields as the tools report them, flags named for the
 /// map's family.
@@ -109,50 +104,9 @@ struct LinedefDetail {
     back: Option<usize>,
 }
 
-/// The flag adjustments of an [`Cyberdemon::edit_linedef`] call.
-struct EditBits {
-    /// Whole-replacement bits from `flags`, `None` when it was absent.
-    absolute: Option<u32>,
-    /// Bits from `set_flags`.
-    set: u32,
-    /// Bits from `clear_flags`.
-    clear: u32,
-    /// Whether any of the three flag parameters was given: the two-sided
-    /// and blocking auto-adjustments stand down when it was.
-    explicit: bool,
-}
-
-impl EditBits {
-    /// Resolves the three flag parameters against `family`'s linedef table.
-    ///
-    /// # Errors
-    ///
-    /// [`CyberError::InvalidArgument`] when a name is not in the table.
-    fn resolve(args: &EditLinedefParams, family: FlagFamily) -> Result<Self, CyberError> {
-        let given = args.flags.clone();
-        Ok(Self {
-            absolute: given
-                .map(|input| input.resolve(FlagKind::Linedef, family))
-                .transpose()?,
-            set: resolve_bits(args.set_flags.as_ref(), family)?,
-            clear: resolve_bits(args.clear_flags.as_ref(), family)?,
-            explicit: flags_given(args),
-        })
-    }
-
-    /// The flags after the edit: an absolute bitset replaces everything;
-    /// otherwise the `clear` bits go and the `set` bits go on (a bit named
-    /// for both ends up set).
-    #[must_use]
-    const fn apply(&self, current: u32) -> u32 {
-        match self.absolute {
-            Some(bits) => bits,
-            None => (current & !self.clear) | self.set,
-        }
-    }
-}
-
-/// Whether any of the three flag parameters was given.
+/// Whether any of the three flag parameters of an [`Cyberdemon::edit_linedef`]
+/// call was given: the two-sided and blocking auto-adjustments stand down
+/// when one was.
 fn flags_given(args: &EditLinedefParams) -> bool {
     [
         args.flags.as_ref(),
@@ -163,49 +117,11 @@ fn flags_given(args: &EditLinedefParams) -> bool {
     .any(Option::is_some)
 }
 
-/// The bits of one optional flag parameter, `0` when absent.
-fn resolve_bits(input: Option<&FlagsInput>, family: FlagFamily) -> Result<u32, CyberError> {
-    input.cloned().map_or_else(
-        || Ok(0_u32),
-        |given| given.resolve(FlagKind::Linedef, family),
-    )
-}
-
 /// The flags a new linedef starts with when the caller named none: the
 /// one-sided default blocks, the two-sided default just is two-sided.
 #[must_use]
 const fn default_line_flags(two_sided: bool) -> u32 {
     if two_sided { TWO_SIDED } else { BLOCKING }
-}
-
-/// The index of the first vertex sitting exactly on `x`/`y`.
-fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
-    map.vertices
-        .iter()
-        .position(|vertex| vertex.x == x && vertex.y == y)
-}
-
-/// Refuses unless `value` sits inside the binary record field's
-/// `min..=max` range.
-fn fits_field(name: &str, value: i32, min: i32, max: i32) -> Result<(), CyberError> {
-    if (min..=max).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds {min}..={max}"
-    )))
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `VERTEXES` column.
-fn fits_coord(name: &str, value: i32) -> Result<(), CyberError> {
-    fits_field(name, value, COORD_MIN, COORD_MAX)
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `SIDEDEFS` offset column.
-fn fits_offset(name: &str, value: i32) -> Result<(), CyberError> {
-    fits_field(name, value, OFFSET_MIN, OFFSET_MAX)
 }
 
 /// Range-checks one point against the binary `VERTEXES` record; a `UDMF`

@@ -13,7 +13,8 @@
 //! one undo entry moves the whole call. The parameter shapes
 //! ([`IndexSelector`]) and validators ([`check_index`],
 //! [`validate_texture_name`]) come from [`crate::tools::maps::params`];
-//! removal runs through [`crate::wad::map::remove`] and refuses the
+//! removal walks the shared scaffold of [`crate::tools::maps::remove`] and
+//! refuses the
 //! `conflict` of a sector that sidedefs still use unless `cascade` is set.
 //! `create_sector_from_loop` and `carve_void` wrap the pure overlay
 //! engine [`crate::wad::map::overlay::apply_overlay`]: [`draw`] turns
@@ -61,7 +62,7 @@ use crate::tools::edit_sectors::draw::{
 use crate::tools::edit_sectors::edit::{
     AddSectorParams, EditSectorParams, RemoveSectorParams, add_run, edit_run, remove_run,
 };
-use crate::tools::maps::params::validate_texture_name;
+use crate::tools::maps::params::{fits_field, validate_texture_name};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Sector;
@@ -89,10 +90,6 @@ const FIELD_MAX: i32 = 0xFFFF_i32;
 const OUTER_AUTO: &str = "auto";
 /// The `outer_sector` mode that keeps every new wall one-sided.
 const OUTER_NONE: &str = "none";
-/// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
-const COORD_MIN: i32 = -0x8000_i32;
-/// The highest coordinate an `i16` binary `VERTEXES` column holds (`i16::MAX`).
-const COORD_MAX: i32 = 0x7FFF_i32;
 
 /// One sector's fields as the tools report them.
 #[derive(Debug, Serialize)]
@@ -160,18 +157,6 @@ fn edited_flat(
         || Ok(current.to_owned()),
         |name| validate_flat(name, format),
     )
-}
-
-/// Refuses unless `value` sits inside the binary record field's
-/// `min..=max` range.
-fn fits_field(name: &str, value: i32, min: i32, max: i32) -> Result<(), CyberError> {
-    if (min..=max).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds \
-         {min}..={max}"
-    )))
 }
 
 /// Range-checks `sector` against the binary `SECTORS` record: heights are

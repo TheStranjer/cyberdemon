@@ -9,11 +9,11 @@ use crate::tools::edit_vertices::moves::{
     collapse_refusal, made_zero_length, move_in_place, moved_to, new_coord, same_point, stored,
     validate_move,
 };
-use crate::tools::edit_vertices::{
-    COORD_MAX, COORD_MIN, Moves, add_in_place, check_binary_coords, current_map, find_vertex,
-    fits_coord, reuses, untouched_fragment,
-};
+use crate::tools::edit_vertices::{Moves, add_in_place, check_binary_coords, reuses};
+use crate::tools::maps::common::current_map;
+use crate::tools::maps::params::{find_vertex, fits_coord, untouched_fragment};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
 use crate::wad::map::{Linedef, Vertex};
 
 #[test]

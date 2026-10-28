@@ -5,19 +5,18 @@
 //! [`crate::tools::edit_linedefs::add::AddLinedefParams`] carries into
 //! exactly one [`EndpointSpec`] - existing vertex indices or `from`/`to`
 //! points - and [`place_endpoints`] turns that into [`Ends`]: indices checked
-//! against the map's vertices, points reused through the parent's
-//! [`find_vertex`] or appended by [`place_point`] and recorded in the order
-//! they were created. Endpoints coming out of one point are the
-//! [`zero_endpoint`] refusal.
+//! against the map's vertices, points reused through [`find_vertex`] or
+//! appended by [`place_point`] and recorded in the order they were created.
+//! Endpoints coming out of one point are the [`zero_endpoint`] refusal.
 
 use alloc::collections::BTreeMap;
 
 use crate::error::CyberError;
-use crate::tools::maps::params::{ElementKind, check_index};
+use crate::tools::maps::params::{ElementKind, check_index, find_vertex};
 use crate::wad::map::{Map, Vertex};
 
 use super::add::AddLinedefParams;
-use super::{check_binary_coords, find_vertex};
+use super::check_binary_coords;
 use crate::tools::maps::params::PointParam;
 
 /// The two endpoint forms of an [`Cyberdemon::add_linedef`] call, checked

@@ -28,7 +28,6 @@ use crate::wad::map::features::{
     build_switch, build_walk_over_exit,
 };
 
-use super::current_map;
 use super::door::point_of;
 use crate::tools::maps::params::PointParam;
 
@@ -131,7 +130,7 @@ fn run_switch_step(
     action: SwitchAction,
 ) -> Result<Switched, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let format = current_map(session, name)?.format;
+    let format = common::current_map(session, name)?.format;
     let texture = validate_texture_name(&theme_texture(session, switch_role(action))?, format)?;
     let spec = SwitchSpec {
         linedef: args.linedef,

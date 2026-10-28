@@ -8,17 +8,20 @@
 //! `load` adds [`crate::session::Session::definitions`] in the same lock
 //! and answers with the `Prepared` pair the analysing tools
 //! (`find_elements`) read from; the `playability` group pairs the same
-//! read with the render settings under its own `load`.
+//! read with the render settings under its own `load`. `current_map` is
+//! the working-scope-then-merged read every editing tool runs against
+//! before its next [`crate::session::Session::edit_map`] step.
 
 use crate::defs::Definitions;
 use crate::error::CyberError;
-use crate::session::Scope;
 pub(crate) use crate::session::mapdir::load_map;
 pub(in crate::tools) use crate::session::mapdir::{
     Directory, directory, missing_map, resolve_map_name,
 };
+use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::wad::map::Map;
+use crate::wad::name::LumpName;
 
 /// The map and the session's definitions, read together out of one
 /// session lock: what the analysing tool (`find_elements`) runs on.
@@ -49,6 +52,21 @@ pub(crate) fn load(state: &AppState, requested: Option<&str>) -> Result<Prepared
             defs: session.definitions()?,
         })
     })
+}
+
+/// The map as the next edit sees it: the working archive's block when it
+/// holds one, else the merged view's (which is what the edit copies in).
+///
+/// # Errors
+///
+/// [`load_map`]'s errors for the merged scope when the working archive
+/// holds no such block.
+pub(crate) fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
+    match load_map(session, name, Scope::Working) {
+        Ok(map) => Ok(map),
+        Err(error) if error.is_not_found() => load_map(session, name, Scope::Merged),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]

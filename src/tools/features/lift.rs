@@ -33,7 +33,6 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::{LiftBuild, LiftPlatform, LiftSpec, LiftStyle, build_lift};
 
-use super::current_map;
 use crate::tools::maps::params::PointParam;
 
 /// The `add_lift` default trigger style name.
@@ -176,7 +175,7 @@ pub(super) fn add_lift_run(
     let style = lift_style_of(args.style.as_deref().unwrap_or(DEFAULT_LIFT_STYLE))?;
     let platform = lift_platform_of(args.platform.as_ref(), args.sector)?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let format = current_map(session, name)?.format;
+    let format = common::current_map(session, name)?.format;
     let skins = lift_skins(session, format)?;
     let spec = LiftSpec {
         platform,

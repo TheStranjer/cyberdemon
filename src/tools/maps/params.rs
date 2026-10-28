@@ -1,11 +1,23 @@
 //! Shared wire types and validators for the map editing tools.
 //!
-//! The `flags` and index parameter shapes ([`FlagsInput`],
-//! [`IndexSelector`]), the one `{x, y}` map-unit point ([`PointParam`]),
+//! The `flags` and index parameter shapes ([`FlagsInput`] with the shared
+//! [`EditBits`] adjustment the flag-editing tools resolve their three flag
+//! parameters into, [`IndexSelector`]), the one `{x, y}` map-unit point
+//! ([`PointParam`]),
 //! element bounds checking ([`check_index`]), texture-name validation
 //! ([`validate_texture_name`]) and the standard result fragment
 //! ([`edit_result_fragment`]) every edit tool merges into its structured
 //! content.
+//!
+//! Beside these, the small shared readings the element-editing groups'
+//! refusal and reuse paths repeat: the comma-joined index list ([`join`]),
+//! the changed-nothing result fragment ([`untouched_fragment`]) and the
+//! exact-point vertex lookup ([`find_vertex`]).
+//!
+//! Beside these, the one binary field-range checker ([`fits_field`], with
+//! the [`fits_coord`] and [`fits_offset`] conveniences for the `i16`
+//! columns) every `edit_*` group's per-format check calls, so the shared
+//! refusal message is spelled in exactly one place.
 //!
 //! These are the pieces the per-element editing tools (vertices, linedefs,
 //! sidedefs, sectors, things, ...) reuse so they stay thin wrappers around
@@ -19,11 +31,17 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::map_edit::MapEditReport;
 use crate::wad::classify::MapFormat;
-use crate::wad::map::{FlagFamily, FlagKind, flags};
-use crate::wad::name::MAX_NAME_LEN;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
+use crate::wad::map::{FlagFamily, FlagKind, Map, flags};
+use crate::wad::name::{LumpName, MAX_NAME_LEN};
 
 /// Longest texture name a `UDMF` map may carry.
 const UDMF_TEXTURE_MAX: usize = 64;
+
+/// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
+pub const OFFSET_MIN: i32 = -0x8000_i32;
+/// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
+pub const OFFSET_MAX: i32 = 0x7FFF_i32;
 
 /// A `flags` parameter: the raw bitset or a list of flag names.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -59,6 +77,76 @@ impl FlagsInput {
         match self {
             Self::Bits(bits) => Ok(bits),
             Self::Names(names) => flags::from_names(&names, kind, family),
+        }
+    }
+}
+
+/// The `flags`, `set_flags` and `clear_flags` parameters of one `edit_*`
+/// call, exactly as parsed from the wire and waiting to be resolved into
+/// [`EditBits`].
+///
+/// The three travel as one bundle so [`EditBits::resolve`] keeps its kind
+/// and family selectors inside the crate's four-parameter budget.
+pub struct FlagInputs {
+    /// The whole-replacement `flags` parameter, `None` when absent.
+    pub flags: Option<FlagsInput>,
+    /// The `set_flags` parameter, `None` when absent.
+    pub set_flags: Option<FlagsInput>,
+    /// The `clear_flags` parameter, `None` when absent.
+    pub clear_flags: Option<FlagsInput>,
+}
+
+/// The resolved flag adjustments of one `edit_*` call: the three
+/// `flags`/`set_flags`/`clear_flags` parameters as bits.
+///
+/// The `edit_thing` and `edit_linedef` tools share this one shape; each
+/// keeps its own policy (like the linedef's flag-given check) beside it.
+#[derive(Debug)]
+pub struct EditBits {
+    /// Whole-replacement bits from `flags`, `None` when it was absent.
+    pub absolute: Option<u32>,
+    /// Bits from `set_flags`.
+    pub set: u32,
+    /// Bits from `clear_flags`.
+    pub clear: u32,
+}
+
+impl EditBits {
+    /// Resolves the three flag parameters of one edit call through
+    /// [`FlagsInput::resolve`] for `kind` and `family`.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] when a name is not in the table.
+    #[inline]
+    pub fn resolve(
+        given: FlagInputs,
+        kind: FlagKind,
+        family: FlagFamily,
+    ) -> Result<Self, CyberError> {
+        Ok(Self {
+            absolute: given
+                .flags
+                .map(|input| input.resolve(kind, family))
+                .transpose()?,
+            set: given
+                .set_flags
+                .map_or_else(|| Ok(0_u32), |input| input.resolve(kind, family))?,
+            clear: given
+                .clear_flags
+                .map_or_else(|| Ok(0_u32), |input| input.resolve(kind, family))?,
+        })
+    }
+
+    /// The flags after the edit: an absolute bitset replaces everything;
+    /// otherwise the `clear` bits go and the `set` bits go on (a bit named
+    /// for both ends up set).
+    #[must_use]
+    #[inline]
+    pub const fn apply(&self, current: u32) -> u32 {
+        match self.absolute {
+            Some(bits) => bits,
+            None => (current & !self.clear) | self.set,
         }
     }
 }
@@ -200,18 +288,103 @@ pub fn edit_result_fragment(report: &MapEditReport) -> JsonMap<String, Value> {
     .collect()
 }
 
+/// The edit fragment of a call that changed nothing: the map's name with
+/// both flags `false`.
+#[must_use]
+#[inline]
+pub fn untouched_fragment(name: LumpName) -> JsonMap<String, Value> {
+    edit_result_fragment(&MapEditReport {
+        map: name,
+        copied_to_working: false,
+        nodes_invalidated: false,
+    })
+}
+
+/// The index of the first vertex sitting exactly on `x`/`y`.
+#[must_use]
+#[inline]
+pub fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
+    map.vertices
+        .iter()
+        .position(|vertex| vertex.x == x && vertex.y == y)
+}
+
+/// The indices as one comma-separated list.
+#[must_use]
+#[inline]
+pub fn join(indices: &[usize]) -> String {
+    indices
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// Refuses unless `value` sits inside the binary record field's
+/// `min..=max` range.
+///
+/// This is the one range checker every `edit_*` group's format check calls
+/// (each keeps its own `check_binary_*` wrapper because only the wrapper
+/// knows which `MapFormat` needs the check at all).
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the field, the value and the
+/// range.
+#[inline]
+pub fn fits_field(name: &str, value: i32, min: i32, max: i32) -> Result<(), CyberError> {
+    if (min..=max).contains(&value) {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "{name} {value} is out of range for the binary map format: the field holds {min}..={max}"
+    )))
+}
+
+/// Refuses unless `value` sits inside the `i16` range of a binary
+/// `VERTEXES` column.
+///
+/// # Errors
+///
+/// As [`fits_field`].
+#[inline]
+pub fn fits_coord(name: &str, value: i32) -> Result<(), CyberError> {
+    fits_field(name, value, COORD_MIN, COORD_MAX)
+}
+
+/// Refuses unless `value` sits inside the `i16` range of a binary
+/// `SIDEDEFS` offset column.
+///
+/// # Errors
+///
+/// As [`fits_field`].
+#[inline]
+pub fn fits_offset(name: &str, value: i32) -> Result<(), CyberError> {
+    fits_field(name, value, OFFSET_MIN, OFFSET_MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{from_str, json};
 
     use super::{
-        ElementKind, FlagsInput, IndexSelector, PointParam, check_index, edit_result_fragment,
-        validate_texture_name,
+        COORD_MAX, COORD_MIN, EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector,
+        OFFSET_MAX, OFFSET_MIN, PointParam, check_index, edit_result_fragment, find_vertex,
+        fits_coord, fits_field, fits_offset, join, untouched_fragment, validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::{FlagFamily, FlagKind};
+    use crate::wad::map::{FlagFamily, FlagKind, Map, Vertex};
     use crate::wad::name::LumpName;
+
+    /// A vertex at `x`/`y`.
+    fn vertex(x: i32, y: i32) -> Vertex {
+        Vertex {
+            x,
+            y,
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn flags_input_reads_bits_or_names_from_json() {
@@ -282,6 +455,162 @@ mod tests {
             doom_thing.to_string().contains("easy, medium, hard"),
             "the thing table is listed: {doom_thing}"
         );
+    }
+
+    /// The shared edit `flags`/`set_flags`/`clear_flags` parameter bundle.
+    fn given(
+        flags: Option<FlagsInput>,
+        set_flags: Option<FlagsInput>,
+        clear_flags: Option<FlagsInput>,
+    ) -> FlagInputs {
+        FlagInputs {
+            flags,
+            set_flags,
+            clear_flags,
+        }
+    }
+
+    /// One name as a [`FlagsInput::Names`] parameter value.
+    fn name(one: &str) -> FlagsInput {
+        FlagsInput::Names(vec![one.to_owned()])
+    }
+
+    #[test]
+    fn edit_bits_absolute_replaces_all_and_adjusts_clear_then_set() {
+        let replacing = EditBits {
+            absolute: Some(3_u32),
+            set: 8_u32,
+            clear: 1_u32,
+        };
+        assert_eq!(replacing.apply(7_u32), 3_u32, "the absolute bitset wins");
+        let adjusting = EditBits {
+            absolute: None,
+            set: 8_u32,
+            clear: 1_u32,
+        };
+        assert_eq!(
+            adjusting.apply(7_u32),
+            14_u32,
+            "the clear bit goes, the set bit comes"
+        );
+        assert_eq!(
+            adjusting.apply(0_u32),
+            8_u32,
+            "clearing an absent bit changes nothing"
+        );
+        let both = EditBits {
+            absolute: None,
+            set: 2_u32,
+            clear: 2_u32,
+        };
+        assert_eq!(both.apply(2_u32), 2_u32, "a bit in both ends stays set");
+        assert_eq!(both.apply(0_u32), 2_u32, "and comes on when it was off");
+        let untouched = EditBits {
+            absolute: None,
+            set: 0_u32,
+            clear: 0_u32,
+        };
+        assert_eq!(
+            untouched.apply(42_u32),
+            42_u32,
+            "no adjustments keep the flags"
+        );
+    }
+
+    #[test]
+    fn edit_bits_resolve_reads_the_three_parameters_in_order() {
+        let bits = EditBits::resolve(
+            given(
+                Some(FlagsInput::Bits(9)),
+                Some(FlagsInput::Bits(8)),
+                Some(FlagsInput::Bits(1)),
+            ),
+            FlagKind::Linedef,
+            FlagFamily::Doom,
+        )
+        .expect("raw bitsets always resolve");
+        assert_eq!(bits.absolute, Some(9_u32), "the first is the replacement");
+        assert_eq!(bits.set, 8_u32, "the second sets");
+        assert_eq!(bits.clear, 1_u32, "the third clears");
+        let empty = EditBits::resolve(given(None, None, None), FlagKind::Thing, FlagFamily::Hexen)
+            .expect("three absent parameters resolve");
+        assert_eq!(
+            (empty.absolute, empty.set, empty.clear),
+            (None, 0_u32, 0_u32),
+            "absent means no replacement and no bits"
+        );
+    }
+
+    #[test]
+    fn edit_bits_refuses_unknown_names_with_the_kind_and_family_list() {
+        let error = EditBits::resolve(
+            given(None, Some(name("nope")), None),
+            FlagKind::Linedef,
+            FlagFamily::Doom,
+        )
+        .expect_err("nope is in no table");
+        assert_eq!(error.code(), "invalid_argument", "unknown set name code");
+        assert!(
+            error.to_string().contains("valid names are"),
+            "the refusal lists the linedef names: {error}"
+        );
+        let clear_bad = EditBits::resolve(
+            given(None, None, Some(name("twosided"))),
+            FlagKind::Thing,
+            FlagFamily::Doom,
+        )
+        .expect_err("twosided is no thing flag");
+        assert!(
+            clear_bad.to_string().contains("easy, medium, hard"),
+            "the thing table is listed: {clear_bad}"
+        );
+        let absolute_bad = EditBits::resolve(
+            given(Some(name("standing")), None, None),
+            FlagKind::Thing,
+            FlagFamily::Doom,
+        )
+        .expect_err("standing is a Hexen thing bit");
+        assert!(
+            absolute_bad.to_string().contains("'standing'"),
+            "the refusal names the bad flag: {absolute_bad}"
+        );
+    }
+
+    #[test]
+    fn edit_bits_names_resolve_per_kind_and_family() {
+        let line_doom = EditBits::resolve(
+            given(None, Some(name("mapped")), Some(name("twosided"))),
+            FlagKind::Linedef,
+            FlagFamily::Doom,
+        )
+        .expect("Doom linedef names");
+        assert_eq!(line_doom.set, 256, "mapped is bit 8 of 256");
+        assert_eq!(line_doom.clear, 4, "twosided is bit 4");
+        let line_hexen = EditBits::resolve(
+            given(None, Some(name("playeruse")), None),
+            FlagKind::Linedef,
+            FlagFamily::Hexen,
+        )
+        .expect("Hexen linedef activation name");
+        assert_eq!(
+            line_hexen.set, 1024,
+            "the activation field value 1 at bit 10"
+        );
+        let thing_doom = EditBits::resolve(
+            given(None, Some(name("friend")), Some(name("ambush"))),
+            FlagKind::Thing,
+            FlagFamily::Doom,
+        )
+        .expect("Doom thing names");
+        assert_eq!(thing_doom.set, 128, "friend is the top Doom bit");
+        assert_eq!(thing_doom.clear, 8, "ambush is bit 8");
+        let thing_hexen = EditBits::resolve(
+            given(Some(name("standing")), None, None),
+            FlagKind::Thing,
+            FlagFamily::Hexen,
+        )
+        .expect("Hexen thing name");
+        assert_eq!(thing_hexen.absolute, Some(0x4000), "the top Hexen bit");
     }
 
     #[test]
@@ -417,6 +746,123 @@ mod tests {
                 "copied_to_working": false,
             }),
             "the flags mirror the report"
+        );
+    }
+
+    #[test]
+    fn join_lists_no_one_or_many_indices() {
+        assert_eq!(join(&[]), "", "the empty list joins to nothing");
+        assert_eq!(join(&[4_usize]), "4", "one index stands alone");
+        assert_eq!(
+            join(&[4_usize, 7, 12]),
+            "4, 7, 12",
+            "many are comma-separated in order"
+        );
+    }
+
+    #[test]
+    fn the_untouched_fragment_names_the_map_with_both_flags_false() {
+        let name = LumpName::parse("MAP01").expect("a valid name");
+        assert_eq!(
+            json!(untouched_fragment(name)),
+            json!({
+                "map": "MAP01",
+                "nodes_invalidated": false,
+                "copied_to_working": false,
+            }),
+            "a call that changed nothing reports the name alone"
+        );
+    }
+
+    #[test]
+    fn find_vertex_matches_the_exact_point_and_the_first_one() {
+        let map = Map {
+            vertices: vec![vertex(0, 0), vertex(256, 0), vertex(0, 0)],
+            ..Default::default()
+        };
+        assert_eq!(
+            find_vertex(&map, 256_i32, 0_i32),
+            Some(1_usize),
+            "an exact hit answers its index"
+        );
+        assert_eq!(
+            find_vertex(&map, 0_i32, 0_i32),
+            Some(0_usize),
+            "of two matches the first wins"
+        );
+        assert_eq!(
+            find_vertex(&map, 0_i32, 256_i32),
+            None,
+            "one axis off is another point"
+        );
+        assert_eq!(
+            find_vertex(&Map::default(), 0_i32, 0_i32),
+            None,
+            "an empty list is a miss"
+        );
+    }
+
+    #[test]
+    fn fits_field_accepts_both_endpoints_and_refuses_outside_naming_the_field() {
+        assert!(
+            fits_field("type", 0_i32, 0_i32, 0xFFFF_i32).is_ok(),
+            "the low end"
+        );
+        assert!(
+            fits_field("type", 0xFFFF_i32, 0_i32, 0xFFFF_i32).is_ok(),
+            "the high end"
+        );
+        let over = fits_field("type", 70_000_i32, 0_i32, 0xFFFF_i32).expect_err("above refuses");
+        assert_eq!(over.code(), "invalid_argument", "above code");
+        assert_eq!(
+            over.message(),
+            "type 70000 is out of range for the binary map format: the field holds 0..=65535",
+            "the refusal names the field, value and range"
+        );
+        let under = fits_field("arg", -1_i32, 0_i32, 255_i32).expect_err("below refuses");
+        assert_eq!(under.code(), "invalid_argument", "below code");
+        assert_eq!(
+            under.message(),
+            "arg -1 is out of range for the binary map format: the field holds 0..=255",
+            "the refusal spells a negative value"
+        );
+    }
+
+    #[test]
+    fn fits_coord_spells_the_vertexes_i16_range_at_both_edges() {
+        assert!(fits_coord("x", COORD_MIN).is_ok(), "i16::MIN fits");
+        assert!(fits_coord("y", COORD_MAX).is_ok(), "i16::MAX fits");
+        let over = fits_coord("x", COORD_MAX.saturating_add(1)).expect_err("above i16 refuses");
+        assert_eq!(
+            over.message(),
+            "x 32768 is out of range for the binary map format: the field holds -32768..=32767",
+            "the refusal names the field and the i16 range"
+        );
+        let under = fits_coord("y", COORD_MIN.saturating_sub(1)).expect_err("below i16 refuses");
+        assert_eq!(
+            under.message(),
+            "y -32769 is out of range for the binary map format: the field holds -32768..=32767",
+            "the lower side refuses too"
+        );
+    }
+
+    #[test]
+    fn fits_offset_spells_the_sidedefs_i16_range_at_both_edges() {
+        assert!(fits_offset("x_offset", OFFSET_MIN).is_ok(), "i16::MIN fits");
+        assert!(fits_offset("y_offset", OFFSET_MAX).is_ok(), "i16::MAX fits");
+        let over =
+            fits_offset("y_offset", OFFSET_MAX.saturating_add(1)).expect_err("above i16 refuses");
+        assert_eq!(
+            over.message(),
+            "y_offset 32768 is out of range for the binary map format: the field holds -32768..=32767",
+            "the refusal names the field and the i16 range"
+        );
+        let under =
+            fits_offset("x_offset", OFFSET_MIN.saturating_sub(1)).expect_err("below i16 refuses");
+        assert_eq!(
+            under.message(),
+            "x_offset -32769 is out of range for the binary map format: the field holds -32768..=32767",
+            "the lower side refuses too"
         );
     }
 }

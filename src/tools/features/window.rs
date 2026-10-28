@@ -49,7 +49,7 @@ use super::wall::{
     STRIP_THICKNESS, carve_strip, choose_wall, outward_normal, require_landing, strip_face_lost,
     strip_wall, to_pts,
 };
-use super::{current_map, no_room, wall_lost};
+use super::{no_room, wall_lost};
 
 /// The `add_window` default sill height above the higher room floor.
 const DEFAULT_SILL: i32 = 32_i32;
@@ -261,7 +261,7 @@ pub(super) fn add_window_run(
 ) -> Result<WindowReport, CyberError> {
     let target = target_of(args.between, args.linedef, "the window looks between")?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let format = current_map(session, name)?.format;
+    let format = common::current_map(session, name)?.format;
     let skins = window_skins(session, format)?;
     let trim = WindowHeights {
         sill: args.sill.unwrap_or(DEFAULT_SILL),

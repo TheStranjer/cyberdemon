@@ -21,8 +21,6 @@ use crate::wad::map::transform::{
     expand_selection,
 };
 
-use super::current_map;
-
 /// The `selection` parameter of
 /// [`Cyberdemon::transform_selection`](crate::server::Cyberdemon): the
 /// index lists and expansion switches, before anything is resolved
@@ -198,7 +196,7 @@ pub(super) fn transform_run(
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let request = selection_request(args.selection);
     let pivot = args.origin.as_ref().map(Point::from);
-    let expanded = expand_selection(&current_map(session, name)?, &request)?;
+    let expanded = expand_selection(&common::current_map(session, name)?, &request)?;
     let label = format!(
         "transform {} and {}",
         counted(expanded.vertices.len(), "vertex", "vertices"),

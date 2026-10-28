@@ -17,8 +17,8 @@ use super::delete::{
     removal_size, seed_removal, selected_lists,
 };
 use super::transform::{RotateInput, TransformSelectionParams};
-use super::untouched_fragment;
 use crate::error::CyberError;
+use crate::tools::maps::params::untouched_fragment;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::{CascadeOptions, RemovalReport};
 use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};

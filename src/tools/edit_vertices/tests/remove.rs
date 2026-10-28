@@ -3,15 +3,33 @@
 //! pruning flags that reach it.
 
 use super::{add_args, code, fixture, remove_args};
-use crate::tools::edit_vertices::{add_in_place, cascade_options, remove_in_place};
+use crate::error::CyberError;
+use crate::tools::edit_vertices::add_in_place;
+use crate::tools::maps::params::ElementKind;
+use crate::tools::maps::remove::{cascade_options, remove_in_place};
 use crate::wad::classify::MapFormat;
+use crate::wad::map::Map;
+use crate::wad::map::remove::RemovalReport;
+
+/// Run the shared vertex removal step the way `remove_vertex` does: read
+/// the request's `cascade` flag and pruning switches and hand them on.
+fn remove(map: &mut Map, json: &str) -> Result<RemovalReport, CyberError> {
+    let args = remove_args(json);
+    let indices = args.index.indices()?;
+    remove_in_place(
+        map,
+        ElementKind::Vertices,
+        &indices,
+        args.cascade
+            .then(|| cascade_options(args.prune_sidedefs, args.prune_vertices)),
+    )
+}
 
 #[test]
 fn an_unreferenced_vertex_removes_without_a_cascade() {
     let mut map = fixture(MapFormat::Doom);
     let added = add_in_place(&mut map, &add_args(r#"{"x": 32, "y": 32}"#)).expect("one point");
-    let report = remove_in_place(&mut map, &remove_args(r#"{"index": 6}"#), &[6_usize])
-        .expect("the loose point goes");
+    let report = remove(&mut map, r#"{"index": 6}"#).expect("the loose point goes");
     assert_eq!(added.index, 6, "the fixture has six vertices");
     assert_eq!(report.vertices, vec![6], "the removed original index");
     assert!(
@@ -25,8 +43,7 @@ fn an_unreferenced_vertex_removes_without_a_cascade() {
 fn a_used_vertex_refuses_without_cascade_and_lists_its_lines() {
     let mut map = fixture(MapFormat::Doom);
     let before = map.clone();
-    let error = remove_in_place(&mut map, &remove_args(r#"{"index": 4}"#), &[4_usize])
-        .expect_err("three lines end at vertex 4");
+    let error = remove(&mut map, r#"{"index": 4}"#).expect_err("three lines end at vertex 4");
     assert_eq!(code(&error), "conflict", "dependents code");
     assert!(
         error
@@ -41,12 +58,8 @@ fn a_used_vertex_refuses_without_cascade_and_lists_its_lines() {
 #[test]
 fn a_cascaded_vertex_removal_takes_its_lines_and_orphaned_sides() {
     let mut map = fixture(MapFormat::Doom);
-    let report = remove_in_place(
-        &mut map,
-        &remove_args(r#"{"index": 4, "cascade": true}"#),
-        &[4_usize],
-    )
-    .expect("the cascade lifts the conflict");
+    let report = remove(&mut map, r#"{"index": 4, "cascade": true}"#)
+        .expect("the cascade lifts the conflict");
     assert_eq!(report.vertices, vec![4], "the seeded point");
     assert_eq!(
         report.linedefs,
@@ -73,22 +86,25 @@ fn a_cascaded_vertex_removal_takes_its_lines_and_orphaned_sides() {
 
 #[test]
 fn the_pruning_flags_reach_the_cascade() {
-    let defaults = cascade_options(&remove_args(r#"{"index": 4, "cascade": true}"#));
+    let defaults = cascade_options(
+        remove_args(r#"{"index": 4, "cascade": true}"#).prune_sidedefs,
+        remove_args(r#"{"index": 4, "cascade": true}"#).prune_vertices,
+    );
     assert!(
         defaults.prune_sidedefs && defaults.prune_vertices,
         "pruning is on by default"
     );
-    let let_alone = remove_args(
-        r#"{"index": 4, "cascade": true, "prune_sidedefs": false, "prune_vertices": false}"#,
-    );
-    let off = cascade_options(&let_alone);
+    let off = cascade_options(Some(false), Some(false));
     assert!(
         !off.prune_sidedefs && !off.prune_vertices,
         "both switches reach the options"
     );
     let mut map = fixture(MapFormat::Doom);
-    let report = remove_in_place(&mut map, &let_alone, &[4_usize])
-        .expect("the unpruned cascade still applies");
+    let report = remove(
+        &mut map,
+        r#"{"index": 4, "cascade": true, "prune_sidedefs": false, "prune_vertices": false}"#,
+    )
+    .expect("the unpruned cascade still applies");
     assert_eq!(report.linedefs, vec![1, 2, 4], "the seeded rule still runs");
     assert!(report.sidedefs.is_empty(), "the sides stay orphaned");
     assert_eq!(map.vertices.len(), 5, "only the selected vertex went");
@@ -98,8 +114,7 @@ fn the_pruning_flags_reach_the_cascade() {
 #[test]
 fn removing_a_missing_index_reports_not_found() {
     let mut map = fixture(MapFormat::Doom);
-    let error = remove_in_place(&mut map, &remove_args(r#"{"index": 40}"#), &[40_usize])
-        .expect_err("the map holds six vertices");
+    let error = remove(&mut map, r#"{"index": 40}"#).expect_err("the map holds six vertices");
     assert_eq!(code(&error), "not_found", "out of range code");
     assert_eq!(map, fixture(MapFormat::Doom), "nothing removed");
 }

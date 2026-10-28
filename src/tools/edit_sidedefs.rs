@@ -5,8 +5,10 @@
 //! one undo entry moves the whole call. The parameter shapes
 //! ([`IndexSelector`]) and validators ([`check_index`],
 //! [`validate_texture_name`]) come from [`crate::tools::maps::params`];
-//! removal runs through [`crate::wad::map::remove`] and refuses the
-//! `conflict` of a referenced sidedef unless `cascade` is set.
+//! removal walks the shared scaffold of [`crate::tools::maps::remove`] and
+//! refuses the `conflict` of a referenced sidedef unless `cascade` is set
+//! (with the removal engine's pruning defaults — this tool exposes no
+//! pruning switches).
 //!
 //! The geometry rule: the session treats the sidedef block as geometry, so
 //! appending a sidedef, changing its sector or removing one reports
@@ -16,7 +18,7 @@
 //! `-32768..=32767` are refused as `invalid_argument` before anything is
 //! written; `UDMF` stores full integers and has no such cap.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -30,21 +32,16 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, IndexSelector, check_index, edit_result_fragment, validate_texture_name,
+    ElementKind, IndexSelector, check_index, edit_result_fragment, fits_offset,
+    validate_texture_name,
 };
+use crate::tools::maps::remove::{self, RemovePlan, RemoveToolReport};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::Sidedef;
 use crate::wad::map::consts::NO_TEXTURE;
-use crate::wad::map::remove::{
-    CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
-};
-
-/// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
-const OFFSET_MIN: i32 = -0x8000_i32;
-/// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
-const OFFSET_MAX: i32 = 0x7FFF_i32;
+use crate::wad::map::remove::CascadeOptions;
 
 /// Arguments for [`Cyberdemon::add_sidedef`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -170,16 +167,6 @@ struct EditReport {
     edit: JsonMap<String, Value>,
 }
 
-/// Structured result of [`Cyberdemon::remove_sidedef`].
-#[derive(Serialize)]
-struct RemoveToolReport {
-    /// What the removal engine dropped, flipped and normalised.
-    removed: RemovalReport,
-    /// The standard edit fragment.
-    #[serde(flatten)]
-    edit: JsonMap<String, Value>,
-}
-
 /// The reported fields of `side`.
 fn detail_of(side: &Sidedef) -> SidedefDetail {
     SidedefDetail {
@@ -210,18 +197,6 @@ fn edited_texture(
         || Ok(current.to_owned()),
         |name| validate_texture_name(name, format),
     )
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `SIDEDEFS` offset column.
-fn fits_offset(name: &str, value: i32) -> Result<(), CyberError> {
-    if (OFFSET_MIN..=OFFSET_MAX).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds \
-         {OFFSET_MIN}..={OFFSET_MAX}"
-    )))
 }
 
 /// Range-checks `side`'s offsets against the binary `SIDEDEFS` record; a
@@ -393,57 +368,6 @@ fn edit_in_place(
     Ok(rows)
 }
 
-/// The `conflict` naming every linedef that still uses a selected sidedef.
-fn dependent_refusal(uses: &BTreeMap<usize, Vec<usize>>) -> CyberError {
-    let parts: Vec<String> = uses
-        .iter()
-        .map(|(side, lines)| format!("sidedef {side} is used by linedef(s) {}", join(lines)))
-        .collect();
-    CyberError::Conflict(format!(
-        "{}; pass cascade: true to remove the referencing linedefs with them",
-        parts.join("; ")
-    ))
-}
-
-/// The indices as one comma-separated list.
-fn join(indices: &[usize]) -> String {
-    indices
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
-/// The seed removal of exactly the selected sidedefs.
-fn sidedef_removal(indices: &[usize]) -> Removal {
-    Removal {
-        sidedefs: indices.iter().copied().collect::<BTreeSet<usize>>(),
-        ..Default::default()
-    }
-}
-
-/// `remove_sidedef`'s step: check the indices, refuse a referenced sidedef
-/// without `cascade`, then run the removal (grown by the cascade when set).
-fn remove_in_place(
-    map: &mut Map,
-    args: &RemoveSidedefParams,
-    indices: &[usize],
-) -> Result<RemovalReport, CyberError> {
-    for index in indices {
-        check_index(ElementKind::Sidedefs, *index, map.sidedefs.len())?;
-    }
-    let removal = sidedef_removal(indices);
-    if !args.cascade {
-        let uses = dependents(map, &removal).linedefs_using_sidedefs;
-        if !uses.is_empty() {
-            return Err(dependent_refusal(&uses));
-        }
-        return apply_removal(map, &removal);
-    }
-    let grown = expand_cascade(map, &removal, CascadeOptions::default());
-    apply_removal(map, &grown)
-}
-
 /// `add_sidedef`'s work: resolve the map, run the one-step append.
 fn add_run(session: &mut Session, args: &AddSidedefParams) -> Result<AddReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
@@ -469,20 +393,23 @@ fn edit_run(session: &mut Session, args: &EditSidedefParams) -> Result<EditRepor
     })
 }
 
-/// `remove_sidedef`'s work: resolve the map and run the removal.
+/// `remove_sidedef`'s work: resolve the map and run the shared removal
+/// step; the cascade takes the engine's pruning defaults, the plain arm
+/// refuses a referenced side.
 fn remove_run(
     session: &mut Session,
     args: &RemoveSidedefParams,
 ) -> Result<RemoveToolReport, CyberError> {
     let indices = args.index.indices()?;
-    let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let label = format!("remove {} sidedefs", indices.len());
-    let (removed, report) =
-        session.edit_map(name, &label, |map| remove_in_place(map, args, &indices))?;
-    Ok(RemoveToolReport {
-        removed,
-        edit: edit_result_fragment(&report),
-    })
+    remove::remove_run(
+        session,
+        &RemovePlan {
+            kind: ElementKind::Sidedefs,
+            map: args.map.as_deref(),
+            indices: &indices,
+            cascade: args.cascade.then(CascadeOptions::default),
+        },
+    )
 }
 
 #[expect(
@@ -536,13 +463,15 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddSidedefParams, EditSidedefParams, OFFSET_MAX, OFFSET_MIN, add_in_place,
-        check_binary_offsets, dependent_refusal, detail_of, edit_in_place, edited_sidedef,
-        edited_texture, fits_offset, has_change, new_offset, new_sidedef, new_texture,
-        remove_in_place, validate_edit,
+        AddSidedefParams, EditSidedefParams, add_in_place, check_binary_offsets, detail_of,
+        edit_in_place, edited_sidedef, edited_texture, has_change, new_offset, new_sidedef,
+        new_texture, validate_edit,
     };
     use crate::error::CyberError;
+    use crate::tools::maps::params::{ElementKind, OFFSET_MAX, OFFSET_MIN, fits_offset};
+    use crate::tools::maps::remove::{dependent_refusal, remove_in_place};
     use crate::wad::classify::MapFormat;
+    use crate::wad::map::remove::CascadeOptions;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
     use alloc::collections::BTreeMap;
@@ -560,11 +489,6 @@ mod tests {
     /// An edit request parsed from `json`.
     fn edit_args(json: &str) -> EditSidedefParams {
         from_str(json).expect("test edit requests parse")
-    }
-
-    /// A remove request parsed from `json`.
-    fn remove_args(json: &str) -> super::RemoveSidedefParams {
-        from_str(json).expect("test remove requests parse")
     }
 
     /// A sidedef with the given texture names over `sector`.
@@ -845,7 +769,7 @@ mod tests {
     #[test]
     fn removal_refuses_referenced_sides_and_cuts_orphans() {
         let mut map = test_map();
-        let used = remove_in_place(&mut map, &remove_args(r#"{"index": 1}"#), &[1]);
+        let used = remove_in_place(&mut map, ElementKind::Sidedefs, &[1], None);
         let error = used.expect_err("sidedef 1 is a linedef's front");
         assert_eq!(code(&error), "conflict", "referenced without cascade");
         assert!(
@@ -856,7 +780,7 @@ mod tests {
             "the message names the user and the fix: {error}"
         );
         assert_eq!(map.sidedefs.len(), 4, "the conflict changed nothing");
-        let report = remove_in_place(&mut map, &remove_args(r#"{"index": 3}"#), &[3])
+        let report = remove_in_place(&mut map, ElementKind::Sidedefs, &[3], None)
             .expect("the orphan goes without a cascade");
         assert_eq!(report.sidedefs, vec![3_usize], "the removed original index");
         assert!(report.flipped_linedefs.is_empty(), "no line was touched");
@@ -868,8 +792,9 @@ mod tests {
         let mut map = test_map();
         let report = remove_in_place(
             &mut map,
-            &remove_args(r#"{"index": 1, "cascade": true}"#),
+            ElementKind::Sidedefs,
             &[1],
+            Some(CascadeOptions::default()),
         )
         .expect("the cascade lifts the conflict");
         assert_eq!(report.sidedefs, vec![1_usize], "the seeded side goes");
@@ -886,7 +811,8 @@ mod tests {
         let uses: BTreeMap<usize, Vec<usize>> = [(1_usize, vec![1_usize, 4]), (2_usize, vec![1])]
             .into_iter()
             .collect();
-        let message = dependent_refusal(&uses).to_string();
+        let message =
+            dependent_refusal(ElementKind::Sidedefs, ElementKind::Linedefs, &uses).to_string();
         assert!(
             message.contains("sidedef 1 is used by linedef(s) 1, 4")
                 && message.contains("sidedef 2 is used by linedef(s) 1"),

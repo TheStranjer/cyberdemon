@@ -24,11 +24,10 @@
 //! [`lift`] and [`teleporter`] the movers, [`switches`] the switch and
 //! exit tools, [`specials`] the two sector-special steps, and
 //! [`place_params`] and [`place`] the `place_things` wire parsing and
-//! distribution run. This root keeps the shared refusal helpers, the map
-//! read ([`current_map`]), the theme helpers ([`skin`] and [`theme_skin`],
-//! on the shared [`crate::tools::themes`] `theme_wall` and
-//! [`theme_roles`] machinery so no group re-resolves what another
-//! already does), the result handoff ([`reply`]) and the
+//! distribution run. This root keeps the shared refusal helpers, the theme
+//! helpers ([`skin`] and [`theme_skin`], on the shared [`crate::tools::themes`]
+//! `theme_wall` and [`theme_roles`] machinery so no group re-resolves what
+//! another already does), the result handoff ([`reply`]) and the
 //! router; the group's unit tests live in `features/tests.rs`.
 
 mod door;
@@ -51,7 +50,7 @@ use rmcp::{ErrorData, tool, tool_router};
 
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::{Scope, Session};
+use crate::session::Session;
 use crate::themes::Role;
 use crate::tools::features::door::{AddDoorParams, DoorSkins, MAX_DEPTH, add_door_run, track_role};
 use crate::tools::features::lift::{AddLiftParams, add_lift_run};
@@ -66,15 +65,12 @@ use crate::tools::features::switches::{
 };
 use crate::tools::features::teleporter::{AddTeleporterParams, add_teleporter_run};
 use crate::tools::features::window::{AddWindowParams, add_window_run};
-use crate::tools::maps::common;
 use crate::tools::maps::params::validate_texture_name;
 use crate::tools::reply;
 use crate::tools::themes::{FALLBACK_WALL_TEXTURE, role_texture, theme_roles};
 use crate::wad::classify::MapFormat;
-use crate::wad::map::Map;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::DoorStyle;
-use crate::wad::name::LumpName;
 
 /// The refusal for a wall with no room within reach behind it.
 fn no_room() -> CyberError {
@@ -128,21 +124,6 @@ fn theme_skin(
         floor_flat: skin(None, &floor, format)?,
         wall: skin(None, &wall, format)?,
     })
-}
-
-/// The map as the next edit sees it: the working archive's block when it
-/// holds one, else the merged view's (which is what the edit copies in).
-///
-/// # Errors
-///
-/// [`common::load_map`]'s errors for the merged scope when the working
-/// archive holds no such block.
-fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
-    match common::load_map(session, name, Scope::Working) {
-        Ok(map) => Ok(map),
-        Err(error) if error.is_not_found() => common::load_map(session, name, Scope::Merged),
-        Err(error) => Err(error),
-    }
 }
 
 #[expect(

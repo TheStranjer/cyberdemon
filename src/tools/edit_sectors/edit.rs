@@ -5,13 +5,14 @@
 //! [`AddSectorParams`], [`EditSectorParams`] and [`RemoveSectorParams`] to
 //! [`add_run`], [`edit_run`] and [`remove_run`]. Each resolves the map (the
 //! add also resolving the session theme's [`Surfaces`] once) and
-//! then runs [`add_in_place`], [`edit_in_place`] or [`remove_in_place`] as
-//! one [`crate::session::Session::edit_map`] step, so a refused call never
-//! writes: an `edit_sector` request is validated up front by
-//! [`validate_edit`] ([`check_conflicts`] and [`has_change`]) and every
+//! then runs [`add_in_place`], [`edit_in_place`] or the shared removal
+//! scaffold's step as one [`crate::session::Session::edit_map`] step, so a
+//! refused call never writes: an `edit_sector` request is validated up front
+//! by [`validate_edit`] ([`check_conflicts`] and [`has_change`]) and every
 //! selected sector is computed by [`planned_edits`] before any of them is
 //! stored; a `remove_sector` call without `cascade` refuses the `conflict`
-//! [`dependent_refusal`] spells out, and with it hands the grown set to
+//! [`crate::tools::maps::remove::dependent_refusal`] spells out, and with
+//! it hands the grown set to
 //! [`crate::wad::map::remove::apply_removal`]. Every resulting sector faces
 //! [`check_sector`] in the parent module beside the [`SectorDetail`] these
 //! tools report.
@@ -26,11 +27,10 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{ElementKind, IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::remove::{self, RemovePlan, RemoveToolReport, cascade_options};
 use crate::tools::themes::{Surfaces, surfaces};
 use crate::wad::classify::MapFormat;
-use crate::wad::map::remove::{
-    CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
-};
+use crate::wad::map::remove::CascadeOptions;
 use crate::wad::map::{Map, Sector};
 
 use super::{
@@ -157,16 +157,6 @@ pub(super) struct AddReport {
 pub(super) struct EditReport {
     /// The edited sectors, ascending by index.
     sectors: Vec<EditRow>,
-    /// The standard edit fragment.
-    #[serde(flatten)]
-    edit: JsonMap<String, Value>,
-}
-
-/// Structured result of [`Cyberdemon::remove_sector`].
-#[derive(Serialize)]
-pub(super) struct RemoveToolReport {
-    /// What the removal engine dropped, flipped and normalised.
-    removed: RemovalReport,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -356,64 +346,12 @@ pub(super) fn edit_in_place(
     Ok(rows)
 }
 
-/// The `conflict` naming every sidedef that still uses a selected sector.
-pub(super) fn dependent_refusal(uses: &BTreeMap<usize, Vec<usize>>) -> CyberError {
-    let parts: Vec<String> = uses
-        .iter()
-        .map(|(sector, sides)| format!("sector {sector} is used by sidedef(s) {}", join(sides)))
-        .collect();
-    CyberError::Conflict(format!(
-        "{}; pass cascade: true to remove the referencing sidedefs with them",
-        parts.join("; ")
-    ))
-}
-
-/// The indices as one comma-separated list.
-pub(super) fn join(indices: &[usize]) -> String {
-    indices
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
-/// The seed removal of exactly the selected sectors.
-fn sector_removal(indices: &[usize]) -> Removal {
-    Removal {
-        sectors: indices.iter().copied().collect::<BTreeSet<usize>>(),
-        ..Default::default()
-    }
-}
-
-/// The pruning flags of the `remove_sector` parameters; an absent flag
-/// prunes, the cascading default.
-pub(super) fn cascade_options(args: &RemoveSectorParams) -> CascadeOptions {
-    CascadeOptions {
-        prune_sidedefs: args.prune_sidedefs.unwrap_or(true),
-        prune_vertices: args.prune_vertices.unwrap_or(true),
-    }
-}
-
-/// `remove_sector`'s step: check the indices, refuse a referenced sector
-/// without `cascade`, then run the removal (grown by the cascade when set).
-pub(super) fn remove_in_place(
-    map: &mut Map,
-    args: &RemoveSectorParams,
-    indices: &[usize],
-) -> Result<RemovalReport, CyberError> {
-    for index in indices {
-        check_index(ElementKind::Sectors, *index, map.sectors.len())?;
-    }
-    let removal = sector_removal(indices);
-    if !args.cascade {
-        let uses = dependents(map, &removal).sidedefs_using_sectors;
-        if !uses.is_empty() {
-            return Err(dependent_refusal(&uses));
-        }
-        return apply_removal(map, &removal);
-    }
-    let grown = expand_cascade(map, &removal, cascade_options(args));
-    apply_removal(map, &grown)
+/// The cascade mode the `remove_sector` parameters ask for: the grown arm
+/// with the call's pruning flags when `cascade` is set, `None` for the
+/// refuse-or-plain arm.
+pub(super) fn sector_cascade(args: &RemoveSectorParams) -> Option<CascadeOptions> {
+    args.cascade
+        .then(|| cascade_options(args.prune_sidedefs, args.prune_vertices))
 }
 
 /// `add_sector`'s work: resolve the map and the theme defaults, run the
@@ -449,18 +387,20 @@ pub(super) fn edit_run(
     })
 }
 
-/// `remove_sector`'s work: resolve the map and run the removal.
+/// `remove_sector`'s work: resolve the map and run the shared removal step,
+/// whose cascade takes the call's pruning flags.
 pub(super) fn remove_run(
     session: &mut Session,
     args: &RemoveSectorParams,
 ) -> Result<RemoveToolReport, CyberError> {
     let indices = args.index.indices()?;
-    let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let label = format!("remove {} sectors", indices.len());
-    let (removed, report) =
-        session.edit_map(name, &label, |map| remove_in_place(map, args, &indices))?;
-    Ok(RemoveToolReport {
-        removed,
-        edit: edit_result_fragment(&report),
-    })
+    remove::remove_run(
+        session,
+        &RemovePlan {
+            kind: ElementKind::Sectors,
+            map: args.map.as_deref(),
+            indices: &indices,
+            cascade: sector_cascade(args),
+        },
+    )
 }

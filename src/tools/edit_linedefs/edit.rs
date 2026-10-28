@@ -6,7 +6,7 @@
 //! or empty request with [`validate_edit`] ([`has_change`] is the "nothing to
 //! change" half) and then runs [`edit_in_place`] as one
 //! [`crate::session::Session::edit_map`] step. Inside that step [`EditPlan`]
-//! holds the request beside the targets and the parent's [`EditBits`],
+//! holds the request beside the targets and the shared [`EditBits`],
 //! [`edited_line`] computes what each selected linedef becomes (its fields
 //! replaced, [`adjusted_for_back`] keeping two-sidedness honest after a `back`
 //! change, a flip swapping ends and sides together, [`moves_endpoints`] and
@@ -26,13 +26,13 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+    EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector, check_index, edit_result_fragment,
 };
 use crate::wad::classify::MapFormat;
-use crate::wad::map::{FlagFamily, Linedef, Map};
+use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map};
 
 use super::side_edit::{SideEdit, apply_side_edit, side_target};
-use super::{EditBits, LinedefDetail, check_line, detail_of, flags_given};
+use super::{LinedefDetail, check_line, detail_of, flags_given};
 use crate::wad::map::flags::{BLOCKING, TWO_SIDED};
 
 /// The value of an [`Cyberdemon::edit_linedef`] side reference: an existing
@@ -216,6 +216,9 @@ pub(super) struct EditPlan<'req> {
     indices: BTreeSet<usize>,
     /// The resolved flag adjustments.
     bits: EditBits,
+    /// Whether any of the three flag parameters was given: the two-sided
+    /// and blocking auto-adjustments stand down when it was.
+    explicit: bool,
     /// The map's binary storage layout.
     format: MapFormat,
     /// The map's flag family.
@@ -235,12 +238,22 @@ impl<'req> EditPlan<'req> {
         indices: Vec<usize>,
         map: &Map,
     ) -> Result<Self, CyberError> {
+        let family = map.flag_family();
         Ok(Self {
             args,
             indices: indices.into_iter().collect(),
-            bits: EditBits::resolve(args, map.flag_family())?,
+            bits: EditBits::resolve(
+                FlagInputs {
+                    flags: args.flags.clone(),
+                    set_flags: args.set_flags.clone(),
+                    clear_flags: args.clear_flags.clone(),
+                },
+                FlagKind::Linedef,
+                family,
+            )?,
+            explicit: flags_given(args),
             format: map.format,
-            family: map.flag_family(),
+            family,
         })
     }
 
@@ -301,7 +314,7 @@ pub(super) fn edited_line(
         },
         extra: current.extra.clone(),
     };
-    if let Some(target) = args.back.filter(|_| !plan.bits.explicit) {
+    if let Some(target) = args.back.filter(|_| !plan.explicit) {
         line.flags = adjusted_for_back(line.flags, target);
     }
     if args.flip == Some(true) {

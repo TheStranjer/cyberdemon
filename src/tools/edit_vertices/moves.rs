@@ -13,7 +13,7 @@
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{ElementKind, edit_result_fragment};
+use crate::tools::maps::params::{ElementKind, edit_result_fragment, join};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::query::check_indices;
 use crate::wad::map::{Linedef, Map, Vertex};
@@ -146,15 +146,6 @@ fn collapsed_linedefs(map: &Map, moved: &Moves) -> Vec<usize> {
         .filter(|&(_, line)| made_zero_length(map, moved, line))
         .map(|(index, _)| index)
         .collect()
-}
-
-/// The indices as one comma-separated list.
-pub(super) fn join(indices: &[usize]) -> String {
-    indices
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<String>>()
-        .join(", ")
 }
 
 /// The `conflict` naming every linedef a move would collapse to a point.

@@ -6,15 +6,18 @@
 //! to; `create_map`, `copy_map`, `rename_map` and `remove_map` manage
 //! whole blocks of the working archive. Everything reads through the
 //! shared resolvers in `common` that every
-//! later map tool reuses, and the element-editing tools will reuse the
-//! parameter types and validators in [`crate::tools::maps::params`]. The
-//! management machinery (block append, copy, rename and removal over the
-//! working archive) lives in the private `manage` module.
+//! later map tool reuses, the element-editing tools reuse the
+//! parameter types and validators in [`crate::tools::maps::params`], and
+//! every `remove_*` element tool walks the shared removal ladder in
+//! [`crate::tools::maps::remove`]. The management machinery (block append,
+//! copy, rename and removal over the working archive) lives in the private
+//! `manage` module.
 
 mod assemble;
 pub mod common;
 mod manage;
 pub mod params;
+pub mod remove;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;

@@ -12,20 +12,28 @@
 //! find: raw `Doom` flats and column/post patches, or the `PNG` form ports
 //! also carry, quantized against `PLAYPAL` entry 0 with alpha transparency
 //! and with the drawing offsets taken from a `grAb` chunk. `lump_bytes`
-//! is the same name lookup for a reader of a lump of any kind. The
-//! image tools of the `graphics` group publish through these,
+//! is the same name lookup for a reader of a lump of any kind. Every
+//! resolver reads through a `PictureIndex` built once from the cached
+//! merged view - the winning row per name and place, the decoded texture
+//! definitions and a patch cache shared by one operation - so a texture's
+//! N components, a scene's whole picture set and a render's rotation sweep
+//! each walk the directory once, not once per picture.
+//! The image tools of the `graphics` group publish through these,
 //! [`crate::render::scene`] builds its scenes through them and the `assets`
 //! group dispatches to all of them, so name resolution is written once. It
 //! lives here, beside the session it reads, depending only on the session,
 //! [`crate::gfx`] and [`crate::wad`], so no core module has to reach into
-//! the tool layer for a picture. Composite textures resolve in `texture`,
-//! sprite rotations in `sprite`.
+//! the tool layer for a picture. The lookup itself is `index`, composite
+//! textures resolve in `texture`, sprite rotations in `sprite`.
 
+pub mod index;
 pub mod sprite;
 pub mod texture;
 
 use sprite::clamp_offset;
 
+pub(crate) use index::PictureIndex;
+use index::SpriteRow;
 pub(crate) use sprite::{load_sprite, load_sprite_cached, load_sprite_lump};
 pub(crate) use texture::load_texture;
 
@@ -34,15 +42,10 @@ use crate::gfx::codec::{decode_image, is_png};
 use crate::gfx::flat::decode_flat;
 use crate::gfx::grab::{GrabOffsets, read_grab};
 use crate::gfx::image::IndexedImage;
-use crate::gfx::palette::Palette;
 use crate::gfx::patch::{Patch, decode_patch};
 use crate::gfx::quantize::{QuantizeOptions, quantize};
 use crate::gfx::sprite_name::{ALL_ANGLES, SpriteName};
-use crate::session::Scope;
-use crate::session::Session;
-use crate::session::palette::load_palette;
-use crate::wad::archive::Lump;
-use crate::wad::classify::{LumpInfo, LumpKind, Namespace};
+use crate::wad::classify::Namespace;
 use crate::wad::name::LumpName;
 
 /// The `PLAYPAL` entry `PNG` graphics are quantized to: ports store such
@@ -57,25 +60,10 @@ const PATCH_PLACES: [Place; 2] = [Place::In(Namespace::Patches), Place::Loose];
 /// Where [`load_flat`] looks: the flats region first, then anywhere.
 const FLAT_PLACES: [Place; 2] = [Place::In(Namespace::Flats), Place::Anywhere];
 
-/// One merged-view lump a resolver can look at: its name, its classification
-/// and its payload. The resolvers read a picture by name, so unlike the
-/// `lumps` tools' listing rows they carry no save-layout offset, source tag
-/// or map owner - only the name, namespace and kind a lookup matches on and
-/// the bytes it decodes.
-#[derive(Clone, Debug)]
-pub(super) struct Entry {
-    /// Normalised lump name.
-    pub(super) name: LumpName,
-    /// Type hint from [`crate::wad::classify::analyze`].
-    pub(super) kind: LumpKind,
-    /// Namespace region the lump sits in, if any.
-    pub(super) namespace: Option<Namespace>,
-    /// The lump itself, whose payload is decoded.
-    pub(super) lump: Lump,
-}
-
-/// Where a name lookup may find its lump in the merged view.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Where a name lookup may find its lump in the merged view. A [`PictureIndex`]
+/// files every data row under each place that admits it, so a lookup is one
+/// map probe per place rather than a scan of the directory.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Place {
     /// Inside one namespace region.
     In(Namespace),
@@ -84,21 +72,6 @@ enum Place {
     Loose,
     /// Any data lump.
     Anywhere,
-}
-
-impl Place {
-    /// Whether an [`Entry`] is a lump this rule lets a lookup reach; region
-    /// markers carry no pixels and never match.
-    fn allows(self, entry: &Entry) -> bool {
-        if entry.kind == LumpKind::Marker {
-            return false;
-        }
-        match self {
-            Self::In(wanted) => entry.namespace == Some(wanted),
-            Self::Loose => !matches!(entry.namespace, Some(Namespace::Flats | Namespace::Sprites)),
-            Self::Anywhere => true,
-        }
-    }
 }
 
 /// How a found sprite lump serves the rotation that was asked for.
@@ -178,52 +151,6 @@ const SPRITE_PLACES: [Place; 3] = [
     Place::Loose,
 ];
 
-/// The merged directory's entries: every lump of the view an engine reads,
-/// in directory order, with its name, classification and payload.
-///
-/// Both the entries and the classification come from [`Session::analyzed`],
-/// so the resolvers no longer clone the whole view only to re-analyze it;
-/// the merged scope is served from the session's read cache.
-///
-/// # Errors
-///
-/// [`Session::analyzed`]'s [`CyberError::NotFound`] for an out-of-range
-/// scope.
-fn merged_rows(session: &Session) -> Result<Vec<Entry>, CyberError> {
-    let (entries, analysis) = session.analyzed(Scope::Merged)?;
-    Ok(zip_rows(&entries, &analysis.lumps))
-}
-
-/// Pairs one scope's tagged lumps with their classification, index-aligned,
-/// into [`Entry`] rows: the shape every name lookup matches against.
-fn zip_rows(entries: &[crate::session::MergedLump], infos: &[LumpInfo]) -> Vec<Entry> {
-    entries
-        .iter()
-        .zip(infos.iter())
-        .map(|(entry, info)| Entry {
-            name: info.name,
-            kind: info.kind,
-            namespace: info.namespace,
-            lump: entry.lump.clone(),
-        })
-        .collect()
-}
-
-/// The winning entry for `name`: the last entry of that name the first of
-/// `places` with a match allows, which is what an engine's lookup of a
-/// name reaches for.
-fn locate(entries: &[Entry], name: LumpName, places: &[Place]) -> Option<Entry> {
-    places
-        .iter()
-        .find_map(|place| {
-            entries
-                .iter()
-                .rev()
-                .find(|entry| entry.name == name && place.allows(entry))
-        })
-        .cloned()
-}
-
 /// The `not_found` for a missing picture: names what was looked for and
 /// the listing tool that knows what the session holds. Flat and texture
 /// refusals carry the create/list hint: those two kinds are what the
@@ -251,28 +178,41 @@ const SURFACE_HINT: &str = "list_textures / list_flats with a glob pattern; or c
 ///
 /// [`CyberError::NotFound`] when no loaded archive holds `name`;
 /// [`CyberError::Format`] when the bytes are neither a raw flat of a
-/// supported size nor a readable `PNG`; [`load_palette`]' errors when a
-/// `PNG` flat has no `PLAYPAL` to quantize against.
-pub(crate) fn load_flat(session: &Session, name: LumpName) -> Result<IndexedImage, CyberError> {
-    let entry = locate(&merged_rows(session)?, name, &FLAT_PLACES)
+/// supported size nor a readable `PNG`; [`PictureIndex::reference_palette`]'
+/// errors when a `PNG` flat has no `PLAYPAL` to quantize against.
+pub(crate) fn load_flat(
+    index: &PictureIndex<'_>,
+    name: LumpName,
+) -> Result<IndexedImage, CyberError> {
+    let lump = index
+        .located(name, &FLAT_PLACES)
         .ok_or_else(|| not_found("flat", "list_flats", name))?;
-    decode_flat_bytes(session, &entry.lump.data)
+    decode_flat_bytes(index, &lump.data)
 }
 
 /// The patch `name`: the last patches-region lump, else the last loose one
 /// outside the flats and sprites regions, as a `Doom` patch or a quantized
-/// `PNG` with its `grAb` offsets.
+/// `PNG` with its `grAb` offsets. The decode is shared: within one
+/// operation - one texture's repeated components, one scene's whole
+/// texture set - a name is decoded once and answered from the index's
+/// cache after that.
 ///
 /// # Errors
 ///
 /// [`CyberError::NotFound`] when no loaded archive holds `name`;
 /// [`decode_patch_bytes`]' [`CyberError::Format`] for bytes that are
-/// neither format; [`load_palette`]' errors for a `PNG` without a
-/// `PLAYPAL`.
-pub(crate) fn load_patch(session: &Session, name: LumpName) -> Result<Patch, CyberError> {
-    let entry = locate(&merged_rows(session)?, name, &PATCH_PLACES)
+/// neither format; [`PictureIndex::reference_palette`]' errors for a `PNG`
+/// without a `PLAYPAL`.
+pub(crate) fn load_patch(index: &PictureIndex<'_>, name: LumpName) -> Result<Patch, CyberError> {
+    if let Some(patch) = index.cached_patch(name) {
+        return Ok(patch);
+    }
+    let lump = index
+        .located(name, &PATCH_PLACES)
         .ok_or_else(|| not_found("patch", "list_patches", name))?;
-    decode_patch_bytes(session, &entry.lump.data)
+    let patch = decode_patch_bytes(index, &lump.data)?;
+    index.store_patch(name, &patch);
+    Ok(patch)
 }
 
 /// A flat lump's pixels: the raw indexed plane, or a `PNG` flat quantized
@@ -283,11 +223,11 @@ pub(crate) fn load_patch(session: &Session, name: LumpName) -> Result<Patch, Cyb
 /// [`decode_flat`]' [`CyberError::Format`] for a raw lump of an
 /// unsupported size; [`quantize_png`]' errors for a `PNG`.
 pub(crate) fn decode_flat_bytes(
-    session: &Session,
+    index: &PictureIndex<'_>,
     data: &[u8],
 ) -> Result<IndexedImage, CyberError> {
     if is_png(data) {
-        return quantize_png(session, data);
+        return quantize_png(index, data);
     }
     decode_flat(data)
 }
@@ -301,11 +241,14 @@ pub(crate) fn decode_flat_bytes(
 /// [`decode_patch`]' [`CyberError::Format`] for `Doom` bytes that are
 /// corrupt; [`quantize_png`]' errors for a `PNG`; [`read_grab`]'
 /// [`CyberError::Format`] for a chunk stream that does not parse.
-pub(crate) fn decode_patch_bytes(session: &Session, data: &[u8]) -> Result<Patch, CyberError> {
+pub(crate) fn decode_patch_bytes(
+    index: &PictureIndex<'_>,
+    data: &[u8],
+) -> Result<Patch, CyberError> {
     if !is_png(data) {
         return decode_patch(data);
     }
-    let image = quantize_png(session, data)?;
+    let image = quantize_png(index, data)?;
     let (left, top) = read_grab(data)?.unwrap_or(NO_OFFSETS);
     Ok(Patch {
         left_offset: clamp_offset(left),
@@ -321,25 +264,15 @@ pub(crate) fn decode_patch_bytes(session: &Session, data: &[u8]) -> Result<Patch
 /// # Errors
 ///
 /// [`decode_image`]' errors for bytes that are not a readable image;
-/// [`load_palette`]' [`CyberError::NotFound`] for a session without a
-/// `PLAYPAL`.
-fn quantize_png(session: &Session, data: &[u8]) -> Result<IndexedImage, CyberError> {
+/// [`PictureIndex::reference_palette`]' [`CyberError::NotFound`] for a
+/// session without a `PLAYPAL`.
+fn quantize_png(index: &PictureIndex<'_>, data: &[u8]) -> Result<IndexedImage, CyberError> {
     let rgba = decode_image(data)?;
     Ok(quantize(
         &rgba,
-        &reference_palette(session)?,
+        &index.reference_palette()?,
         &QuantizeOptions::default(),
     ))
-}
-
-/// The palette `PNG` graphics are quantized against: `PLAYPAL` entry 0.
-///
-/// # Errors
-///
-/// [`load_palette`]' [`CyberError::NotFound`] for a session without a
-/// `PLAYPAL`.
-fn reference_palette(session: &Session) -> Result<Palette, CyberError> {
-    load_palette(session, PNG_PALETTE)
 }
 
 /// The winning lump's payload bytes anywhere in the merged view: what a
@@ -348,9 +281,10 @@ fn reference_palette(session: &Session) -> Result<Palette, CyberError> {
 /// # Errors
 ///
 /// [`CyberError::NotFound`] when no loaded archive holds `name`.
-pub(crate) fn lump_bytes(session: &Session, name: LumpName) -> Result<Vec<u8>, CyberError> {
-    locate(&merged_rows(session)?, name, &[Place::Anywhere])
-        .map(|entry| entry.lump.data.to_vec())
+pub(crate) fn lump_bytes(index: &PictureIndex<'_>, name: LumpName) -> Result<Vec<u8>, CyberError> {
+    index
+        .located(name, &[Place::Anywhere])
+        .map(|lump| lump.data.to_vec())
         .ok_or_else(|| not_found("lump", "list_lumps", name))
 }
 

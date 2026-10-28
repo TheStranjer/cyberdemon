@@ -19,12 +19,12 @@ use crate::gfx::sprite_rotation::rotation_for;
 use crate::render::sprites::SpriteItem;
 use crate::render::view::ONE_16;
 use crate::render::{
-    RenderSettings, ViewCamera, ViewFrame, build_scene, camera_sector, check_pitch, default_eye_z,
-    gamma_table, render_frame,
+    RenderSettings, ViewCamera, ViewFrame, build_scene_with, camera_sector, check_pitch,
+    default_eye_z, gamma_table, render_frame,
 };
 use crate::session::Session;
 use crate::state::AppState;
-use crate::tools::graphics::resolve::load_sprite_cached;
+use crate::tools::graphics::resolve::{PictureIndex, load_sprite_cached};
 use crate::tools::maps::common;
 use crate::wad::LumpName;
 use crate::wad::map::geometry;
@@ -205,9 +205,14 @@ impl<'defs> SpriteWiring<'defs> {
     /// The sprite patch at the spot's bucketed rotation, decoded once per
     /// lump for the whole render; a sprite name that will not load
     /// reports itself once and dresses nothing.
-    fn patch(&mut self, session: &Session, def: &ThingDef, spot: &SpriteSpot) -> Option<Patch> {
+    fn patch(
+        &mut self,
+        index: &PictureIndex<'_>,
+        def: &ThingDef,
+        spot: &SpriteSpot,
+    ) -> Option<Patch> {
         let rotation = rotation_for((self.cam_x, self.cam_y), (spot.x, spot.y), spot.angle);
-        match load_sprite_cached(session, def, rotation, &mut self.cache) {
+        match load_sprite_cached(index, def, rotation, &mut self.cache) {
             Ok(sprite) => Some(sprite.patch),
             Err(error) => {
                 let missing = error.is_not_found();
@@ -233,7 +238,7 @@ impl<'defs> SpriteWiring<'defs> {
     /// sector, and its sprite loads; the sector's light shades the whole
     /// sprite, standing things anchor on the sector's floor plus the
     /// spawn `z` and hanging ones under the ceiling by the patch height.
-    fn add(&mut self, session: &Session, map: &Map, mark: &Thing) {
+    fn add(&mut self, index: &PictureIndex<'_>, map: &Map, mark: &Thing) {
         let Some(def) = self.definition(mark) else {
             return;
         };
@@ -248,7 +253,7 @@ impl<'defs> SpriteWiring<'defs> {
         let Some(row) = map.sectors.get(sector) else {
             return;
         };
-        let Some(patch) = self.patch(session, def, &spot) else {
+        let Some(patch) = self.patch(index, def, &spot) else {
             return;
         };
         let base = if def.hanging {
@@ -274,16 +279,18 @@ impl<'defs> SpriteWiring<'defs> {
 
 /// The session half of one `render_view` sprite pass: the map's things
 /// dressed as sprite items for the transparent pass, and the problem
-/// lines naming the sprite names the session could not dress with.
+/// lines naming the sprite names the session could not dress with. The
+/// whole pass reads through the render's one [`PictureIndex`], the same
+/// the scene was built with.
 fn view_sprites(
-    session: &Session,
+    index: &PictureIndex<'_>,
     scene: &crate::render::Scene,
     defs: &Definitions,
     camera: &ViewCamera,
 ) -> (Vec<SpriteItem>, Vec<String>) {
     let mut wiring = SpriteWiring::new(defs, camera);
     for mark in &scene.map.things {
-        wiring.add(session, &scene.map, mark);
+        wiring.add(index, &scene.map, mark);
     }
     (wiring.items, wiring.problems)
 }
@@ -319,7 +326,8 @@ fn load_view(state: &AppState, args: &RenderViewParams) -> Result<PreparedView, 
     state.with_session(|session| {
         let name = common::resolve_map_name(session, args.map.as_deref())?;
         let settings = view_settings(session, args)?;
-        let scene = build_scene(session, name, &settings)?;
+        let index = PictureIndex::new(session)?;
+        let scene = build_scene_with(&index, name, &settings)?;
         let sector = camera_sector(&scene, i64::from(args.x), i64::from(args.y)).ok_or_else(|| {
             CyberError::InvalidArgument(format!(
                 "camera is outside the map: ({}, {}) lies in no sector of {}; move x/y inside a \
@@ -338,7 +346,7 @@ fn load_view(state: &AppState, args: &RenderViewParams) -> Result<PreparedView, 
         };
         let (sprites, sprite_problems) = if settings.show_sprites.is_on() {
             let defs = session.definitions()?;
-            view_sprites(session, &scene, &defs, &camera)
+            view_sprites(&index, &scene, &defs, &camera)
         } else {
             (Vec::new(), Vec::new())
         };

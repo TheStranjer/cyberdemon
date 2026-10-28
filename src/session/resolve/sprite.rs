@@ -4,7 +4,9 @@
 //! merged view's sprite regions by the name grammar (the exact lump, the
 //! rotation's own pair, its mirror pair, the frame's all-angles image) and
 //! decoded through `super::decode_patch_bytes`, flipped and offset like an
-//! engine draws a mirrored rotation.
+//! engine draws a mirrored rotation. The rows come from the caller's
+//! `PictureIndex`, so a whole render's rotation sweep reads the merged
+//! directory once and parses each lump name once.
 
 use std::collections::HashMap;
 
@@ -12,13 +14,11 @@ use crate::defs::ThingDef;
 use crate::error::CyberError;
 use crate::gfx::image::flip_horizontal;
 use crate::gfx::patch::Patch;
-use crate::gfx::sprite_name::{ALL_ANGLES, SpriteName};
-use crate::session::Session;
-use crate::wad::classify::{LumpKind, Namespace};
+use crate::gfx::sprite_name::ALL_ANGLES;
 use crate::wad::name::LumpName;
 
 use super::{
-    Entry, Request, SPRITE_PLACES, Serving, decode_patch_bytes, locate, merged_rows, not_found,
+    PictureIndex, Request, SPRITE_PLACES, Serving, SpriteRow, decode_patch_bytes, not_found,
 };
 
 /// The sprite image for one rotation: `sprite` is the four-character
@@ -35,16 +35,15 @@ use super::{
 /// when the sprite regions serve nothing for the rotation;
 /// [`decode_patch_bytes`]' errors for a lump that is not a picture.
 pub(crate) fn load_sprite(
-    session: &Session,
+    index: &PictureIndex<'_>,
     sprite: &str,
     frame: char,
     rotation: u8,
 ) -> Result<Sprite, CyberError> {
     let wanted = Request::new(sprite, frame, rotation)?;
-    let entries = sprite_entries(session)?;
-    let (entry, serving) = find_rotation(&entries, &wanted).ok_or_else(|| wanted.missing())?;
-    let stored = decode_patch_bytes(session, &entry.lump.data)?;
-    Ok(Sprite::of(entry.name, stored, serving))
+    let (row, serving) = find_rotation(index.sprites(), &wanted).ok_or_else(|| wanted.missing())?;
+    let stored = decode_patch_bytes(index, &row.lump.data)?;
+    Ok(Sprite::of(row.name, stored, serving))
 }
 
 /// The sprite image for one rotation of a thing definition's sprite, with
@@ -59,20 +58,19 @@ pub(crate) fn load_sprite(
 ///
 /// [`load_sprite`]'s errors.
 pub(crate) fn load_sprite_cached(
-    session: &Session,
+    index: &PictureIndex<'_>,
     def: &ThingDef,
     rotation: u8,
     cache: &mut HashMap<LumpName, Patch>,
 ) -> Result<Sprite, CyberError> {
     let wanted = Request::new(&def.sprite, def.frame, rotation)?;
-    let entries = sprite_entries(session)?;
-    let (entry, serving) = find_rotation(&entries, &wanted).ok_or_else(|| wanted.missing())?;
-    if let Some(patch) = cache.get(&entry.name) {
-        return Ok(Sprite::of(entry.name, patch.clone(), serving));
+    let (row, serving) = find_rotation(index.sprites(), &wanted).ok_or_else(|| wanted.missing())?;
+    if let Some(patch) = cache.get(&row.name) {
+        return Ok(Sprite::of(row.name, patch.clone(), serving));
     }
-    let stored = decode_patch_bytes(session, &entry.lump.data)?;
-    cache.insert(entry.name, stored.clone());
-    Ok(Sprite::of(entry.name, stored, serving))
+    let stored = decode_patch_bytes(index, &row.lump.data)?;
+    cache.insert(row.name, stored.clone());
+    Ok(Sprite::of(row.name, stored, serving))
 }
 
 /// The patch stored in the lump `name`, served exactly as stored: no
@@ -85,10 +83,14 @@ pub(crate) fn load_sprite_cached(
 /// [`CyberError::NotFound`] when no loaded archive holds `name`;
 /// [`decode_patch_bytes`]' errors for bytes that are neither a `Doom`
 /// patch nor a readable `PNG`.
-pub(crate) fn load_sprite_lump(session: &Session, name: LumpName) -> Result<Patch, CyberError> {
-    let entry = locate(&merged_rows(session)?, name, &SPRITE_PLACES)
+pub(crate) fn load_sprite_lump(
+    index: &PictureIndex<'_>,
+    name: LumpName,
+) -> Result<Patch, CyberError> {
+    let lump = index
+        .located(name, &SPRITE_PLACES)
         .ok_or_else(|| not_found("sprite", "list_sprites", name))?;
-    decode_patch_bytes(session, &entry.lump.data)
+    decode_patch_bytes(index, &lump.data)
 }
 
 /// One resolved sprite image.
@@ -119,62 +121,46 @@ impl Sprite {
     }
 }
 
-/// The data entries of the sprite regions, in directory order.
-///
-/// # Errors
-///
-/// [`merged_rows`]' errors.
-pub(super) fn sprite_entries(session: &Session) -> Result<Vec<Entry>, CyberError> {
-    Ok(merged_rows(session)?
-        .into_iter()
-        .filter(|entry| {
-            entry.kind != LumpKind::Marker && entry.namespace == Some(Namespace::Sprites)
-        })
-        .collect())
-}
-
 /// The last entry that serves the request, with how it serves it.
-pub(super) fn find_rotation<'entries>(
-    entries: &'entries [Entry],
+pub(super) fn find_rotation<'rows>(
+    rows: &'rows [SpriteRow],
     wanted: &Request,
-) -> Option<(&'entries Entry, Serving)> {
-    exact_entry(entries, wanted)
-        .or_else(|| pair_entry(entries, wanted))
-        .or_else(|| mirror_entry(entries, wanted))
-        .or_else(|| angles_entry(entries, wanted))
+) -> Option<(&'rows SpriteRow, Serving)> {
+    exact_row(rows, wanted)
+        .or_else(|| pair_row(rows, wanted))
+        .or_else(|| mirror_row(rows, wanted))
+        .or_else(|| angles_row(rows, wanted))
 }
 
 /// The lump named for this very rotation.
-fn exact_entry<'entries>(
-    entries: &'entries [Entry],
+fn exact_row<'rows>(
+    rows: &'rows [SpriteRow],
     wanted: &Request,
-) -> Option<(&'entries Entry, Serving)> {
-    entries
-        .iter()
+) -> Option<(&'rows SpriteRow, Serving)> {
+    rows.iter()
         .rev()
-        .find(|entry| entry.name == wanted.exact)
-        .map(|entry| (entry, Serving::Direct))
+        .find(|row| row.name == wanted.exact)
+        .map(|row| (row, Serving::Direct))
 }
 
 /// The last lump whose name carries the rotation as its own, unmirrored
 /// pair: an `IWAD` writes a frame's rotations `2`, `3` and `4` into the
 /// mirror-pair names `TROOA2A8`, `TROOA3A7` and `TROOA4A6` and never into
 /// the three-character ones, so only this reading finds them.
-fn pair_entry<'entries>(
-    entries: &'entries [Entry],
+fn pair_row<'rows>(
+    rows: &'rows [SpriteRow],
     wanted: &Request,
-) -> Option<(&'entries Entry, Serving)> {
-    entries
-        .iter()
+) -> Option<(&'rows SpriteRow, Serving)> {
+    rows.iter()
         .rev()
-        .find(|entry| serves_pair(entry, wanted))
-        .map(|entry| (entry, Serving::Direct))
+        .find(|row| serves_pair(row, wanted))
+        .map(|row| (row, Serving::Direct))
 }
 
-/// Whether `entry`'s name carries the request's frame and rotation as its
+/// Whether `row`'s name carries the request's frame and rotation as its
 /// first, directly served, pair.
-fn serves_pair(entry: &Entry, wanted: &Request) -> bool {
-    SpriteName::parse(&entry.name.to_string()).is_some_and(|parsed| {
+fn serves_pair(row: &SpriteRow, wanted: &Request) -> bool {
+    row.parsed.as_ref().is_some_and(|parsed| {
         parsed.sprite == wanted.sprite
             && parsed.frame == wanted.frame
             && parsed.rotation == wanted.rotation
@@ -182,36 +168,34 @@ fn serves_pair(entry: &Entry, wanted: &Request) -> bool {
 }
 
 /// The last lump whose name carries this rotation as its mirror pair.
-fn mirror_entry<'entries>(
-    entries: &'entries [Entry],
+fn mirror_row<'rows>(
+    rows: &'rows [SpriteRow],
     wanted: &Request,
-) -> Option<(&'entries Entry, Serving)> {
-    entries
-        .iter()
+) -> Option<(&'rows SpriteRow, Serving)> {
+    rows.iter()
         .rev()
-        .find(|entry| serves_mirror(entry, wanted))
-        .map(|entry| (entry, Serving::Mirrored))
+        .find(|row| serves_mirror(row, wanted))
+        .map(|row| (row, Serving::Mirrored))
 }
 
 /// The frame's all-angles lump, for a rotation nothing else serves.
-fn angles_entry<'entries>(
-    entries: &'entries [Entry],
+fn angles_row<'rows>(
+    rows: &'rows [SpriteRow],
     wanted: &Request,
-) -> Option<(&'entries Entry, Serving)> {
+) -> Option<(&'rows SpriteRow, Serving)> {
     if wanted.rotation == ALL_ANGLES {
         return None;
     }
-    entries
-        .iter()
+    rows.iter()
         .rev()
-        .find(|entry| entry.name == wanted.angles)
-        .map(|entry| (entry, Serving::Direct))
+        .find(|row| row.name == wanted.angles)
+        .map(|row| (row, Serving::Direct))
 }
 
-/// Whether `entry`'s name carries the request's frame and rotation as its
+/// Whether `row`'s name carries the request's frame and rotation as its
 /// second, mirrored, pair.
-fn serves_mirror(entry: &Entry, wanted: &Request) -> bool {
-    SpriteName::parse(&entry.name.to_string()).is_some_and(|parsed| {
+fn serves_mirror(row: &SpriteRow, wanted: &Request) -> bool {
+    row.parsed.as_ref().is_some_and(|parsed| {
         parsed.sprite == wanted.sprite && parsed.mirror == Some((wanted.frame, wanted.rotation))
     })
 }

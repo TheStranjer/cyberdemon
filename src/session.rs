@@ -504,6 +504,16 @@ impl Session {
         self.cache.definition_rebuild_count()
     }
 
+    /// How many [`crate::session::resolve::PictureIndex`]es the session's
+    /// picture reads have built: one per operation, the resolver tests
+    /// count these.
+    #[cfg(test)]
+    #[must_use]
+    #[inline]
+    pub(in crate::session) fn picture_index_count(&self) -> u64 {
+        self.cache.picture_index_count()
+    }
+
     /// The directory an engine would see: every layer in load order with the
     /// working archive on top, later archives overriding earlier ones.
     ///

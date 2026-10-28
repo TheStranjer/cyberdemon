@@ -6,8 +6,14 @@ use super::{
     code, definition, doom_patch, lump, name, place, pnames_lump, session, texture_bytes,
     with_extra,
 };
-use crate::session::resolve::load_texture;
+use crate::session::Session;
+use crate::session::resolve::{PictureIndex, load_texture};
 use crate::wad::archive::Lump;
+
+/// The fixture session's picture index.
+fn index_of(session: &Session) -> PictureIndex<'_> {
+    PictureIndex::new(session).expect("the fixture indexes")
+}
 
 #[test]
 fn textures_composite_definitions_and_report_missing_patches() {
@@ -21,7 +27,7 @@ fn textures_composite_definitions_and_report_missing_patches() {
         pnames_lump(&["WALLP1", "GONE"]),
         lump("TEXTURE1", texture1),
     ]);
-    let composite = load_texture(&session, name("TWALL")).expect("TWALL composes");
+    let composite = load_texture(&index_of(&session), name("TWALL")).expect("TWALL composes");
     assert_eq!(
         (composite.image.width, composite.image.height),
         (8, 4),
@@ -56,7 +62,7 @@ fn texture2_definitions_win_over_their_texture1_namesakes() {
         lump("TEXTURE1", texture1),
         lump("TEXTURE2", texture2),
     ]);
-    let composite = load_texture(&session, name("AWIN")).expect("AWIN composes");
+    let composite = load_texture(&index_of(&session), name("AWIN")).expect("AWIN composes");
     assert_eq!(
         (composite.image.width, composite.image.height),
         (2, 2),
@@ -77,7 +83,7 @@ fn texture2_definitions_win_over_their_texture1_namesakes() {
 fn without_a_pnames_lump_indices_stay_unnamed_and_missing() {
     let texture1 = texture_bytes(vec![definition("TPTR", 2, 2, vec![place(0, 0, 0)])]);
     let session = with_extra(vec![lump("TEXTURE1", texture1)]);
-    let composite = load_texture(&session, name("TPTR")).expect("TPTR composes");
+    let composite = load_texture(&index_of(&session), name("TPTR")).expect("TPTR composes");
     assert_eq!(
         composite.missing,
         ["PNAMES index 0"],
@@ -97,7 +103,7 @@ fn a_tx_region_patch_serves_a_texture_without_definitions() {
         lump("TXONE", doom_patch(3, 5, (0, 0), 0x33)),
         Lump::marker(name("TX_END")),
     ]);
-    let composite = load_texture(&session, name("TXONE")).expect("the TX patch answers");
+    let composite = load_texture(&index_of(&session), name("TXONE")).expect("the TX patch answers");
     assert_eq!(
         (composite.image.width, composite.image.height),
         (3, 5),
@@ -113,7 +119,7 @@ fn a_tx_region_patch_serves_a_texture_without_definitions() {
 #[test]
 fn unknown_texture_names_are_not_found_and_broken_lumps_are_format_errors() {
     let session = session();
-    let missing = load_texture(&session, name("NOPE")).expect_err("no such texture");
+    let missing = load_texture(&index_of(&session), name("NOPE")).expect_err("no such texture");
     assert_eq!(code(&missing), "not_found", "missing texture code");
     assert!(
         missing.to_string().contains("list_textures"),
@@ -123,7 +129,7 @@ fn unknown_texture_names_are_not_found_and_broken_lumps_are_format_errors() {
         pnames_lump(&["WALLP1"]),
         lump("TEXTURE1", vec![b'?'; 40]),
     ]);
-    let error = load_texture(&broken, name("ANY")).expect_err("junk is no texture lump");
+    let error = load_texture(&index_of(&broken), name("ANY")).expect_err("junk is no texture lump");
     assert_eq!(code(&error), "format_error", "undecodable lump code");
 }
 
@@ -135,7 +141,7 @@ fn a_component_that_is_no_picture_stays_a_reported_hole() {
         lump("TEXTURE1", texture1),
         lump("JUNK", vec![b'?'; 40]),
     ]);
-    let composite = load_texture(&session, name("AWRY")).expect("AWRY composes");
+    let composite = load_texture(&index_of(&session), name("AWRY")).expect("AWRY composes");
     assert_eq!(
         composite.missing,
         ["JUNK"],

@@ -24,7 +24,9 @@ use crate::tools::graphics::list_sprites::parse_sprite;
 use crate::tools::graphics::picture::{
     ImageOptions, ImageParams, ImageReport, Prepared, finish, render_indexed, render_patch,
 };
-use crate::tools::graphics::resolve::{load_flat, load_patch, load_sprite, load_sprite_lump};
+use crate::tools::graphics::resolve::{
+    PictureIndex, load_flat, load_patch, load_sprite, load_sprite_lump,
+};
 use crate::tools::graphics::{DEFAULT_FRAME, DEFAULT_ROTATION};
 use crate::wad::name::LumpName;
 
@@ -90,7 +92,8 @@ pub(super) fn get_flat_run(
     options: &ImageOptions,
 ) -> Result<ImageReport, CyberError> {
     let prepared = state.with_session(|session| {
-        let image = load_flat(session, name)?;
+        let index = PictureIndex::new(session)?;
+        let image = load_flat(&index, name)?;
         Ok(Prepared::plain(
             name,
             render_indexed(session, &image, None, options)?,
@@ -111,7 +114,8 @@ pub(super) fn get_patch_run(
     options: &ImageOptions,
 ) -> Result<ImageReport, CyberError> {
     let prepared = state.with_session(|session| {
-        let patch = load_patch(session, name)?;
+        let index = PictureIndex::new(session)?;
+        let patch = load_patch(&index, name)?;
         Ok(Prepared::plain(
             name,
             render_patch(session, &patch, options)?,
@@ -239,7 +243,10 @@ pub(super) fn get_sprite_run(
     request: SpriteRequest,
     options: &ImageOptions,
 ) -> Result<ImageReport, CyberError> {
-    let prepared = state.with_session(|session| prepare_sprite(session, request, options))?;
+    let prepared = state.with_session(|session| {
+        let index = PictureIndex::new(session)?;
+        prepare_sprite(&index, session, request, options)
+    })?;
     finish(state, prepared, options)
 }
 
@@ -251,13 +258,14 @@ pub(super) fn get_sprite_run(
 /// [`load_sprite_lump`] and [`load_sprite`]' errors, and
 /// [`render_patch`]' for the pixels.
 fn prepare_sprite(
+    index: &PictureIndex<'_>,
     session: &Session,
     request: SpriteRequest,
     options: &ImageOptions,
 ) -> Result<Prepared, CyberError> {
     match request {
         SpriteRequest::Lump(name) => {
-            let patch = load_sprite_lump(session, name)?;
+            let patch = load_sprite_lump(index, name)?;
             let rendered = render_patch(session, &patch, options)?;
             Ok(Prepared::served(name, name, false, rendered))
         }
@@ -267,7 +275,7 @@ fn prepare_sprite(
             frame,
             rotation,
         } => {
-            let found = load_sprite(session, &sprite, frame, rotation)?;
+            let found = load_sprite(index, &sprite, frame, rotation)?;
             let rendered = render_patch(session, &found.patch, options)?;
             Ok(Prepared::served(name, found.lump, found.mirrored, rendered))
         }

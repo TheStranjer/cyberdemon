@@ -37,6 +37,7 @@ use crate::render::settings::MAX_GAMMA;
 pub use canvas::{Canvas, Edge, Pt, Rgba, Stroke};
 pub use font::{GLYPH_HEIGHT, GLYPH_WIDTH, LETTER_GAP, TextStyle, draw_text, glyph};
 pub use light::{WallDir, colormap_index, shade};
+pub(crate) use scene::build_scene_with;
 pub use scene::{Scene, build_scene, camera_sector, default_eye_z};
 pub use settings::{Lighting, RenderSettings, Switch, TopdownStyle};
 pub use topdown::{

@@ -254,7 +254,8 @@ src/
                   COLORMAP table choice (`colormap_index`, `WallDir` fake
                   contrast) and `shade`, `render/scene.rs` the `Scene`
                   preparation: map, palette, COLORMAP, used textures and
-                  flats, sky selection, checkerboard fallbacks, `problems`
+                  flats read through one `PictureIndex`, sky selection,
+                  checkerboard fallbacks, `problems`
                   and the camera helpers, `render/topdown.rs` the
                   shared automap line map: `Doom` classification and
                   colours (RGB defaults plus `PLAYPAL` entries), thing
@@ -483,14 +484,22 @@ src/
                   imports `crate::tools`: `session/resolve.rs` the shared picture
                   resolvers (a lump name in, decoded pixels out: `load_flat`,
                   `load_patch`, `load_texture`, `load_sprite`,
-                  `load_sprite_cached`, `load_sprite_lump`, `lump_bytes`, the
-                  `Place`/`locate` lookup over `merged_rows` and the
-                  PNG-quantizing decoders) on `session/resolve/texture.rs` (the
+                  `load_sprite_cached`, `load_sprite_lump`, `lump_bytes` and the
+                  PNG-quantizing decoders), each reading through a
+                  `session/resolve/index.rs` `PictureIndex` built once per
+                  operation from the cached merged view (the winning data row per
+                  name and `Place`, the sprites-region rows with their names
+                  parsed once, and the once-per-operation decoded
+                  `TEXTURE1`/`TEXTURE2` definitions and `PNAMES`, the reference
+                  `PLAYPAL` and the per-name patch cache one texture or scene
+                  shares), on `session/resolve/texture.rs` (the
                   `TEXTURE1`/`TEXTURE2` composite) and `session/resolve/sprite.rs`
                   (the sprite rotation grammar, mirroring and cache), with those
                   resolvers' tests in `session/resolve/tests.rs` plus
-                  `session/resolve/tests/pictures.rs` and
-                  `session/resolve/tests/textures.rs`; `session/textures.rs` the
+                  `session/resolve/tests/pictures.rs`,
+                  `session/resolve/tests/textures.rs` and
+                  `session/resolve/tests/index.rs` (the once-per-operation
+                  build and decode counters); `session/textures.rs` the
                   merged view's `TextureSet`/`WhichLump` definition loader (the
                   `find`/`widths`/`textures`/`texture_entries` reads the texture
                   tools, resolvers, themes and validator share);
@@ -723,7 +732,7 @@ src/
                   shared picture resolvers now live in `session/resolve.rs`
                   (see the `session/` entry); `tools/graphics.rs` re-exports
                   them as `crate::tools::graphics::resolve` so the image tools
-                  and `tools/assets.rs` keep reaching `locate`/`lump_bytes`,
+                  and `tools/assets.rs` keep reaching the `PictureIndex` lookup, `lump_bytes`,
                   the flat/patch/texture/sprite loaders and the `PNG`
                   quantizing decoders at the same path;
                   `tools/maps/common.rs` re-exports the `map`-parameter
@@ -1051,7 +1060,8 @@ src/
                   `playability_overview`), `render/minimap.rs` (the
                   `render_minimap` window resolution, painting and
                   report) and `render/view.rs` (the `render_view` settings
-                  overrides, the `SpriteWiring` dressing pass and the
+                  overrides, the `SpriteWiring` dressing pass reading the
+                  scene's one `PictureIndex` and the
                   report); that group's tests are `render/tests.rs` (the
                   fixture map, request, pixel and colour builders) plus
                   `render/tests/settings.rs` (the settings tools),

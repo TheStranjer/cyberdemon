@@ -31,12 +31,13 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::state::AppState;
 use crate::tools::audio::{DEFAULT_BITS, is_sound_kind, sound_to_playable};
-use crate::tools::graphics::resolve::{decode_flat_bytes, decode_patch_bytes, load_texture};
+use crate::tools::graphics::resolve::{
+    PictureIndex, decode_flat_bytes, decode_patch_bytes, load_texture,
+};
 use crate::tools::lumps::rows::LumpRow;
 use crate::tools::lumps::select::{LumpSelector, resolve};
 use crate::tools::music::music_to_playable;
 use crate::tools::palette::{load_palette, swatch_image};
-use crate::tools::textures::TextureSet;
 use crate::tools::{fail, reply};
 use crate::wad::classify::{LumpKind, Namespace, is_doom_patch};
 use crate::wad::name::LumpName;
@@ -204,18 +205,30 @@ impl<'req> Request<'req> {
 }
 
 /// What a picture converter needs besides the lump: the session to read
-/// colours from and the palette entry to colour with.
+/// colours from, its picture index to resolve names through, and the
+/// palette entry to colour with.
 struct View<'sess> {
     /// The session whose `PLAYPAL` and patches are read.
     session: &'sess Session,
+    /// The merged view's picture lookups, built once for the whole call.
+    index: PictureIndex<'sess>,
     /// The requested `PLAYPAL` entry.
     palette: usize,
 }
 
 impl View<'_> {
-    /// The view of one call.
-    const fn new(session: &Session, palette: usize) -> View<'_> {
-        View { session, palette }
+    /// The view of one call: the session's picture index is built now, so
+    /// every resource this call resolves shares one merged-view read.
+    ///
+    /// # Errors
+    ///
+    /// [`PictureIndex::new`]' errors for the merged scope.
+    fn new(session: &Session, palette: usize) -> Result<View<'_>, CyberError> {
+        Ok(View {
+            session,
+            index: PictureIndex::new(session)?,
+            palette,
+        })
     }
 
     /// The session's requested palette.
@@ -304,14 +317,14 @@ fn is_colormap(kind: LumpKind, namespace: Option<Namespace>) -> bool {
 /// # Errors
 ///
 /// Whatever the chosen converter reports, plus [`resolve`]' errors for the
-/// selector.
+/// selector and [`View::new`]' for the picture index.
 fn prepare(
     session: &Session,
     request: &Request<'_>,
     palette: usize,
 ) -> Result<Prepared, CyberError> {
-    let view = View::new(session, palette);
-    if request.prefer == Prefer::Texture && holds_texture(session, request.name)? {
+    let view = View::new(session, palette)?;
+    if request.prefer == Prefer::Texture && holds_texture(&view.index, request.name)? {
         return texture_asset(&view, request.name);
     }
     match resolve(session, request.selector) {
@@ -337,7 +350,7 @@ fn fallback_to_texture(
     if !error.is_not_found() {
         return Err(error);
     }
-    if !holds_texture(view.session, request.name)? {
+    if !holds_texture(&view.index, request.name)? {
         return Err(CyberError::NotFound(format!(
             "{error}; {} is not a composite texture either; list_textures names the definitions",
             request.name
@@ -350,9 +363,10 @@ fn fallback_to_texture(
 ///
 /// # Errors
 ///
-/// [`TextureSet::load`]' [`CyberError::Format`] for a malformed texture lump.
-fn holds_texture(session: &Session, name: LumpName) -> Result<bool, CyberError> {
-    Ok(TextureSet::load(session)?.find(&name.to_string()).is_some())
+/// [`PictureIndex::find_texture`]' [`CyberError::Format`] for a malformed
+/// texture lump.
+fn holds_texture(index: &PictureIndex<'_>, name: LumpName) -> Result<bool, CyberError> {
+    Ok(index.find_texture(&name.to_string())?.is_some())
 }
 
 /// The preview file one lump converts to, chosen by [`family`].
@@ -393,7 +407,7 @@ fn unsupported(row: &LumpRow) -> CyberError {
 /// [`load_texture`]' errors for the definition, and [`View::palette`]' for
 /// the colours.
 fn texture_asset(view: &View<'_>, name: LumpName) -> Result<Prepared, CyberError> {
-    let composite = load_texture(view.session, name)?;
+    let composite = load_texture(&view.index, name)?;
     indexed_asset(view, "texture", &composite.image, None)
 }
 
@@ -405,7 +419,7 @@ fn texture_asset(view: &View<'_>, name: LumpName) -> Result<Prepared, CyberError
 /// [`decode_flat_bytes`]' errors for bytes that are neither, and
 /// [`View::palette`]' for the colours.
 fn flat_asset(view: &View<'_>, row: &LumpRow) -> Result<Prepared, CyberError> {
-    let image = decode_flat_bytes(view.session, &row.lump.data)?;
+    let image = decode_flat_bytes(&view.index, &row.lump.data)?;
     indexed_asset(view, "flat", &image, None)
 }
 
@@ -417,7 +431,7 @@ fn flat_asset(view: &View<'_>, row: &LumpRow) -> Result<Prepared, CyberError> {
 /// [`decode_patch_bytes`]' errors for bytes that are neither a `Doom` patch
 /// nor a readable `PNG`, and [`View::palette`]' for the colours.
 fn patch_asset(view: &View<'_>, row: &LumpRow) -> Result<Prepared, CyberError> {
-    let patch = decode_patch_bytes(view.session, &row.lump.data)?;
+    let patch = decode_patch_bytes(&view.index, &row.lump.data)?;
     let label = if row.kind == LumpKind::Sprite {
         "sprite"
     } else {

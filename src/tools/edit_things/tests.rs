@@ -6,14 +6,14 @@
 use serde_json::from_str;
 
 use super::edit::{
-    EditBits, EditPlan, EditThingParams, edited_thing, has_change, new_angle, new_coord,
-    validate_edit,
+    EditPlan, EditThingParams, edited_thing, has_change, new_angle, new_coord, validate_edit,
 };
 use super::{
     AddThingParams, COORD_MAX, COORD_MIN, DEGREES, TYPE_MAX, add_in_place, check_binary_ranges,
     check_doom_plain, default_bits, fits_field, new_thing,
 };
 use crate::error::CyberError;
+use crate::tools::maps::params::EditBits;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::{FlagFamily, Map, Thing};
 use crate::wad::name::LumpName;

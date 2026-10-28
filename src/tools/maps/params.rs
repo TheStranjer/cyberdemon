@@ -1,7 +1,9 @@
 //! Shared wire types and validators for the map editing tools.
 //!
-//! The `flags` and index parameter shapes ([`FlagsInput`],
-//! [`IndexSelector`]), the one `{x, y}` map-unit point ([`PointParam`]),
+//! The `flags` and index parameter shapes ([`FlagsInput`] with the shared
+//! [`EditBits`] adjustment the flag-editing tools resolve their three flag
+//! parameters into, [`IndexSelector`]), the one `{x, y}` map-unit point
+//! ([`PointParam`]),
 //! element bounds checking ([`check_index`]), texture-name validation
 //! ([`validate_texture_name`]) and the standard result fragment
 //! ([`edit_result_fragment`]) every edit tool merges into its structured
@@ -64,6 +66,76 @@ impl FlagsInput {
         match self {
             Self::Bits(bits) => Ok(bits),
             Self::Names(names) => flags::from_names(&names, kind, family),
+        }
+    }
+}
+
+/// The `flags`, `set_flags` and `clear_flags` parameters of one `edit_*`
+/// call, exactly as parsed from the wire and waiting to be resolved into
+/// [`EditBits`].
+///
+/// The three travel as one bundle so [`EditBits::resolve`] keeps its kind
+/// and family selectors inside the crate's four-parameter budget.
+pub struct FlagInputs {
+    /// The whole-replacement `flags` parameter, `None` when absent.
+    pub flags: Option<FlagsInput>,
+    /// The `set_flags` parameter, `None` when absent.
+    pub set_flags: Option<FlagsInput>,
+    /// The `clear_flags` parameter, `None` when absent.
+    pub clear_flags: Option<FlagsInput>,
+}
+
+/// The resolved flag adjustments of one `edit_*` call: the three
+/// `flags`/`set_flags`/`clear_flags` parameters as bits.
+///
+/// The `edit_thing` and `edit_linedef` tools share this one shape; each
+/// keeps its own policy (like the linedef's flag-given check) beside it.
+#[derive(Debug)]
+pub struct EditBits {
+    /// Whole-replacement bits from `flags`, `None` when it was absent.
+    pub absolute: Option<u32>,
+    /// Bits from `set_flags`.
+    pub set: u32,
+    /// Bits from `clear_flags`.
+    pub clear: u32,
+}
+
+impl EditBits {
+    /// Resolves the three flag parameters of one edit call through
+    /// [`FlagsInput::resolve`] for `kind` and `family`.
+    ///
+    /// # Errors
+    ///
+    /// [`CyberError::InvalidArgument`] when a name is not in the table.
+    #[inline]
+    pub fn resolve(
+        given: FlagInputs,
+        kind: FlagKind,
+        family: FlagFamily,
+    ) -> Result<Self, CyberError> {
+        Ok(Self {
+            absolute: given
+                .flags
+                .map(|input| input.resolve(kind, family))
+                .transpose()?,
+            set: given
+                .set_flags
+                .map_or_else(|| Ok(0_u32), |input| input.resolve(kind, family))?,
+            clear: given
+                .clear_flags
+                .map_or_else(|| Ok(0_u32), |input| input.resolve(kind, family))?,
+        })
+    }
+
+    /// The flags after the edit: an absolute bitset replaces everything;
+    /// otherwise the `clear` bits go and the `set` bits go on (a bit named
+    /// for both ends up set).
+    #[must_use]
+    #[inline]
+    pub const fn apply(&self, current: u32) -> u32 {
+        match self.absolute {
+            Some(bits) => bits,
+            None => (current & !self.clear) | self.set,
         }
     }
 }
@@ -241,8 +313,8 @@ mod tests {
     use serde_json::{from_str, json};
 
     use super::{
-        ElementKind, FlagsInput, IndexSelector, PointParam, check_index, edit_result_fragment,
-        find_vertex, join, untouched_fragment, validate_texture_name,
+        EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector, PointParam, check_index,
+        edit_result_fragment, find_vertex, join, untouched_fragment, validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
     use crate::wad::classify::MapFormat;
@@ -327,6 +399,162 @@ mod tests {
             doom_thing.to_string().contains("easy, medium, hard"),
             "the thing table is listed: {doom_thing}"
         );
+    }
+
+    /// The shared edit `flags`/`set_flags`/`clear_flags` parameter bundle.
+    fn given(
+        flags: Option<FlagsInput>,
+        set_flags: Option<FlagsInput>,
+        clear_flags: Option<FlagsInput>,
+    ) -> FlagInputs {
+        FlagInputs {
+            flags,
+            set_flags,
+            clear_flags,
+        }
+    }
+
+    /// One name as a [`FlagsInput::Names`] parameter value.
+    fn name(one: &str) -> FlagsInput {
+        FlagsInput::Names(vec![one.to_owned()])
+    }
+
+    #[test]
+    fn edit_bits_absolute_replaces_all_and_adjusts_clear_then_set() {
+        let replacing = EditBits {
+            absolute: Some(3_u32),
+            set: 8_u32,
+            clear: 1_u32,
+        };
+        assert_eq!(replacing.apply(7_u32), 3_u32, "the absolute bitset wins");
+        let adjusting = EditBits {
+            absolute: None,
+            set: 8_u32,
+            clear: 1_u32,
+        };
+        assert_eq!(
+            adjusting.apply(7_u32),
+            14_u32,
+            "the clear bit goes, the set bit comes"
+        );
+        assert_eq!(
+            adjusting.apply(0_u32),
+            8_u32,
+            "clearing an absent bit changes nothing"
+        );
+        let both = EditBits {
+            absolute: None,
+            set: 2_u32,
+            clear: 2_u32,
+        };
+        assert_eq!(both.apply(2_u32), 2_u32, "a bit in both ends stays set");
+        assert_eq!(both.apply(0_u32), 2_u32, "and comes on when it was off");
+        let untouched = EditBits {
+            absolute: None,
+            set: 0_u32,
+            clear: 0_u32,
+        };
+        assert_eq!(
+            untouched.apply(42_u32),
+            42_u32,
+            "no adjustments keep the flags"
+        );
+    }
+
+    #[test]
+    fn edit_bits_resolve_reads_the_three_parameters_in_order() {
+        let bits = EditBits::resolve(
+            given(
+                Some(FlagsInput::Bits(9)),
+                Some(FlagsInput::Bits(8)),
+                Some(FlagsInput::Bits(1)),
+            ),
+            FlagKind::Linedef,
+            FlagFamily::Doom,
+        )
+        .expect("raw bitsets always resolve");
+        assert_eq!(bits.absolute, Some(9_u32), "the first is the replacement");
+        assert_eq!(bits.set, 8_u32, "the second sets");
+        assert_eq!(bits.clear, 1_u32, "the third clears");
+        let empty = EditBits::resolve(given(None, None, None), FlagKind::Thing, FlagFamily::Hexen)
+            .expect("three absent parameters resolve");
+        assert_eq!(
+            (empty.absolute, empty.set, empty.clear),
+            (None, 0_u32, 0_u32),
+            "absent means no replacement and no bits"
+        );
+    }
+
+    #[test]
+    fn edit_bits_refuses_unknown_names_with_the_kind_and_family_list() {
+        let error = EditBits::resolve(
+            given(None, Some(name("nope")), None),
+            FlagKind::Linedef,
+            FlagFamily::Doom,
+        )
+        .expect_err("nope is in no table");
+        assert_eq!(error.code(), "invalid_argument", "unknown set name code");
+        assert!(
+            error.to_string().contains("valid names are"),
+            "the refusal lists the linedef names: {error}"
+        );
+        let clear_bad = EditBits::resolve(
+            given(None, None, Some(name("twosided"))),
+            FlagKind::Thing,
+            FlagFamily::Doom,
+        )
+        .expect_err("twosided is no thing flag");
+        assert!(
+            clear_bad.to_string().contains("easy, medium, hard"),
+            "the thing table is listed: {clear_bad}"
+        );
+        let absolute_bad = EditBits::resolve(
+            given(Some(name("standing")), None, None),
+            FlagKind::Thing,
+            FlagFamily::Doom,
+        )
+        .expect_err("standing is a Hexen thing bit");
+        assert!(
+            absolute_bad.to_string().contains("'standing'"),
+            "the refusal names the bad flag: {absolute_bad}"
+        );
+    }
+
+    #[test]
+    fn edit_bits_names_resolve_per_kind_and_family() {
+        let line_doom = EditBits::resolve(
+            given(None, Some(name("mapped")), Some(name("twosided"))),
+            FlagKind::Linedef,
+            FlagFamily::Doom,
+        )
+        .expect("Doom linedef names");
+        assert_eq!(line_doom.set, 256, "mapped is bit 8 of 256");
+        assert_eq!(line_doom.clear, 4, "twosided is bit 4");
+        let line_hexen = EditBits::resolve(
+            given(None, Some(name("playeruse")), None),
+            FlagKind::Linedef,
+            FlagFamily::Hexen,
+        )
+        .expect("Hexen linedef activation name");
+        assert_eq!(
+            line_hexen.set, 1024,
+            "the activation field value 1 at bit 10"
+        );
+        let thing_doom = EditBits::resolve(
+            given(None, Some(name("friend")), Some(name("ambush"))),
+            FlagKind::Thing,
+            FlagFamily::Doom,
+        )
+        .expect("Doom thing names");
+        assert_eq!(thing_doom.set, 128, "friend is the top Doom bit");
+        assert_eq!(thing_doom.clear, 8, "ambush is bit 8");
+        let thing_hexen = EditBits::resolve(
+            given(Some(name("standing")), None, None),
+            FlagKind::Thing,
+            FlagFamily::Hexen,
+        )
+        .expect("Hexen thing name");
+        assert_eq!(thing_hexen.absolute, Some(0x4000), "the top Hexen bit");
     }
 
     #[test]

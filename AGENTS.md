@@ -635,7 +635,8 @@ src/
                   flag plan and edit steps, whose unit tests are
                   `edit_things/tests.rs`),
                   `tools/edit_linedefs.rs` (the constants, the reported
-                  `LinedefDetail`, the flag adjustments and the checks every
+                  `LinedefDetail`, the `flags_given` check beside the shared
+                  `EditBits` adjustments and the checks every
                   resulting linedef faces, and the router) with
                   `edit_linedefs/endpoints.rs` (the two endpoint forms and
                   their resolution against the map), `edit_linedefs/add.rs`
@@ -729,7 +730,9 @@ src/
                   working-scope-then-merged read every editing group
                   shares, and
                   `tools/maps/params.rs` the shared
-                  editing parameter types (`FlagsInput`, `IndexSelector`,
+                  editing parameter types (`FlagsInput`, the shared `EditBits`
+                  flag adjustment `edit_thing` and `edit_linedef` resolve their
+                  three flag parameters into, `IndexSelector`,
                   `PointParam`, the re-exported `check_index` guard,
                   `validate_texture_name`, `edit_result_fragment`, `join`,
                   `untouched_fragment` and `find_vertex`) every map edit tool

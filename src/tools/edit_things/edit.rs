@@ -20,7 +20,7 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+    EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector, check_index, edit_result_fragment,
 };
 use crate::wad::map::{FlagFamily, FlagKind, Map, Thing};
 
@@ -92,52 +92,6 @@ pub(super) struct EditReport {
     edit: JsonMap<String, Value>,
 }
 
-/// The resolved flag adjustments of an [`Cyberdemon::edit_thing`] call.
-pub(super) struct EditBits {
-    /// Whole-replacement bits from `flags`, `None` when it was absent.
-    pub(super) absolute: Option<u32>,
-    /// Bits from `set_flags`.
-    pub(super) set: u32,
-    /// Bits from `clear_flags`.
-    pub(super) clear: u32,
-}
-
-impl EditBits {
-    /// Resolves the three flag parameters against `family`'s thing table.
-    ///
-    /// # Errors
-    ///
-    /// [`CyberError::InvalidArgument`] when a name is not in the table.
-    fn resolve(args: &EditThingParams, family: FlagFamily) -> Result<Self, CyberError> {
-        let given = args.flags.clone();
-        Ok(Self {
-            absolute: given
-                .map(|input| input.resolve(FlagKind::Thing, family))
-                .transpose()?,
-            set: resolve_bits(args.set_flags.as_ref(), family)?,
-            clear: resolve_bits(args.clear_flags.as_ref(), family)?,
-        })
-    }
-
-    /// The flags after the edit: an absolute bitset replaces everything;
-    /// otherwise the `clear` bits go and the `set` bits go on (a bit named
-    /// for both ends up set).
-    #[must_use]
-    pub(super) const fn apply(&self, current: u32) -> u32 {
-        match self.absolute {
-            Some(bits) => bits,
-            None => (current & !self.clear) | self.set,
-        }
-    }
-}
-
-/// The bits of one optional flag parameter, `0` when absent.
-fn resolve_bits(input: Option<&FlagsInput>, family: FlagFamily) -> Result<u32, CyberError> {
-    input
-        .cloned()
-        .map_or_else(|| Ok(0_u32), |given| given.resolve(FlagKind::Thing, family))
-}
-
 /// An [`Cyberdemon::edit_thing`] call resolved against the edited map: the
 /// target indices and the flag adjustments.
 pub(super) struct EditPlan<'req> {
@@ -164,7 +118,15 @@ impl<'req> EditPlan<'req> {
         Ok(Self {
             args,
             indices,
-            bits: EditBits::resolve(args, family)?,
+            bits: EditBits::resolve(
+                FlagInputs {
+                    flags: args.flags.clone(),
+                    set_flags: args.set_flags.clone(),
+                    clear_flags: args.clear_flags.clone(),
+                },
+                FlagKind::Thing,
+                family,
+            )?,
         })
     }
 

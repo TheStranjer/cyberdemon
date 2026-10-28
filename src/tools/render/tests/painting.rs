@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::defs::definitions_for;
 use crate::render::{Canvas, Pt, RenderSettings, Rgba, Switch};
 use crate::wad::game::Game;
+use crate::wad::map::geometry::SectorIndex;
 
 use crate::tools::render::frame::{View, bounds_plane, fit};
 use crate::tools::render::marks::LABEL_COLOUR;
@@ -91,6 +92,7 @@ fn grid_lines_pick_their_colour_across_the_frame() {
     let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
     let mut scene = Scene {
         map: &map,
+        geometry: SectorIndex::new(&map),
         defs: &defs,
         view: fit(&bounds_plane(&request.bounds), 200, 120),
         canvas: Canvas::new(200, 120, [0_u8, 0, 0, 255]),
@@ -140,6 +142,7 @@ fn the_grid_frame_is_the_unprojected_canvas_rectangle() {
     assert_eq!(
         grid_frame(&Scene {
             map: &map,
+            geometry: SectorIndex::new(&map),
             defs: &defs,
             view: View {
                 num: 128,

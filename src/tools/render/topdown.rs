@@ -16,6 +16,7 @@ use crate::session::Scope;
 use crate::state::AppState;
 use crate::tools::maps::common;
 use crate::wad::map::Map;
+use crate::wad::map::geometry::SectorIndex;
 
 use super::PNG_MIME;
 use super::frame::{View, bounds_plane, fit, height_span, iso_plane};
@@ -48,6 +49,7 @@ pub(super) fn paint_map(map: &Map, defs: &Definitions, request: &Request) -> Pai
     let view = fit(&plane, request.width, request.height);
     let mut scene = Scene {
         map,
+        geometry: SectorIndex::new(map),
         defs,
         view,
         canvas: Canvas::new(request.width, request.height, request.background),

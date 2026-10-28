@@ -2,13 +2,18 @@
 //! definition sets, the hand-drawn fixtures the topics measure — the
 //! square, concave and split-wall rooms, the nested exit squares and the
 //! room halls the neighbour and overview readings walk — and the lookups
-//! every topic asks of a described map.
+//! every topic asks of a described map. The hand-drawn rooms are
+//! `pub(in crate::wad::map)` so the query engine's shape tests can weigh
+//! the light read against the full rows on the very same maps.
 //!
 //! [`plans`] adds the plan-built fixtures, [`facts`] the per-sector row,
-//! [`neighbours`] the boundary readings, [`roles`] the role names and
-//! [`overview`] the whole-map summary.
+//! [`neighbours`] the boundary readings, [`roles`] the role names,
+//! [`overview`] the whole-map summary and [`index`] the one stored
+//! [`SectorIndex`](crate::wad::map::geometry::SectorIndex) every row
+//! answers from, checked against the free-function wrappers.
 
 mod facts;
+mod index;
 mod neighbours;
 mod overview;
 mod plans;
@@ -42,7 +47,7 @@ pub(super) fn doom2_defs() -> Definitions {
 
 /// The 256x256 square room: `WALL1` on all four one-sided walls,
 /// floor `0` under a 128-unit ceiling, light 160, tag 0, sector 0.
-pub(super) fn square_map() -> Map {
+pub(in crate::wad::map) fn square_map() -> Map {
     let mut map = Map::new_empty(name("MAP01"), MapFormat::Doom);
     map.vertices = vec![
         vertex(0, 0),
@@ -65,7 +70,7 @@ pub(super) fn square_map() -> Map {
 
 /// The concave room: a 512x256 foot with a 256x256 tower on its west
 /// end, six `WALL1` sides around sector 0.
-pub(super) fn elbow_map() -> Map {
+pub(in crate::wad::map) fn elbow_map() -> Map {
     let mut map = Map::new_empty(name("MAP01"), MapFormat::Doom);
     map.vertices = vec![
         vertex(0, 0),
@@ -93,7 +98,7 @@ pub(super) fn elbow_map() -> Map {
 /// The square room with its east side split in two and its north side
 /// in three: six `WALL1` sides and one `SWITCH1` middle around
 /// sector 0.
-pub(super) fn switch_map() -> Map {
+pub(in crate::wad::map) fn switch_map() -> Map {
     let mut map = Map::new_empty(name("MAP01"), MapFormat::Doom);
     map.vertices = vec![
         vertex(0, 0),
@@ -140,7 +145,7 @@ pub(super) fn stand(map: &mut Map, row: Thing) {
 /// shared wall is split at `y = 128` into linedefs `6` and `7`, both
 /// two-sided and facing `A` in front, wearing `lower_flags` and
 /// `upper_flags`.
-pub(super) fn split_divider_map(lower_flags: u32, upper_flags: u32) -> Map {
+pub(in crate::wad::map) fn split_divider_map(lower_flags: u32, upper_flags: u32) -> Map {
     let mut map = Map::new_empty(name("MAP01"), MapFormat::Doom);
     map.vertices = vec![
         vertex(0, 0),
@@ -183,7 +188,7 @@ pub(super) fn split_divider_map(lower_flags: u32, upper_flags: u32) -> Map {
 /// `400..600` sector of one-sided walls - plus a floating line inside
 /// the inner square whose front opens into the outer sector and which
 /// carries exit `special` with `flags`: the midpoint rule's test bench.
-pub(super) fn nested_exit_map(format: MapFormat, special: i32, flags: u32) -> Map {
+pub(in crate::wad::map) fn nested_exit_map(format: MapFormat, special: i32, flags: u32) -> Map {
     let mut map = Map::new_empty(name("MAP01"), format);
     map.vertices = vec![
         vertex(0, 0),

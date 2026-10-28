@@ -6,10 +6,11 @@ use crate::defs::{Definitions, definitions_for};
 use crate::render::ViewCamera;
 use crate::render::view::ONE_16;
 use crate::wad::game::Game;
+use crate::wad::map::geometry::SectorIndex;
 
 use crate::tools::render::view::{SPRITE_MIN_TZ16, SpriteSpot, SpriteWiring};
 
-use super::spawn;
+use super::{spawn, two_rooms};
 
 /// A camera standing at `x`/`y`, facing `angle` degrees.
 fn view_camera(x: i32, y: i32, angle: i32) -> ViewCamera {
@@ -29,15 +30,18 @@ fn raw16(value: i64) -> i128 {
 }
 
 /// The wiring over the embedded `Doom II` tables, due east from
-/// `(64, 128)` like the view fixture camera.
-fn east_wiring(defs: &Definitions) -> SpriteWiring<'_> {
-    SpriteWiring::new(defs, &view_camera(64, 128, 0))
+/// `(64, 128)` like the view fixture camera, reading `geometry` for the
+/// home sectors.
+fn east_wiring<'ctx>(defs: &'ctx Definitions, geometry: &'ctx SectorIndex) -> SpriteWiring<'ctx> {
+    SpriteWiring::new(defs, &view_camera(64, 128, 0), geometry)
 }
 
 #[test]
 fn sprite_projection_measures_forward_and_right_from_the_camera() {
     let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-    let east = east_wiring(&defs);
+    let map = two_rooms();
+    let geometry = SectorIndex::new(&map);
+    let east = east_wiring(&defs, &geometry);
     let imp = SpriteSpot {
         x: 384,
         y: 128,
@@ -55,7 +59,7 @@ fn sprite_projection_measures_forward_and_right_from_the_camera() {
         (raw16(64), raw16(320)),
         "south of the view axis is positive right when facing east"
     );
-    let north = SpriteWiring::new(&defs, &view_camera(64, 128, 90));
+    let north = SpriteWiring::new(&defs, &view_camera(64, 128, 90), &geometry);
     assert_eq!(
         north.project(&imp),
         (raw16(320), 0_i128),
@@ -66,7 +70,8 @@ fn sprite_projection_measures_forward_and_right_from_the_camera() {
 #[test]
 fn the_skip_line_is_four_map_units_of_forward_depth() {
     let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-    let east = east_wiring(&defs);
+    let geometry = SectorIndex::new(&two_rooms());
+    let east = east_wiring(&defs, &geometry);
     let near = SpriteSpot {
         x: 67,
         y: 128,
@@ -87,7 +92,8 @@ fn the_skip_line_is_four_map_units_of_forward_depth() {
 #[test]
 fn only_a_known_kind_with_a_sprite_dresses_a_thing() {
     let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-    let east = east_wiring(&defs);
+    let geometry = SectorIndex::new(&two_rooms());
+    let east = east_wiring(&defs, &geometry);
     let imp = east
         .definition(&spawn(3001, 384, 128, 180))
         .expect("the imp carries a sprite");
@@ -108,7 +114,8 @@ fn only_a_known_kind_with_a_sprite_dresses_a_thing() {
 #[test]
 fn sprite_problem_lines_dedup_per_sprite_name() {
     let defs = definitions_for(Game::Doom2).expect("the embedded tables are valid");
-    let mut wiring = east_wiring(&defs);
+    let geometry = SectorIndex::new(&two_rooms());
+    let mut wiring = east_wiring(&defs, &geometry);
     wiring.report("POSS", true);
     wiring.report("POSS", true);
     wiring.report("POSS", false);

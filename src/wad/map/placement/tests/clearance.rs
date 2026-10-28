@@ -1,16 +1,22 @@
 //! Clearance cases: what fits where, the exact distance test and the grid
 //! walkers, whole [`distribute`] runs on the square, L, box and circle
 //! areas, and the existing bodies that keep their room off the grid.
+//! Every membership, box and boundary read goes through the run's one
+//! [`SectorIndex`](crate::wad::map::geometry::SectorIndex); the index-path
+//! cases (a sector bounding nothing, a point exactly on a shared wall)
+//! live here too.
 
 use alloc::vec::Vec;
 
-use crate::wad::map::Thing;
+use crate::wad::classify::MapFormat;
+use crate::wad::map::common::fixtures::two_room_map;
 use crate::wad::map::placement::distribute::distribute;
 use crate::wad::map::placement::{
     Area, CLEARANCE, DEFAULT_RADIUS, axis_points, fits, keeps_distance, thing_clearance,
 };
+use crate::wad::map::{Map, Sector, Thing};
 
-use super::{doom_definitions, l_room, points, spec, square_rooms};
+use super::{doom_definitions, l_room, map_name, points, spec, square_rooms};
 
 #[test]
 fn fits_requires_the_sector_and_the_clearance_from_every_wall() {
@@ -254,4 +260,58 @@ fn a_circle_area_keeps_its_radius_and_orders_its_picks() {
         "five points sit within the radius; every second, from the centre"
     );
     assert!(out.warnings.is_empty(), "five kept for two needed");
+}
+
+#[test]
+fn a_sector_that_bounds_nothing_places_nothing_and_notes_it() {
+    let mut bare = Map::new_empty(map_name("MAP01"), MapFormat::Doom);
+    bare.sectors.push(Sector::default());
+    let definitions = doom_definitions();
+    let out = distribute(&bare, &definitions, &spec(Area::Sector(0), 2_usize, 20_i64));
+    assert!(
+        out.placed.is_empty(),
+        "an empty index box lays no grid: the area bounds nothing"
+    );
+    assert_eq!(
+        out.warnings,
+        vec!["sector 0 fits only 0 of 2 things".to_owned()],
+        "the empty-bbox arm notes the shortfall like the old scan did"
+    );
+    assert!(
+        !Area::Sector(0).contains(&bare, (0_i64, 0_i64)),
+        "and the sector contains no point through the index either"
+    );
+}
+
+#[test]
+fn a_point_exactly_on_a_shared_wall_membership_holds_for_the_front_sector() {
+    let map = two_room_map();
+    let definitions = doom_definitions();
+    assert!(
+        Area::Sector(0).contains(&map, (256_i64, 128_i64)),
+        "the step line's front side owns its middle point through the index"
+    );
+    assert!(
+        !Area::Sector(1).contains(&map, (256_i64, 128_i64)),
+        "and the back sector does not"
+    );
+    let out = distribute(
+        &map,
+        &definitions,
+        &spec(
+            Area::Circle {
+                centre: (256_i64, 128_i64),
+                radius: 4_i64,
+            },
+            1_usize,
+            20_i64,
+        ),
+    );
+    assert_eq!(
+        points(&out),
+        vec![(256_i64, 128_i64)],
+        "the circle's one grid point sits on the shared wall: the \
+         sits-in-some-sector arm answers from the run's index and keeps it"
+    );
+    assert!(out.warnings.is_empty(), "the pick landed");
 }

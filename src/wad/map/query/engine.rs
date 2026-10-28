@@ -4,9 +4,13 @@
 //! [`Engine`] snapshots one [`run_query`](super::run_query) call: the flag
 //! family and definitions of the [`QueryContext`], the map, the [`Prepared`]
 //! filters [`prepare_filter`] checked, the resolved `within` bound, and the
-//! two derived reads it builds only when the query asks for them — the
-//! [`Describe`] sector facts behind `area`, `roles` and a sector `bbox`, and
-//! the sidedef-to-linedef owners behind `linedef` and a sidedef `bbox`.
+//! derived reads it builds only when the query asks for them — one geometry
+//! read per run: the [`Describe`] light [`SectorShape`] rows behind `area`,
+//! `roles` and the sector arm of a `bbox` (whose centre they carry), or a
+//! plain [`SectorIndex`] behind the thing `sector` field and the point rule
+//! of a `sectors` bound. The two gates exclude each other by kind, so no
+//! run ever builds both. The sidedef-to-linedef owners behind `linedef` and
+//! a sidedef `bbox` are the third, independent read.
 //! [`Engine::matches`] bounds the element and then `AND`s every filter over
 //! the field values [`Engine::value`] reads; a derived field that does not
 //! resolve matches nothing, `ne`, `not_in` and `has_not` included.
@@ -25,9 +29,9 @@ use alloc::vec::Vec;
 use serde_json::Value;
 
 use crate::error::CyberError;
-use crate::wad::map::describe::{Describe, SectorFacts};
+use crate::wad::map::describe::{Describe, SectorShape};
 use crate::wad::map::flags::{FlagFamily, FlagKind};
-use crate::wad::map::geometry::{linedef_length, point_in_sector};
+use crate::wad::map::geometry::{SectorIndex, linedef_length};
 use crate::wad::map::model::{Linedef, Map, Thing};
 
 use super::check::{compare, prepare_filter};
@@ -45,7 +49,7 @@ pub(super) struct Prepared<'req> {
 }
 
 /// The query's engine: the map, the checked filters and the derived reads
-/// (the [`Describe`] facts, the sidedef owners) built only when asked.
+/// (the geometry read and the sidedef owners) built only when asked.
 pub(super) struct Engine<'map, 'req> {
     /// The element block being queried.
     kind: ElementKind,
@@ -60,8 +64,14 @@ pub(super) struct Engine<'map, 'req> {
     /// The resolved `within` bound.
     bounds: Bounds,
     /// The per-sector describe read, built only when derived sector fields
-    /// or a sector `bbox` ask for it.
+    /// or a sector `bbox` ask for it; every sector `area`, `roles` and
+    /// centre read answers from its [`Describe::sector_shape`].
     describe: Option<Describe<'map>>,
+    /// The stored sector geometry, built only when the thing `sector`
+    /// field or the point rule of a `sectors` bound asks for it. Its gate
+    /// excludes [`Self::describe`]'s by kind, so one engine holds at most
+    /// one of the two geometry reads, and never re-indexes per element.
+    index: Option<SectorIndex>,
     /// The sidedef-to-linedef owners, built only when the `linedef` field
     /// or a sidedef `bbox` ask for them.
     owners: Option<Vec<Option<usize>>>,
@@ -81,6 +91,7 @@ impl<'map, 'req> Engine<'map, 'req> {
         }
         let bounds = resolve_bounds(query.within.as_ref());
         let bounded_by_box = bounds.bbox.is_some();
+        let bounded_by_sectors = bounds.sectors;
         Ok(Self {
             kind: query.kind,
             family: ctx.family,
@@ -88,9 +99,9 @@ impl<'map, 'req> Engine<'map, 'req> {
             map,
             filters,
             bounds,
-            describe: (query.kind == ElementKind::Sectors
-                && (bounded_by_box || mentions(&query.r#where, &["area", "roles"])))
-            .then(|| Describe::new(map, ctx.defs, ctx.sky_flat)),
+            describe: wants_shapes(query, bounded_by_box)
+                .then(|| Describe::new(map, ctx.defs, ctx.sky_flat)),
+            index: wants_points(query, bounded_by_sectors).then(|| SectorIndex::new(map)),
             owners: (query.kind == ElementKind::Sidedefs
                 && (bounded_by_box || mentions(&query.r#where, &["linedef"])))
             .then(|| build_owners(map)),
@@ -130,8 +141,8 @@ impl<'map, 'req> Engine<'map, 'req> {
         }
     }
 
-    /// One sector field; `area` and `roles` read the [`Describe`] this
-    /// query built.
+    /// One sector field; `area` and `roles` read the [`SectorShape`] rows
+    /// this query's [`Describe`] answers with.
     fn sector_value(&self, index: usize, name: &str) -> Option<FValue<'map>> {
         let row = self.map.sectors.get(index)?;
         match name {
@@ -147,17 +158,23 @@ impl<'map, 'req> Engine<'map, 'req> {
             "special" => Some(FValue::Num(i64::from(row.special))),
             "tag" => Some(FValue::Num(i64::from(row.tag))),
             "area" => self
-                .facts(index)
-                .map(|facts| FValue::Num(wide_u64(facts.area))),
-            "roles" => self.facts(index).map(|facts| FValue::Roles(facts.roles)),
+                .shape(index)
+                .map(|shape| FValue::Num(wide_u64(shape.area))),
+            "roles" => self.shape(index).map(|shape| FValue::Roles(shape.roles)),
             _ => None,
         }
     }
 
-    /// The described facts of sector `index`, when the query asked for a
-    /// derived sector field.
-    fn facts(&self, index: usize) -> Option<SectorFacts> {
-        self.describe.as_ref()?.sector(index)
+    /// The light shape row of sector `index`, when the query asked for a
+    /// derived sector field or a sector `bbox`.
+    fn shape(&self, index: usize) -> Option<SectorShape> {
+        self.describe.as_ref()?.sector_shape(index)
+    }
+
+    /// The sector holding the point `x`/`y` through the [`SectorIndex`]
+    /// this query built, `None` in the void.
+    fn holder(&self, x: i64, y: i64) -> Option<usize> {
+        self.index.as_ref()?.point_in_sector(x, y)
     }
 
     /// One linedef field; sides, length and faces resolve through the
@@ -251,7 +268,7 @@ impl<'map, 'req> Engine<'map, 'req> {
 
     /// The sector thing `row` stands in, `None` in the void.
     fn thing_sector(&self, row: &Thing) -> Option<usize> {
-        point_in_sector(self.map, i64::from(row.x), i64::from(row.y))
+        self.holder(i64::from(row.x), i64::from(row.y))
     }
 
     /// One vertex field.
@@ -277,8 +294,8 @@ impl<'map, 'req> Engine<'map, 'req> {
     fn in_bbox(&self, bbox: [i64; 4], index: usize) -> bool {
         match self.kind {
             ElementKind::Sectors => self
-                .facts(index)
-                .and_then(|facts| facts.center)
+                .shape(index)
+                .and_then(|shape| shape.center)
                 .is_some_and(|(x, y)| in_box(bbox, x, y)),
             ElementKind::Things => self
                 .map
@@ -345,7 +362,8 @@ impl<'map, 'req> Engine<'map, 'req> {
 
     /// Whether the point `x`/`y` stands in one of `set`'s sectors.
     fn point_in_set(&self, x: i64, y: i64, set: &BTreeSet<usize>) -> bool {
-        point_in_sector(self.map, x, y).is_some_and(|sector| set.contains(&sector))
+        self.holder(x, y)
+            .is_some_and(|sector| set.contains(&sector))
     }
 
     /// Whether the resolvable side `side` opens into one of `set`'s sectors.
@@ -361,6 +379,25 @@ fn mentions(filters: &[Filter], wanted: &[&str]) -> bool {
     filters
         .iter()
         .any(|filter| wanted.contains(&filter.field.as_str()))
+}
+
+/// Whether the query reads the derived sector fields `area` or `roles`, or
+/// bounds sectors by a box: the gate for the [`Describe`] shape read.
+fn wants_shapes(query: &Query, bounded_by_box: bool) -> bool {
+    query.kind == ElementKind::Sectors
+        && (bounded_by_box || mentions(&query.r#where, &["area", "roles"]))
+}
+
+/// Whether the query reads the thing `sector` field or bounds things and
+/// vertices by sector membership: the gate for the plain [`SectorIndex`]
+/// point read. It excludes [`wants_shapes`]'s kind, so one engine builds
+/// at most one geometry read.
+fn wants_points(query: &Query, bounded_by_sectors: bool) -> bool {
+    match query.kind {
+        ElementKind::Things => bounded_by_sectors || mentions(&query.r#where, &["sector"]),
+        ElementKind::Vertices => bounded_by_sectors,
+        ElementKind::Sectors | ElementKind::Linedefs | ElementKind::Sidedefs => false,
+    }
 }
 
 /// The first linedef referencing each sidedef, in linedef order; a side no

@@ -5,7 +5,9 @@
 //! The helpers here answer two questions the roles and neighbours fields
 //! ask. Where does a sector's boundary lie, and which sectors sit across
 //! it ([`boundary_edges`], [`neighbour_groups`], with [`Map::side_sector`]
-//! for the single-side read)? And what
+//! for the single-side read)? Both boundary reads take the [`SectorIndex`]
+//! the whole map is indexed into once and walk its stored pairs, resolving
+//! each line's far side and vertices against the map. And what
 //! does a line, a floor difference or a stored special state about the way
 //! through it ([`carries_flag`], [`height_via`], [`is_stair_step`],
 //! [`walk_over_exit`], [`special_roles`])? The one read that needs the
@@ -19,15 +21,14 @@ use crate::defs::boom::{SectorFamily, SectorFlag, decode_sector_special};
 use crate::fixed::midpoint;
 use crate::geom::Pt;
 use crate::wad::map::flags::FlagFamily;
-use crate::wad::map::geometry::sector_boundary;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::playability::MAX_STEP_UP;
 use crate::wad::map::specials::exit_for;
 use crate::wad::map::specials::tables::Trigger;
 
 use super::{
-    Edge, NAME_DAMAGING, NAME_LIGHT_EFFECT, NAME_OPENING, NAME_SECRET, NAME_STEP_DOWN,
-    NAME_STEP_UP, Neighbour,
+    Edge, NAME_DAMAGING, NAME_LIGHT_EFFECT, NAME_OPENING, NAME_SECRET, NAME_STEP_DOWN, NAME_STEP_UP,
 };
 
 /// The largest footprint of a stair-step sector, square map units:
@@ -58,13 +59,17 @@ const NO_DAMAGE: &str = "none";
 
 /// `sector`'s boundary as directed world-space edges: front sides walk
 /// `v1` to `v2`, back sides `v2` to `v1`, linedef order; lines whose
-/// vertices do not resolve are skipped.
-pub(super) fn boundary_edges(map: &Map, sector: usize) -> Vec<Edge> {
-    sector_boundary(map, sector)
-        .into_iter()
-        .filter_map(|(index, is_front)| {
-            let line = map.linedefs.get(index)?;
-            let ((sx, sy), (ex, ey)) = map.line_endpoints(line)?;
+/// vertices do not resolve are skipped. The pairs come from `index`'s
+/// boundary read, the endpoints resolved afresh against `map`.
+pub(super) fn boundary_edges(map: &Map, index: &SectorIndex, sector: usize) -> Vec<Edge> {
+    index
+        .boundary(sector)
+        .iter()
+        .filter_map(|&(line, is_front)| {
+            let ((sx, sy), (ex, ey)) = map
+                .linedefs
+                .get(line)
+                .and_then(|definition| map.line_endpoints(definition))?;
             let from = (i64::from(sx), i64::from(sy));
             let to = (i64::from(ex), i64::from(ey));
             Some(if is_front { (from, to) } else { (to, from) })
@@ -76,17 +81,22 @@ pub(super) fn boundary_edges(map: &Map, sector: usize) -> Vec<Edge> {
 /// the linedef indices it shares, in sector order and linedef order. A
 /// line whose own side resolves to `sector` and whose far side resolves
 /// to another sector joins that neighbour's group; lines to the void, to
-/// `sector` itself or with a dangling far side group nothing.
-pub(super) fn neighbour_groups(map: &Map, sector: usize) -> Vec<(usize, Vec<usize>)> {
+/// `sector` itself or with a dangling far side group nothing. The pairs
+/// come from `index`'s boundary read, the far side resolved afresh
+/// against `map`.
+pub(super) fn neighbour_groups(
+    map: &Map,
+    index: &SectorIndex,
+    sector: usize,
+) -> Vec<(usize, Vec<usize>)> {
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for (index, is_front) in sector_boundary(map, sector) {
-        let across = map
-            .linedefs
-            .get(index)
-            .and_then(|line| map.side_sector(if is_front { line.back } else { line.front }))
+    for &(line, is_front) in index.boundary(sector) {
+        let definition = map.linedefs.get(line);
+        let across = definition
+            .and_then(|def| map.side_sector(if is_front { def.back } else { def.front }))
             .filter(|other| *other != sector);
         if let Some(other) = across {
-            groups.entry(other).or_default().push(index);
+            groups.entry(other).or_default().push(line);
         }
     }
     groups.into_iter().collect()
@@ -113,18 +123,21 @@ pub(super) const fn height_via(delta: i32) -> &'static str {
     }
 }
 
-/// Whether an `area` sector wedged between `neighbours` reads as a stair
-/// step: a footprint of at most [`STAIR_MAX_AREA`] square units with one
-/// neighbour [`STEP_UP`] to [`MAX_STEP_UP`] units above and another
-/// [`MAX_STEP_DOWN`] to [`STEP_DOWN_TOP`] units below.
-pub(super) fn is_stair_step(area: u64, neighbours: &[Neighbour]) -> bool {
+/// Whether an `area` sector wedged between neighbours standing at the
+/// `floor_deltas` reads as a stair step: a footprint of at most
+/// [`STAIR_MAX_AREA`] square units with one delta [`STEP_UP`] to
+/// [`MAX_STEP_UP`] units above and another [`MAX_STEP_DOWN`] to
+/// [`STEP_DOWN_TOP`] units below. The deltas are all a neighbour row
+/// contributes to this read, so the light [`super::SectorShape`] path can
+/// answer them off the neighbour groups without dressing the rows.
+pub(super) fn is_stair_step(area: u64, floor_deltas: &[i32]) -> bool {
     area <= STAIR_MAX_AREA
-        && neighbours
+        && floor_deltas
             .iter()
-            .any(|row| (STEP_UP..=MAX_STEP_UP).contains(&row.floor_delta))
-        && neighbours
+            .any(|delta| (STEP_UP..=MAX_STEP_UP).contains(delta))
+        && floor_deltas
             .iter()
-            .any(|row| (MAX_STEP_DOWN..=STEP_DOWN_TOP).contains(&row.floor_delta))
+            .any(|delta| (MAX_STEP_DOWN..=STEP_DOWN_TOP).contains(delta))
 }
 
 /// Whether the exit special on `line` ends the level by walking over it:

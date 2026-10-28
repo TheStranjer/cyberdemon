@@ -18,7 +18,7 @@ use crate::wad::map::features::{
     DoorWall, door_rect, door_wall, endpoints, longest_boundary, nearest_boundary, outward_depth,
     project_onto_line, void_strip,
 };
-use crate::wad::map::geometry::{linedef_length, point_in_sector};
+use crate::wad::map::geometry::{SectorIndex, linedef_length};
 use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, Paint, WallTextures};
 use crate::wad::map::{Linedef, Map};
@@ -294,10 +294,14 @@ pub(super) fn recess_depth(map: &Map, wall: &DoorWall, spec: &DoorSpec) -> Resul
 }
 
 /// Refuse a one-sided recess whose far middle falls in the void: only a
-/// recess that lands on (or inside) a sector can ever act as a door.
-pub(super) fn require_landing(map: &Map, rect: &[Point]) -> Result<(), CyberError> {
+/// recess that lands on (or inside) a sector can ever act as a door. The
+/// probe answers from `geometry`, the run's one sector index.
+pub(super) fn require_landing(geometry: &SectorIndex, rect: &[Point]) -> Result<(), CyberError> {
     let middle = centroid(rect);
-    if point_in_sector(map, i64::from(middle.x), i64::from(middle.y)).is_some() {
+    if geometry
+        .point_in_sector(i64::from(middle.x), i64::from(middle.y))
+        .is_some()
+    {
         return Ok(());
     }
     Err(no_room())
@@ -320,7 +324,7 @@ pub(super) fn place_rect(
     };
     let rect = door_rect(&wall, normal, depth, grown_back);
     if !chosen.touching {
-        require_landing(map, &rect)?;
+        require_landing(&SectorIndex::new(map), &rect)?;
     }
     Ok(Placed {
         wall: chosen.wall,

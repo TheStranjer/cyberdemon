@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use super::{Context, Issue, Severity, listed};
 use crate::wad::map::consts::PLAYER1_START;
-use crate::wad::map::geometry::{point_in_sector, sector_bbox};
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::Map;
 
 /// The cooperative starts a map without them cannot host `coop`.
@@ -94,19 +94,25 @@ fn in_some_bbox(boxes: &[Option<Box4>], x: i32, y: i32) -> bool {
 /// Things standing outside every sector: the engine spawns them into the
 /// void, no floor is found under them and editors cannot place the camera
 /// on them in `3D`.
+///
+/// One [`SectorIndex`] answers both the sector-bbox pre-filter and every
+/// thing's containment; nothing is scanned per thing or per sector.
 pub(super) fn thing_outside_map(map: &Map) -> Vec<Issue> {
+    let geometry = SectorIndex::new(map);
     let boxes: Vec<Option<Box4>> = map
         .sectors
         .iter()
         .enumerate()
-        .map(|(sector, _)| sector_bbox(map, sector))
+        .map(|(sector, _)| geometry.bbox(sector))
         .collect();
     map.things
         .iter()
         .enumerate()
         .filter(|&(_, placed)| {
             !in_some_bbox(&boxes, placed.x, placed.y)
-                || point_in_sector(map, i64::from(placed.x), i64::from(placed.y)).is_none()
+                || geometry
+                    .point_in_sector(i64::from(placed.x), i64::from(placed.y))
+                    .is_none()
         })
         .map(|(index, placed)| {
             Issue::new(
@@ -299,6 +305,30 @@ mod tests {
             thing_outside_map(&nowhere).len(),
             1,
             "a map without geometry holds nothing"
+        );
+    }
+
+    #[test]
+    fn a_sector_whose_boundary_never_resolves_holds_nobody() {
+        let mut broken = ring(vec![thing_at(1, 64, 64)]);
+        for line in &mut broken.linedefs {
+            line.v2 = 999;
+        }
+        assert_eq!(
+            thing_outside_map(&broken).len(),
+            1,
+            "no endpoint resolves: the indexed bbox arm reports the spawn \
+             lost exactly as the old per-sector scan did"
+        );
+    }
+
+    #[test]
+    fn a_thing_exactly_on_the_front_wall_stands_inside() {
+        let on_wall = ring(vec![thing_at(1, 0, 64), thing_at(2, 128, 64)]);
+        assert!(
+            thing_outside_map(&on_wall).is_empty(),
+            "the shared-wall point belongs to the sector that fronts the \
+             line: the index's front-side rule keeps both spawns inside"
         );
     }
 }

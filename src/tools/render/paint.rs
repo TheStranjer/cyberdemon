@@ -7,8 +7,9 @@
 use crate::defs::Definitions;
 use crate::fixed::mul_div_round;
 use crate::render::{AutomapColors, Canvas, Edge, Pt, Rgba, TopdownStyle, automap_color};
-use crate::wad::map::geometry;
-use crate::wad::map::{Linedef, Map};
+use crate::wad::map::Linedef;
+use crate::wad::map::Map;
+use crate::wad::map::geometry::SectorIndex;
 
 use super::frame::View;
 use super::marks::{
@@ -62,6 +63,10 @@ pub(super) struct IsoPair {
 pub(super) struct Scene<'render> {
     /// The map being drawn.
     pub(super) map: &'render Map,
+    /// The map's per-sector geometry, indexed once for the render: the
+    /// sector fills' boundary edges and the isometric things' floor
+    /// reads all answer from it.
+    pub(super) geometry: SectorIndex,
     /// The session definitions behind thing markers.
     pub(super) defs: &'render Definitions,
     /// The fitted plane-to-pixel mapping.
@@ -101,9 +106,10 @@ impl Scene<'_> {
     /// The boundary of `sector` as pixel-space edges, for the even-odd
     /// fill; dangling references drop out.
     pub(super) fn sector_edges(&self, sector: usize) -> Vec<Edge> {
-        geometry::sector_boundary(self.map, sector)
-            .into_iter()
-            .filter_map(|(index, _)| {
+        self.geometry
+            .boundary(sector)
+            .iter()
+            .filter_map(|&(index, _)| {
                 self.map
                     .linedefs
                     .get(index)

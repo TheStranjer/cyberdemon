@@ -5,7 +5,6 @@
 
 use crate::fixed::{Angle, midpoint, rotate_point};
 use crate::render::{Edge, Pt, Rgba, Stroke, TextStyle, draw_text, thing_visual};
-use crate::wad::map::geometry;
 use crate::wad::map::{Linedef, Thing, Vertex};
 
 use super::frame::offset_pt;
@@ -305,7 +304,9 @@ pub(super) fn paint_iso_things(scene: &mut Scene<'_>, request: &Request) {
 /// Marks one thing at the floor height of the sector that holds it.
 fn paint_one_iso_thing(scene: &mut Scene<'_>, mark: &Thing, index: usize, request: &Request) {
     let (x, y) = (i64::from(mark.x), i64::from(mark.y));
-    let floor = geometry::point_in_sector(scene.map, x, y)
+    let floor = scene
+        .geometry
+        .point_in_sector(x, y)
         .and_then(|sector| scene.map.sectors.get(sector))
         .map_or(0_i64, |sector| i64::from(sector.floor_height));
     let center = scene.view.iso(x, y, floor);

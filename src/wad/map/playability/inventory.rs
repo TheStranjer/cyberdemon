@@ -32,7 +32,7 @@ use alloc::vec::Vec;
 use super::KeyColor;
 use crate::wad::map::consts::PLAYER1_START;
 use crate::wad::map::flags::{FlagFamily, Skill, THING_DOOM_NOT_SINGLE, THING_HEXEN_SINGLE};
-use crate::wad::map::geometry::point_in_sector;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map};
 use crate::wad::map::specials::tables::{KEY_THINGS, RowEffect, Trigger};
 
@@ -167,6 +167,10 @@ struct Plan {
 struct Reader<'map> {
     /// The map being read.
     map: &'map Map,
+    /// The map's per-sector geometry, indexed once for the whole read:
+    /// every key's and teleport destination's home sector answers from
+    /// it, not from a per-thing scan.
+    geometry: SectorIndex,
     /// The flag family its lines and things are stored in.
     family: FlagFamily,
     /// The skill whose presence bits decide what spawns.
@@ -273,7 +277,7 @@ pub(super) fn start_sector(
         ));
     }
     let spawn = map.things.get(spawn_index)?;
-    let sector = point_in_sector(map, i64::from(spawn.x), i64::from(spawn.y));
+    let sector = SectorIndex::new(map).point_in_sector(i64::from(spawn.x), i64::from(spawn.y));
     if sector.is_none() {
         warnings.push(format!(
             "player 1 start thing {spawn_index} stands outside every sector: nothing can be reached"

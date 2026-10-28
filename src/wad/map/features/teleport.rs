@@ -34,7 +34,7 @@ use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{
     ACTIVATION_MASK, BLOCKING, FlagFamily, PLAYER_CROSS_BITS, REPEAT_SPECIAL, THING_SKILL_BITS,
 };
-use crate::wad::map::geometry::point_in_sector;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map, Sector, Thing};
 use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, apply_overlay};
@@ -175,15 +175,18 @@ fn check_size(spec: &TeleportSpec) -> Result<(), CyberError> {
 }
 
 /// The sector holding `point`, refused with role-naming instructions
-/// when the map holds no sector there.
-fn centre_sector(map: &Map, point: Point, role: &str) -> Result<usize, CyberError> {
-    point_in_sector(map, i64::from(point.x), i64::from(point.y)).ok_or_else(|| {
-        CyberError::invalid(&format!(
-            "the {role} point {}, {} lies in no sector: pass a point inside the \
+/// when the map holds no sector there. The lookup answers from the
+/// [`SectorIndex`] the build prepared before its first change.
+fn centre_sector(geometry: &SectorIndex, point: Point, role: &str) -> Result<usize, CyberError> {
+    geometry
+        .point_in_sector(i64::from(point.x), i64::from(point.y))
+        .ok_or_else(|| {
+            CyberError::invalid(&format!(
+                "the {role} point {}, {} lies in no sector: pass a point inside the \
              room the {role} stands in (get_map_summary lists the rooms)",
-            point.x, point.y
-        ))
-    })
+                point.x, point.y
+            ))
+        })
 }
 
 /// The refusal for a square whose border no player can walk across.
@@ -414,7 +417,8 @@ fn build_return_leg(
 /// place the type-14 destination thing, dress the pad's outward-facing
 /// borders with [`teleport_specials`] answering with the destination's
 /// fresh tag (or TID), and, with [`TeleportSpec::two_way`], run the
-/// return leg that makes the destination lead back.
+/// return leg that makes the destination lead back. Both centre landing
+/// probes answer from one [`SectorIndex`] built before the first change.
 ///
 /// Both drawings rebuild the map from a sorted arrangement, so every
 /// linedef index can move: [`TeleportBuild::line_remap`] carries the
@@ -436,8 +440,9 @@ fn build_return_leg(
 #[inline]
 pub fn build_teleporter(map: &mut Map, spec: &TeleportSpec) -> Result<TeleportBuild, CyberError> {
     check_size(spec)?;
-    let pad_base = centre_sector(map, spec.pad, "pad")?;
-    let destination_base = centre_sector(map, spec.destination, "destination")?;
+    let geometry = SectorIndex::new(&*map);
+    let pad_base = centre_sector(&geometry, spec.pad, "pad")?;
+    let destination_base = centre_sector(&geometry, spec.destination, "destination")?;
     let family = map.flag_family();
     let tag = next_free_tag(map);
     let (pad_sector, mut notes, pad_remap) = draw_square(

@@ -15,7 +15,6 @@ use alloc::vec::Vec;
 
 use crate::defs::Definitions;
 use crate::wad::map::consts::{MAX_STEP_HEIGHT, MIN_LINE_WIDTH, PLAYER_HEIGHT};
-use crate::wad::map::geometry::point_in_sector;
 use crate::wad::map::playability::{Blocker, BlockerReason, Stuck, StuckReason, thing_spawns};
 
 use super::UNKNOWN_THING_RADIUS;
@@ -122,13 +121,17 @@ pub(super) fn stuck_rows(a: &Analysis<'_>) -> Vec<StuckRow> {
 
 /// The `unreachable_things` rows: every thing that spawns at this skill,
 /// stands in a resolvable sector, and whose sector the walk never reached.
+/// Each thing's home reads the analysis' one sector index.
 pub(super) fn unreachable_rows(a: &Analysis<'_>) -> Vec<UnreachableRow> {
     let mut rows: Vec<UnreachableRow> = Vec::new();
     for (index, row) in a.map.things.iter().enumerate() {
         if !thing_spawns(row.flags, a.family, a.skill) {
             continue;
         }
-        let Some(sector) = point_in_sector(a.map, i64::from(row.x), i64::from(row.y)) else {
+        let Some(sector) = a
+            .geometry
+            .point_in_sector(i64::from(row.x), i64::from(row.y))
+        else {
             continue;
         };
         if a.found.reachable.contains(&sector) {

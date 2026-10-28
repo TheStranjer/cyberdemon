@@ -3,14 +3,14 @@
 //! the interior anchor a drawn platform reads its base sector from, the
 //! edge probe, the refusals and the small-drop note.
 
-use super::build::{activation_edges, build_lift, platform_anchor};
+use super::build::{activation_edges, build_lift, lowest_neighbour, platform_anchor};
 use super::{LiftPlatform, LiftSpec, LiftStyle, MIN_LIFT_DROP, lift_specials};
 use crate::error::CyberError;
 use crate::geom::Pt;
 use crate::wad::map::common::fixtures::{name, room, side, solid_line, two_room_map, vertex};
 use crate::wad::map::features::DoorLineSetup;
 use crate::wad::map::flags::FlagFamily;
-use crate::wad::map::geometry::point_in_sector;
+use crate::wad::map::geometry::{SectorIndex, point_in_sector};
 use crate::wad::map::{Map, MapFormat};
 
 /// The tag the table tests ask `lift_specials` for.
@@ -544,4 +544,45 @@ fn the_edge_probe_skips_walls_that_are_not_lower_edges() {
     let edges = activation_edges(&map, 1_usize, 32_i32);
     assert_eq!(edges.len(), 1_usize, "the step line only");
     assert_eq!(edges.first().expect("the edge").line, 2_usize);
+}
+
+#[test]
+fn a_neighbour_of_a_sector_the_index_does_not_have_is_isolated() {
+    let map = two_room_map();
+    let geometry = SectorIndex::new(&map);
+    let message = refuse(&lowest_neighbour(&map, &geometry, 9_usize).unwrap_err());
+    assert!(
+        message.contains("no neighbouring sector"),
+        "a missing row bounds nothing, so nothing is its neighbour: {message}"
+    );
+    assert_eq!(
+        lowest_neighbour(&map, &geometry, 1_usize).expect("the hall below the raised room"),
+        0_i32,
+        "the stored neighbour rows answer the real read exactly as the old scan did"
+    );
+}
+
+#[test]
+fn a_drawn_platform_reads_its_low_floor_from_the_rebuilt_index() {
+    let mut map = two_room_map();
+    let build = build_lift(
+        &mut map,
+        &spec(LiftPlatform::Draw(vec![
+            (224_i64, 32_i64),
+            (448_i64, 32_i64),
+            (448_i64, 224_i64),
+            (224_i64, 224_i64),
+        ])),
+    )
+    .expect("a ledge straddling the step");
+    assert_eq!(build.floor_height, 32_i32, "the room under its centre");
+    assert_eq!(
+        build.low_floor, 0_i32,
+        "the hall across the rebuilt two-sided run, off the re-indexed rows"
+    );
+    assert_eq!(build.drop, 32_i32, "a 32-unit ride");
+    assert!(
+        !build.lines.is_empty(),
+        "the ledge edge facing the hall activates"
+    );
 }

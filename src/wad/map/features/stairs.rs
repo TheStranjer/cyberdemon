@@ -28,7 +28,7 @@ use crate::error::CyberError;
 use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};
 use crate::geom::Pt;
 use crate::geom::segment::Delta;
-use crate::wad::map::geometry::point_in_sector;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Map, Sector};
 use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{Outside, OverlayRequest, Paint, WallTextures, apply_overlay};
@@ -140,6 +140,16 @@ struct Climb {
     count: usize,
 }
 
+/// One plan pass over the map: the map itself with its sector geometry
+/// indexed once. Every endpoint floor and step-centre probe of the run
+/// answers from this one [`SectorIndex`], not from a per-point scan.
+struct Read<'map> {
+    /// The map the staircase is planned on.
+    map: &'map Map,
+    /// Its per-sector geometry, built once for the whole plan.
+    geometry: SectorIndex,
+}
+
 /// Everything the step loop shares: the request, the path and the climb.
 #[derive(Clone, Copy, Debug)]
 struct Prep {
@@ -201,21 +211,33 @@ fn path_run(spec: &StairSpec) -> Result<PathRun, CyberError> {
     Ok(PathRun { dx, dy, length })
 }
 
-/// The sector holding `point`, `None` when no sector resolves there.
-fn sector_under(map: &Map, point: Point) -> Option<&Sector> {
-    point_in_sector(map, i64::from(point.x), i64::from(point.y))
-        .and_then(|index| map.sectors.get(index))
+impl<'map> Read<'map> {
+    /// Index `map` once for one plan pass.
+    fn new(map: &'map Map) -> Self {
+        Self {
+            map,
+            geometry: SectorIndex::new(map),
+        }
+    }
+}
+
+/// The sector holding `point`, `None` when no sector resolves there; the
+/// containment answers from the run's one index.
+fn sector_under<'map>(read: &Read<'map>, point: Point) -> Option<&'map Sector> {
+    read.geometry
+        .point_in_sector(i64::from(point.x), i64::from(point.y))
+        .and_then(|index| read.map.sectors.get(index))
 }
 
 /// One endpoint's floor: the explicit `given` one, else the sector at
 /// `point`; a point in no sector refuses with its `role` named.
 fn endpoint_floor(
-    map: &Map,
+    read: &Read<'_>,
     point: Point,
     role: &str,
     given: Option<i32>,
 ) -> Result<i32, CyberError> {
-    let base = sector_under(map, point).ok_or_else(|| {
+    let base = sector_under(read, point).ok_or_else(|| {
         CyberError::invalid(&format!(
             "the {role} point {}, {} lies in no sector: `from` stands in the lower \
              area and `to` in the higher one; move the point onto a sector \
@@ -226,10 +248,11 @@ fn endpoint_floor(
     Ok(given.unwrap_or(base.floor_height))
 }
 
-/// The two endpoint floors, checked against the sectors at both points.
-fn endpoint_floors(map: &Map, spec: &StairSpec) -> Result<(i32, i32), CyberError> {
-    let floor_from = endpoint_floor(map, spec.from, "from", spec.floor_from)?;
-    let floor_to = endpoint_floor(map, spec.to, "to", spec.floor_to)?;
+/// The two endpoint floors, checked against the sectors at both points
+/// through the run's one index.
+fn endpoint_floors(read: &Read<'_>, spec: &StairSpec) -> Result<(i32, i32), CyberError> {
+    let floor_from = endpoint_floor(read, spec.from, "from", spec.floor_from)?;
+    let floor_to = endpoint_floor(read, spec.to, "to", spec.floor_to)?;
     Ok((floor_from, floor_to))
 }
 
@@ -273,11 +296,12 @@ fn check_depth(run: &PathRun, count: usize, depth: i32) -> Result<(), CyberError
     )))
 }
 
-/// Every check up front, then the shared plan inputs.
-fn prepare(map: &Map, spec: &StairSpec) -> Result<Prep, CyberError> {
+/// Every check up front, then the shared plan inputs; the endpoint probes
+/// run on `read`'s one index.
+fn prepare(read: &Read<'_>, spec: &StairSpec) -> Result<Prep, CyberError> {
     check_shape(spec)?;
     let run = path_run(spec)?;
-    let (floor_from, floor_to) = endpoint_floors(map, spec)?;
+    let (floor_from, floor_to) = endpoint_floors(read, spec)?;
     let count = climb_count(floor_from, floor_to, spec.step_height)?;
     if let Some(depth) = spec.step_depth {
         check_depth(&run, count, depth)?;
@@ -367,8 +391,12 @@ fn middle(from: Point, to: Point) -> Point {
 
 /// The base sector under a step's centre, refusing a path that crosses
 /// solid rock (steps are 1-based in the message).
-fn probe_base(map: &Map, centre: Point, index: usize) -> Result<&Sector, CyberError> {
-    sector_under(map, centre).ok_or_else(|| {
+fn probe_base<'map>(
+    read: &Read<'map>,
+    centre: Point,
+    index: usize,
+) -> Result<&'map Sector, CyberError> {
+    sector_under(read, centre).ok_or_else(|| {
         CyberError::invalid(&format!(
             "step {} at {}, {} lies in no sector: the stair path crosses solid rock; \
              reroute it through the rooms",
@@ -403,13 +431,14 @@ fn step_record(base: &Sector, floor: i32, ceiling: i32) -> Sector {
     record
 }
 
-/// One planned step: its span, floor, probed base and dressed record.
-fn plan_step(map: &Map, prep: &Prep, index: usize) -> Result<StairStep, CyberError> {
+/// One planned step: its span, floor, probed base and dressed record. The
+/// base probe reads the run's one index, so the step loop never rescans.
+fn plan_step(read: &Read<'_>, prep: &Prep, index: usize) -> Result<StairStep, CyberError> {
     let near = along(prep, index);
     let far = along(prep, index.saturating_add(1));
     let floor = step_floor(prep.climb, index.saturating_add(1));
     let centre = middle(near, far);
-    let base = probe_base(map, centre, index)?;
+    let base = probe_base(read, centre, index)?;
     let ceiling = base.ceiling_height;
     require_headroom(floor, ceiling, index)?;
     Ok(StairStep {
@@ -428,7 +457,8 @@ fn plan_step(map: &Map, prep: &Prep, index: usize) -> Result<StairStep, CyberErr
 /// step is a `width`-wide rectangle centred on one `count`-th of the
 /// straight `from` to `to` path, and every step's ceiling is the base
 /// sector's ceiling at the step's centre — at least [`MIN_HEADROOM`]
-/// units over the step's floor.
+/// units over the step's floor. All the probes share the one
+/// [`SectorIndex`] this entry builds.
 ///
 /// # Errors
 ///
@@ -440,10 +470,11 @@ fn plan_step(map: &Map, prep: &Prep, index: usize) -> Result<StairStep, CyberErr
 /// without headroom; [`CyberError::LimitExceeded`] for an absurd count.
 #[inline]
 pub fn plan_stairs(map: &Map, spec: &StairSpec) -> Result<StairPlan, CyberError> {
-    let prep = prepare(map, spec)?;
+    let read = Read::new(map);
+    let prep = prepare(&read, spec)?;
     let mut steps = Vec::with_capacity(prep.climb.count);
     for index in 0..prep.climb.count {
-        steps.push(plan_step(map, &prep, index)?);
+        steps.push(plan_step(&read, &prep, index)?);
     }
     Ok(StairPlan {
         floor_from: prep.climb.floor_from,
@@ -530,8 +561,8 @@ pub fn build_stairs(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_STEP_HEIGHT, MIN_HEADROOM, MIN_STEP_HEIGHT, PaintedStep, StairSpec, build_stairs,
-        check_shape, endpoint_floor, plan_stairs, probe_base,
+        MAX_STEP_HEIGHT, MIN_HEADROOM, MIN_STEP_HEIGHT, PaintedStep, Read, StairSpec, build_stairs,
+        check_shape, endpoint_floor, plan_stairs, probe_base, sector_under,
     };
     use crate::error::CyberError;
     use crate::wad::map::common::fixtures::two_room_map;
@@ -675,16 +706,35 @@ mod tests {
         };
         let void_note = refuse(&plan_stairs(&map, &void).unwrap_err());
         assert!(void_note.contains("from point 3000, 3000"), "{void_note}");
-        let beyond = refuse(&endpoint_floor(&map, point(5000, 128), "to", None).unwrap_err());
+        let read = Read::new(&map);
+        let beyond = refuse(&endpoint_floor(&read, point(5000, 128), "to", None).unwrap_err());
         assert!(beyond.contains("to point 5000, 128"), "{beyond}");
     }
 
     #[test]
     fn a_path_through_rock_refuses_its_step() {
         let map = two_room_map();
-        let message = refuse(&probe_base(&map, point(5000, 5000), 2).unwrap_err());
+        let message = refuse(&probe_base(&Read::new(&map), point(5000, 5000), 2).unwrap_err());
         assert!(message.contains("step 3 at 5000, 5000"), "{message}");
         assert!(message.contains("solid rock"), "{message}");
+    }
+
+    #[test]
+    fn a_probe_exactly_on_the_shared_line_answers_the_front_sector() {
+        let map = two_room_map();
+        let read = Read::new(&map);
+        let base = sector_under(&read, point(256, 128)).expect("the step line's front owns it");
+        assert_eq!(base.floor_height, 0_i32, "the hall side of the step line");
+        assert_eq!(
+            sector_under(&read, point(255, 128)).map(|row| row.floor_height),
+            Some(0_i32),
+            "one unit west stays in the hall, as the old scan answered"
+        );
+        assert_eq!(
+            sector_under(&read, point(257, 128)).map(|row| row.floor_height),
+            Some(32_i32),
+            "and one unit east is already the raised room"
+        );
     }
 
     #[test]

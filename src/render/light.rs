@@ -138,6 +138,7 @@ mod tests {
     use crate::gfx::palette::Palette;
     use crate::render::settings::MAX_GAMMA;
     use crate::render::{Lighting, RenderSettings, scene::Scene};
+    use crate::wad::map::geometry::SectorIndex;
     use crate::wad::map::{Map, MapFormat};
 
     /// The fixture palette: colour `i` is `(i, 255 - i, i)`.
@@ -166,8 +167,10 @@ mod tests {
             crate::wad::name::LumpName::parse("MAP01").expect("test names are valid"),
             MapFormat::Doom,
         );
+        let geometry = SectorIndex::new(&map);
         Scene {
             map,
+            geometry,
             palette: fixture_palette(),
             colormaps,
             textures: BTreeMap::new(),

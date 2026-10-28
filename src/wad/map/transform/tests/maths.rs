@@ -5,12 +5,12 @@
 use alloc::collections::BTreeSet;
 
 use super::{grown, point, selection, shifted, transform, turned};
-use crate::wad::map::Map;
 use crate::wad::map::common::fixtures::{spawn, two_room_map};
 use crate::wad::map::transform::apply::{default_origin, rotated_angle};
 use crate::wad::map::transform::{
     Operations, Point, Rotation, Scale, SelectionRequest, expand_selection,
 };
+use crate::wad::map::{Map, Sector};
 
 /// The zero origin.
 const ZERO: Point = point(0, 0);
@@ -192,4 +192,51 @@ fn sector_selection_grabs_its_boundary_and_its_things() {
     .expect("all");
     assert_eq!(everything.vertices.len(), 6, "every vertex");
     assert_eq!(everything.things.len(), 2, "every thing");
+}
+
+#[test]
+fn a_thing_exactly_on_the_shared_line_follows_the_front_sector() {
+    let mut map = two_room_map();
+    map.things.push(spawn(3004, 256, 128, 0));
+    let picker = |sectors: &[usize]| {
+        expand_selection(
+            &map,
+            &SelectionRequest {
+                sectors: sectors.to_vec(),
+                include_things_in_sectors: true,
+                ..Default::default()
+            },
+        )
+        .expect("the sector is there")
+    };
+    let hall = picker(&[0]);
+    assert!(
+        hall.things.contains(&2_usize),
+        "the step line's front is the hall: its indexed lookup hands \
+         the line's middle thing to sector 0"
+    );
+    let raised = picker(&[1]);
+    assert!(
+        !raised.things.contains(&2_usize),
+        "and the back sector does not claim it"
+    );
+}
+
+#[test]
+fn a_sector_the_index_bounds_nothing_for_selects_nothing() {
+    let mut map = two_room_map();
+    map.sectors.push(Sector::default());
+    let bare = expand_selection(
+        &map,
+        &SelectionRequest {
+            sectors: vec![2],
+            include_things_in_sectors: true,
+            ..Default::default()
+        },
+    );
+    let error = bare.expect_err("an unbounded sector selects nothing to move");
+    assert!(
+        error.to_string().contains("nothing selected"),
+        "the refusal instructs like before: {error}"
+    );
 }

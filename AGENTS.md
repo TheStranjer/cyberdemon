@@ -253,10 +253,12 @@ src/
                   time and the `RGBA8` image out, `render/light.rs` the
                   COLORMAP table choice (`colormap_index`, `WallDir` fake
                   contrast) and `shade`, `render/scene.rs` the `Scene`
-                  preparation: map, palette, COLORMAP, used textures and
+                  preparation: map with its one stored `SectorIndex`,
+                  palette, COLORMAP, used textures and
                   flats read through one `PictureIndex`, sky selection,
                   checkerboard fallbacks, `problems`
-                  and the camera helpers, `render/topdown.rs` the
+                  and the camera helpers reading that stored index,
+                  `render/topdown.rs` the
                   shared automap line map: `Doom` classification and
                   colours (RGB defaults plus `PLAYPAL` entries), thing
                   visuals, and the square `Window` mapping the minimap
@@ -389,7 +391,9 @@ src/
                   `plan/features/tests/rooms.rs` and
                   `plan/features/tests/pipeline.rs`,
                   `plan/things.rs` the name
-                  resolution, in-room grid placement and presence flags,
+                  resolution, in-room grid placement through one
+                  `SectorIndex` pass over the compiled map and presence
+                  flags,
                   and `plan/compile.rs` the `compile` pipeline folding it
                   all into a `CompiledPlan` (the reachability, coverage and
                   floor-gap warnings it adds), with that pipeline's tests in
@@ -757,7 +761,11 @@ src/
                   `tools/maps/assemble.rs` builds
                   `assemble_map`'s typed graph (resolved references,
                   dangling ones reported as `problems`, published as a
-                  JSON asset past the inline limit);
+                  JSON asset past the inline limit), its sector and thing
+                  rows reading one shared `SectorIndex` with every thing
+                  home resolved once through it and its vertex rows
+                  reading one pass's vertex-to-linedef buckets, with those
+                  builders' unit tests in `maps/assemble/tests.rs`;
                   `tools/convert.rs` is the thin `convert_map_format` group:
                   it turns the parameters into a `wad::map::convert::Target`
                   and runs the pure conversion as one `Session::convert_map`
@@ -830,7 +838,8 @@ src/
                   and `describe_map` group: its root keeps the shared
                   `UNKNOWN_THING_RADIUS`, the `Prepared` inputs and `load`
                   and the two router methods, with `CheckPlayabilityParams`,
-                  `parse_skill`, `Analysis`, the report's row types,
+                  `parse_skill`, `Analysis` (the walk's inputs with the
+                  map's one report-wide `SectorIndex`), the report's row types,
                   `PlayabilityReport`, its count, summary and mark builders
                   and `check_run` in `playability/check.rs`, the reason-keyed
                   `blocker_hint`, `step_hint`, `stuck_hint`, `stuck_rows` and
@@ -1050,8 +1059,9 @@ src/
                   rounding helpers), `render/resolve.rs` (the projection,
                   bounds, highlight and overlay parsing behind
                   `resolve_request` and the `load_underlay` fetch),
-                  `render/paint.rs` (the colour helpers, the `Scene` and
-                  its element reads, the top-down and isometric painting
+                  `render/paint.rs` (the colour helpers, the `Scene` with
+                  its one stored `SectorIndex` and its element reads, the
+                  top-down and isometric painting
                   order with the underlay and grid passes),
                   `render/marks.rs` (the line, fill, mark, label,
                   annotation and isometric strokes),
@@ -1218,7 +1228,22 @@ src/
                   (bounds-derived grid, block-touching linedef lists),
                   `map/geometry.rs` pure integer
                   map geometry (sector boundaries, point-in-sector,
-                  bounding boxes, line lengths and sector adjacency),
+                  bounding boxes, line lengths and sector adjacency) as
+                  thin wrappers over the one-pass `map/geometry/index.rs`
+                  `SectorIndex` (per-sector boundary lines, carrying
+                  segments, box, neighbours, degrees and bbox-filtered
+                  point candidates), with that engine's tests in
+                  `map/geometry/index/tests.rs` plus
+                  `map/geometry/index/tests/reference.rs` (the verbatim
+                  full-scan bodies the index must match),
+                  `map/geometry/index/tests/fixtures.rs` (the maps and
+                  probe points they walk) and
+                  `map/geometry/index/tests/perf.rs` (the 400-sector
+                  work-count acceptance: the describe and distribute
+                  point lookups over a 400-room grid counted at the
+                  covering candidates' degrees and bound, with the
+                  naive full-scan count shown to break the same bound
+                  and the wrapper answers pinned equal),
                   `map/overlay.rs` + `overlay/labeler.rs` +
                   `overlay/prepared.rs` + `overlay/rebuilt.rs` +
                   `overlay/geometry.rs` the pure room-drawing and

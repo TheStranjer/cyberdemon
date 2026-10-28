@@ -6,8 +6,11 @@
 //! graph's `problems` list and the unresolvable part becomes `null`.
 //!
 //! The row builders here are pure model folds; the geometry (sector
-//! boundaries, adjacency, containment, boxes, lengths) comes from
-//! [`crate::wad::map::geometry`].
+//! boundaries, adjacency, containment, boxes) comes from one
+//! [`SectorIndex`] the run builds when sector or thing rows are asked
+//! for, shared by every row that reads it, and the vertex rows read one
+//! pass's worth of vertex-to-linedef buckets. Only the per-line lengths
+//! stay single-answer [`crate::wad::map::geometry`] reads.
 
 use serde::Serialize;
 
@@ -17,7 +20,7 @@ use crate::error::CyberError;
 use crate::state::AppState;
 use crate::tools::{json_bytes, parse_limit};
 use crate::wad::map::flags::to_names;
-use crate::wad::map::geometry;
+use crate::wad::map::geometry::{self, SectorIndex};
 use crate::wad::map::{FlagKind, Map};
 use crate::wad::name::LumpName;
 
@@ -411,20 +414,77 @@ impl Plan {
 pub(super) fn assemble(name: LumpName, map: &Map, include: &[Kind]) -> Plan {
     let mut problems: Vec<String> = Vec::new();
     let wants = |kind| include.contains(&kind);
+    let geometry = (wants(Kind::Sectors) || wants(Kind::Things)).then(|| Geometry::new(map));
+    let vertex_lines = wants(Kind::Vertices).then(|| vertex_linedefs(map));
     let graph = Graph {
         map: name,
-        vertices: wants(Kind::Vertices).then(|| vertex_nodes(map)),
+        vertices: wants(Kind::Vertices)
+            .then(|| vertex_nodes(map, vertex_lines.as_deref().unwrap_or(&[]))),
         linedefs: wants(Kind::Linedefs).then(|| linedef_nodes(map, &mut problems)),
         sidedefs: wants(Kind::Sidedefs).then(|| sidedef_nodes(map, &mut problems)),
-        sectors: wants(Kind::Sectors).then(|| sector_nodes(map)),
-        things: wants(Kind::Things).then(|| thing_nodes(map)),
+        sectors: geometry
+            .as_ref()
+            .filter(|_| wants(Kind::Sectors))
+            .map(|shared| sector_nodes(map, shared)),
+        things: geometry
+            .as_ref()
+            .filter(|_| wants(Kind::Things))
+            .map(|shared| thing_nodes(map, shared)),
         problems,
     };
     Plan { graph }
 }
 
-/// The vertex rows, each listing the linedefs that use it.
-fn vertex_nodes(map: &Map) -> Vec<VertexNode> {
+/// The map reads the sector and thing rows share: one pass over the
+/// linedefs behind every boundary, box, neighbour and containment answer
+/// of the graph, and every thing's home sector resolved once from it.
+struct Geometry {
+    /// The map's per-sector geometry, indexed once for the assemble run.
+    index: SectorIndex,
+    /// The sector each thing stands in, in thing order.
+    homes: Vec<Option<usize>>,
+}
+
+impl Geometry {
+    /// Index `map` and resolve every thing's home through the one index.
+    fn new(map: &Map) -> Self {
+        let index = SectorIndex::new(map);
+        let homes = map
+            .things
+            .iter()
+            .map(|spawn| index.point_in_sector(i64::from(spawn.x), i64::from(spawn.y)))
+            .collect();
+        Self { index, homes }
+    }
+}
+
+/// One pass over the linedefs: the linedefs using each vertex. Bucket
+/// `index` holds, in linedef order, every line referencing vertex
+/// `index`; a line whose two ends are the same vertex is counted once
+/// and a dangling vertex reference enters no bucket, exactly as the
+/// per-vertex scans it replaces answered.
+fn vertex_linedefs(map: &Map) -> Vec<Vec<usize>> {
+    let mut users: Vec<Vec<usize>> = map.vertices.iter().map(|_| Vec::new()).collect();
+    for (index, line) in map.linedefs.iter().enumerate() {
+        record_vertex(&mut users, line.v1, index);
+        if line.v2 != line.v1 {
+            record_vertex(&mut users, line.v2, index);
+        }
+    }
+    users
+}
+
+/// Append `line` to vertex `at`'s bucket; an index past `VERTEXES` has
+/// no bucket and is quietly skipped.
+fn record_vertex(users: &mut [Vec<usize>], at: usize, line: usize) {
+    if let Some(bucket) = users.get_mut(at) {
+        bucket.push(line);
+    }
+}
+
+/// The vertex rows, each listing its linedefs from `lines`, the run's
+/// one-pass buckets.
+fn vertex_nodes(map: &Map, lines: &[Vec<usize>]) -> Vec<VertexNode> {
     map.vertices
         .iter()
         .enumerate()
@@ -432,12 +492,7 @@ fn vertex_nodes(map: &Map) -> Vec<VertexNode> {
             index,
             x: vertex.x,
             y: vertex.y,
-            linedefs: map
-                .linedefs
-                .iter()
-                .enumerate()
-                .filter_map(|(at, line)| (line.v1 == index || line.v2 == index).then_some(at))
-                .collect(),
+            linedefs: lines.get(index).cloned().unwrap_or_default(),
         })
         .collect()
 }
@@ -606,17 +661,9 @@ fn sidedef_nodes(map: &Map, problems: &mut Vec<String>) -> Vec<SidedefNode> {
         .collect()
 }
 
-/// The sector each thing stands in.
-fn thing_homes(map: &Map) -> Vec<Option<usize>> {
-    map.things
-        .iter()
-        .map(|spawn| geometry::point_in_sector(map, i64::from(spawn.x), i64::from(spawn.y)))
-        .collect()
-}
-
-/// The sector rows with boundary, neighbours and occupants resolved.
-fn sector_nodes(map: &Map) -> Vec<SectorNode> {
-    let homes = thing_homes(map);
+/// The sector rows with boundary, neighbours and occupants resolved
+/// from the run's shared [`Geometry`].
+fn sector_nodes(map: &Map, shared: &Geometry) -> Vec<SectorNode> {
     map.sectors
         .iter()
         .enumerate()
@@ -629,18 +676,21 @@ fn sector_nodes(map: &Map) -> Vec<SectorNode> {
             light: sector.light,
             special: sector.special,
             tag: sector.tag,
-            linedefs: geometry::sector_boundary(map, index)
-                .into_iter()
-                .map(|(at, _)| at)
+            linedefs: shared
+                .index
+                .boundary(index)
+                .iter()
+                .map(|&(at, _)| at)
                 .collect(),
             sidedefs: sidedefs_of(map, index),
-            neighbors: geometry::neighbors(map, index),
-            things: homes
+            neighbors: shared.index.neighbours(index).to_vec(),
+            things: shared
+                .homes
                 .iter()
                 .enumerate()
                 .filter_map(|(at, home)| (*home == Some(index)).then_some(at))
                 .collect(),
-            bbox: geometry::sector_bbox(map, index),
+            bbox: shared.index.bbox(index),
         })
         .collect()
 }
@@ -654,10 +704,10 @@ fn sidedefs_of(map: &Map, sector: usize) -> Vec<usize> {
         .collect()
 }
 
-/// The thing rows, flags named and sectors assigned.
-fn thing_nodes(map: &Map) -> Vec<ThingNode> {
+/// The thing rows, flags named and sectors assigned from the run's
+/// shared [`Geometry`].
+fn thing_nodes(map: &Map, shared: &Geometry) -> Vec<ThingNode> {
     let family = map.flag_family();
-    let homes = thing_homes(map);
     map.things
         .iter()
         .enumerate()
@@ -673,311 +723,10 @@ fn thing_nodes(map: &Map) -> Vec<ThingNode> {
             tid: spawn.tid,
             special: spawn.special,
             args: spawn.args,
-            sector: homes.get(index).copied().flatten(),
+            sector: shared.homes.get(index).copied().flatten(),
         })
         .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use alloc::collections::BTreeMap;
-
-    use serde_json::{Value, json};
-
-    use super::{Kind, MAX_INLINE_LIMIT, assemble, parse_include, parse_inline_limit};
-    use crate::state::AppState;
-    use crate::wad::map::{Linedef, Map, Sector, Sidedef, Thing, Vertex};
-    use crate::wad::name::LumpName;
-
-    /// A valid parsed name for test data.
-    fn name(text: &str) -> LumpName {
-        LumpName::parse(text).expect("test names are valid")
-    }
-
-    /// A vertex at `x`/`y`.
-    fn vertex(x: i32, y: i32) -> Vertex {
-        Vertex {
-            x,
-            y,
-            extra: BTreeMap::new(),
-        }
-    }
-
-    /// A one-sided line from `v1` to `v2` over front sidedef `front`.
-    fn line(v1: usize, v2: usize, front: usize) -> Linedef {
-        Linedef {
-            v1,
-            v2,
-            flags: 1,
-            front: Some(front),
-            ..Default::default()
-        }
-    }
-
-    /// A two-sided line from `v1` to `v2` over sidedefs `front`/`back`.
-    fn line_both(v1: usize, v2: usize, front: usize, back: usize) -> Linedef {
-        Linedef {
-            v1,
-            v2,
-            flags: 4,
-            front: Some(front),
-            back: Some(back),
-            ..Default::default()
-        }
-    }
-
-    /// A sidedef over `sector`.
-    fn side(sector: usize) -> Sidedef {
-        Sidedef {
-            sector,
-            ..Default::default()
-        }
-    }
-
-    /// A spawn of `kind` at `x`/`y`.
-    fn spawn(kind: i32, x: i32, y: i32) -> Thing {
-        Thing {
-            kind,
-            x,
-            y,
-            angle: 0,
-            flags: 7,
-            ..Default::default()
-        }
-    }
-
-    /// The unit-test two-room map: a hall (`0..256`) and a back room
-    /// (`256..512`) split by the two-sided line `2`.
-    fn two_rooms() -> Map {
-        Map {
-            name: name("MAP01"),
-            things: vec![spawn(1, 64, 128), spawn(3001, 384, 128)],
-            vertices: vec![
-                vertex(0, 0),
-                vertex(256, 0),
-                vertex(512, 0),
-                vertex(512, 256),
-                vertex(256, 256),
-                vertex(0, 256),
-            ],
-            linedefs: vec![
-                line(0, 5, 0),
-                line(5, 4, 1),
-                line_both(4, 1, 2, 3),
-                line(1, 0, 4),
-                line(4, 3, 5),
-                line(3, 2, 6),
-                line(2, 1, 7),
-            ],
-            sidedefs: vec![
-                side(0),
-                side(0),
-                side(0),
-                side(1),
-                side(0),
-                side(1),
-                side(1),
-                side(1),
-            ],
-            sectors: vec![Sector::default(), Sector::default()],
-            ..Default::default()
-        }
-    }
-
-    /// The full graph of `map` as a JSON value.
-    fn graph_json(map: &Map) -> Value {
-        let include = parse_include(None).expect("all kinds");
-        let plan = assemble(name("MAP01"), map, &include);
-        let outcome = plan
-            .finish(&AppState::default(), MAX_INLINE_LIMIT)
-            .expect("inlining needs no asset server");
-        serde_json::to_value(&outcome).expect("outcomes serialize")
-    }
-
-    #[test]
-    fn parse_include_defaults_deduplicates_and_refuses_unknowns() {
-        assert_eq!(
-            parse_include(None).expect("absent means all"),
-            vec![
-                Kind::Vertices,
-                Kind::Linedefs,
-                Kind::Sidedefs,
-                Kind::Sectors,
-                Kind::Things
-            ],
-            "all five, in report order",
-        );
-        let given = vec![
-            "Things".to_owned(),
-            "linedefs".to_owned(),
-            "things".to_owned(),
-        ];
-        assert_eq!(
-            parse_include(Some(given)).expect("known names"),
-            vec![Kind::Things, Kind::Linedefs],
-            "case-insensitive, deduplicated, request order",
-        );
-        let empty = parse_include(Some(Vec::new())).expect("nothing is valid");
-        assert!(empty.is_empty(), "an empty include carries no arrays");
-        let error = parse_include(Some(vec!["nope".to_owned()])).expect_err("not a kind");
-        assert_eq!(error.code(), "invalid_argument", "bad kind code");
-        let message = error.to_string();
-        assert!(
-            message.contains("\"nope\"")
-                && message.contains("vertices, linedefs, sidedefs, sectors, things"),
-            "the refusal names the word and the valid list: {message}"
-        );
-    }
-
-    #[test]
-    fn parse_inline_limit_applies_the_default_and_the_range() {
-        assert_eq!(
-            parse_inline_limit(None).expect("absent"),
-            2000,
-            "the default"
-        );
-        assert_eq!(
-            parse_inline_limit(Some(MAX_INLINE_LIMIT)).expect("the boundary"),
-            MAX_INLINE_LIMIT,
-            "the maximum is inclusive"
-        );
-        let zero = parse_inline_limit(Some(0)).expect_err("zero refuses");
-        assert_eq!(zero.code(), "invalid_argument", "zero code");
-        let over = parse_inline_limit(Some(20_001)).expect_err("above the maximum");
-        assert_eq!(over.code(), "invalid_argument", "over-max code");
-        assert!(
-            zero.to_string().contains("1..=20000"),
-            "the message names the range: {zero}"
-        );
-    }
-
-    #[test]
-    fn the_graph_resolves_linedefs_sidedefs_and_vertices() {
-        let report = graph_json(&two_rooms());
-        assert_eq!(report["map"], json!("MAP01"), "the map echoes");
-        assert_eq!(report["problems"], json!([]), "the fixture map is sound");
-        let step = &report["linedefs"][2];
-        assert_eq!(
-            step["front"]["sector"],
-            json!(0_i64),
-            "the step line's front room"
-        );
-        assert_eq!(step["back"]["sector"], json!(1_i64), "and its back room");
-        assert_eq!(step["flag_names"], json!(["twosided"]), "flags named");
-        assert_eq!(step["length"], json!(256_u64), "the shared wall's length");
-        assert_eq!(
-            step["v1"]["index"],
-            json!(4_i64),
-            "ends resolved to coordinates"
-        );
-        assert_eq!(step["v1"]["y"], json!(256_i64), "vertex 4 is at y 256");
-        assert_eq!(
-            report["sidedefs"][3]["side"],
-            json!("back"),
-            "sidedef 3 is a back side"
-        );
-        assert_eq!(
-            report["sidedefs"][3]["linedef"],
-            json!(2_i64),
-            "of the step line"
-        );
-        assert_eq!(
-            report["vertices"][1]["linedefs"],
-            json!([2_i64, 3_i64, 6_i64]),
-            "shared corner"
-        );
-    }
-
-    #[test]
-    fn the_graph_places_sectors_and_things() {
-        let report = graph_json(&two_rooms());
-        assert_eq!(
-            report["sectors"][0]["neighbors"],
-            json!([1_i64]),
-            "hall neighbours"
-        );
-        assert_eq!(
-            report["sectors"][0]["things"],
-            json!([0_i64]),
-            "the player start stands in the hall"
-        );
-        assert_eq!(
-            report["sectors"][1]["things"],
-            json!([1_i64]),
-            "the imp stands in the back room"
-        );
-        assert_eq!(
-            report["sectors"][0]["bbox"],
-            json!([0_i64, 0_i64, 256_i64, 256_i64]),
-            "the hall box"
-        );
-        assert_eq!(
-            report["things"][1]["sector"],
-            json!(1_i64),
-            "and back from the thing side"
-        );
-        assert_eq!(
-            report["things"][0]["flag_names"],
-            json!(["easy", "medium", "hard"]),
-            "thing flags named",
-        );
-        assert_eq!(
-            report["sectors"][0]["sidedefs"],
-            json!([0_i64, 1_i64, 2_i64, 4_i64]),
-            "the hall's sides"
-        );
-    }
-
-    #[test]
-    fn include_narrows_the_arrays_and_the_counts() {
-        let include = parse_include(Some(vec!["things".to_owned()])).expect("one kind");
-        let plan = assemble(name("MAP01"), &two_rooms(), &include);
-        let outcome = plan
-            .finish(&AppState::default(), MAX_INLINE_LIMIT)
-            .expect("two things inline");
-        let report = serde_json::to_value(&outcome).expect("outcomes serialize");
-        assert!(
-            report.get("things").is_some(),
-            "the requested array is there"
-        );
-        for key in ["vertices", "linedefs", "sidedefs", "sectors"] {
-            assert!(report.get(key).is_none(), "{key} was not requested");
-        }
-        assert_eq!(
-            report["things"].as_array().expect("array").len(),
-            2,
-            "both things"
-        );
-        assert_eq!(report["problems"], json!([]), "problems always ride along");
-    }
-
-    #[test]
-    fn dangling_references_become_problems_and_nulls() {
-        let mut broken = two_rooms();
-        broken.sidedefs.get_mut(4).expect("sidedef 4").sector = 99;
-        let report = graph_json(&broken);
-        let problems = report["problems"].as_array().expect("array");
-        assert!(!problems.is_empty(), "the graph reports the break");
-        assert!(
-            problems.iter().any(|problem| problem
-                .as_str()
-                .is_some_and(|text| text.contains("sector 99"))),
-            "the dangling sector is named: {problems:?}"
-        );
-        assert_eq!(
-            report["sidedefs"][4]["sector"],
-            Value::Null,
-            "the row nulls it"
-        );
-        assert_eq!(
-            report["linedefs"][3]["front"]["sector"],
-            Value::Null,
-            "and through the line"
-        );
-        assert_eq!(
-            report["sectors"][0]["sidedefs"],
-            json!([0_i64, 1_i64, 2_i64]),
-            "the hall lost side 4"
-        );
-    }
-}
+mod tests;

@@ -19,7 +19,7 @@ use super::{
     spawns,
 };
 use crate::wad::map::flags::{FlagFamily, Skill};
-use crate::wad::map::geometry::point_in_sector;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map, Thing};
 use crate::wad::map::specials::exit_for;
 use crate::wad::map::specials::hexen_trigger;
@@ -27,10 +27,13 @@ use crate::wad::map::specials::lock_color;
 use crate::wad::map::specials::tables::{DOOM_ROWS, HEXEN_ROWS, RowEffect, Trigger};
 
 impl<'map> Reader<'map> {
-    /// A reader over `map` for flag family `family` at `skill`.
+    /// A reader over `map` for flag family `family` at `skill`: one
+    /// [`SectorIndex`] folded in here serves every home-sector read of
+    /// the whole pass.
     pub(super) fn new(map: &'map Map, family: FlagFamily, skill: Skill) -> Self {
         Self {
             map,
+            geometry: SectorIndex::new(map),
             family,
             skill,
             tagged: sectors_by_tag(map),
@@ -221,9 +224,12 @@ impl<'map> Reader<'map> {
     }
 
     /// The sector `thing` stands in, when it answers the tag `wanted`; `0`
-    /// asks for no narrowing at all.
+    /// asks for no narrowing at all. The home-sector read comes from the
+    /// read's one [`SectorIndex`].
     fn in_tagged_sector(&self, spawned: &Thing, wanted: i32) -> Option<usize> {
-        let sector = point_in_sector(self.map, i64::from(spawned.x), i64::from(spawned.y))?;
+        let sector = self
+            .geometry
+            .point_in_sector(i64::from(spawned.x), i64::from(spawned.y))?;
         if wanted == 0_i32 {
             return Some(sector);
         }
@@ -280,7 +286,9 @@ impl<'map> Reader<'map> {
         if !self.spawns(spawn.flags) {
             return;
         }
-        let sector = point_in_sector(self.map, i64::from(spawn.x), i64::from(spawn.y));
+        let sector = self
+            .geometry
+            .point_in_sector(i64::from(spawn.x), i64::from(spawn.y));
         self.keys.push(KeyThing {
             thing: index,
             color,

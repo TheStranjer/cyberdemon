@@ -25,7 +25,7 @@ use super::inventory::spawns;
 use crate::defs::{Category, Definitions, ThingDef};
 use crate::wad::map::consts::UNKNOWN_THING_RADIUS;
 use crate::wad::map::flags::{FlagFamily, Skill, blocks_players};
-use crate::wad::map::geometry::point_in_sector;
+use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Map, Thing};
 
 /// Why one thing cannot stand where it is.
@@ -67,17 +67,20 @@ pub struct Stuck {
 ///
 /// The rows come out in thing order: each stuck thing's own reason first,
 /// then one overlap row per jammed pair found among what is left standing.
+/// The home-sector read of every thing answers from one [`SectorIndex`]
+/// built here: the linedefs are walked once for the whole report.
 #[must_use]
 #[inline]
 pub fn stuck_things(map: &Map, defs: &Definitions, skill: Skill) -> Vec<Stuck> {
     let family = map.flag_family();
+    let geometry = SectorIndex::new(map);
     let mut report: Vec<Stuck> = Vec::new();
     let mut standing: Vec<(usize, Square)> = Vec::new();
     for (index, row) in map.things.iter().enumerate() {
         if !spawns(row.flags, family, skill) {
             continue;
         }
-        let Some(sector) = point_in_sector(map, i64::from(row.x), i64::from(row.y)) else {
+        let Some(sector) = geometry.point_in_sector(i64::from(row.x), i64::from(row.y)) else {
             report.push(Stuck {
                 thing: index,
                 reason: StuckReason::OutsideMap,
@@ -490,6 +493,46 @@ mod tests {
         assert!(
             stuck_things(&map, &defs(), Skill::Medium).is_empty(),
             "the Doom tables do not name those bits, so the open line passes"
+        );
+    }
+
+    /// Widen [`room_map`] with a raised second room behind its east wall
+    /// (line 1, the x = 256 run), turning that wall into an open
+    /// two-sided line: hall `0..256` west, room `256..512` east.
+    fn two_rooms() -> Map {
+        let mut map = room_map((0_i32, 128_i32));
+        map.things.clear();
+        let back = map.sidedefs.len();
+        map.sidedefs.push(side("-", "-", "-", 1_usize));
+        let east = map.linedefs.get_mut(1).expect("the east wall");
+        east.flags = 4_u32;
+        east.back = Some(back);
+        let corner_south = map.vertices.len();
+        let corner_north = corner_south.saturating_add(1);
+        map.vertices.push(vertex(512, 0));
+        map.vertices.push(vertex(512, 256));
+        map.sectors.push(room(32_i32, 128_i32, 192_i32, 1_i32));
+        for (first, second) in [
+            (1_usize, corner_south),
+            (corner_south, corner_north),
+            (corner_north, 2_usize),
+        ] {
+            let front = map.sidedefs.len();
+            map.sidedefs.push(side("-", "-", "WALL1", 1_usize));
+            map.linedefs.push(solid_line(first, second, front));
+        }
+        map
+    }
+
+    #[test]
+    fn a_thing_exactly_on_a_two_sided_line_stands_in_the_front_sector() {
+        let mut map = two_rooms();
+        map.things.push(spawn(3001, 256, 128, 0));
+        let report = stuck_things(&map, &defs(), Skill::Medium);
+        assert!(
+            report.is_empty(),
+            "the shared line's middle is the hall's front side: the indexed \
+             lookup holds the imp on a floor and the open line is no wall: {report:?}"
         );
     }
 

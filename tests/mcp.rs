@@ -73,7 +73,8 @@
 //! the plan-group shared helpers in `plan` with its `plan/basics`,
 //! `plan/units`, `plan/things`, `plan/finalize`, `plan/features`,
 //! `plan/panels` and `plan/six_room` topic tests, the
-//! playability-group tests in `playability`, the query-group shared
+//! playability-group shared clients in `playability` with its
+//! `playability/check` and `playability/describe` topic tests, the query-group shared
 //! helpers in `query` with its
 //! `query/find`, `query/replace_surfaces`, `query/replace_things` and
 //! `query/bulk` topic tests, the sketch-group shared helpers in

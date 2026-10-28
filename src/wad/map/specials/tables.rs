@@ -34,12 +34,22 @@ pub enum RowEffect {
 pub enum Trigger {
     /// A use line: only the sector on its front side works it.
     Use,
-    /// A walk or shoot line: either side works it.
+    /// A walk line: either side works it.
     Walk,
+    /// A shoot or bump line: the `Doom` family's `G1` gun specials and the
+    /// `Hexen` family's `impact`, `playerpush` and `missilecross` fields.
+    /// The player works it without crossing it - with a shot, a shove, or a
+    /// missile sent across - so this model gives its front side only: a
+    /// player behind such a line has no documented way to set it off.
+    Shoot,
+    /// An activation no player sets off: the `Hexen` family's
+    /// `monstercross` field, worked only by a monster crossing. No sector
+    /// works the line, so a walk over its tables never fires it.
+    Monster,
 }
 
 /// One row of the `Doom` family's line-special table.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DoomRow {
     /// The [`Linedef::special`](crate::wad::map::model::Linedef::special) the row answers for.
     pub special: i32,
@@ -125,12 +135,15 @@ const fn hexen_locked(
 ///
 /// The `DR`/`D1` rows at the top open the sector behind the line; the rest
 /// answer a tag. `W1`/`WR` lines work from either side, `S1`/`SR` lines from
-/// the front only, and `G1` line 46 is shootable, which this model reads as
-/// "either side". The locked walkovers (99, 133 to 137) are tagged doors
-/// whose key the row names. The [`RowEffect::CloseDoor`] rows are the door
-/// shutters (`W1`/`S1`/`SR`/`WR` Door Close, and the DOOM II fast pairs that
-/// close, or close and reopen): a door action to a texture pass, and known
-/// but never opened by a player who wants through.
+/// the front only, and the `G1` gun specials (line 46, the [`DOOM_EXITS`]
+/// 197/198) from the front only as [`Trigger::Shoot`]: the player shoots the
+/// face they see, never the side behind. The locked walkovers (99, 133 to
+/// 137) are tagged doors whose key the row names. The
+/// [`RowEffect::CloseDoor`] rows are the door shutters (`W1`/`S1`/`SR`/`WR`
+/// Door Close, and the DOOM II fast pairs that close, or close and reopen):
+/// a door action to a texture pass, and known but never opened by a player
+/// who wants through. The perpetual plats (87, 89) drop their tagged sector
+/// like the down-wait-up ones and stay down.
 pub const DOOM_ROWS: &[DoomRow] = &[
     // Press the wall: the sector behind it is the doorway.
     doom(1, RowEffect::ManualDoor, Trigger::Use),
@@ -160,7 +173,7 @@ pub const DOOM_ROWS: &[DoomRow] = &[
     doom(112, RowEffect::TaggedDoor, Trigger::Use),
     doom(114, RowEffect::TaggedDoor, Trigger::Use),
     doom(115, RowEffect::TaggedDoor, Trigger::Use),
-    doom(46, RowEffect::TaggedDoor, Trigger::Walk),
+    doom(46, RowEffect::TaggedDoor, Trigger::Shoot),
     doom_locked(99, RowEffect::TaggedDoor, Trigger::Walk, KeyColor::Blue),
     doom_locked(133, RowEffect::TaggedDoor, Trigger::Walk, KeyColor::Blue),
     doom_locked(134, RowEffect::TaggedDoor, Trigger::Walk, KeyColor::Red),
@@ -182,7 +195,9 @@ pub const DOOM_ROWS: &[DoomRow] = &[
     doom(10, RowEffect::Lift, Trigger::Walk),
     doom(21, RowEffect::Lift, Trigger::Use),
     doom(62, RowEffect::Lift, Trigger::Use),
+    doom(87, RowEffect::Lift, Trigger::Walk),
     doom(88, RowEffect::Lift, Trigger::Walk),
+    doom(89, RowEffect::Lift, Trigger::Use),
     doom(120, RowEffect::Lift, Trigger::Walk),
     doom(121, RowEffect::Lift, Trigger::Walk),
     doom(122, RowEffect::Lift, Trigger::Use),
@@ -192,7 +207,9 @@ pub const DOOM_ROWS: &[DoomRow] = &[
     doom(97, RowEffect::Teleport, Trigger::Walk),
 ];
 
-/// The `Doom` family's level ends.
+/// The `Doom` family's level ends: the `S1` pair needs a press, the `WR`
+/// pair is walked onto, and the `G1` pair 197/198 is shot at - worked from
+/// the front side like every other [`Trigger::Shoot`] row.
 pub const DOOM_EXITS: &[ExitRow] = &[
     ExitRow {
         special: 11,
@@ -217,12 +234,12 @@ pub const DOOM_EXITS: &[ExitRow] = &[
     ExitRow {
         special: 197,
         secret: false,
-        trigger: Trigger::Walk,
+        trigger: Trigger::Shoot,
     },
     ExitRow {
         special: 198,
         secret: true,
-        trigger: Trigger::Walk,
+        trigger: Trigger::Shoot,
     },
 ];
 

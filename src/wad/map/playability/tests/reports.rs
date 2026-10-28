@@ -108,10 +108,17 @@ fn specials_outside_the_tables_are_counted_not_guessed() {
         notes.first().is_some_and(|note| note.contains("2 line(s)")),
         "and both lines are counted: {notes:?}"
     );
+    assert!(
+        notes
+            .first()
+            .is_some_and(|note| note.contains("reads those lines by their flags alone")),
+        "the note says what the walk does: it ignores the action, the line stays exactly \
+         as its flags draw it: {notes:?}"
+    );
 }
 
 #[test]
-fn a_boom_generalized_line_is_unhandled_like_any_other() {
+fn a_boom_generalized_non_door_line_is_unhandled_like_any_other() {
     let mut map = hall(&[cell(0_i32), cell(0_i32)]);
     wire(&mut map, 0, (0x2F_81_i32, 1_i32, TWO_SIDED));
     let found = analyze_playability(&map, FlagFamily::Doom, Skill::Medium);
@@ -120,13 +127,14 @@ fn a_boom_generalized_line_is_unhandled_like_any_other() {
             .warnings
             .iter()
             .any(|warning| warning.contains("generalized")),
-        "the analysis does not decode Boom bit patterns: {:?}",
+        "the walk decodes generalized doors, locked doors and lifts; a crusher is counted \
+         as unhandled without special wording: {:?}",
         found.warnings
     );
     assert_eq!(
         found.reachable,
         sectors(&[0, 1]),
-        "and the line is still a gap"
+        "and the line is still a gap: an unmodelled special never walls a player off"
     );
 }
 

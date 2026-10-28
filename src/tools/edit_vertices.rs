@@ -8,8 +8,10 @@
 //! and copies nothing in.
 //!
 //! The parameter shapes ([`IndexSelector`]) and validators ([`check_index`],
-//! [`edit_result_fragment`]) come from [`crate::tools::maps::params`];
-//! removal runs through [`crate::wad::map::remove`] and refuses the
+//! [`edit_result_fragment`]) and the shared `join`, `find_vertex` and
+//! `untouched_fragment` helpers come from [`crate::tools::maps::params`];
+//! the working-then-merged map read from [`crate::tools::maps::common`].
+//! Removal runs through [`crate::wad::map::remove`] and refuses the
 //! `conflict` of a vertex the linedefs still use unless `cascade` is set.
 //!
 //! The geometry rule: a vertex is geometry for the node lumps while a
@@ -53,18 +55,18 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::map_edit::MapEditReport;
-use crate::session::{Scope, Session};
-use crate::tools::edit_vertices::moves::{check_vertices, join, move_run};
+use crate::session::Session;
+use crate::tools::edit_vertices::moves::{check_vertices, move_run};
 use crate::tools::maps::common;
-use crate::tools::maps::params::{IndexSelector, edit_result_fragment};
+use crate::tools::maps::params::{
+    IndexSelector, edit_result_fragment, find_vertex, join, untouched_fragment,
+};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };
 use crate::wad::map::{Map, Vertex};
-use crate::wad::name::LumpName;
 
 /// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
 const COORD_MIN: i32 = -0x8000_i32;
@@ -190,38 +192,6 @@ fn reuses(args: &AddVertexParams) -> bool {
     args.reuse_existing.unwrap_or(true)
 }
 
-/// The index of the first vertex sitting exactly on `x`/`y`.
-fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
-    map.vertices
-        .iter()
-        .position(|vertex| vertex.x == x && vertex.y == y)
-}
-
-/// The map as the next edit sees it: the working archive's block when it
-/// holds one, else the merged view's (which is what the edit copies in).
-///
-/// # Errors
-///
-/// [`common::load_map`]'s errors for the merged scope when the working
-/// archive holds no such block.
-fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
-    match common::load_map(session, name, Scope::Working) {
-        Ok(map) => Ok(map),
-        Err(error) if error.is_not_found() => common::load_map(session, name, Scope::Merged),
-        Err(error) => Err(error),
-    }
-}
-
-/// The edit fragment of a call that changed nothing: the map's name with
-/// both flags `false`.
-fn untouched_fragment(name: LumpName) -> JsonMap<String, Value> {
-    edit_result_fragment(&MapEditReport {
-        map: name,
-        copied_to_working: false,
-        nodes_invalidated: false,
-    })
-}
-
 /// Refuses unless `value` sits inside the `i16` range of a binary
 /// `VERTEXES` column.
 fn fits_coord(name: &str, value: i32) -> Result<(), CyberError> {
@@ -317,7 +287,7 @@ fn remove_in_place(
 fn add_run(session: &mut Session, args: &AddVertexParams) -> Result<AddReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let existing = if reuses(args) {
-        find_vertex(&current_map(session, name)?, args.x, args.y)
+        find_vertex(&common::current_map(session, name)?, args.x, args.y)
     } else {
         None
     };

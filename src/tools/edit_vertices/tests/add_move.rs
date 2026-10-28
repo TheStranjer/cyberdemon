@@ -10,9 +10,10 @@ use crate::tools::edit_vertices::moves::{
     validate_move,
 };
 use crate::tools::edit_vertices::{
-    COORD_MAX, COORD_MIN, Moves, add_in_place, check_binary_coords, current_map, find_vertex,
-    fits_coord, reuses, untouched_fragment,
+    COORD_MAX, COORD_MIN, Moves, add_in_place, check_binary_coords, fits_coord, reuses,
 };
+use crate::tools::maps::common::current_map;
+use crate::tools::maps::params::{find_vertex, untouched_fragment};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::{Linedef, Vertex};
 

@@ -7,6 +7,11 @@
 //! ([`edit_result_fragment`]) every edit tool merges into its structured
 //! content.
 //!
+//! Beside these, the small shared readings the element-editing groups'
+//! refusal and reuse paths repeat: the comma-joined index list ([`join`]),
+//! the changed-nothing result fragment ([`untouched_fragment`]) and the
+//! exact-point vertex lookup ([`find_vertex`]).
+//!
 //! These are the pieces the per-element editing tools (vertices, linedefs,
 //! sidedefs, sectors, things, ...) reuse so they stay thin wrappers around
 //! [`crate::session::Session::edit_map`]: parse the parameters with these
@@ -19,8 +24,8 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::map_edit::MapEditReport;
 use crate::wad::classify::MapFormat;
-use crate::wad::map::{FlagFamily, FlagKind, flags};
-use crate::wad::name::MAX_NAME_LEN;
+use crate::wad::map::{FlagFamily, FlagKind, Map, flags};
+use crate::wad::name::{LumpName, MAX_NAME_LEN};
 
 /// Longest texture name a `UDMF` map may carry.
 const UDMF_TEXTURE_MAX: usize = 64;
@@ -199,18 +204,59 @@ pub fn edit_result_fragment(report: &MapEditReport) -> JsonMap<String, Value> {
     .collect()
 }
 
+/// The edit fragment of a call that changed nothing: the map's name with
+/// both flags `false`.
+#[must_use]
+#[inline]
+pub fn untouched_fragment(name: LumpName) -> JsonMap<String, Value> {
+    edit_result_fragment(&MapEditReport {
+        map: name,
+        copied_to_working: false,
+        nodes_invalidated: false,
+    })
+}
+
+/// The index of the first vertex sitting exactly on `x`/`y`.
+#[must_use]
+#[inline]
+pub fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
+    map.vertices
+        .iter()
+        .position(|vertex| vertex.x == x && vertex.y == y)
+}
+
+/// The indices as one comma-separated list.
+#[must_use]
+#[inline]
+pub fn join(indices: &[usize]) -> String {
+    indices
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{from_str, json};
 
     use super::{
         ElementKind, FlagsInput, IndexSelector, PointParam, check_index, edit_result_fragment,
-        validate_texture_name,
+        find_vertex, join, untouched_fragment, validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
     use crate::wad::classify::MapFormat;
-    use crate::wad::map::{FlagFamily, FlagKind};
+    use crate::wad::map::{FlagFamily, FlagKind, Map, Vertex};
     use crate::wad::name::LumpName;
+
+    /// A vertex at `x`/`y`.
+    fn vertex(x: i32, y: i32) -> Vertex {
+        Vertex {
+            x,
+            y,
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn flags_input_reads_bits_or_names_from_json() {
@@ -416,6 +462,59 @@ mod tests {
                 "copied_to_working": false,
             }),
             "the flags mirror the report"
+        );
+    }
+
+    #[test]
+    fn join_lists_no_one_or_many_indices() {
+        assert_eq!(join(&[]), "", "the empty list joins to nothing");
+        assert_eq!(join(&[4_usize]), "4", "one index stands alone");
+        assert_eq!(
+            join(&[4_usize, 7, 12]),
+            "4, 7, 12",
+            "many are comma-separated in order"
+        );
+    }
+
+    #[test]
+    fn the_untouched_fragment_names_the_map_with_both_flags_false() {
+        let name = LumpName::parse("MAP01").expect("a valid name");
+        assert_eq!(
+            json!(untouched_fragment(name)),
+            json!({
+                "map": "MAP01",
+                "nodes_invalidated": false,
+                "copied_to_working": false,
+            }),
+            "a call that changed nothing reports the name alone"
+        );
+    }
+
+    #[test]
+    fn find_vertex_matches_the_exact_point_and_the_first_one() {
+        let map = Map {
+            vertices: vec![vertex(0, 0), vertex(256, 0), vertex(0, 0)],
+            ..Default::default()
+        };
+        assert_eq!(
+            find_vertex(&map, 256_i32, 0_i32),
+            Some(1_usize),
+            "an exact hit answers its index"
+        );
+        assert_eq!(
+            find_vertex(&map, 0_i32, 0_i32),
+            Some(0_usize),
+            "of two matches the first wins"
+        );
+        assert_eq!(
+            find_vertex(&map, 0_i32, 256_i32),
+            None,
+            "one axis off is another point"
+        );
+        assert_eq!(
+            find_vertex(&Map::default(), 0_i32, 0_i32),
+            None,
+            "an empty list is a miss"
         );
     }
 }

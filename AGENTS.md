@@ -725,11 +725,15 @@ src/
                   `Directory` wrapper from `session/mapdir.rs` and keeps the
                   one locked `load` of a merged-view map with the session's
                   definitions (`Prepared`) the analysing
-                  tools share, and `tools/maps/params.rs` the shared
+                  tools share, beside the `current_map`
+                  working-scope-then-merged read every editing group
+                  shares, and
+                  `tools/maps/params.rs` the shared
                   editing parameter types (`FlagsInput`, `IndexSelector`,
                   `PointParam`, the re-exported `check_index` guard,
-                  `validate_texture_name`,
-                  `edit_result_fragment`) every map edit tool builds on; `tools/maps/manage.rs`
+                  `validate_texture_name`, `edit_result_fragment`, `join`,
+                  `untouched_fragment` and `find_vertex`) every map edit tool
+                  builds on; `tools/maps/manage.rs`
                   the block-level machinery behind `create_map`,
                   `copy_map`, `rename_map` and `remove_map` (the plans,
                   the `GL` helpers and the block builders) on
@@ -748,8 +752,7 @@ src/
                   and runs the pure conversion as one `Session::convert_map`
                   step (`dry_run` converts a copy and only reports);
                   `tools/features.rs` is the `features` group: its root
-                  keeps the shared refusal helpers, the `current_map`
-                  read, the theme skins (`skin`,
+                  keeps the shared refusal helpers, the theme skins (`skin`,
                   `theme_skin`, all on the shared `tools/themes`
                   `theme_roles`/`theme_wall`), the result handoff (`reported`) and the
                   router, the work split by tool into

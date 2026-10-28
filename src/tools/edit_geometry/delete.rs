@@ -17,15 +17,13 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{ElementKind, edit_result_fragment};
+use crate::tools::maps::params::{ElementKind, edit_result_fragment, untouched_fragment};
 use crate::wad::map::Map;
 use crate::wad::map::query::check_indices;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
 };
 use crate::wad::name::LumpName;
-
-use super::{current_map, untouched_fragment};
 
 /// Arguments for [`Cyberdemon::delete_geometry`](crate::server::Cyberdemon).
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -198,7 +196,7 @@ fn dry_delete(
     opts: CascadeOptions,
     removal: &Removal,
 ) -> Result<DeleteReport, CyberError> {
-    let mut copy = current_map(session, name)?;
+    let mut copy = common::current_map(session, name)?;
     let removed = delete_in_place(&mut copy, opts, removal)?;
     Ok(DeleteReport {
         removed,

@@ -32,7 +32,6 @@ use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::features::{DEFAULT_PAD_SIZE, TeleportBuild, TeleportSpec, build_teleporter};
 use crate::wad::map::ops::Point;
 
-use super::current_map;
 use super::door::point_of;
 use crate::tools::maps::params::PointParam;
 
@@ -153,7 +152,7 @@ pub(super) fn add_teleporter_run(
     args: &AddTeleporterParams,
 ) -> Result<TeleporterReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let format = current_map(session, name)?.format;
+    let format = common::current_map(session, name)?.format;
     let skins = teleport_skins(session, format)?;
     let spec = teleport_spec(args, &skins)?;
     let label = if args.two_way {

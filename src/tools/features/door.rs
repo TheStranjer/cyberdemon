@@ -45,7 +45,7 @@ use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Pai
 use crate::wad::map::{Linedef, Map, Sector};
 
 use super::wall::{carve_strip, choose_wall, place_rect, strip_face_lost, strip_wall, to_pts};
-use super::{NO_TEXTURE, current_map, sector_lost, theme_skin, wall_lost};
+use super::{NO_TEXTURE, sector_lost, theme_skin, wall_lost};
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
 pub(super) const DEFAULT_WIDTH: i32 = 64_i32;
@@ -425,7 +425,7 @@ pub(super) fn add_door_run(
     let style = style_of(args.style.as_deref().unwrap_or(DEFAULT_STYLE))?;
     let target = target_of(args.between, args.linedef, "the door joins")?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let format = current_map(session, name)?.format;
+    let format = common::current_map(session, name)?.format;
     let skins = theme_skin(session, style, args, format)?;
     let spec = DoorSpec {
         target,

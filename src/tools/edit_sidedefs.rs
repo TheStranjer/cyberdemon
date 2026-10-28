@@ -30,7 +30,7 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, IndexSelector, check_index, edit_result_fragment, validate_texture_name,
+    ElementKind, IndexSelector, check_index, edit_result_fragment, join, validate_texture_name,
 };
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
@@ -403,15 +403,6 @@ fn dependent_refusal(uses: &BTreeMap<usize, Vec<usize>>) -> CyberError {
         "{}; pass cascade: true to remove the referencing linedefs with them",
         parts.join("; ")
     ))
-}
-
-/// The indices as one comma-separated list.
-fn join(indices: &[usize]) -> String {
-    indices
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<String>>()
-        .join(", ")
 }
 
 /// The seed removal of exactly the selected sidedefs.

@@ -4,8 +4,9 @@
 //!
 //! The two tools live in [`delete`] and [`transform`]: each file holds its
 //! tool's parameter and report types beside the steps its router method
-//! calls, and this root keeps only the two router methods, the map reader
-//! both of them share and the outcome wrapper.
+//! calls, and this root keeps only the two router methods and the outcome
+//! wrapper; both tools read the map through [`crate::tools::maps::common`]
+//! and report through [`crate::tools::maps::params`].
 //!
 //! `transform_selection` moves a mixed selection of vertices and things
 //! through one scale/rotate/translate. The math and the selection
@@ -48,44 +49,11 @@ mod transform;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
-use serde_json::{Map as JsonMap, Value};
 
-use crate::error::CyberError;
 use crate::server::Cyberdemon;
-use crate::session::map_edit::MapEditReport;
-use crate::session::{Scope, Session};
 use crate::tools::edit_geometry::delete::{DeleteGeometryParams, delete_run};
 use crate::tools::edit_geometry::transform::{TransformSelectionParams, transform_run};
-use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
 use crate::tools::reply;
-use crate::wad::map::Map;
-use crate::wad::name::LumpName;
-
-/// The map as the next edit sees it: the working archive's block when it
-/// holds one, else the merged view's (which is what the edit copies in).
-///
-/// # Errors
-///
-/// [`common::load_map`]'s errors for the merged scope when the working
-/// archive holds no such block.
-fn current_map(session: &Session, name: LumpName) -> Result<Map, CyberError> {
-    match common::load_map(session, name, Scope::Working) {
-        Ok(map) => Ok(map),
-        Err(error) if error.is_not_found() => common::load_map(session, name, Scope::Merged),
-        Err(error) => Err(error),
-    }
-}
-
-/// The edit fragment of a call that changed nothing: the map's name with
-/// both flags `false`.
-fn untouched_fragment(name: LumpName) -> JsonMap<String, Value> {
-    edit_result_fragment(&MapEditReport {
-        map: name,
-        copied_to_working: false,
-        nodes_invalidated: false,
-    })
-}
 
 #[expect(
     clippy::multiple_inherent_impl,

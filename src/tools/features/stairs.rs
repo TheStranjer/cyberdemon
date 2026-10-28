@@ -26,7 +26,6 @@ use crate::tools::themes::theme_texture;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::features::{PaintedStep, StairSpec, build_stairs};
 
-use super::current_map;
 use super::door::point_of;
 use crate::tools::maps::params::PointParam;
 
@@ -123,7 +122,7 @@ pub(super) fn add_stairs_run(
 ) -> Result<StairsReport, CyberError> {
     let spec = stair_spec(args);
     let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let format = current_map(session, name)?.format;
+    let format = common::current_map(session, name)?.format;
     let riser = stair_riser(session, format)?;
     let (built, report) =
         session.edit_map(name, "add stairs", |map| build_stairs(map, &spec, &riser))?;

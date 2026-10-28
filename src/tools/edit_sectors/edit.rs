@@ -26,6 +26,9 @@ use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{ElementKind, IndexSelector, check_index, edit_result_fragment};
+// The comma-joined index list of the `conflict` refusals, re-exported from
+// `crate::tools::maps::params` so this module's tests keep reaching it here.
+pub(super) use crate::tools::maps::params::join;
 use crate::tools::themes::{Surfaces, surfaces};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::{
@@ -366,15 +369,6 @@ pub(super) fn dependent_refusal(uses: &BTreeMap<usize, Vec<usize>>) -> CyberErro
         "{}; pass cascade: true to remove the referencing sidedefs with them",
         parts.join("; ")
     ))
-}
-
-/// The indices as one comma-separated list.
-pub(super) fn join(indices: &[usize]) -> String {
-    indices
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<String>>()
-        .join(", ")
 }
 
 /// The seed removal of exactly the selected sectors.

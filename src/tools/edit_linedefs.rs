@@ -64,7 +64,7 @@ use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::flags::{self, BLOCKING, TWO_SIDED};
-use crate::wad::map::{FlagFamily, FlagKind, Linedef, Map, Sidedef};
+use crate::wad::map::{FlagFamily, FlagKind, Linedef, Sidedef};
 
 /// The all-zero script argument list of a `Doom`-family linedef.
 const ZERO_ARGS: [i32; 5] = [0_i32; 5];
@@ -176,13 +176,6 @@ fn resolve_bits(input: Option<&FlagsInput>, family: FlagFamily) -> Result<u32, C
 #[must_use]
 const fn default_line_flags(two_sided: bool) -> u32 {
     if two_sided { TWO_SIDED } else { BLOCKING }
-}
-
-/// The index of the first vertex sitting exactly on `x`/`y`.
-fn find_vertex(map: &Map, x: i32, y: i32) -> Option<usize> {
-    map.vertices
-        .iter()
-        .position(|vertex| vertex.x == x && vertex.y == y)
 }
 
 /// Refuses unless `value` sits inside the binary record field's

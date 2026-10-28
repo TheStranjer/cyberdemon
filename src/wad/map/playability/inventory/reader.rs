@@ -21,10 +21,11 @@ use super::{
 use crate::wad::map::flags::{FlagFamily, Skill};
 use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::model::{Linedef, Map, Thing};
+use crate::wad::map::specials::doom_row;
 use crate::wad::map::specials::exit_for;
 use crate::wad::map::specials::hexen_trigger;
 use crate::wad::map::specials::lock_color;
-use crate::wad::map::specials::tables::{DOOM_ROWS, HEXEN_ROWS, RowEffect, Trigger};
+use crate::wad::map::specials::tables::{HEXEN_ROWS, RowEffect, Trigger};
 
 impl<'map> Reader<'map> {
     /// A reader over `map` for flag family `family` at `skill`: one
@@ -55,13 +56,19 @@ impl<'map> Reader<'map> {
     }
 
     /// The sectors from which a player can work `line`: its front side for a
-    /// use line, either side for a walk or shoot line.
+    /// use or shoot line, either side for a walk line, and none at all for a
+    /// monster's own activation, which no player can set off.
     fn trigger_sectors(&self, line: &Linedef, trigger: Trigger) -> BTreeSet<usize> {
-        let mut sectors: BTreeSet<usize> = self.map.side_sector(line.front).into_iter().collect();
-        if trigger == Trigger::Walk {
-            sectors.extend(self.map.side_sector(line.back));
+        match trigger {
+            Trigger::Walk => self
+                .map
+                .side_sector(line.front)
+                .into_iter()
+                .chain(self.map.side_sector(line.back))
+                .collect(),
+            Trigger::Use | Trigger::Shoot => self.map.side_sector(line.front).into_iter().collect(),
+            Trigger::Monster => BTreeSet::new(),
         }
-        sectors
     }
 
     /// Reads one linedef into the features, exits and unhandled counts.
@@ -99,9 +106,10 @@ impl<'map> Reader<'map> {
         }
     }
 
-    /// Reads a `Doom` family line against [`DOOM_ROWS`].
+    /// Reads a `Doom` family line against the `Doom` row table, or the row
+    /// a `Boom` generalized door, locked door or lift decodes to.
     fn doom_feature(&mut self, index: usize, line: &Linedef) -> Reading {
-        let Some(row) = DOOM_ROWS.iter().find(|entry| entry.special == line.special) else {
+        let Some(row) = doom_row(line.special) else {
             return Reading::Unknown;
         };
         let plan = Plan {
@@ -308,7 +316,7 @@ impl<'map> Reader<'map> {
         for (special, count) in &self.unhandled {
             warnings.push(format!(
                 "unhandled special {special} on {count} line(s) is not modelled: the walk \
-                 treats those lines as plain walls"
+                 ignores the action and reads those lines by their flags alone"
             ));
         }
         Inventory {

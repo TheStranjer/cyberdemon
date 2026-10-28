@@ -143,7 +143,8 @@ pub(super) fn is_stair_step(area: u64, floor_deltas: &[i32]) -> bool {
 /// Whether the exit special on `line` ends the level by walking over it:
 /// the shared exit rule of [`crate::wad::map::specials`] answered with a
 /// [`Trigger::Walk`] side - the `Doom` family's touch specials and the
-/// `Hexen` family's portals on any activation but `playeruse`.
+/// `Hexen` family's portals on the `playercross` activation (and its two
+/// unassigned field values).
 pub(super) fn walk_over_exit(family: FlagFamily, line: &Linedef) -> bool {
     exit_for(family, line).is_some_and(|exit| exit.trigger == Trigger::Walk)
 }

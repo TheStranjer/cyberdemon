@@ -1478,9 +1478,12 @@ src/
                   exit reading goes through: `specials.rs` the `SpecialClass`
                   (`Door`/`Lift`/`Teleport`/`Exit{secret,trigger}`) result,
                   the `special_class`, `is_door_action` (the `Doom` family's
-                  `Boom` generalized doors included), `exit_for` and
+                  `Boom` generalized doors included), `doom_row` (the
+                  playability lookup, decoding a generalized door,
+                  locked-door or lift into its row), `exit_for` and
                   `hexen_trigger` entry points, on
-                  `specials/tables.rs` (the row types and the `DOOM_ROWS`,
+                  `specials/tables.rs` (the row types, the `Use`/`Walk`/
+                  `Shoot`/`Monster` triggers and the `DOOM_ROWS`,
                   `DOOM_EXITS`, `HEXEN_ROWS`, `HEXEN_EXITS` and `KEY_THINGS`
                   tables) and that module's tests in `specials/tests.rs`;
                   `map/playability.rs` + `map/playability/` the pure

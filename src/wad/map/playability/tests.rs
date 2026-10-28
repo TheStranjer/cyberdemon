@@ -5,14 +5,16 @@
 //! no topic can disturb what another one measures.
 //!
 //! `movement` checks the lines a player can take, `features` the lifts,
-//! teleporters and exits the walk opens, `plan_built` the features the plan
-//! engine wires and `reports` everything the finished report says about a
-//! map.
+//! teleporters and exits the walk opens, `triggers` the activation kinds -
+//! use, walk, shoot, push and monster-only - and the `Boom` generalized
+//! rows the walk decodes, `plan_built` the features the plan engine wires
+//! and `reports` everything the finished report says about a map.
 
 mod features;
 mod movement;
 mod plan_built;
 mod reports;
+mod triggers;
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;

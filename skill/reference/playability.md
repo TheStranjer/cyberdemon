@@ -68,6 +68,24 @@ worked any trigger raising that door's sectors.
 not take. `doors_never_opened` lists the door sectors no opened feature
 ever raised.
 
+How a line is set off is the trigger its special (or, in the `Hexen`
+family, its activation field) carries, and each kind reaches specific
+sides: `walk` lines (`W1`/`WR` specials, `playercross`) work from
+**either** side; `use` lines (`S1`/`SR`, `D1`/`DR`, `playeruse`) from the
+**front** side only; shoot and bump lines - the `Doom` family's `G1`
+specials (the 46 gun door, the 197/198 gun exits) and the `Hexen`
+family's `impact`, `playerpush` and `missilecross` - work from the
+**front** side only, the modelled player shooting or shoving the face it
+sees; and a `monstercross` line is **never** worked by the player, so
+its door, lift, teleporter or exit reads unreachable however open the
+map around it. (`UDMF`'s `monsteruse`/`monsterpush` booleans arrive as
+their player counterpart with the monster-activate bit, so they read as
+`use`/`push`, not as monster-only.) `Boom` generalized specials are
+decoded where they model a route: a generalized door, locked door
+(single colour - `"any"` and `"all six"` stay counted unhandled) or lift
+works its tagged sectors like the classic row of the same trigger
+letters.
+
 ## `blockers` rows
 
 For every unreachable sector next to a reachable one across a two-sided
@@ -110,12 +128,14 @@ walk never reached: `{thing, name, category, sector}`.
 
 ## What is not modelled yet
 
-Boom generalized specials, ACS/`ZDoom` scripts, `UDMF`-only line effects
-and skill-vanilla monster behaviour are outside the walk: unhandled line
-specials are counted into `warnings`, never guessed. The walk is
-single-player: `notsingle` things do not spawn. `render_topdown`
-(`reference/render.md`) remains the way to look at everything the numbers
-report.
+`Boom` generalized `Floor`, `Ceiling`, `Stairs` and `Crusher` specials,
+generalized locks keyed `"any"` or `"all six"`, ACS/`ZDoom` scripts,
+`UDMF`-only line effects and skill-vanilla monster behaviour are outside
+the walk: unhandled line specials are counted into `warnings`, never
+guessed at - an unhandled line keeps its plain passage and only loses
+its action. The walk is single-player: `notsingle` things do not spawn.
+`render_topdown` (`reference/render.md`) remains the way to look at
+everything the numbers report.
 
 ## `describe_map`
 

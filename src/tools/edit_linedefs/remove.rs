@@ -1,13 +1,14 @@
 //! The three remaining linedef tools: `remove_linedef`, `split_linedef` and
 //! `join_linedefs`, each one [`crate::session::Session::edit_map`] step.
 //!
-//! [`remove_run`] checks the indices and hands the cascade-grown set to
-//! [`remove_in_place`], with [`cascade_options`] reading the call's pruning
-//! flags; [`split_run`] and [`join_run`] are thin wrappers over the pure
-//! [`crate::wad::map::ops`] engine, the split taking its optional cut point
-//! as a [`PointParam`]. Every result is its engine's report
-//! ([`RemoveToolReport`], [`SplitToolReport`] and [`JoinToolReport`]) beside
-//! the standard edit fragment.
+//! [`remove_run`] hands the call's pruning flags to the shared scaffold in
+//! [`crate::tools::maps::remove`] as an always-cascading [`remove::RemovePlan`]
+//! — a linedef is referenced by nothing, so its removal only ever grows the
+//! set through the cascade; [`split_run`] and [`join_run`] are thin wrappers
+//! over the pure [`crate::wad::map::ops`] engine, the split taking its
+//! optional cut point as a [`PointParam`]. Every result is its engine's
+//! report ([`remove::RemoveToolReport`], [`SplitToolReport`] and
+//! [`JoinToolReport`]) beside the standard edit fragment.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -16,13 +17,9 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{
-    ElementKind, IndexSelector, PointParam, check_index, edit_result_fragment,
-};
-use crate::wad::map::remove::{
-    CascadeOptions, Removal, RemovalReport, apply_removal, expand_cascade,
-};
-use crate::wad::map::{Map, ops};
+use crate::tools::maps::params::{ElementKind, IndexSelector, PointParam, edit_result_fragment};
+use crate::tools::maps::remove::{self, RemoveToolReport, cascade_options};
+use crate::wad::map::ops;
 
 /// Arguments for [`Cyberdemon::remove_linedef`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -73,16 +70,6 @@ pub(super) struct JoinLinedefsParams {
     force: Option<bool>,
 }
 
-/// Structured result of [`Cyberdemon::remove_linedef`].
-#[derive(Serialize)]
-pub(super) struct RemoveToolReport {
-    /// What the removal engine dropped, flipped and normalised.
-    removed: RemovalReport,
-    /// The standard edit fragment.
-    #[serde(flatten)]
-    edit: JsonMap<String, Value>,
-}
-
 /// Structured result of [`Cyberdemon::split_linedef`].
 #[derive(Serialize)]
 pub(super) struct SplitToolReport {
@@ -106,47 +93,22 @@ pub(super) struct JoinToolReport {
     edit: JsonMap<String, Value>,
 }
 
-/// The pruning flags of a `remove_linedef` call, the cascading default
-/// when either is absent.
-fn cascade_options(args: &RemoveLinedefParams) -> CascadeOptions {
-    CascadeOptions {
-        prune_sidedefs: args.prune_sidedefs.unwrap_or(true),
-        prune_vertices: args.prune_vertices.unwrap_or(true),
-    }
-}
-
-/// `remove_linedef`'s step: check the indices and run the cascade-grown
-/// removal.
-pub(super) fn remove_in_place(
-    map: &mut Map,
-    args: &RemoveLinedefParams,
-    indices: &[usize],
-) -> Result<RemovalReport, CyberError> {
-    for index in indices {
-        check_index(ElementKind::Linedefs, *index, map.linedefs.len())?;
-    }
-    let removal = Removal {
-        linedefs: indices.iter().copied().collect(),
-        ..Default::default()
-    };
-    let grown = expand_cascade(map, &removal, cascade_options(args));
-    apply_removal(map, &grown)
-}
-
-/// `remove_linedef`'s work: resolve the map and run the removal.
+/// `remove_linedef`'s work: resolve the map and run the shared removal
+/// step as the always-cascading plan the call's pruning flags describe.
 pub(super) fn remove_run(
     session: &mut Session,
     args: &RemoveLinedefParams,
 ) -> Result<RemoveToolReport, CyberError> {
     let indices = args.index.indices()?;
-    let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let label = format!("remove {} linedefs", indices.len());
-    let (removed, report) =
-        session.edit_map(name, &label, |map| remove_in_place(map, args, &indices))?;
-    Ok(RemoveToolReport {
-        removed,
-        edit: edit_result_fragment(&report),
-    })
+    remove::remove_run(
+        session,
+        &remove::RemovePlan {
+            kind: ElementKind::Linedefs,
+            map: args.map.as_deref(),
+            indices: &indices,
+            cascade: Some(cascade_options(args.prune_sidedefs, args.prune_vertices)),
+        },
+    )
 }
 
 /// `split_linedef`'s work: resolve the map and run the one-step split.

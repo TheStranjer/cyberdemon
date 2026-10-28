@@ -13,7 +13,8 @@
 //! one undo entry moves the whole call. The parameter shapes
 //! ([`IndexSelector`]) and validators ([`check_index`],
 //! [`validate_texture_name`]) come from [`crate::tools::maps::params`];
-//! removal runs through [`crate::wad::map::remove`] and refuses the
+//! removal walks the shared scaffold of [`crate::tools::maps::remove`] and
+//! refuses the
 //! `conflict` of a sector that sidedefs still use unless `cascade` is set.
 //! `create_sector_from_loop` and `carve_void` wrap the pure overlay
 //! engine [`crate::wad::map::overlay::apply_overlay`]: [`draw`] turns

@@ -12,8 +12,9 @@
 //! geometry: `nodes_invalidated` is always `false`. The parameter shapes
 //! ([`IndexSelector`], [`FlagsInput`]) and validators come from
 //! [`crate::tools::maps::params`]; the flag names resolve through the map's
-//! own [`FlagFamily`] thing table, and removal runs through
-//! [`crate::wad::map::remove::apply_removal`] with only the thing set.
+//! own [`FlagFamily`] thing table, and removal walks the shared scaffold in
+//! [`crate::tools::maps::remove`] with only the thing set — nothing
+//! references a thing, so its no-cascade arm is the plain apply.
 //!
 //! The format rules: `Doom`-family maps (binary `Doom`, and `UDMF` in the
 //! `doom`/`heretic`/`strife` namespace) store no `z`, `tid`, `special` or
@@ -40,8 +41,9 @@ use crate::session::Session;
 use crate::tools::edit_things::edit::{EditThingParams, edit_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment, fits_field,
+    ElementKind, FlagsInput, IndexSelector, edit_result_fragment, fits_field,
 };
+use crate::tools::maps::remove;
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
@@ -50,7 +52,6 @@ use crate::wad::map::flags::{
     THING_HEXEN_CLASS1, THING_HEXEN_CLASS2, THING_HEXEN_CLASS3, THING_HEXEN_COOP, THING_HEXEN_DM,
     THING_HEXEN_SINGLE, THING_SKILL_BITS,
 };
-use crate::wad::map::remove::{Removal, apply_removal};
 use crate::wad::map::{FlagFamily, FlagKind, Map, Thing};
 
 /// Degrees in a full circle; thing angles normalise into `0..=359`.
@@ -311,31 +312,29 @@ fn add_run(session: &mut Session, args: &AddThingParams) -> Result<AddReport, Cy
     })
 }
 
-/// `remove_thing`'s work: resolve the map and run the removal with only
-/// the thing set.
+/// `remove_thing`'s work: resolve the map and run the shared removal step
+/// with only the thing set, reporting the removed indices.
 ///
 /// # Errors
 ///
 /// [`IndexSelector::indices`]' and [`check_index`]' refusals (an index the
 /// map does not hold is `not_found`), [`apply_removal`]'s errors and
 /// whatever [`crate::session::Session::edit_map`] reports.
+///
+/// [`check_index`]: crate::tools::maps::params::check_index
+/// [`apply_removal`]: crate::wad::map::remove::apply_removal
 fn remove_run(session: &mut Session, args: &RemoveThingParams) -> Result<RemoveReport, CyberError> {
     let indices = args.index.indices()?;
-    let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let label = format!("remove {} things", indices.len());
-    let (removed, report) = session.edit_map(name, &label, |map| {
-        for index in &indices {
-            check_index(ElementKind::Things, *index, map.things.len())?;
-        }
-        let removal = Removal {
-            things: indices.iter().copied().collect(),
-            ..Default::default()
-        };
-        Ok(apply_removal(map, &removal)?.things)
-    })?;
+    let plan = remove::RemovePlan {
+        kind: ElementKind::Things,
+        map: args.map.as_deref(),
+        indices: &indices,
+        cascade: None,
+    };
+    let report = remove::remove_run(session, &plan)?;
     Ok(RemoveReport {
-        removed,
-        edit: edit_result_fragment(&report),
+        removed: report.removed.things,
+        edit: report.edit,
     })
 }
 

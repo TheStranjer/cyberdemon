@@ -16,10 +16,10 @@
 //! one undo entry moves the whole call. The parameter shapes
 //! ([`IndexSelector`], [`FlagsInput`]) and validators ([`check_index`],
 //! [`validate_texture_name`], [`edit_result_fragment`]) come from
-//! [`crate::tools::maps::params`]; removal runs through
-//! [`crate::wad::map::remove`] with the linedef set seeded and the pruning
-//! [`crate::wad::map::remove::CascadeOptions`] from the call. The split and
-//! join geometry itself lives in the pure [`crate::wad::map::ops`].
+//! [`crate::tools::maps::params`]; removal walks the shared scaffold of
+//! [`crate::tools::maps::remove`] with the linedef set seeded and the
+//! pruning [`crate::wad::map::remove::CascadeOptions`] from the call. The
+//! split and join geometry itself lives in the pure [`crate::wad::map::ops`].
 //!
 //! The orientation rule: walk from `v1` to `v2`, the front sidedef is on
 //! your right, the back sidedef on your left. `edit_linedef`'s `flip` keeps

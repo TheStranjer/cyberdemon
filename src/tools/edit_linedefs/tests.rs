@@ -14,8 +14,10 @@ use serde_json::from_str;
 use super::add::AddLinedefParams;
 use super::edit::EditLinedefParams;
 use super::endpoints::{EndpointSpec, endpoint_spec};
-use super::remove::{RemoveLinedefParams, remove_in_place};
+use super::remove::RemoveLinedefParams;
 use crate::error::CyberError;
+use crate::tools::maps::params::ElementKind;
+use crate::tools::maps::remove::{cascade_options, remove_in_place};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::RemovalReport;
 use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
@@ -133,17 +135,22 @@ pub(super) fn spec_of(args: &AddLinedefParams) -> EndpointSpec<'_> {
     endpoint_spec(args).expect("test endpoint forms resolve")
 }
 
-/// Run `remove_in_place` on `map` with the request parsed from `json`.
+/// Run the shared linedef removal step (always cascading) on `map` with
+/// the request parsed from `json`.
 pub(super) fn removal(json: &str, map: &mut Map) -> RemovalReport {
     let args = remove_args(json);
     let indices = args.index.indices().expect("test indices parse");
-    remove_in_place(map, &args, &indices).expect("the removal applies")
+    let cascade = cascade_options(args.prune_sidedefs, args.prune_vertices);
+    remove_in_place(map, ElementKind::Linedefs, &indices, Some(cascade))
+        .expect("the removal applies")
 }
 
-/// The error `remove_in_place` gives for the request parsed from
+/// The error the linedef removal step gives for the request parsed from
 /// `json`.
 pub(super) fn removal_error(json: &str, map: &mut Map) -> CyberError {
     let args = remove_args(json);
     let indices = args.index.indices().expect("test indices parse");
-    remove_in_place(map, &args, &indices).expect_err("the request must refuse")
+    let cascade = cascade_options(args.prune_sidedefs, args.prune_vertices);
+    remove_in_place(map, ElementKind::Linedefs, &indices, Some(cascade))
+        .expect_err("the request must refuse")
 }

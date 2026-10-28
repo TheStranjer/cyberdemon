@@ -8,11 +8,12 @@
 //! and copies nothing in.
 //!
 //! The parameter shapes ([`IndexSelector`]) and validators ([`check_index`],
-//! [`edit_result_fragment`]) and the shared `join`, `find_vertex` and
+//! [`edit_result_fragment`]) and the shared `find_vertex` and
 //! `untouched_fragment` helpers come from [`crate::tools::maps::params`];
 //! the working-then-merged map read from [`crate::tools::maps::common`].
-//! Removal runs through [`crate::wad::map::remove`] and refuses the
-//! `conflict` of a vertex the linedefs still use unless `cascade` is set.
+//! Removal walks the shared scaffold of [`crate::tools::maps::remove`] and
+//! refuses the `conflict` of a vertex the linedefs still use unless
+//! `cascade` is set.
 //!
 //! The geometry rule: a vertex is geometry for the node lumps while a
 //! linedef ends at it. Editing a referenced vertex changes geometry — the
@@ -44,7 +45,7 @@
 
 mod moves;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -56,16 +57,14 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::server::Cyberdemon;
 use crate::session::Session;
-use crate::tools::edit_vertices::moves::{check_vertices, move_run};
+use crate::tools::edit_vertices::moves::move_run;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    IndexSelector, edit_result_fragment, find_vertex, fits_coord, join, untouched_fragment,
+    ElementKind, IndexSelector, edit_result_fragment, find_vertex, fits_coord, untouched_fragment,
 };
+use crate::tools::maps::remove::{self, RemovePlan, RemoveToolReport, cascade_options};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
-use crate::wad::map::remove::{
-    CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
-};
 use crate::wad::map::{Map, Vertex};
 
 /// Where a `move_vertex` call lands its targets: each selected vertex index
@@ -172,16 +171,6 @@ struct MoveReport {
     edit: JsonMap<String, Value>,
 }
 
-/// Structured result of [`Cyberdemon::remove_vertex`].
-#[derive(Serialize)]
-struct RemoveToolReport {
-    /// What the removal engine dropped, flipped and normalised.
-    removed: RemovalReport,
-    /// The standard edit fragment.
-    #[serde(flatten)]
-    edit: JsonMap<String, Value>,
-}
-
 /// Whether the request accepts an existing point at the same coordinates.
 fn reuses(args: &AddVertexParams) -> bool {
     args.reuse_existing.unwrap_or(true)
@@ -216,55 +205,6 @@ fn add_in_place(map: &mut Map, args: &AddVertexParams) -> Result<VertexRow, Cybe
     })
 }
 
-/// The pruning flags of a `remove_vertex` call, the cascading default when
-/// either is absent.
-fn cascade_options(args: &RemoveVertexParams) -> CascadeOptions {
-    CascadeOptions {
-        prune_sidedefs: args.prune_sidedefs.unwrap_or(true),
-        prune_vertices: args.prune_vertices.unwrap_or(true),
-    }
-}
-
-/// The seed removal of exactly the selected vertices.
-fn vertex_removal(indices: &[usize]) -> Removal {
-    Removal {
-        vertices: indices.iter().copied().collect::<BTreeSet<usize>>(),
-        ..Default::default()
-    }
-}
-
-/// The `conflict` naming every linedef that still uses a selected vertex.
-fn dependent_refusal(uses: &BTreeMap<usize, Vec<usize>>) -> CyberError {
-    let parts: Vec<String> = uses
-        .iter()
-        .map(|(vertex, lines)| format!("vertex {vertex} is used by linedef(s) {}", join(lines)))
-        .collect();
-    CyberError::Conflict(format!(
-        "{}; pass cascade: true to remove the referencing linedefs with them",
-        parts.join("; ")
-    ))
-}
-
-/// `remove_vertex`'s step: check the indices, refuse a used vertex without
-/// `cascade`, then run the removal (grown by the cascade when set).
-fn remove_in_place(
-    map: &mut Map,
-    args: &RemoveVertexParams,
-    indices: &[usize],
-) -> Result<RemovalReport, CyberError> {
-    check_vertices(indices, map)?;
-    let removal = vertex_removal(indices);
-    if !args.cascade {
-        let uses = dependents(map, &removal).linedefs_using_vertices;
-        if !uses.is_empty() {
-            return Err(dependent_refusal(&uses));
-        }
-        return apply_removal(map, &removal);
-    }
-    let grown = expand_cascade(map, &removal, cascade_options(args));
-    apply_removal(map, &grown)
-}
-
 /// `add_vertex`'s work: resolve the map, return a point that is already
 /// there, else run the one-step append.
 fn add_run(session: &mut Session, args: &AddVertexParams) -> Result<AddReport, CyberError> {
@@ -294,20 +234,24 @@ fn add_run(session: &mut Session, args: &AddVertexParams) -> Result<AddReport, C
     })
 }
 
-/// `remove_vertex`'s work: resolve the map and run the removal.
+/// `remove_vertex`'s work: resolve the map and run the shared removal step,
+/// whose cascade takes the call's pruning flags.
 fn remove_run(
     session: &mut Session,
     args: &RemoveVertexParams,
 ) -> Result<RemoveToolReport, CyberError> {
     let indices = args.index.indices()?;
-    let name = common::resolve_map_name(session, args.map.as_deref())?;
-    let label = format!("remove {} vertices", indices.len());
-    let (removed, report) =
-        session.edit_map(name, &label, |map| remove_in_place(map, args, &indices))?;
-    Ok(RemoveToolReport {
-        removed,
-        edit: edit_result_fragment(&report),
-    })
+    remove::remove_run(
+        session,
+        &RemovePlan {
+            kind: ElementKind::Vertices,
+            map: args.map.as_deref(),
+            indices: &indices,
+            cascade: args
+                .cascade
+                .then(|| cascade_options(args.prune_sidedefs, args.prune_vertices)),
+        },
+    )
 }
 
 #[expect(

@@ -7,17 +7,20 @@ use alloc::collections::BTreeSet;
 
 use super::{add_args, code, edit_args, remove_args, room, test_map, vanilla_surfaces};
 use crate::tools::edit_sectors::edit::{
-    add_in_place, cascade_options, dependent_refusal, edit_in_place, edited_sector, has_change,
-    join, new_height, new_sector, planned_edits, remove_in_place, validate_edit,
+    add_in_place, edit_in_place, edited_sector, has_change, new_height, new_sector, planned_edits,
+    sector_cascade, validate_edit,
 };
 use crate::tools::edit_sectors::{
     DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT, FIELD_MAX, HEIGHT_MAX, HEIGHT_MIN, LIGHT_MAX, LIGHT_MIN,
     check_binary_ranges, check_height_order, check_light, edited_flat, flat_or_default,
     validate_flat,
 };
+use crate::tools::maps::params::{ElementKind, join};
+use crate::tools::maps::remove::{dependent_refusal, remove_in_place};
 use crate::tools::themes::Surfaces;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Sector;
+use crate::wad::map::remove::CascadeOptions;
 
 #[test]
 fn added_sectors_take_the_theme_defaults() {
@@ -303,7 +306,7 @@ fn the_planning_pass_validates_the_whole_selection_first() {
 #[test]
 fn removal_refuses_used_sectors_and_cuts_orphans() {
     let mut map = test_map();
-    let used = remove_in_place(&mut map, &remove_args(r#"{"index": 0}"#), &[0]);
+    let used = remove_in_place(&mut map, ElementKind::Sectors, &[0], None);
     let error = used.expect_err("sidedefs 0/1 use sector 0");
     assert_eq!(code(&error), "conflict", "referenced without cascade");
     assert!(
@@ -314,13 +317,13 @@ fn removal_refuses_used_sectors_and_cuts_orphans() {
         "the message names the users and the fix: {error}"
     );
     assert_eq!(map.sectors.len(), 3, "the conflict changed nothing");
-    let past = remove_in_place(&mut map, &remove_args(r#"{"index": 9}"#), &[9]);
+    let past = remove_in_place(&mut map, ElementKind::Sectors, &[9], None);
     assert_eq!(
         code(&past.expect_err("sector 9 is not there")),
         "not_found",
         "a missing index refuses"
     );
-    let report = remove_in_place(&mut map, &remove_args(r#"{"index": 2}"#), &[2])
+    let report = remove_in_place(&mut map, ElementKind::Sectors, &[2], None)
         .expect("the unreferenced sector goes without a cascade");
     assert_eq!(report.sectors, vec![2_usize], "the removed original index");
     assert!(
@@ -335,8 +338,9 @@ fn a_cascaded_removal_closes_the_line_and_prunes_the_room() {
     let mut map = test_map();
     let report = remove_in_place(
         &mut map,
-        &remove_args(r#"{"index": 1, "cascade": true}"#),
+        ElementKind::Sectors,
         &[1],
+        Some(CascadeOptions::default()),
     )
     .expect("the cascade lifts the conflict");
     assert_eq!(report.sectors, vec![1_usize], "the seeded sector goes");
@@ -363,20 +367,22 @@ fn a_cascaded_removal_closes_the_line_and_prunes_the_room() {
 #[test]
 fn the_pruning_flags_reach_the_cascade() {
     let pruning = remove_args(r#"{"index": 1, "cascade": true}"#);
+    let defaults = sector_cascade(&pruning).expect("the request cascades");
     assert!(
-        cascade_options(&pruning).prune_sidedefs && cascade_options(&pruning).prune_vertices,
+        defaults.prune_sidedefs && defaults.prune_vertices,
         "both prunings default on"
     );
     let let_alone = remove_args(
         r#"{"index": 1, "cascade": true, "prune_sidedefs": false, "prune_vertices": false}"#,
     );
-    let options = cascade_options(&let_alone);
+    let options = sector_cascade(&let_alone).expect("the request cascades");
     assert!(
         !options.prune_sidedefs && !options.prune_vertices,
         "both switch off"
     );
     let mut map = test_map();
-    let report = remove_in_place(&mut map, &let_alone, &[1]).expect("the unpruned cascade applies");
+    let report = remove_in_place(&mut map, ElementKind::Sectors, &[1], Some(options))
+        .expect("the unpruned cascade applies");
     assert_eq!(
         report.linedefs,
         vec![2_usize],
@@ -398,7 +404,7 @@ fn the_conflict_message_joins_every_user() {
         [(0_usize, vec![0_usize, 1]), (1_usize, vec![2, 3])]
             .into_iter()
             .collect();
-    let message = dependent_refusal(&uses).to_string();
+    let message = dependent_refusal(ElementKind::Sectors, ElementKind::Sidedefs, &uses).to_string();
     assert!(
         message.contains("sector 0 is used by sidedef(s) 0, 1")
             && message.contains("sector 1 is used by sidedef(s) 2, 3"),

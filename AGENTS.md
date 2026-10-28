@@ -647,7 +647,9 @@ src/
                   lines), `edit_linedefs/side_edit.rs` (the `SideEdit`
                   parameter, the sidedef it computes and the side it points
                   at) and `edit_linedefs/remove.rs` (the
-                  `remove_linedef`, `split_linedef` and `join_linedefs`
+                  `remove_linedef` run walking the shared `maps/remove`
+                  scaffold with its always-on cascade and the call's pruning
+                  flags, beside the `split_linedef` and `join_linedefs`
                   parameters, reports and runs); that group's tests are
                   `edit_linedefs/tests.rs` (the shared fixture builders) plus
                   `edit_linedefs/tests/add.rs` (the endpoint, side, family
@@ -669,8 +671,9 @@ src/
                   `SectorDetail`, the checks every resulting sector faces
                   and the router) with `edit_sectors/edit.rs` (the
                   `add_sector`, `edit_sector` and `remove_sector` parameter
-                  and report shapes beside their planning and one-step
-                  work) and `edit_sectors/draw.rs` (the
+                  and report shapes beside their planning and one-step work,
+                  `remove_sector` walking the shared `maps/remove` scaffold
+                  with the call's pruning flags) and `edit_sectors/draw.rs` (the
                   `create_sector_from_loop` and `carve_void` parameters and
                   the overlay requests they build); that group's tests are
                   `edit_sectors/tests.rs` (the shared fixture builders) plus
@@ -678,7 +681,8 @@ src/
                   checks) and `edit_sectors/tests/draw.rs` (the loop and
                   carve requests),
                   `tools/edit_vertices.rs` (the parameter and report shapes,
-                  the append and removal paths and the router) with
+                  the append path and the `remove_vertex` run walking the
+                  shared `maps/remove` scaffold, and the router) with
                   `edit_vertices/moves.rs` (the move's request-to-points
                   math, the collapsed-line refusal and `move_vertex`'s run);
                   that group's tests are `edit_vertices/tests.rs` (the
@@ -739,7 +743,12 @@ src/
                   conveniences every `edit_*` group's `check_binary_*` wrapper
                   calls, `edit_result_fragment`, `join`,
                   `untouched_fragment` and `find_vertex`) every map edit tool
-                  builds on; `tools/maps/manage.rs`
+                  builds on, and `tools/maps/remove.rs` the shared
+                  element-removal scaffold (`seed_removal`, `check_present`,
+                  `cascade_options`, the kind-pair `dependent_refusal`, the
+                  refuse-or-cascade `remove_in_place` step and the `remove_run`
+                  wrapper with its `RemovePlan` and `RemoveToolReport`) every
+                  `remove_*` tool walks; `tools/maps/manage.rs`
                   the block-level machinery behind `create_map`,
                   `copy_map`, `rename_map` and `remove_map` (the plans,
                   the `GL` helpers and the block builders) on

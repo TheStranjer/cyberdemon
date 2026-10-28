@@ -26,7 +26,7 @@ use crate::tools::graphics::get::parse_frame;
 use crate::tools::graphics::picture::{
     ImageOptions, ImageParams, Rendered, publish_image, render_patch,
 };
-use crate::tools::graphics::resolve::load_sprite;
+use crate::tools::graphics::resolve::{PictureIndex, load_sprite};
 use crate::wad::name::LumpName;
 
 /// Arguments for [`Cyberdemon::get_thing_sprite`].
@@ -163,7 +163,8 @@ pub(super) fn prepare_thing_sprite(
     let def = thing_sprite_def(session, request.kind)?;
     let frame = request.frame.unwrap_or(def.frame);
     let sprite = def.sprite.clone();
-    let found = match load_sprite(session, &sprite, frame, request.rotation) {
+    let index = PictureIndex::new(session)?;
+    let found = match load_sprite(&index, &sprite, frame, request.rotation) {
         Ok(found) => found,
         Err(error) if error.is_not_found() => {
             return Err(missing_thing_sprite(&sprite, frame, request.rotation));

@@ -3,6 +3,7 @@
 //! builders and the texture-definition builders the topic modules build
 //! on.
 
+mod index;
 mod pictures;
 mod textures;
 

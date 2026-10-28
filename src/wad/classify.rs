@@ -49,8 +49,9 @@ const SOUND_FORMAT: u16 = 3;
 const MAX_PATCH_DIM: u16 = 4096;
 /// Bytes in one `PatchCol` column-offset entry.
 const COLUMN_OFFSET_LEN: usize = 4;
-/// A marker-delimited region of the lump directory.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+/// A marker-delimited region of the lump directory. Ordered by declaration
+/// order, which is the order [`Namespace::ALL`] lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Namespace {
     /// Between `S_START`/`SS_START` and `S_END`/`SS_END`.

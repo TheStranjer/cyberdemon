@@ -5,7 +5,10 @@
 //! the `PLAYPAL` palette, the 34 `COLORMAP` lighting tables, the composed
 //! image of every wall texture and flat the map actually uses, the sky
 //! image its name and game select when the map shows a sky plane, and the
-//! settings to draw with. What cannot be found is not an error: a texture,
+//! settings to draw with. Every picture is read through one
+//! `crate::session::resolve::PictureIndex`, so the directory, the texture
+//! definitions and each shared patch are read once per scene. What cannot
+//! be found is not an error: a texture,
 //! flat or sky the map names and the session lacks gets a 64x64
 //! checkerboard fallback built from the palette's brightest and darkest
 //! colours and a line in [`Scene::problems`], so the view still renders.
@@ -23,7 +26,7 @@ use crate::gfx::palette::Palette;
 use crate::render::RenderSettings;
 use crate::session::mapdir::load_map;
 use crate::session::palette::load_palette;
-use crate::session::resolve::{load_flat, load_texture};
+use crate::session::resolve::{PictureIndex, load_flat, load_texture};
 use crate::session::{Scope, Session};
 use crate::wad::game::{Game, sky_flat};
 use crate::wad::lumps;
@@ -102,7 +105,8 @@ pub struct Scene {
 /// sky of a map that shows one through the texture definitions first and
 /// the flat resolver after them; the palette from `PLAYPAL` entry 0 and
 /// the lighting tables from the merged `COLORMAP` when it holds at least
-/// 34 full tables, generated from the palette otherwise.
+/// 34 full tables, generated from the palette otherwise. The whole build
+/// reads the merged view through one `PictureIndex`.
 ///
 /// # Errors
 ///
@@ -116,15 +120,32 @@ pub fn build_scene(
     map: LumpName,
     settings: &RenderSettings,
 ) -> Result<Scene, CyberError> {
+    build_scene_with(&PictureIndex::new(session)?, map, settings)
+}
+
+/// [`build_scene`] over a [`PictureIndex`] the caller already built: the
+/// `render_view` tool shares one index between the scene and its sprite
+/// pass, so one render reads the merged view once.
+///
+/// # Errors
+///
+/// [`build_scene`]'s.
+#[inline]
+pub(crate) fn build_scene_with(
+    index: &PictureIndex<'_>,
+    map: LumpName,
+    settings: &RenderSettings,
+) -> Result<Scene, CyberError> {
+    let session = index.session();
     let model = load_map(session, map, Scope::Merged)?;
     let palette = load_palette(session, PALETTE_NORMAL)?;
     let mut problems = Vec::new();
     let lighting = scene_colormaps(session, &palette, &mut problems);
     let fallback = fallback_image(&palette)?;
-    let textures = wall_textures(session, &model, &fallback, &mut problems);
-    let flats = sector_flats(session, &model, &fallback, &mut problems);
+    let textures = wall_textures(index, &model, &fallback, &mut problems);
+    let flats = sector_flats(index, &model, &fallback, &mut problems);
     let sky_marker = sky_flat(session.game());
-    let sky = sky_image(session, &model, &fallback, &mut problems);
+    let sky = sky_image(index, &model, &fallback, &mut problems);
     Ok(Scene {
         map: model,
         palette,
@@ -179,9 +200,11 @@ fn scene_colormaps(
 }
 
 /// The composed image of every texture the map's sidedefs name, with a
-/// fallback and a problem line for each one the session cannot load.
+/// fallback and a problem line for each one the session cannot load. The
+/// whole set shares the one [`PictureIndex`]: its definitions decode once
+/// and every patch component is read once.
 fn wall_textures(
-    session: &Session,
+    index: &PictureIndex<'_>,
     map: &Map,
     fallback: &IndexedImage,
     problems: &mut Vec<String>,
@@ -190,7 +213,7 @@ fn wall_textures(
     for name in texture_names(map) {
         let loaded = LumpName::parse(&name)
             .ok()
-            .and_then(|lump| load_texture(session, lump).ok());
+            .and_then(|lump| load_texture(index, lump).ok());
         if let Some(composite) = loaded {
             problems.extend(composite.problems);
             textures.insert(name, composite.image);
@@ -205,14 +228,14 @@ fn wall_textures(
 /// The image of every flat the map's sectors name, with a fallback and a
 /// problem line for each one the session cannot load.
 fn sector_flats(
-    session: &Session,
+    index: &PictureIndex<'_>,
     map: &Map,
     fallback: &IndexedImage,
     problems: &mut Vec<String>,
 ) -> BTreeMap<String, IndexedImage> {
     let mut flats = BTreeMap::new();
     for name in flat_names(map) {
-        let image = load_flat_image(session, &name).unwrap_or_else(|| {
+        let image = load_flat_image(index, &name).unwrap_or_else(|| {
             problems.push(format!("missing flat {name}"));
             fallback.clone()
         });
@@ -227,16 +250,16 @@ fn sector_flats(
 /// picture is neither looked for nor missed: the silent fallback stands in
 /// for an image the renderer never samples.
 fn sky_image(
-    session: &Session,
+    index: &PictureIndex<'_>,
     map: &Map,
     fallback: &IndexedImage,
     problems: &mut Vec<String>,
 ) -> IndexedImage {
-    if !shows_sky(map, sky_flat(session.game())) {
+    if !shows_sky(map, sky_flat(index.session().game())) {
         return fallback.clone();
     }
-    let name = sky_name(session.game(), &map.name.to_string());
-    load_sky_image(session, &name, problems).unwrap_or_else(|| {
+    let name = sky_name(index.session().game(), &map.name.to_string());
+    load_sky_image(index, &name, problems).unwrap_or_else(|| {
         problems.push(format!("missing sky {name}"));
         fallback.clone()
     })
@@ -258,24 +281,24 @@ fn shows_sky(map: &Map, sky: &str) -> bool {
 /// and some ports write. A definition whose components the session lacks
 /// reports them; `None` when it serves neither picture.
 fn load_sky_image(
-    session: &Session,
+    index: &PictureIndex<'_>,
     name: &str,
     problems: &mut Vec<String>,
 ) -> Option<IndexedImage> {
     let lump = LumpName::parse(name).ok()?;
-    match load_texture(session, lump) {
+    match load_texture(index, lump) {
         Ok(composite) => {
             problems.extend(composite.problems);
             Some(composite.image)
         }
-        Err(_) => load_flat(session, lump).ok(),
+        Err(_) => load_flat(index, lump).ok(),
     }
 }
 
 /// The flat named `name`, `None` when no lump of that name decodes.
-fn load_flat_image(session: &Session, name: &str) -> Option<IndexedImage> {
+fn load_flat_image(index: &PictureIndex<'_>, name: &str) -> Option<IndexedImage> {
     let lump = LumpName::parse(name).ok()?;
-    load_flat(session, lump).ok()
+    load_flat(index, lump).ok()
 }
 
 /// The texture names the sidedefs use, normalized and `"-"` excluded.

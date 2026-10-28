@@ -186,6 +186,10 @@ pub(in crate::session) struct ViewCache {
     /// the cache tests read it.
     #[cfg(test)]
     definition_rebuilds: Cell<u64>,
+    /// How many picture indexes have been built over this session's merged
+    /// view; the resolver tests count these.
+    #[cfg(test)]
+    picture_indexes: Cell<u64>,
 }
 
 impl ViewCache {
@@ -226,6 +230,14 @@ impl ViewCache {
             .set(self.definition_rebuilds.get().saturating_add(1));
     }
 
+    /// Counts one picture index built over this cache's session (resolver
+    /// tests only).
+    #[cfg(test)]
+    pub(in crate::session) fn count_picture_index(&self) {
+        self.picture_indexes
+            .set(self.picture_indexes.get().saturating_add(1));
+    }
+
     /// How many merged directories this cache has built (cache tests only).
     #[cfg(test)]
     pub(in crate::session) fn rebuild_count(&self) -> u64 {
@@ -236,6 +248,13 @@ impl ViewCache {
     #[cfg(test)]
     pub(in crate::session) fn definition_rebuild_count(&self) -> u64 {
         self.definition_rebuilds.get()
+    }
+
+    /// How many picture indexes have been built over this cache's session
+    /// (resolver tests only).
+    #[cfg(test)]
+    pub(in crate::session) fn picture_index_count(&self) -> u64 {
+        self.picture_indexes.get()
     }
 }
 
@@ -253,6 +272,8 @@ impl Clone for ViewCache {
             rebuilds: Cell::new(0_u64),
             #[cfg(test)]
             definition_rebuilds: Cell::new(0_u64),
+            #[cfg(test)]
+            picture_indexes: Cell::new(0_u64),
         }
     }
 }
@@ -269,7 +290,8 @@ impl fmt::Debug for ViewCache {
         #[cfg(test)]
         built
             .field("rebuilds", &self.rebuilds.get())
-            .field("definition_rebuilds", &self.definition_rebuilds.get());
+            .field("definition_rebuilds", &self.definition_rebuilds.get())
+            .field("picture_indexes", &self.picture_indexes.get());
         built.finish()
     }
 }

@@ -17,7 +17,7 @@ use crate::error::CyberError;
 use crate::gfx::codec::encode_png;
 use crate::gfx::patch::decode_patch;
 use crate::state::AppState;
-use crate::tools::graphics::resolve::lump_bytes;
+use crate::tools::graphics::resolve::{PictureIndex, lump_bytes};
 use crate::tools::graphics::{DEFAULT_PALETTE, FALLBACK_NAME, RGBA_MIME};
 use crate::tools::palette::load_palette;
 use crate::wad::name::LumpName;
@@ -56,7 +56,10 @@ async fn patch_payload(
     match (args.name.as_deref(), args.source.as_deref()) {
         (Some(text), None) => {
             let name = LumpName::parse(text)?;
-            let data = state.with_session(|session| lump_bytes(session, name))?;
+            let data = state.with_session(|session| {
+                let index = PictureIndex::new(session)?;
+                lump_bytes(&index, name)
+            })?;
             Ok((name.to_string(), data))
         }
         (None, Some(uri)) => {

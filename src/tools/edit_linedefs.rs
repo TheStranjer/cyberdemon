@@ -62,7 +62,7 @@ use crate::tools::edit_linedefs::edit::{EditLinedefParams, edit_run};
 use crate::tools::edit_linedefs::remove::{
     JoinLinedefsParams, RemoveLinedefParams, SplitLinedefParams, join_run, remove_run, split_run,
 };
-use crate::tools::maps::params::validate_texture_name;
+use crate::tools::maps::params::{fits_coord, fits_field, fits_offset, validate_texture_name};
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::NO_TEXTURE;
@@ -79,14 +79,6 @@ const U16_MAX: i32 = 0xFFFF_i32;
 /// The highest value a binary `Hexen` `special` or `arg` column holds
 /// (`u8::MAX`).
 const SCRIPT_MAX: i32 = 0xFF_i32;
-/// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
-const COORD_MIN: i32 = -0x8000_i32;
-/// The highest coordinate an `i16` binary `VERTEXES` column holds (`i16::MAX`).
-const COORD_MAX: i32 = 0x7FFF_i32;
-/// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
-const OFFSET_MIN: i32 = -0x8000_i32;
-/// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
-const OFFSET_MAX: i32 = 0x7FFF_i32;
 
 /// One linedef's fields as the tools report them, flags named for the
 /// map's family.
@@ -130,29 +122,6 @@ fn flags_given(args: &EditLinedefParams) -> bool {
 #[must_use]
 const fn default_line_flags(two_sided: bool) -> u32 {
     if two_sided { TWO_SIDED } else { BLOCKING }
-}
-
-/// Refuses unless `value` sits inside the binary record field's
-/// `min..=max` range.
-fn fits_field(name: &str, value: i32, min: i32, max: i32) -> Result<(), CyberError> {
-    if (min..=max).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds {min}..={max}"
-    )))
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `VERTEXES` column.
-fn fits_coord(name: &str, value: i32) -> Result<(), CyberError> {
-    fits_field(name, value, COORD_MIN, COORD_MAX)
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `SIDEDEFS` offset column.
-fn fits_offset(name: &str, value: i32) -> Result<(), CyberError> {
-    fits_field(name, value, OFFSET_MIN, OFFSET_MAX)
 }
 
 /// Range-checks one point against the binary `VERTEXES` record; a `UDMF`

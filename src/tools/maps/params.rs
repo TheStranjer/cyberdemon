@@ -14,6 +14,11 @@
 //! the changed-nothing result fragment ([`untouched_fragment`]) and the
 //! exact-point vertex lookup ([`find_vertex`]).
 //!
+//! Beside these, the one binary field-range checker ([`fits_field`], with
+//! the [`fits_coord`] and [`fits_offset`] conveniences for the `i16`
+//! columns) every `edit_*` group's per-format check calls, so the shared
+//! refusal message is spelled in exactly one place.
+//!
 //! These are the pieces the per-element editing tools (vertices, linedefs,
 //! sidedefs, sectors, things, ...) reuse so they stay thin wrappers around
 //! [`crate::session::Session::edit_map`]: parse the parameters with these
@@ -26,11 +31,17 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::map_edit::MapEditReport;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
 use crate::wad::map::{FlagFamily, FlagKind, Map, flags};
 use crate::wad::name::{LumpName, MAX_NAME_LEN};
 
 /// Longest texture name a `UDMF` map may carry.
 const UDMF_TEXTURE_MAX: usize = 64;
+
+/// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
+pub const OFFSET_MIN: i32 = -0x8000_i32;
+/// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
+pub const OFFSET_MAX: i32 = 0x7FFF_i32;
 
 /// A `flags` parameter: the raw bitset or a list of flag names.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -308,13 +319,57 @@ pub fn join(indices: &[usize]) -> String {
         .join(", ")
 }
 
+/// Refuses unless `value` sits inside the binary record field's
+/// `min..=max` range.
+///
+/// This is the one range checker every `edit_*` group's format check calls
+/// (each keeps its own `check_binary_*` wrapper because only the wrapper
+/// knows which `MapFormat` needs the check at all).
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] naming the field, the value and the
+/// range.
+#[inline]
+pub fn fits_field(name: &str, value: i32, min: i32, max: i32) -> Result<(), CyberError> {
+    if (min..=max).contains(&value) {
+        return Ok(());
+    }
+    Err(CyberError::InvalidArgument(format!(
+        "{name} {value} is out of range for the binary map format: the field holds {min}..={max}"
+    )))
+}
+
+/// Refuses unless `value` sits inside the `i16` range of a binary
+/// `VERTEXES` column.
+///
+/// # Errors
+///
+/// As [`fits_field`].
+#[inline]
+pub fn fits_coord(name: &str, value: i32) -> Result<(), CyberError> {
+    fits_field(name, value, COORD_MIN, COORD_MAX)
+}
+
+/// Refuses unless `value` sits inside the `i16` range of a binary
+/// `SIDEDEFS` offset column.
+///
+/// # Errors
+///
+/// As [`fits_field`].
+#[inline]
+pub fn fits_offset(name: &str, value: i32) -> Result<(), CyberError> {
+    fits_field(name, value, OFFSET_MIN, OFFSET_MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{from_str, json};
 
     use super::{
-        EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector, PointParam, check_index,
-        edit_result_fragment, find_vertex, join, untouched_fragment, validate_texture_name,
+        COORD_MAX, COORD_MIN, EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector,
+        OFFSET_MAX, OFFSET_MIN, PointParam, check_index, edit_result_fragment, find_vertex,
+        fits_coord, fits_field, fits_offset, join, untouched_fragment, validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
     use crate::wad::classify::MapFormat;
@@ -743,6 +798,70 @@ mod tests {
             find_vertex(&Map::default(), 0_i32, 0_i32),
             None,
             "an empty list is a miss"
+        );
+    }
+
+    #[test]
+    fn fits_field_accepts_both_endpoints_and_refuses_outside_naming_the_field() {
+        assert!(
+            fits_field("type", 0_i32, 0_i32, 0xFFFF_i32).is_ok(),
+            "the low end"
+        );
+        assert!(
+            fits_field("type", 0xFFFF_i32, 0_i32, 0xFFFF_i32).is_ok(),
+            "the high end"
+        );
+        let over = fits_field("type", 70_000_i32, 0_i32, 0xFFFF_i32).expect_err("above refuses");
+        assert_eq!(over.code(), "invalid_argument", "above code");
+        assert_eq!(
+            over.message(),
+            "type 70000 is out of range for the binary map format: the field holds 0..=65535",
+            "the refusal names the field, value and range"
+        );
+        let under = fits_field("arg", -1_i32, 0_i32, 255_i32).expect_err("below refuses");
+        assert_eq!(under.code(), "invalid_argument", "below code");
+        assert_eq!(
+            under.message(),
+            "arg -1 is out of range for the binary map format: the field holds 0..=255",
+            "the refusal spells a negative value"
+        );
+    }
+
+    #[test]
+    fn fits_coord_spells_the_vertexes_i16_range_at_both_edges() {
+        assert!(fits_coord("x", COORD_MIN).is_ok(), "i16::MIN fits");
+        assert!(fits_coord("y", COORD_MAX).is_ok(), "i16::MAX fits");
+        let over = fits_coord("x", COORD_MAX.saturating_add(1)).expect_err("above i16 refuses");
+        assert_eq!(
+            over.message(),
+            "x 32768 is out of range for the binary map format: the field holds -32768..=32767",
+            "the refusal names the field and the i16 range"
+        );
+        let under = fits_coord("y", COORD_MIN.saturating_sub(1)).expect_err("below i16 refuses");
+        assert_eq!(
+            under.message(),
+            "y -32769 is out of range for the binary map format: the field holds -32768..=32767",
+            "the lower side refuses too"
+        );
+    }
+
+    #[test]
+    fn fits_offset_spells_the_sidedefs_i16_range_at_both_edges() {
+        assert!(fits_offset("x_offset", OFFSET_MIN).is_ok(), "i16::MIN fits");
+        assert!(fits_offset("y_offset", OFFSET_MAX).is_ok(), "i16::MAX fits");
+        let over =
+            fits_offset("y_offset", OFFSET_MAX.saturating_add(1)).expect_err("above i16 refuses");
+        assert_eq!(
+            over.message(),
+            "y_offset 32768 is out of range for the binary map format: the field holds -32768..=32767",
+            "the refusal names the field and the i16 range"
+        );
+        let under =
+            fits_offset("x_offset", OFFSET_MIN.saturating_sub(1)).expect_err("below i16 refuses");
+        assert_eq!(
+            under.message(),
+            "x_offset -32769 is out of range for the binary map format: the field holds -32768..=32767",
+            "the lower side refuses too"
         );
     }
 }

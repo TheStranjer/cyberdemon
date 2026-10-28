@@ -30,7 +30,8 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, IndexSelector, check_index, edit_result_fragment, join, validate_texture_name,
+    ElementKind, IndexSelector, check_index, edit_result_fragment, fits_offset, join,
+    validate_texture_name,
 };
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
@@ -40,11 +41,6 @@ use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };
-
-/// The lowest offset an `i16` binary `SIDEDEFS` column holds (`i16::MIN`).
-const OFFSET_MIN: i32 = -0x8000_i32;
-/// The highest offset an `i16` binary `SIDEDEFS` column holds (`i16::MAX`).
-const OFFSET_MAX: i32 = 0x7FFF_i32;
 
 /// Arguments for [`Cyberdemon::add_sidedef`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -210,18 +206,6 @@ fn edited_texture(
         || Ok(current.to_owned()),
         |name| validate_texture_name(name, format),
     )
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `SIDEDEFS` offset column.
-fn fits_offset(name: &str, value: i32) -> Result<(), CyberError> {
-    if (OFFSET_MIN..=OFFSET_MAX).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds \
-         {OFFSET_MIN}..={OFFSET_MAX}"
-    )))
 }
 
 /// Range-checks `side`'s offsets against the binary `SIDEDEFS` record; a
@@ -527,12 +511,12 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddSidedefParams, EditSidedefParams, OFFSET_MAX, OFFSET_MIN, add_in_place,
-        check_binary_offsets, dependent_refusal, detail_of, edit_in_place, edited_sidedef,
-        edited_texture, fits_offset, has_change, new_offset, new_sidedef, new_texture,
-        remove_in_place, validate_edit,
+        AddSidedefParams, EditSidedefParams, add_in_place, check_binary_offsets, dependent_refusal,
+        detail_of, edit_in_place, edited_sidedef, edited_texture, has_change, new_offset,
+        new_sidedef, new_texture, remove_in_place, validate_edit,
     };
     use crate::error::CyberError;
+    use crate::tools::maps::params::{OFFSET_MAX, OFFSET_MIN, fits_offset};
     use crate::wad::classify::MapFormat;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;

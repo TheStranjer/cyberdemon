@@ -59,7 +59,7 @@ use crate::session::Session;
 use crate::tools::edit_vertices::moves::{check_vertices, move_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    IndexSelector, edit_result_fragment, find_vertex, join, untouched_fragment,
+    IndexSelector, edit_result_fragment, find_vertex, fits_coord, join, untouched_fragment,
 };
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
@@ -67,11 +67,6 @@ use crate::wad::map::remove::{
     CascadeOptions, Removal, RemovalReport, apply_removal, dependents, expand_cascade,
 };
 use crate::wad::map::{Map, Vertex};
-
-/// The lowest coordinate an `i16` binary `VERTEXES` column holds (`i16::MIN`).
-const COORD_MIN: i32 = -0x8000_i32;
-/// The highest coordinate an `i16` binary `VERTEXES` column holds (`i16::MAX`).
-const COORD_MAX: i32 = 0x7FFF_i32;
 
 /// Where a `move_vertex` call lands its targets: each selected vertex index
 /// with the point it gets.
@@ -190,18 +185,6 @@ struct RemoveToolReport {
 /// Whether the request accepts an existing point at the same coordinates.
 fn reuses(args: &AddVertexParams) -> bool {
     args.reuse_existing.unwrap_or(true)
-}
-
-/// Refuses unless `value` sits inside the `i16` range of a binary
-/// `VERTEXES` column.
-fn fits_coord(name: &str, value: i32) -> Result<(), CyberError> {
-    if (COORD_MIN..=COORD_MAX).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds \
-         {COORD_MIN}..={COORD_MAX}"
-    )))
 }
 
 /// Range-checks one point against the binary `VERTEXES` record; a `UDMF`

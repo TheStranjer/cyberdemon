@@ -734,7 +734,10 @@ src/
                   flag adjustment `edit_thing` and `edit_linedef` resolve their
                   three flag parameters into, `IndexSelector`,
                   `PointParam`, the re-exported `check_index` guard,
-                  `validate_texture_name`, `edit_result_fragment`, `join`,
+                  `validate_texture_name`, the shared binary field-range
+                  checker `fits_field` with its `fits_coord` and `fits_offset`
+                  conveniences every `edit_*` group's `check_binary_*` wrapper
+                  calls, `edit_result_fragment`, `join`,
                   `untouched_fragment` and `find_vertex`) every map edit tool
                   builds on; `tools/maps/manage.rs`
                   the block-level machinery behind `create_map`,

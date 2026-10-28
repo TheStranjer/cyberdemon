@@ -40,10 +40,11 @@ use crate::session::Session;
 use crate::tools::edit_things::edit::{EditThingParams, edit_run};
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment,
+    ElementKind, FlagsInput, IndexSelector, check_index, edit_result_fragment, fits_field,
 };
 use crate::tools::reply;
 use crate::wad::classify::MapFormat;
+use crate::wad::map::consts::{COORD_MAX, COORD_MIN};
 use crate::wad::map::flags;
 use crate::wad::map::flags::{
     THING_HEXEN_CLASS1, THING_HEXEN_CLASS2, THING_HEXEN_CLASS3, THING_HEXEN_COOP, THING_HEXEN_DM,
@@ -72,10 +73,6 @@ const ZERO_ARGS: [i32; 5] = [0_i32; 5];
 const FIELD_MIN: i32 = 0_i32;
 /// The highest value the `u16` `type` column holds (`u16::MAX`).
 const TYPE_MAX: i32 = 0xFFFF_i32;
-/// The lowest value an `i16` coordinate column holds (`i16::MIN`).
-const COORD_MIN: i32 = -0x8000_i32;
-/// The highest value an `i16` coordinate column holds (`i16::MAX`).
-const COORD_MAX: i32 = 0x7FFF_i32;
 /// The highest value a `Hexen` `u8` script column holds (`u8::MAX`).
 const SCRIPT_MAX: i32 = 0xFF_i32;
 
@@ -216,17 +213,6 @@ pub(in crate::tools) fn check_doom_plain(
         return Err(doom_field_error());
     }
     Ok(())
-}
-
-/// Refuses unless `value` sits inside the binary record field's
-/// `min..=max` range.
-fn fits_field(name: &str, value: i32, min: i32, max: i32) -> Result<(), CyberError> {
-    if (min..=max).contains(&value) {
-        return Ok(());
-    }
-    Err(CyberError::InvalidArgument(format!(
-        "{name} {value} is out of range for the binary map format: the field holds {min}..={max}"
-    )))
 }
 
 /// The `Hexen`-only `special` and `args` of a binary `Hexen` record fit

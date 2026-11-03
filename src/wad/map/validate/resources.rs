@@ -13,7 +13,10 @@
 //! all - without any `TEXTURE1`/`TEXTURE2`/`TX_` source there is no standard
 //! to check texture names against, and [`texture_check_skipped`] says so
 //! instead; the flat side likewise judges no names when the session carries
-//! no flats.
+//! no flats. Names that the merged view holds only as the *other* kind of
+//! picture (a flat worn on a face, a wall texture worn on a plane) are the
+//! `misused_resource` check's rows, not undefined-name rows: each offending
+//! element reports once.
 
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -21,7 +24,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::{Context, Issue, Severity};
+use super::Misuse;
+use super::{Context, Issue, ResourceIndex, Severity};
 use crate::wad::map::consts::{NO_TEXTURE, is_sky_flat, normalized_picture};
 use crate::wad::map::model::{Map, Sector, Sidedef};
 
@@ -76,22 +80,27 @@ fn texture_issue(index: usize, role: &str, name: &str) -> Issue {
     .sidedef(&[index])
 }
 
-/// The undefined faces named by one sidedef.
-fn side_texture_gaps(index: usize, side: &Sidedef, textures: &BTreeSet<String>) -> Vec<Issue> {
+/// The undefined faces named by one sidedef. A face wearing a name the
+/// view carries only as a flat is the `misused_resource` check's row, not
+/// an undefined-name row, so it stays out of here.
+fn side_texture_gaps(index: usize, side: &Sidedef, resources: &ResourceIndex) -> Vec<Issue> {
     let mut gaps: Vec<Issue> = Vec::new();
     for (role, name) in [
         ("upper", side.upper.as_str()),
         ("lower", side.lower.as_str()),
         ("middle", side.middle.as_str()),
     ] {
-        if checkable(name) && !known(textures, name) {
+        let misused = Misuse::flat_only(name, &resources.flats, &resources.textures);
+        if checkable(name) && !known(&resources.textures, name) && !misused {
             gaps.push(texture_issue(index, role, name));
         }
     }
     gaps
 }
 
-/// Sidedef faces naming a texture the merged view does not define.
+/// Sidedef faces naming a texture the merged view does not define. A face
+/// wearing a name the view carries only as a flat belongs to the
+/// `misused_resource` check instead.
 pub(super) fn missing_texture(map: &Map, context: &Context<'_>) -> Vec<Issue> {
     if !context.resources.has_texture_defs {
         return Vec::new();
@@ -99,7 +108,7 @@ pub(super) fn missing_texture(map: &Map, context: &Context<'_>) -> Vec<Issue> {
     map.sidedefs
         .iter()
         .enumerate()
-        .flat_map(|(index, side)| side_texture_gaps(index, side, &context.resources.textures))
+        .flat_map(|(index, side)| side_texture_gaps(index, side, context.resources))
         .collect()
 }
 
@@ -139,14 +148,20 @@ fn bare_plane(flat: &str) -> bool {
 }
 
 /// The standards `missing_flat` judges sector planes by: the carried flats
-/// (`None` for a session with none, which judges no names) and the
-/// session's sky flat, which never reports on either plane.
+/// (`None` for a session with none, which judges no names), the session's
+/// sky flat, which never reports on either plane, and the defined wall
+/// textures, whose exclusive names belong to the `misused_resource`
+/// check's rows instead.
 struct FlatRules<'ctx> {
     /// The merged view's flat names, `None` when it carries no flats at
     /// all and so names nothing to check.
     carried: Option<&'ctx BTreeSet<String>>,
     /// The sky flat of the session's game: [`crate::wad::game::sky_flat`].
     sky: &'ctx str,
+    /// The merged view's defined composite texture names: a plane wearing
+    /// one of those that is carried as no flat is a misused picture, not
+    /// an undefined name, and [`misused_resource`] reports it.
+    walls: &'ctx BTreeSet<String>,
 }
 
 /// The row one plane of sector `index` earns, or `None` when it is sound.
@@ -154,12 +169,16 @@ struct FlatRules<'ctx> {
 /// `rules` carries flats and does not hold it, the empty set standing for
 /// a session that carries no flats and so judges no names at all. The
 /// session's sky flat never reports: every port draws the sky itself.
+/// A name defined only as a wall texture never reports here either: the
+/// `misused_resource` check owns that row.
 fn plane_gap(index: usize, role: &str, flat: &str, rules: &FlatRules<'_>) -> Option<Issue> {
     if bare_plane(flat) {
         return Some(bare_plane_issue(index, role, flat));
     }
     let carried = rules.carried?;
-    let sound = is_sky_flat(flat, rules.sky) || known(carried, flat);
+    let sound = is_sky_flat(flat, rules.sky)
+        || known(carried, flat)
+        || Misuse::texture_only(flat, carried, rules.walls);
     (!sound).then(|| flat_issue(index, role, flat))
 }
 
@@ -180,11 +199,14 @@ fn sector_flat_gaps(index: usize, space: &Sector, rules: &FlatRules<'_>) -> Vec<
 /// in `Hexen`) is always allowed on either plane - the engine substitutes
 /// the sky. A carried flat is the standard a name is measured against, so
 /// the name half stays quiet when the session carries none; an undressed
-/// plane needs no standard and reports whatever the session holds.
+/// plane needs no standard and reports whatever the session holds. A name
+/// the view defines only as a wall texture is the `misused_resource`
+/// check's row, not an undefined-name row.
 pub(super) fn missing_flat(map: &Map, context: &Context<'_>) -> Vec<Issue> {
     let rules = FlatRules {
         carried: (!context.resources.flats.is_empty()).then_some(&context.resources.flats),
         sky: context.sky_flat,
+        walls: &context.resources.textures,
     };
     map.sectors
         .iter()

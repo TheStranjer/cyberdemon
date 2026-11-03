@@ -17,6 +17,12 @@
 //! The binary formats store the offsets as `i16`, so values outside
 //! `-32768..=32767` are refused as `invalid_argument` before anything is
 //! written; `UDMF` stores full integers and has no such cap.
+//!
+//! The warning rule: a call that dresses a face is weighed against the
+//! merged view's stock, and every given name the view carries only as a
+//! flat earns a `warnings` row - the one sentence
+//! [`crate::wad::map::validate::Misuse`] owns, shared with `validate_map`'s
+//! `misused_resource` check so the two never disagree.
 
 use alloc::collections::BTreeMap;
 
@@ -32,16 +38,18 @@ use crate::server::Cyberdemon;
 use crate::session::Session;
 use crate::tools::maps::common;
 use crate::tools::maps::params::{
-    ElementKind, IndexSelector, check_index, edit_result_fragment, fits_offset,
+    ElementKind, IndexSelector, check_index, edit_result_fragment, element_subject, fits_offset,
     validate_texture_name,
 };
 use crate::tools::maps::remove::{self, RemovePlan, RemoveToolReport};
 use crate::tools::reply;
+use crate::tools::validate::resource_index;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Map;
 use crate::wad::map::Sidedef;
 use crate::wad::map::consts::NO_TEXTURE;
 use crate::wad::map::remove::CascadeOptions;
+use crate::wad::map::validate::{Misuse, ResourceIndex};
 
 /// Arguments for [`Cyberdemon::add_sidedef`].
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -152,6 +160,11 @@ struct AddReport {
     index: usize,
     /// The created sidedef's fields.
     sidedef: SidedefDetail,
+    /// Picture-kind warnings for the names this call dressed: one per
+    /// given face whose name the merged view carries only as a flat
+    /// (`validate_map` reports the same elements as `misused_resource`),
+    /// in the upper/lower/middle order.
+    warnings: Vec<String>,
     /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -162,6 +175,8 @@ struct AddReport {
 struct EditReport {
     /// The edited sidedefs, ascending by index.
     sidedefs: Vec<EditRow>,
+    /// Picture-kind warnings, as in [`AddReport`].
+    warnings: Vec<String>,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -287,6 +302,52 @@ fn add_in_place(map: &mut Map, args: &AddSidedefParams) -> Result<EditRow, Cyber
     })
 }
 
+/// The face roles the request dressed, paired with the names it gave:
+/// roles the request left out are absent, and the names read off `rows`
+/// are the stored ones, in the upper/lower/middle order. A given role
+/// writes the same name on every selected row, so the first row speaks.
+fn given_faces(
+    rows: &[EditRow],
+    upper: Option<&String>,
+    lower: Option<&String>,
+    middle: Option<&String>,
+) -> Vec<(&'static str, String)> {
+    let Some(first) = rows.first() else {
+        return Vec::new();
+    };
+    let mut given: Vec<(&'static str, String)> = Vec::new();
+    if upper.is_some() {
+        given.push(("upper", first.detail.upper.clone()));
+    }
+    if lower.is_some() {
+        given.push(("lower", first.detail.lower.clone()));
+    }
+    if middle.is_some() {
+        given.push(("middle", first.detail.middle.clone()));
+    }
+    given
+}
+
+/// The picture-kind warnings one sidedef call's given face names earn: a
+/// face dressed with a name the merged view carries only as a flat is
+/// never a wall texture, and the warning - the very sentence the
+/// `misused_resource` check later reports - says what to do instead.
+/// `rows` are the sidedefs the call wrote, so one sentence lists them
+/// all.
+fn face_warnings(
+    rows: &[EditRow],
+    given: &[(&'static str, String)],
+    resources: &ResourceIndex,
+) -> Vec<String> {
+    let indices: Vec<usize> = rows.iter().map(|row| row.index).collect();
+    let who = element_subject(ElementKind::Sidedefs, &indices);
+    given
+        .iter()
+        .filter(|face| Misuse::flat_only(&face.1, &resources.flats, &resources.textures))
+        .map(|face| Misuse::FlatOnWall.explain(&who, face.0, &face.1))
+        .collect()
+}
+
 /// Refuses an absolute/delta pair carried together on one axis.
 fn check_conflicts(args: &EditSidedefParams) -> Result<(), CyberError> {
     let moves = [
@@ -368,27 +429,54 @@ fn edit_in_place(
     Ok(rows)
 }
 
-/// `add_sidedef`'s work: resolve the map, run the one-step append.
+/// `add_sidedef`'s work: resolve the map, run the one-step append and
+/// weigh the given face names against the merged view's stock.
 fn add_run(session: &mut Session, args: &AddSidedefParams) -> Result<AddReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let asked = args.upper.is_some() || args.lower.is_some() || args.middle.is_some();
+    let resources = asked.then(|| resource_index(session)).transpose()?;
     let label = format!("add sidedef for sector {}", args.sector);
     let (row, report) = session.edit_map(name, &label, |map| add_in_place(map, args))?;
+    let rows = core::slice::from_ref(&row);
+    let given = given_faces(
+        rows,
+        args.upper.as_ref(),
+        args.lower.as_ref(),
+        args.middle.as_ref(),
+    );
+    let warnings = resources
+        .as_ref()
+        .map_or_else(Vec::new, |stock| face_warnings(rows, &given, stock));
     Ok(AddReport {
         index: row.index,
         sidedef: row.detail,
+        warnings,
         edit: edit_result_fragment(&report),
     })
 }
 
-/// `edit_sidedef`'s work: validate, resolve the map, run the one-step edit.
+/// `edit_sidedef`'s work: validate, resolve the map, run the one-step
+/// edit and weigh the given face names against the merged view's stock.
 fn edit_run(session: &mut Session, args: &EditSidedefParams) -> Result<EditReport, CyberError> {
     let indices = validate_edit(args)?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let asked = args.upper.is_some() || args.lower.is_some() || args.middle.is_some();
+    let resources = asked.then(|| resource_index(session)).transpose()?;
     let label = format!("edit {} sidedefs", indices.len());
     let (rows, report) =
         session.edit_map(name, &label, |map| edit_in_place(map, args, &indices))?;
+    let given = given_faces(
+        &rows,
+        args.upper.as_ref(),
+        args.lower.as_ref(),
+        args.middle.as_ref(),
+    );
+    let warnings = resources
+        .as_ref()
+        .map_or_else(Vec::new, |stock| face_warnings(&rows, &given, stock));
     Ok(EditReport {
         sidedefs: rows,
+        warnings,
         edit: edit_result_fragment(&report),
     })
 }
@@ -420,7 +508,7 @@ fn remove_run(
 impl Cyberdemon {
     /// Appends one sidedef to a map in a single undoable edit.
     #[tool(
-        description = "Adds one sidedef (one side of a linedef: its face textures, offsets and the sector it opens into) to a map in a single undoable edit; sector must name an existing sector and the new side starts unreferenced until a linedef points at it. Prefer create_sector_from_loop to draw walls together with their sides, or build_map_from_plan for a whole map."
+        description = "Adds one sidedef (one side of a linedef: its face textures, offsets and the sector it opens into) to a map in a single undoable edit; sector must name an existing sector and the new side starts unreferenced until a linedef points at it. A result warning names every face you dressed with a picture the merged view carries only as a flat (validate_map reports it as misused_resource). Prefer create_sector_from_loop to draw walls together with their sides, or build_map_from_plan for a whole map."
     )]
     fn add_sidedef(
         &self,
@@ -431,7 +519,7 @@ impl Cyberdemon {
 
     /// Changes one or several sidedefs in a single undoable edit.
     #[tool(
-        description = "Changes one or several sidedefs of a map in a single undoable edit: upper/middle/lower texture names, x_offset and y_offset (absolute or delta) and the sector the side faces. Prefer bulk_edit to apply texture or offset changes across a whole find_elements selection, and replace_texture to swap one texture name for another everywhere; use this for one side's exact fields."
+        description = "Changes one or several sidedefs of a map in a single undoable edit: upper/middle/lower texture names, x_offset and y_offset (absolute or delta) and the sector the side faces. A result warning names every face this call dressed with a picture the merged view carries only as a flat (validate_map reports it as misused_resource). Prefer bulk_edit to apply texture or offset changes across a whole find_elements selection, and replace_texture to swap one texture name for another everywhere; use this for one side's exact fields."
     )]
     fn edit_sidedef(
         &self,
@@ -463,18 +551,19 @@ mod tests {
     use serde_json::from_str;
 
     use super::{
-        AddSidedefParams, EditSidedefParams, add_in_place, check_binary_offsets, detail_of,
-        edit_in_place, edited_sidedef, edited_texture, has_change, new_offset, new_sidedef,
-        new_texture, validate_edit,
+        AddSidedefParams, EditRow, EditSidedefParams, add_in_place, check_binary_offsets,
+        detail_of, edit_in_place, edited_sidedef, edited_texture, face_warnings, given_faces,
+        has_change, new_offset, new_sidedef, new_texture, validate_edit,
     };
     use crate::error::CyberError;
     use crate::tools::maps::params::{ElementKind, OFFSET_MAX, OFFSET_MIN, fits_offset};
     use crate::tools::maps::remove::{dependent_refusal, remove_in_place};
     use crate::wad::classify::MapFormat;
     use crate::wad::map::remove::CascadeOptions;
+    use crate::wad::map::validate::ResourceIndex;
     use crate::wad::map::{Linedef, Map, Sector, Sidedef, Vertex};
     use crate::wad::name::LumpName;
-    use alloc::collections::BTreeMap;
+    use alloc::collections::{BTreeMap, BTreeSet};
 
     /// The error code of `error`, for compact asserts.
     fn code(error: &CyberError) -> &str {
@@ -817,6 +906,77 @@ mod tests {
             message.contains("sidedef 1 is used by linedef(s) 1, 4")
                 && message.contains("sidedef 2 is used by linedef(s) 1"),
             "both sides are listed with their lines: {message}"
+        );
+    }
+
+    /// The report rows of one name written on sidedefs `0` and `2`.
+    fn dressed_rows(middle: &str) -> Vec<EditRow> {
+        [0_usize, 2]
+            .into_iter()
+            .map(|index| EditRow {
+                index,
+                detail: detail_of(&side("-", middle, "-", 0)),
+            })
+            .collect()
+    }
+
+    /// A resource index defining `WALL1` and carrying the flat `FLOOR1`.
+    fn stock() -> ResourceIndex {
+        ResourceIndex {
+            textures: BTreeSet::from(["WALL1".to_owned()]),
+            flats: BTreeSet::from(["FLOOR1".to_owned()]),
+            has_texture_defs: true,
+        }
+    }
+
+    #[test]
+    fn given_faces_reads_the_stored_names_off_the_rows_of_the_given_roles() {
+        let rows = dressed_rows("FLOOR1");
+        let given = given_faces(&rows, None, None, Some(&"floor1".to_owned()));
+        assert_eq!(
+            given,
+            vec![("middle", "FLOOR1".to_owned())],
+            "the unasked roles are absent and the asked one carries the stored name"
+        );
+        assert!(
+            given_faces(&rows, None, None, None).is_empty(),
+            "an offsets-only call gives nothing to weigh"
+        );
+    }
+
+    #[test]
+    fn face_warnings_name_a_flat_dressed_as_a_wall_texture_once_per_face() {
+        let rows = dressed_rows("FLOOR1");
+        let given = given_faces(&rows, None, None, Some(&"floor1".to_owned()));
+        let warnings = face_warnings(&rows, &given, &stock());
+        assert_eq!(warnings.len(), 1, "one role, one sentence");
+        assert!(
+            warnings[0].contains("middle texture \"FLOOR1\" on sidedefs 0, 2")
+                && warnings[0].contains("carried only as a flat")
+                && warnings[0].contains("edit_sidedef"),
+            "the sentence names the role, the name and the fix: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn face_warnings_stay_quiet_on_sound_unknown_and_unset_names() {
+        let wall1 = dressed_rows("WALL1");
+        let given = given_faces(&wall1, None, None, Some(&"WALL1".to_owned()));
+        assert!(
+            face_warnings(&wall1, &given, &stock()).is_empty(),
+            "a defined texture on a face needs no word"
+        );
+        let nope = dressed_rows("NOPE");
+        let nope_given = given_faces(&nope, None, None, Some(&"NOPE".to_owned()));
+        assert!(
+            face_warnings(&nope, &nope_given, &stock()).is_empty(),
+            "a name of neither kind is the missing_texture check's row"
+        );
+        let dashes = dressed_rows("-");
+        let dash_given = given_faces(&dashes, Some(&"-".to_owned()), None, None);
+        assert!(
+            face_warnings(&dashes, &dash_given, &stock()).is_empty(),
+            "clearing a face names no picture"
         );
     }
 }

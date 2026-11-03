@@ -148,6 +148,11 @@ mod tests {
         assert_eq!(result["sidedef"]["upper"], json!("BRICK"), "uppercased");
         assert_eq!(result["sidedef"]["middle"], json!("STARTAN3"));
         assert_eq!(
+            result["warnings"],
+            json!([]),
+            "names the view lacks are not misuses, just undefined"
+        );
+        assert_eq!(
             result["sidedef"]["lower"],
             json!("-"),
             "absent stays a dash"
@@ -162,6 +167,43 @@ mod tests {
         let added = rows.last().expect("the appended sidedef");
         assert_eq!(added["upper"], json!("BRICK"), "written and read back");
         assert_eq!(added["y_offset"], json!(-16_i32), "with the negative shift");
+    }
+
+    #[tokio::test]
+    async fn dressing_a_face_with_a_carried_flat_warns_in_the_result() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let client = doom_loaded(dir.path()).await;
+        let added = call(
+            &client,
+            "add_sidedef",
+            json!({"sector": 0_i32, "middle": "floor1"}),
+        )
+        .await;
+        assert_eq!(
+            added["sidedef"]["middle"],
+            json!("FLOOR1"),
+            "the name writes: a misuse is a warning, never a refusal"
+        );
+        let warnings = added["warnings"].as_array().expect("a warning list");
+        assert_eq!(warnings.len(), 1, "one face, one sentence: {added}");
+        assert!(
+            warnings[0]
+                .as_str()
+                .expect("text")
+                .contains("the middle texture \"FLOOR1\" on sidedef 8 is carried only as a flat"),
+            "the warning names the new side: {warnings:?}"
+        );
+        let moved = call(
+            &client,
+            "edit_sidedef",
+            json!({"index": 8_i32, "x_offset_delta": 4_i32}),
+        )
+        .await;
+        assert_eq!(
+            moved["warnings"],
+            json!([]),
+            "an offsets-only edit gives the call no stock to read"
+        );
     }
 
     #[tokio::test]

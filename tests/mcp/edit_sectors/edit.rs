@@ -76,6 +76,11 @@ async fn add_sector_stores_custom_values_and_refuses_bad_ones() {
     );
     assert_eq!(result["sector"]["light"], json!(255_i32));
     assert_eq!(result["sector"]["tag"], json!(66_i32));
+    assert_eq!(
+        result["warnings"],
+        json!([]),
+        "a carried flat on its plane is sound"
+    );
     refuse(&client, "add_sector", json!({"floor_flat": "TOOLONG9C"})).await;
     refuse(&client, "add_sector", json!({"ceiling_flat": "-"})).await;
     refuse(&client, "add_sector", json!({"light": 300_i32})).await;
@@ -96,6 +101,38 @@ async fn add_sector_stores_custom_values_and_refuses_bad_ones() {
         "only the one successful add stands in the merged view"
     );
     assert_eq!(rows[2]["tag"], json!(66_i32), "and it is the custom one");
+}
+
+#[tokio::test]
+async fn dressing_a_plane_with_a_wall_texture_warns_in_the_result() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = doom_loaded(dir.path()).await;
+    let added = call(&client, "add_sector", json!({"floor_flat": "wall1"})).await;
+    assert_eq!(
+        added["sector"]["floor_flat"],
+        json!("WALL1"),
+        "the name writes: a misuse is a warning, never a refusal"
+    );
+    let warnings = added["warnings"].as_array().expect("a warning list");
+    assert_eq!(warnings.len(), 1, "one plane, one sentence: {added}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .expect("text")
+            .contains("the floor flat \"WALL1\" on sector 2 is defined only as a wall texture"),
+        "the warning names the new sector: {warnings:?}"
+    );
+    let moved = call(
+        &client,
+        "edit_sector",
+        json!({"index": 0_i32, "light": 96_i32}),
+    )
+    .await;
+    assert_eq!(
+        moved["warnings"],
+        json!([]),
+        "an edit that gives no flat has nothing to weigh"
+    );
 }
 
 #[tokio::test]

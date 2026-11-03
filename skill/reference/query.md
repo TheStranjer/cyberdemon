@@ -219,7 +219,7 @@ read the result back with `find_elements {kind: "things", where:
 
 `{map?, kind, where? = [], within?, set?, add?, flags_set?, flags_clear?,
 allow_missing? = false, dry_run? = false, max? = 5000}` →
-`{matched, changed, indices, truncated, dry_run, preview, map,
+`{matched, changed, indices, truncated, dry_run, preview, warnings, map,
 nodes_invalidated, copied_to_working, next_steps}`
 
 The general field editor: selects elements with exactly the
@@ -293,7 +293,10 @@ heights, offsets and thing coordinates, `u16` thing types and
 `special`/args); `UDMF` is unbounded beyond the model's `i32` columns; a
 sector's ceiling must end at or above its floor. Texture and flat names
 must exist in the merged view (`list_textures`/`list_flats`) — `not_found`
-— unless `allow_missing: true` writes them anyway; `"-"` always clears a
+— unless `allow_missing: true` writes them anyway; a written name the
+view holds only as the **other** kind of picture (a flat on a face, a
+wall texture on a plane) then earns a `warnings` row and `validate_map`
+reports every such element as `misused_resource`; `"-"` always clears a
 sidedef face. `max` (default 5000) caps the matched set before anything
 runs: a query matching more fails `limit_exceeded` and writes nothing
 (`max: 0` with any match fails); narrow the `where`/`within` or raise

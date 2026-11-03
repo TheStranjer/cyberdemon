@@ -38,6 +38,12 @@ in first (`copied_to_working: true`) — see `reference/maps.md` and
   `"-"`; every plane needs a flat, so `validate_map` reports such a sector
   as `missing_flat` (see `reference/validate.md`) and `edit_sector` fixes
   it.
+- A flat name is only validated for shape, never refused for what the
+  merged view holds: dressing a plane with a **wall texture** (a composite
+  texture dresses a wall, never a plane) writes fine and comes back as a
+  `warnings` row on the result — `validate_map` reports the same sectors
+  as `misused_resource`. `list_flats` shows the carried flats;
+  `create_flat_from_image` builds one from a picture.
 - The resulting sector needs its ceiling at or above its floor; equal
   heights are allowed (the closed shell of a raised door), a ceiling
   below the floor fails `invalid_argument`.
@@ -51,8 +57,8 @@ in first (`copied_to_working: true`) — see `reference/maps.md` and
 `{map?, floor_height? = 0, ceiling_height? = 128, floor_flat? =
 the theme's Floor flat, ceiling_flat? = the theme's Ceiling flat,
 light? = 160, special? = 0, tag? = 0}` → `{index, sector: {floor_height,
-ceiling_height, floor_flat, ceiling_flat, light, special, tag}, map,
-nodes_invalidated: true, copied_to_working}`
+ceiling_height, floor_flat, ceiling_flat, light, special, tag}, warnings,
+map, nodes_invalidated: true, copied_to_working}`
 
 Appends one sector with the given fields (each optional, the defaults
 above) and reports its index and stored values. The unasked flats are
@@ -60,8 +66,9 @@ theme-aware: `get_texture_theme`'s current `floor` and `ceiling` rows,
 resolved once per call against the merged view — a Heretic session gets
 the `castle` theme's `FLOOR03`/`FLAT506`, and the vanilla `FLOOR4_8`/
 `CEIL3_5` names only stand in when the theme has nothing of that kind.
-Because the sector list grew, the result reports `nodes_invalidated:
-true`.
+`warnings` names every plane this call dressed with a wall texture the
+merged view defines (empty when all is well). Because the sector list
+grew, the result reports `nodes_invalidated: true`.
 
 ```json
 call add_sector {"map": "MAP01"}
@@ -204,15 +211,17 @@ the hall's `WALL1`.
 `{map?, index, floor_height?, ceiling_height?, floor_delta?,
 ceiling_delta?, floor_flat?, ceiling_flat?, light?, special?, tag?}` →
 `{sectors: [{index, floor_height, ceiling_height, floor_flat,
-ceiling_flat, light, special, tag}], map, nodes_invalidated: false,
-copied_to_working}`
+ceiling_flat, light, special, tag}], warnings, map, nodes_invalidated:
+false, copied_to_working}`
 
 `index` is one integer or a list; every change parameter applies to all
 selected sectors and only the given fields change. `floor_height`/
 `ceiling_height` set absolutely, `floor_delta`/`ceiling_delta` shift each
 selected sector from its own value; an absolute and its delta together
 (or no change parameter at all) are `invalid_argument`. The format rules
-above apply to each resulting sector. A missing index is `not_found` and
+above apply to each resulting sector. `warnings` names every given plane
+whose flat name the merged view defines only as a wall texture
+(`validate_map`'s `misused_resource`). A missing index is `not_found` and
 nothing changes. Property edits keep the nodes (`false`).
 
 ```json

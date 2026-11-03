@@ -31,12 +31,13 @@ use crate::plan::things::resolve_thing_kind;
 use crate::session::{Scope, Session};
 use crate::state::AppState;
 use crate::tools::maps::common;
-use crate::tools::maps::params::edit_result_fragment;
+use crate::tools::maps::params::{edit_result_fragment, element_subject};
 use crate::tools::query::replace::Stock;
 use crate::wad::game::sky_flat;
 use crate::wad::map::Map;
 use crate::wad::map::bulk::edits::{Applied, Change, EditScope, FieldEdits, apply};
 use crate::wad::map::query::{ElementKind, Filter, Query, QueryContext, Within, run_query};
+use crate::wad::map::validate::Misuse;
 use crate::wad::name::LumpName;
 
 use super::{DEFAULT_MAX, INDEX_PAGE, PREVIEW_PAGE};
@@ -107,6 +108,12 @@ pub(super) struct BulkReport {
     pub(super) dry_run: bool,
     /// Up to [`PREVIEW_PAGE`] before/after change rows.
     pub(super) preview: Vec<Change>,
+    /// Picture-kind warnings for the names this call wrote: a sidedef
+    /// face dressed with a name the merged view carries only as a flat,
+    /// or a sector plane dressed with a name it defines only as a wall
+    /// texture (`validate_map` reports every such element as
+    /// `misused_resource`).
+    pub(super) warnings: Vec<String>,
     /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
     #[serde(flatten)]
     pub(super) edit: JsonMap<String, Value>,
@@ -130,6 +137,18 @@ const BULK_DRY_NEXT_STEPS: [&str; 2] = [
 /// The extra step a geometry edit's report carries.
 pub(super) const BULK_NODES_STEP: &str =
     "nodes_invalidated is true: run build_nodes before playing the map in vanilla Doom";
+
+/// The extra step a report carrying picture-kind warnings names.
+pub(super) const BULK_MISUSE_STEP: &str = "warnings flag names the merged view holds only as the other kind of picture: validate_map \
+     reports every such element as misused_resource";
+
+/// A `bulk_edit` `set` field name paired with the role word its warning
+/// sentence calls it.
+type FieldRole = (&'static str, &'static str);
+/// The sidedef face fields and their roles, for [`picture_warnings`].
+const FACE_FIELDS: [FieldRole; 3] = [("upper", "upper"), ("lower", "lower"), ("middle", "middle")];
+/// The sector plane fields and their roles, for [`picture_warnings`].
+const PLANE_FIELDS: [FieldRole; 2] = [("floor_flat", "floor"), ("ceiling_flat", "ceiling")];
 
 /// The four request parts of [`BulkEditParams`] as one engine
 /// [`FieldEdits`]. The rows move in rather than being cloned: the tool's run
@@ -221,9 +240,13 @@ fn dry_fragment(name: LumpName) -> JsonMap<String, Value> {
     .collect()
 }
 
-/// The report's `next_steps`, by run mode and whether the step changed
-/// geometry.
-fn bulk_next_steps(dry_run: bool, edit: &JsonMap<String, Value>) -> Vec<&'static str> {
+/// The report's `next_steps`, by run mode, a picture-warning count and
+/// whether the step changed geometry.
+fn bulk_next_steps(
+    dry_run: bool,
+    edit: &JsonMap<String, Value>,
+    misuse_count: usize,
+) -> Vec<&'static str> {
     let nodes_invalidated = edit
         .get("nodes_invalidated")
         .and_then(Value::as_bool)
@@ -233,21 +256,63 @@ fn bulk_next_steps(dry_run: bool, edit: &JsonMap<String, Value>) -> Vec<&'static
     } else {
         BULK_NEXT_STEPS.to_vec()
     };
+    if misuse_count > 0 {
+        steps.push(BULK_MISUSE_STEP);
+    }
     if nodes_invalidated {
         steps.push(BULK_NODES_STEP);
     }
     steps
 }
 
+/// The picture-kind warnings a written (or previewed) run earns: every
+/// `set` name on the two picture-bearing kinds that the merged view holds
+/// only as the other kind - the wrong-kind names `bulk_edit` otherwise
+/// writes silently under `allow_missing`. Nothing is named when no row
+/// changed.
+pub(super) fn picture_warnings(
+    kind: ElementKind,
+    edits: &FieldEdits,
+    applied: &Applied,
+    stock: &Stock,
+) -> Vec<String> {
+    let (fields, misuse): (&[FieldRole], Misuse) = match kind {
+        ElementKind::Sidedefs => (&FACE_FIELDS, Misuse::FlatOnWall),
+        ElementKind::Sectors => (&PLANE_FIELDS, Misuse::TextureOnPlane),
+        ElementKind::Linedefs | ElementKind::Things | ElementKind::Vertices => return Vec::new(),
+    };
+    if applied.changed == 0 {
+        return Vec::new();
+    }
+    let who = element_subject(kind, &applied.indices);
+    let mut warnings: Vec<String> = Vec::new();
+    for (field, role) in fields.iter().copied() {
+        let Some(text) = edits.set.get(field).and_then(Value::as_str) else {
+            continue;
+        };
+        let name = text.to_ascii_uppercase();
+        let found = match misuse {
+            Misuse::FlatOnWall => Misuse::flat_only(&name, &stock.flats, &stock.walls),
+            Misuse::TextureOnPlane => Misuse::texture_only(&name, &stock.flats, &stock.walls),
+        };
+        if found {
+            warnings.push(misuse.explain(&who, role, &name));
+        }
+    }
+    warnings
+}
+
 /// [`Applied`] folded into the tool's report, paged to the documented
-/// `indices` and `preview` windows, beside the edit fragment.
+/// `indices` and `preview` windows, beside the picture-kind warnings and
+/// the edit fragment.
 pub(super) fn bulk_report(
     applied: Applied,
     dry_run: bool,
     edit: JsonMap<String, Value>,
+    warnings: Vec<String>,
 ) -> BulkReport {
     let truncated = applied.indices.len() > INDEX_PAGE;
-    let next_steps = bulk_next_steps(dry_run, &edit);
+    let next_steps = bulk_next_steps(dry_run, &edit, warnings.len());
     BulkReport {
         matched: applied.matched,
         changed: applied.changed,
@@ -255,6 +320,7 @@ pub(super) fn bulk_report(
         truncated,
         dry_run,
         preview: applied.preview.into_iter().take(PREVIEW_PAGE).collect(),
+        warnings,
         edit,
         next_steps,
     }
@@ -301,13 +367,20 @@ pub(super) fn bulk_in_session(
     };
     if args.dry_run.unwrap_or(false) {
         let applied = apply(&mut map, kind, &hits, &edits, &scope)?;
-        return Ok(bulk_report(applied, true, dry_fragment(name)));
+        let warnings = picture_warnings(kind, &edits, &applied, &stock);
+        return Ok(bulk_report(applied, true, dry_fragment(name), warnings));
     }
     let label = format!("bulk_edit {} ({})", kind.as_str(), hits.len());
     let (applied, report) = session.edit_map(name, &label, |target| {
         apply(target, kind, &hits, &edits, &scope)
     })?;
-    Ok(bulk_report(applied, false, edit_result_fragment(&report)))
+    let warnings = picture_warnings(kind, &edits, &applied, &stock);
+    Ok(bulk_report(
+        applied,
+        false,
+        edit_result_fragment(&report),
+        warnings,
+    ))
 }
 
 /// `bulk_edit`'s work: the whole request under one session lock.

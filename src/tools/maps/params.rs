@@ -11,8 +11,9 @@
 //!
 //! Beside these, the small shared readings the element-editing groups'
 //! refusal and reuse paths repeat: the comma-joined index list ([`join`]),
-//! the changed-nothing result fragment ([`untouched_fragment`]) and the
-//! exact-point vertex lookup ([`find_vertex`]).
+//! the changed-nothing result fragment ([`untouched_fragment`]), the exact-point
+//! vertex lookup ([`find_vertex`]) and the spelled element subject a
+//! warning sentence names its touched indices with ([`element_subject`]).
 //!
 //! Beside these, the one binary field-range checker ([`fits_field`], with
 //! the [`fits_coord`] and [`fits_offset`] conveniences for the `i16`
@@ -320,6 +321,35 @@ pub fn join(indices: &[usize]) -> String {
         .join(", ")
 }
 
+/// The most indices [`element_subject`] names before it counts the rest.
+const SUBJECT_INDEX_CAP: usize = 8;
+
+/// The subject of an editing warning: the kind's spelled singular or
+/// plural with the indices a call just touched.
+///
+/// `"sidedef 3"`, `"sectors 0, 2"` or `"sidedefs 0, 1, 2, 3, 4, 5, 6, 7
+/// (+9 more)"`: the list is capped at eight indices with a tail counting
+/// the rest, one index takes the singular and the empty list is the bare
+/// plural. The editing tools use it as the subject of the warning
+/// sentences their results carry.
+#[must_use]
+#[inline]
+pub fn element_subject(kind: ElementKind, indices: &[usize]) -> String {
+    if let Some(index) = indices.first().filter(|_| indices.len() == 1).copied() {
+        return format!("{} {index}", kind.singular());
+    }
+    let shown: Vec<usize> = indices.iter().copied().take(SUBJECT_INDEX_CAP).collect();
+    let word = if shown.is_empty() {
+        kind.plural().to_owned()
+    } else {
+        format!("{} {}", kind.plural(), join(&shown))
+    };
+    match indices.len().checked_sub(SUBJECT_INDEX_CAP) {
+        Some(rest) => format!("{word} (+{rest} more)"),
+        None => word,
+    }
+}
+
 /// Refuses unless `value` sits inside the binary record field's
 /// `min..=max` range.
 ///
@@ -369,8 +399,9 @@ mod tests {
 
     use super::{
         COORD_MAX, COORD_MIN, EditBits, ElementKind, FlagInputs, FlagsInput, IndexSelector,
-        OFFSET_MAX, OFFSET_MIN, PointParam, check_index, edit_result_fragment, find_vertex,
-        fits_coord, fits_field, fits_offset, join, untouched_fragment, validate_texture_name,
+        OFFSET_MAX, OFFSET_MIN, PointParam, check_index, edit_result_fragment, element_subject,
+        find_vertex, fits_coord, fits_field, fits_offset, join, untouched_fragment,
+        validate_texture_name,
     };
     use crate::session::map_edit::MapEditReport;
     use crate::wad::classify::MapFormat;
@@ -757,6 +788,31 @@ mod tests {
             join(&[4_usize, 7, 12]),
             "4, 7, 12",
             "many are comma-separated in order"
+        );
+    }
+
+    #[test]
+    fn element_subject_spells_one_many_and_the_capped_tail() {
+        assert_eq!(
+            element_subject(ElementKind::Sidedefs, &[3_usize]),
+            "sidedef 3",
+            "one index takes the spelled singular"
+        );
+        assert_eq!(
+            element_subject(ElementKind::Sectors, &[0_usize, 2]),
+            "sectors 0, 2",
+            "several take the plural and the joined list"
+        );
+        assert_eq!(
+            element_subject(ElementKind::Sidedefs, &[]),
+            "sidedefs",
+            "none is just the plural, never an empty sentence"
+        );
+        let many: Vec<usize> = (0_usize..12_usize).collect();
+        assert_eq!(
+            element_subject(ElementKind::Sidedefs, &many),
+            "sidedefs 0, 1, 2, 3, 4, 5, 6, 7 (+4 more)",
+            "the cap names eight and counts the rest"
         );
     }
 

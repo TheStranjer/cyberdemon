@@ -7,12 +7,12 @@ use alloc::collections::BTreeSet;
 
 use super::{add_args, code, edit_args, remove_args, room, test_map, vanilla_surfaces};
 use crate::tools::edit_sectors::edit::{
-    add_in_place, edit_in_place, edited_sector, has_change, new_height, new_sector, planned_edits,
-    sector_cascade, validate_edit,
+    EditRow, add_in_place, edit_in_place, edited_sector, given_planes, has_change, new_height,
+    new_sector, plane_warnings, planned_edits, sector_cascade, validate_edit,
 };
 use crate::tools::edit_sectors::{
     DEFAULT_CEILING_HEIGHT, DEFAULT_LIGHT, FIELD_MAX, HEIGHT_MAX, HEIGHT_MIN, LIGHT_MAX, LIGHT_MIN,
-    check_binary_ranges, check_height_order, check_light, edited_flat, flat_or_default,
+    check_binary_ranges, check_height_order, check_light, detail_of, edited_flat, flat_or_default,
     validate_flat,
 };
 use crate::tools::maps::params::{ElementKind, join};
@@ -21,6 +21,7 @@ use crate::tools::themes::Surfaces;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::Sector;
 use crate::wad::map::remove::CascadeOptions;
+use crate::wad::map::validate::ResourceIndex;
 
 #[test]
 fn added_sectors_take_the_theme_defaults() {
@@ -413,5 +414,79 @@ fn the_conflict_message_joins_every_user() {
     assert!(
         join(&[4_usize, 7]) == "4, 7",
         "the joiner spells the list out"
+    );
+}
+
+/// The report rows of one flat name written on sectors `0` and `1`.
+fn dressed_rows(floor_flat: &str) -> Vec<EditRow> {
+    [0_usize, 1]
+        .into_iter()
+        .map(|index| EditRow {
+            index,
+            detail: detail_of(&Sector {
+                floor_flat: floor_flat.to_owned(),
+                ..Default::default()
+            }),
+        })
+        .collect()
+}
+
+/// A resource index defining `WALL1` and carrying the flat `FLOOR1`.
+fn stock() -> ResourceIndex {
+    ResourceIndex {
+        textures: BTreeSet::from(["WALL1".to_owned()]),
+        flats: BTreeSet::from(["FLOOR1".to_owned()]),
+        has_texture_defs: true,
+    }
+}
+
+#[test]
+fn given_planes_reads_the_stored_names_off_the_rows_of_the_given_roles() {
+    let rows = dressed_rows("WALL1");
+    let given = given_planes(&rows, Some(&"wall1".to_owned()), None);
+    assert_eq!(
+        given,
+        vec![("floor", "WALL1".to_owned())],
+        "the unasked role is absent and the asked one carries the stored name"
+    );
+    assert!(
+        given_planes(&rows, None, None).is_empty(),
+        "a heights-only call gives nothing to weigh"
+    );
+}
+
+#[test]
+fn plane_warnings_name_a_wall_texture_dressed_as_a_flat() {
+    let rows = dressed_rows("WALL1");
+    let given = given_planes(&rows, Some(&"wall1".to_owned()), None);
+    let warnings = plane_warnings(&rows, &given, &stock());
+    assert_eq!(warnings.len(), 1, "one plane, one sentence");
+    assert!(
+        warnings[0].contains("floor flat \"WALL1\" on sectors 0, 1")
+            && warnings[0].contains("defined only as a wall texture")
+            && warnings[0].contains("edit_sector"),
+        "the sentence names the role, the name and the fix: {warnings:?}"
+    );
+}
+
+#[test]
+fn plane_warnings_stay_quiet_on_sound_unknown_and_sky_names() {
+    let floor1 = dressed_rows("FLOOR1");
+    let given = given_planes(&floor1, Some(&"FLOOR1".to_owned()), None);
+    assert!(
+        plane_warnings(&floor1, &given, &stock()).is_empty(),
+        "a carried flat on its plane needs no word"
+    );
+    let lava = dressed_rows("LAVA1");
+    let lava_given = given_planes(&lava, Some(&"LAVA1".to_owned()), None);
+    assert!(
+        plane_warnings(&lava, &lava_given, &stock()).is_empty(),
+        "a name of neither kind is the missing_flat check's row"
+    );
+    let sky = dressed_rows("F_SKY1");
+    let sky_given = given_planes(&sky, None, Some(&"F_SKY1".to_owned()));
+    assert!(
+        plane_warnings(&sky, &sky_given, &stock()).is_empty(),
+        "the sky marker is no wall texture"
     );
 }

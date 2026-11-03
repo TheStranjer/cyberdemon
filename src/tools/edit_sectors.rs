@@ -218,7 +218,7 @@ fn check_sector(format: MapFormat, sector: &Sector) -> Result<(), CyberError> {
 impl Cyberdemon {
     /// Appends one sector to a map in a single undoable edit.
     #[tool(
-        description = "Adds one sector (a region sharing floor, ceiling, flats, light and effect) to a map in a single undoable edit with theme-aware defaults (unasked flats come from the session theme's floor and ceiling roles); the appended record stays dead space until sidedefs reference it. Prefer create_sector_from_loop to grow a whole room with its walls in one call, or build_map_from_plan for a finished map; pair this with add_sidedef only for exact low-level control."
+        description = "Adds one sector (a region sharing floor, ceiling, flats, light and effect) to a map in a single undoable edit with theme-aware defaults (unasked flats come from the session theme's floor and ceiling roles); the appended record stays dead space until sidedefs reference it. Results warn when a given flat names only a wall texture (validate_map's misused_resource). Prefer create_sector_from_loop to grow a whole room with its walls in one call, or build_map_from_plan for a finished map; pair this with add_sidedef only for exact low-level control."
     )]
     fn add_sector(
         &self,
@@ -229,7 +229,7 @@ impl Cyberdemon {
 
     /// Changes one or several sectors in a single undoable edit.
     #[tool(
-        description = "Changes one or several sectors of a map in a single undoable edit: floor_height/ceiling_height or deltas, floor_flat/ceiling_flat, light, special and tag, every change applied to each selected index; a ceiling below its floor is refused. Prefer mark_secret and set_light_effect for those specials, and bulk_edit plus replace_texture for sweeping values or flats across many sectors by query; undo steps it all back."
+        description = "Changes one or several sectors of a map in a single undoable edit: floor_height/ceiling_height or deltas, floor_flat/ceiling_flat, light, special and tag, every change applied to each selected index; a ceiling below its floor is refused. Results warn when a given flat names only a wall texture (validate_map's misused_resource). Prefer mark_secret and set_light_effect for those specials, and bulk_edit plus replace_texture for sweeping values or flats across many sectors by query; undo steps it all back."
     )]
     fn edit_sector(
         &self,

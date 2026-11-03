@@ -92,8 +92,11 @@ see a one-unit slip, and why a diagonal you draw has to be exactly 45°.
 A map that depends on lumps you do not have (a custom texture pack, a
 DEHACKED patch WAD) must load them the way the game does: ask for the
 files and `merge_wad` them as layers. `validate_map` tells you whether
-the merged view is complete — `missing_texture`, `missing_flat` and
-`unknown_thing_type` rows name every gap before your edit compounds it.
+the merged view is complete — `missing_texture`, `missing_flat`,
+`misused_resource` and `unknown_thing_type` rows name every gap before
+your edit compounds it. A `misused_resource` row (or an `edit_sidedef`/
+`edit_sector`/`bulk_edit` warning) means a picture worn as the wrong
+kind: a flat dressed a wall face, a wall texture dressed a plane.
 
 ## 4. Change safely
 

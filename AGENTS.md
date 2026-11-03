@@ -1492,8 +1492,13 @@ src/
                   model and the `CHECKS` pipeline (`validate/references.rs`,
                   `validate/structure.rs`, `validate/things.rs`,
                   `validate/specials.rs`, `validate/geometry.rs`,
-                  `validate/resources.rs` and `validate/node_lumps.rs`, one
-                  per check group, each returning `Vec<Issue>`), and
+                  `validate/resources.rs`, `validate/misuse.rs` and
+                  `validate/node_lumps.rs`, one per check group, each
+                  returning `Vec<Issue>` - `misuse.rs` owning the `Misuse`
+                  picture-kind rule (`flat_only`, `texture_only`, the one
+                  `explain` sentence) that the `misused_resource` check and
+                  the `edit_sidedef`/`edit_sector`/`bulk_edit` warnings all
+                  read), and
                   `map/specials.rs` + `map/specials/` the one family-aware
                   line-special classification every door, lift, teleport and
                   exit reading goes through: `specials.rs` the `SpecialClass`

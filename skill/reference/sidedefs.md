@@ -34,6 +34,13 @@ editing a layer-owned map copies the block in first
   validated: `-` means no texture, an empty name, a name over the
   format's cap (8 characters binary, 64 `UDMF`) or characters outside
   printable `ASCII` fail `invalid_argument`.
+- A name is only validated for shape, never refused for what the merged
+  view holds: dressing a face with a **flat** (a flat dresses a sector
+  plane, not a wall) writes fine and comes back as a `warnings` row on
+  the result — `validate_map` reports the same faces as
+  `misused_resource` (see `reference/validate.md`). `list_textures`
+  shows the defined wall textures; `create_texture_from_image` builds
+  one from the flat's picture.
 - A binary map stores no texture as the one-character name `-` with `NUL`
   padding — `2D 00 00 00 00 00 00 00` in `get_lump` hex — never as an
   all-`NUL` field: vanilla engines read a leading `-` as no texture and
@@ -48,11 +55,13 @@ editing a layer-owned map copies the block in first
 
 `{map?, sector, upper? = "-", middle? = "-", lower? = "-", x_offset? = 0,
 y_offset? = 0}` → `{index, sidedef: {sector, upper, middle, lower,
-x_offset, y_offset}, map, nodes_invalidated: true, copied_to_working}`
+x_offset, y_offset}, warnings, map, nodes_invalidated: true,
+copied_to_working}`
 
 Appends one sidedef and reports its index with the stored fields. The
 sector must exist. Because the sidedef list changed, the result reports
-`nodes_invalidated: true`.
+`nodes_invalidated: true`. `warnings` names every face this call dressed
+with a flat the merged view carries (empty when all is well).
 
 ```json
 call add_sidedef {"map": "MAP01", "sector": 0, "middle": "brick01",
@@ -66,11 +75,13 @@ call add_sidedef {"map": "MAP01", "sector": 0, "middle": "brick01",
 
 `{map?, index, upper?, middle?, lower?, x_offset?, x_offset_delta?,
 y_offset?, y_offset_delta?, sector?}` → `{sidedefs: [{index, sector,
-upper, middle, lower, x_offset, y_offset}], map, nodes_invalidated,
-copied_to_working}`
+upper, middle, lower, x_offset, y_offset}], warnings, map,
+nodes_invalidated, copied_to_working}`
 
 `index` is one integer or a list; every change parameter applies to all
-selected sidedefs and only the given fields change. `x_offset`/`y_offset`
+selected sidedefs and only the given fields change. `warnings` names every
+given face whose name the merged view carries only as a flat
+(`validate_map`'s `misused_resource`). `x_offset`/`y_offset`
 set absolutely, `x_offset_delta`/`y_offset_delta` shift each selected
 sidedef from its own value; an absolute and its delta together (or no
 change parameter at all) are `invalid_argument`. `sector` re-points the

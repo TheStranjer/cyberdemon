@@ -286,7 +286,7 @@ fn validate_run(
 impl Cyberdemon {
     /// Reports a map's structural problems as severity-ranked issues.
     #[tool(
-        description = "Checks one map for reference, structure, thing, special, geometry, resource and node-lump problems - dangling indices, zero-length and crossing lines, missing starts, unknown specials and types, ceiling below floor, missing textures and flats, stale nodes - each reported as an issue {severity (error|warning|info), code, message, element indices}. min_severity, codes and limit filter and page; counts answer before the filter. Run it after every meaningful change."
+        description = "Checks one map for reference, structure, thing, special, geometry, resource and node-lump problems - dangling indices, zero-length and crossing lines, missing starts, unknown specials and types, ceiling below floor, missing textures and flats, a flat worn as a wall texture or a wall texture worn as a flat, stale nodes - each reported as an issue {severity (error|warning|info), code, message, element indices}. min_severity, codes and limit filter and page; counts answer before the filter. Run it after every meaningful change."
     )]
     fn validate_map(
         &self,

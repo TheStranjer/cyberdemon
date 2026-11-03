@@ -16,12 +16,15 @@
 //! decisions, not this module's.
 
 mod geometry;
+mod misuse;
 mod node_lumps;
 mod references;
 mod resources;
 mod specials;
 mod structure;
 mod things;
+
+pub use misuse::Misuse;
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -334,6 +337,10 @@ pub const CHECKS: &[Check] = &[
     Check {
         code: "missing_flat",
         run: |map, context| resources::missing_flat(map, context),
+    },
+    Check {
+        code: "misused_resource",
+        run: |map, context| misuse::misused_resource(map, context),
     },
     Check {
         code: "missing_required_texture",
@@ -710,6 +717,7 @@ mod tests {
             "thing_outside_map",
             "missing_texture",
             "missing_flat",
+            "misused_resource",
             "missing_required_texture",
             "texture_check_skipped",
             "nodes_missing",

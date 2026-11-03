@@ -15,7 +15,11 @@
 //! it hands the grown set to
 //! [`crate::wad::map::remove::apply_removal`]. Every resulting sector faces
 //! [`check_sector`] in the parent module beside the [`SectorDetail`] these
-//! tools report.
+//! tools report. A call that dresses a plane is weighed against the merged
+//! view's stock, and every given flat name the view defines only as a wall
+//! texture earns a `warnings` row - the one sentence
+//! [`crate::wad::map::validate::Misuse`] owns, shared with `validate_map`'s
+//! `misused_resource` check.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
@@ -26,11 +30,15 @@ use serde_json::{Map as JsonMap, Value};
 use crate::error::CyberError;
 use crate::session::Session;
 use crate::tools::maps::common;
-use crate::tools::maps::params::{ElementKind, IndexSelector, check_index, edit_result_fragment};
+use crate::tools::maps::params::{
+    ElementKind, IndexSelector, check_index, edit_result_fragment, element_subject,
+};
 use crate::tools::maps::remove::{self, RemovePlan, RemoveToolReport, cascade_options};
 use crate::tools::themes::{Surfaces, surfaces};
+use crate::tools::validate::resource_index;
 use crate::wad::classify::MapFormat;
 use crate::wad::map::remove::CascadeOptions;
+use crate::wad::map::validate::{Misuse, ResourceIndex};
 use crate::wad::map::{Map, Sector};
 
 use super::{
@@ -147,6 +155,11 @@ pub(super) struct AddReport {
     index: usize,
     /// The created sector's fields.
     sector: SectorDetail,
+    /// Picture-kind warnings for the names this call dressed: one per
+    /// given plane whose name the merged view defines only as a wall
+    /// texture (`validate_map` reports the same elements as
+    /// `misused_resource`), in the floor/ceiling order.
+    warnings: Vec<String>,
     /// The standard `map`/`nodes_invalidated`/`copied_to_working` fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -157,6 +170,8 @@ pub(super) struct AddReport {
 pub(super) struct EditReport {
     /// The edited sectors, ascending by index.
     sectors: Vec<EditRow>,
+    /// Picture-kind warnings, as in [`AddReport`].
+    warnings: Vec<String>,
     /// The standard edit fragment.
     #[serde(flatten)]
     edit: JsonMap<String, Value>,
@@ -354,35 +369,93 @@ pub(super) fn sector_cascade(args: &RemoveSectorParams) -> Option<CascadeOptions
         .then(|| cascade_options(args.prune_sidedefs, args.prune_vertices))
 }
 
+/// The plane roles the request dressed, paired with the names it gave:
+/// roles the request left out are absent, and the names read off `rows`
+/// are the stored ones, in the floor/ceiling order. A given role writes
+/// the same name on every selected row, so the first row speaks.
+pub(super) fn given_planes(
+    rows: &[EditRow],
+    floor: Option<&String>,
+    ceiling: Option<&String>,
+) -> Vec<(&'static str, String)> {
+    let Some(first) = rows.first() else {
+        return Vec::new();
+    };
+    let mut given: Vec<(&'static str, String)> = Vec::new();
+    if floor.is_some() {
+        given.push(("floor", first.detail.floor_flat.clone()));
+    }
+    if ceiling.is_some() {
+        given.push(("ceiling", first.detail.ceiling_flat.clone()));
+    }
+    given
+}
+
+/// The picture-kind warnings one sector call's given flat names earn: a
+/// plane dressed with a name the merged view defines only as a wall
+/// texture is never a flat, and the warning - the very sentence the
+/// `misused_resource` check later reports - says what to do instead.
+/// `rows` are the sectors the call wrote, so one sentence lists them all.
+pub(super) fn plane_warnings(
+    rows: &[EditRow],
+    given: &[(&'static str, String)],
+    resources: &ResourceIndex,
+) -> Vec<String> {
+    let indices: Vec<usize> = rows.iter().map(|row| row.index).collect();
+    let who = element_subject(ElementKind::Sectors, &indices);
+    given
+        .iter()
+        .filter(|plane| Misuse::texture_only(&plane.1, &resources.flats, &resources.textures))
+        .map(|plane| Misuse::TextureOnPlane.explain(&who, plane.0, &plane.1))
+        .collect()
+}
+
 /// `add_sector`'s work: resolve the map and the theme defaults, run the
-/// one-step append.
+/// one-step append and weigh the given flat names against the merged
+/// view's stock.
 pub(super) fn add_run(
     session: &mut Session,
     args: &AddSectorParams,
 ) -> Result<AddReport, CyberError> {
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let defaults = surfaces(session)?;
+    let asked = args.floor_flat.is_some() || args.ceiling_flat.is_some();
+    let resources = asked.then(|| resource_index(session)).transpose()?;
     let label = "add sector".to_owned();
     let (row, report) = session.edit_map(name, &label, |map| add_in_place(map, args, &defaults))?;
+    let rows = core::slice::from_ref(&row);
+    let given = given_planes(rows, args.floor_flat.as_ref(), args.ceiling_flat.as_ref());
+    let warnings = resources
+        .as_ref()
+        .map_or_else(Vec::new, |stock| plane_warnings(rows, &given, stock));
     Ok(AddReport {
         index: row.index,
         sector: row.detail,
+        warnings,
         edit: edit_result_fragment(&report),
     })
 }
 
-/// `edit_sector`'s work: validate, resolve the map, run the one-step edit.
+/// `edit_sector`'s work: validate, resolve the map, run the one-step edit
+/// and weigh the given flat names against the merged view's stock.
 pub(super) fn edit_run(
     session: &mut Session,
     args: &EditSectorParams,
 ) -> Result<EditReport, CyberError> {
     let indices = validate_edit(args)?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
+    let asked = args.floor_flat.is_some() || args.ceiling_flat.is_some();
+    let resources = asked.then(|| resource_index(session)).transpose()?;
     let label = format!("edit {} sectors", indices.len());
     let (rows, report) =
         session.edit_map(name, &label, |map| edit_in_place(map, args, &indices))?;
+    let given = given_planes(&rows, args.floor_flat.as_ref(), args.ceiling_flat.as_ref());
+    let warnings = resources
+        .as_ref()
+        .map_or_else(Vec::new, |stock| plane_warnings(&rows, &given, stock));
     Ok(EditReport {
         sectors: rows,
+        warnings,
         edit: edit_result_fragment(&report),
     })
 }

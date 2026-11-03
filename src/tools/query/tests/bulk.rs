@@ -1,8 +1,12 @@
 //! `bulk_edit` through the shared fixture: the wire parts
 //! [`requested_edits`] folds into the engine request, the one labeled step
 //! [`bulk_in_session`] writes with its preview, `max` guard, thing-name
-//! resolution, flag edits and stock checks, the refusal [`bulk_run`]
-//! reports through the state, and the windows [`bulk_report`] pages.
+//! resolution, flag edits and stock checks, the picture-kind warnings
+//! [`picture_warnings`] weighs the written names against, the refusal
+//! [`bulk_run`] reports through the state, and the windows
+//! [`bulk_report`] pages.
+
+use alloc::collections::BTreeMap;
 
 use serde_json::{Map as JsonMap, json};
 
@@ -10,10 +14,13 @@ use crate::session::Scope;
 use crate::state::AppState;
 use crate::tools::maps::common;
 use crate::tools::query::bulk::{
-    BULK_NODES_STEP, bulk_in_session, bulk_report, bulk_run, requested_edits,
+    BULK_MISUSE_STEP, BULK_NODES_STEP, bulk_in_session, bulk_report, bulk_run, picture_warnings,
+    requested_edits,
 };
+use crate::tools::query::replace::Stock;
 use crate::tools::query::{INDEX_PAGE, PREVIEW_PAGE};
-use crate::wad::map::bulk::edits::{Applied, Change};
+use crate::wad::map::bulk::edits::{Applied, Change, FieldEdits};
+use crate::wad::map::query::ElementKind;
 
 use super::{bulk_args, bulk_session, one_filter, parsed};
 
@@ -348,7 +355,7 @@ fn bulk_report_pages_the_index_and_preview_windows() {
             })
             .collect(),
     };
-    let report = bulk_report(applied, false, JsonMap::new());
+    let report = bulk_report(applied, false, JsonMap::new(), Vec::new());
     assert_eq!(report.matched, wide, "the counts travel whole");
     assert_eq!(report.indices.len(), INDEX_PAGE, "the index list is capped");
     assert!(report.truncated, "and says so");
@@ -358,4 +365,178 @@ fn bulk_report_pages_the_index_and_preview_windows() {
         3_usize,
         "a plain written run carries the three steps"
     );
+    assert!(report.warnings.is_empty(), "no warning, no extra step");
+    assert_eq!(
+        serde_json::to_value(&report).expect("the report serializes")["warnings"]
+            .as_array()
+            .expect("the field is on the wire")
+            .len(),
+        0,
+        "warnings ride the wire even when empty"
+    );
+}
+
+/// A written run of `count` rows, for the warning builder.
+fn applied_rows(count: usize) -> Applied {
+    Applied {
+        matched: count,
+        changed: count,
+        indices: (0..count).collect(),
+        preview: Vec::new(),
+    }
+}
+
+/// The `set` request of one field to one name.
+fn set_name(field: &str, name: &str) -> FieldEdits {
+    requested_edits(
+        Some(BTreeMap::from([(field.to_owned(), json!(name))])),
+        None,
+        None,
+        None,
+    )
+}
+
+/// The fixture stock: walls `STEP1`, flats `FLOOR1` and `NUKAGE1`.
+fn fixture_stock() -> Stock {
+    let stock = Stock::load(&bulk_session()).expect("the fixture view stocks");
+    assert!(
+        stock.has_wall("STEP1") && stock.has_flat("FLOOR1"),
+        "the fixture carries the two kinds apart"
+    );
+    stock
+}
+
+#[test]
+fn picture_warnings_flag_a_flat_written_onto_a_sidedef_face() {
+    let warnings = picture_warnings(
+        ElementKind::Sidedefs,
+        &set_name("middle", "floor1"),
+        &applied_rows(2),
+        &fixture_stock(),
+    );
+    assert_eq!(warnings.len(), 1, "one face, one row");
+    assert!(
+        warnings[0].contains("middle texture \"FLOOR1\" on sidedefs 0, 1")
+            && warnings[0].contains("carried only as a flat"),
+        "the sentence names face, name and elements: {warnings:?}"
+    );
+}
+
+#[test]
+fn picture_warnings_flag_a_wall_texture_written_onto_a_sector_plane() {
+    let warnings = picture_warnings(
+        ElementKind::Sectors,
+        &set_name("floor_flat", "step1"),
+        &applied_rows(1),
+        &fixture_stock(),
+    );
+    assert_eq!(warnings.len(), 1, "one plane, one row");
+    assert!(
+        warnings[0].contains("floor flat \"STEP1\" on sector 0")
+            && warnings[0].contains("defined only as a wall texture"),
+        "the sentence names plane, name and element: {warnings:?}"
+    );
+}
+
+#[test]
+fn picture_warnings_stay_quiet_on_sound_unknown_and_unchanged_names() {
+    let stock = fixture_stock();
+    assert!(
+        picture_warnings(
+            ElementKind::Sidedefs,
+            &set_name("middle", "STEP1"),
+            &applied_rows(1),
+            &stock,
+        )
+        .is_empty(),
+        "a defined wall on a face is sound"
+    );
+    assert!(
+        picture_warnings(
+            ElementKind::Sectors,
+            &set_name("ceiling_flat", "NUKAGE1"),
+            &applied_rows(1),
+            &stock,
+        )
+        .is_empty(),
+        "a carried flat on a plane is sound"
+    );
+    assert!(
+        picture_warnings(
+            ElementKind::Sidedefs,
+            &set_name("middle", "NOPE"),
+            &applied_rows(1),
+            &stock,
+        )
+        .is_empty(),
+        "a name of neither kind is the undefined check's business"
+    );
+    assert!(
+        picture_warnings(
+            ElementKind::Sectors,
+            &set_name("floor_flat", "FLOOR1"),
+            &applied_rows(0),
+            &stock,
+        )
+        .is_empty(),
+        "a run that changed nothing writes nothing to warn about"
+    );
+    assert!(
+        picture_warnings(
+            ElementKind::Linedefs,
+            &set_name("special", "FLOOR1"),
+            &applied_rows(2),
+            &stock,
+        )
+        .is_empty(),
+        "the kinds without picture fields never warn"
+    );
+}
+
+#[test]
+fn bulk_in_session_warns_while_allow_missing_writes_the_wrong_kind() {
+    let mut session = bulk_session();
+    let report = bulk_in_session(
+        &mut session,
+        bulk_args(json!({
+            "kind": "sidedefs",
+            "set": {"middle": "floor1"},
+            "allow_missing": true,
+        })),
+    )
+    .expect("allow_missing lets the name through");
+    let shown = serde_json::to_value(&report).expect("the report serializes");
+    assert_eq!(shown["changed"], json!(2_u64), "both faces took the name");
+    let warnings = shown["warnings"].as_array().expect("a warning list");
+    assert_eq!(warnings.len(), 1, "one field, one sentence: {shown}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap_or_default()
+            .contains("middle texture \"FLOOR1\""),
+        "the name is quoted uppercased: {warnings:?}"
+    );
+    assert!(
+        report.next_steps.contains(&BULK_MISUSE_STEP),
+        "the report adds the misuse step: {:?}",
+        report.next_steps
+    );
+    let dry = bulk_in_session(
+        &mut session,
+        bulk_args(json!({
+            "kind": "sectors",
+            "set": {"floor_flat": "STEP1"},
+            "allow_missing": true,
+            "dry_run": true,
+        })),
+    )
+    .expect("the preview runs");
+    assert!(
+        dry.warnings
+            .iter()
+            .any(|text| text.contains("floor flat \"STEP1\"")),
+        "the preview warns about what it would write: {:?}",
+        dry.warnings
+    );
+    assert!(dry.dry_run, "and wrote nothing");
 }

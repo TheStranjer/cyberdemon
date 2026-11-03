@@ -81,7 +81,7 @@ impl Cyberdemon {
 
     /// Applies one field-edit set to every element of a query selection.
     #[tool(
-        description = "Query-driven bulk editing: selects exactly like find_elements ({kind, where, within}) and applies set/add amounts and named flag edits to every matched element as ONE undoable step - sector heights, light, flats, special and tag; sidedef textures and offsets; linedef special, tag and args; thing type, position and angle; vertex x/y add-only. Values are range-checked before anything writes; dry_run previews and max caps the set. Prefer it over looping the edit_* tools."
+        description = "Query-driven bulk editing: selects exactly like find_elements ({kind, where, within}) and applies set/add amounts and named flag edits to every matched element as ONE undoable step - sector heights, light, flats, special and tag; sidedef textures and offsets; linedef special, tag and args; thing type, position and angle; vertex x/y add-only. Values are range-checked before anything writes; dry_run previews and max caps the set. Warnings flag written names that belong only to the other picture kind (validate_map's misused_resource). Prefer it over looping the edit_* tools."
     )]
     fn bulk_edit(
         &self,

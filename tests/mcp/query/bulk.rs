@@ -290,3 +290,82 @@ async fn one_undo_restores_every_bulk_edit_field_on_every_element() {
     assert_eq!(room["tag"], json!(1_i64), "and its tag");
     assert_eq!(room["floor"], json!(32_i64), "and its floor");
 }
+
+#[tokio::test]
+async fn bulk_edit_allow_missing_warns_when_the_name_is_the_wrong_kind() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = plain_iwad(dir.path()).await;
+    let report = edit(
+        &client,
+        json!({
+            "kind": "sidedefs",
+            "where": one("middle", "eq", &json!("WALL1")),
+            "set": {"middle": "floor1"},
+            "allow_missing": true,
+        }),
+    )
+    .await;
+    assert!(
+        report["changed"].as_u64().expect("a count") > 0,
+        "allow_missing wrote the flat onto the faces: {report}"
+    );
+    let warnings = report["warnings"].as_array().expect("a warning list");
+    assert_eq!(warnings.len(), 1, "one field, one sentence: {report}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .expect("text")
+            .contains("middle texture \"FLOOR1\""),
+        "the warning quotes the uppercased name: {warnings:?}"
+    );
+    assert!(
+        report["next_steps"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|step| step
+                .as_str()
+                .unwrap_or_default()
+                .contains("misused_resource")),
+        "next_steps points at the check: {}",
+        report["next_steps"]
+    );
+    let (code, _, _) = call_err(
+        &client,
+        "bulk_edit",
+        json!({"kind": "sidedefs", "set": {"middle": "FLOOR1"}}),
+    )
+    .await;
+    assert_eq!(
+        code, "not_found",
+        "without allow_missing the face stock check still refuses the flat"
+    );
+}
+
+#[tokio::test]
+async fn a_right_kind_bulk_name_carries_no_warning() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = plain_iwad(dir.path()).await;
+    let report = edit(
+        &client,
+        json!({
+            "kind": "sectors",
+            "where": [{"field": "floor", "op": "eq", "value": 0_i64}],
+            "set": {"floor_flat": "FLOOR1"},
+        }),
+    )
+    .await;
+    assert_eq!(report["warnings"], json!([]), "a carried flat stays silent");
+    assert!(
+        !report["next_steps"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|step| step
+                .as_str()
+                .unwrap_or_default()
+                .contains("misused_resource")),
+        "no warning, no extra step: {}",
+        report["next_steps"]
+    );
+}

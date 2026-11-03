@@ -25,7 +25,7 @@ mod tests {
     type Client = RunningService<RoleClient, ()>;
 
     /// Load the two-room `IWAD` fixture as layer 0.
-    async fn plain_iwad(dir: &Path) -> Client {
+    pub(super) async fn plain_iwad(dir: &Path) -> Client {
         let client = connect().await;
         let base = iwad(dir);
         call(
@@ -38,7 +38,7 @@ mod tests {
     }
 
     /// The `code` strings of a report's issues, in report order.
-    fn issue_codes(report: &Value) -> Vec<String> {
+    pub(super) fn issue_codes(report: &Value) -> Vec<String> {
         report["issues"]
             .as_array()
             .expect("an issue list")
@@ -118,7 +118,7 @@ mod tests {
         );
         assert_eq!(
             report["checks_run"].as_array().expect("a list").len(),
-            30,
+            31,
             "every registered check ran, in order"
         );
         assert_eq!(report["truncated"], json!(false), "nothing stayed behind");
@@ -901,3 +901,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "validate/misuse.rs"]
+mod misuse;

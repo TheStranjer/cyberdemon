@@ -1,10 +1,12 @@
 # Design rules
 
-Tools: check_playability, place_things, render_topdown
+Tools: check_playability, place_things, render_topdown, create_sector_from_loop, carve_void, split_linedef, validate_map, assemble_map
 
 Facts about Doom's engine and play conventions you need when choosing values
 for tool parameters: dimensions, scale, lighting, gameplay. These are the
-defaults of good play — break them on purpose, not by accident.
+defaults of good play — break them on purpose, not by accident. The section
+called "The integer grid" is about the server's own geometry, which is
+stricter than the game's.
 
 ## The player
 
@@ -51,6 +53,58 @@ defaults of good play — break them on purpose, not by accident.
 - Wall textures are usually 64 or 128 wide and tile vertically by 128. Match
   the texture's vertical span to the wall height or expect visible seams.
 - Flats are always 64×64 world units; floors and ceilings tile them.
+
+## The integer grid (hand-built geometry)
+
+Every geometry tool here is integer end to end: a vertex is a whole map unit
+(`i64` inside, `i16` once written to a binary map) and every meeting test is
+an exact product. Two points are one point only when they are the same two
+integers; the main slack in the arrangement is the half-unit test in the
+first bullet. When you draw with `create_sector_from_loop` or `carve_void`
+there is no snap parameter, so the snapping is yours:
+
+- **Work on 8s; put structure on 16s.** Two corners are the same corner only
+  when both integers match exactly — that is how a new room reuses a
+  neighbour's vertex. A point is pulled onto a wall it should meet only within
+  **half a unit** perpendicular of it, so a one-unit slip leaves that wall
+  unsplit and the two sectors sharing no edge; the rebuild ends with free ends
+  that `validate_map` reports as `unclosed_sector` and the overlay already
+  warned about in its `notes`. Multiples of 8 also keep a 16-unit offset —
+  the default wall thickness, and the usual wall depth — on the lattice, and
+  stay far inside `i16`.
+- **Make every diagonal exactly 45°** — `|dx| == |dy|`, both ends on the grid.
+  A wall line is keyed by its **gcd-reduced** direction and integer cross
+  constant, so a run of `(100, 98)` reduces to `(50, 49)` and is a different
+  line from `(1, 1)` forever: a near-miss diagonal never stitches with the
+  wall it was meant to continue, and the T-junction test is an exact sign
+  test that it fails. Crossings are rounded to the nearest integer point too.
+  Two 8-grid runs that are axis-aligned or exact 45°s meet at whole
+  coordinates, so that rounding does nothing; with any other slope the meeting
+  point is a fraction most of the time and lands up to about 0.7 units from
+  where the lines truly cross, outside the half-unit window above. Keep to
+  stays, jogs and exact 45°s.
+- **Share vertices by copying them, never by re-deriving them.** Read the
+  neighbour's corner integers with `assemble_map` and put those exact numbers
+  in your loop. To join a wall mid-span, land a corner on it exactly, or
+  `split_linedef` it at that point first and draw to the new vertex. Draw a
+  room *against* an existing wall rather than across it: a touched wall turns
+  two-sided and keeps its texture, special and tag, while a loop that grazes
+  one — a diagonal especially — can lose that piece, because a wall's sides
+  are labelled an eighth of a unit off its midpoint and a piece whose two
+  sides read the same is dropped as interior. After each draw: `validate_map`
+  (`unclosed_sector`, `crossing_lines`, `overlapping_lines`,
+  `duplicate_line`) and `render_topdown` with `grid: 8` under the lines.
+- **Pixels to map units: scale, then snap.** The plan path computes
+  `map = origin + px × scale_num ÷ scale_den`, rounding halves away from zero,
+  then pulls the result to the nearest multiple of `grid` — that is what
+  `units` and `grid` do in `build_map_from_plan` and `trace_sketch`, with
+  `flip_y: true` mirroring image rows. Hand-built loops carry neither, so run
+  those two roundings on your pixel corners yourself before sending them, and
+  pick the fraction so your corners land on 8s and the snap moves nothing:
+  `8/1` gives 8 units per pixel (any whole pixel), `2/1` needs pixels in
+  multiples of 4, `16/5` needs them in multiples of 5. Use one scale, origin
+  and grid in every call, the `render_topdown` underlay included, or the
+  picture and the map disagree.
 
 ## Things and gameplay
 

@@ -6,9 +6,11 @@
 //! `rooms` paints rooms over the fixture map - the floating room, the walls
 //! it splits and opens, `keep_interior` and the emptied sectors; `carve`
 //! cuts solid rock out of it and reads the walls, offsets, outside rules
-//! and refusals that come back.
+//! and refusals that come back; `closure` checks the notes an overlay
+//! leaves when its ring grazes a diagonal wall and opens a sector.
 
 mod carve;
+mod closure;
 mod rooms;
 
 use alloc::collections::BTreeSet;
@@ -156,6 +158,7 @@ fn geometry_errors(map: &Map) -> Vec<String> {
         "zero_length_line",
         "duplicate_line",
         "two_sided_flag_mismatch",
+        "unclosed_sector",
     ]
     .into_iter()
     .collect();
@@ -179,8 +182,9 @@ fn check_following(map: &Map, first: usize) {
     }
 }
 
-/// Invariant: the rebuilt map neither crosses nor overlaps itself
-/// and passes `validate_map`'s structural checks.
+/// Invariant: the rebuilt map neither crosses nor overlaps itself,
+/// closes every sector boundary and passes `validate_map`'s structural
+/// checks.
 pub(super) fn assert_clean(map: &Map) {
     for first in 0..map.linedefs.len() {
         check_following(map, first);

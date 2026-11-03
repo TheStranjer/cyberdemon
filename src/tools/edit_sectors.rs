@@ -257,7 +257,7 @@ impl Cyberdemon {
 
     /// Draws a closed corner loop as one new sector with its walls.
     #[tool(
-        description = "Draws a closed loop of corners as one new sector with its boundary walls, in a single undoable edit: the draw-a-room tool. points: [{x, y}, ...] (at least 3, implicitly closed) or vertices: [i, ...]; sector properties as in add_sector. The geometry engine splits existing walls at T-junctions and crossings and merges painted-over sides, so the result never crosses itself. Prefer build_map_from_plan for a whole fresh level; use this to add rooms to a map."
+        description = "Draws a closed loop of corners as one new sector with its boundary walls, in a single undoable edit: the draw-a-room tool. points: [{x, y}, ...] (at least 3, implicitly closed) or vertices: [i, ...]; sector properties as in add_sector. The engine splits existing walls at T-junctions and crossings and merges painted-over sides, so the result never crosses itself; if a loop grazing an existing linedef leaves a ring open, notes name the sector and each free vertex, coordinate and linedef. Prefer build_map_from_plan for a whole level; use this to add rooms."
     )]
     fn create_sector_from_loop(
         &self,
@@ -271,7 +271,7 @@ impl Cyberdemon {
 
     /// Carves a polygon of solid rock into the map.
     #[tool(
-        description = "Carves a closed polygon of solid rock out of a map in a single undoable edit: the area holds no sector and the surrounding sectors get one-sided walls along the cut. The ring comes as points: [{x, y}, ...] or existing vertices: [i, ...]; zero-area or self-intersecting rings are refused by the geometry engine. Use it to pull a boundary in or delete leftover space; create_sector_from_loop does the opposite."
+        description = "Carves a closed polygon of solid rock out of a map in a single undoable edit: the area holds no sector and the surrounding sectors get one-sided walls along the cut. The ring comes as points: [{x, y}, ...] or existing vertices: [i, ...]; zero-area or self-intersecting rings are refused. If a loop grazing an existing linedef leaves a ring open, notes name the sector and each free vertex, coordinate and linedef. Use it to pull a boundary in or delete leftover space; create_sector_from_loop does the opposite."
     )]
     fn carve_void(
         &self,

@@ -123,6 +123,15 @@ are ever left crossing or overlapping.
   the area of the sectors the boundary touches is repainted. With it off,
   everything inside is overwritten and any sector buried this way is
   reported in `empty_sectors`/`notes` (kept, not deleted).
+- **Opened rings are noted.** If the rebuild leaves a sector whose
+  boundary closed before the draw now has free ends — most often because
+  the loop overlapped an existing linedef (a diagonal especially) and the
+  grazed piece vanished — `notes` says so, naming the sector (and whether
+  it is the one this call paints), every free end's vertex index, `x`/`y`
+  and the linedefs ending open there, and what to do next (move the loop
+  clear, or `split_linedef` the wall at the crossing). The draw still
+  lands; `validate_map` reports the same vertices as `unclosed_sector`
+  errors.
 
 **Indices move.** The whole map's linedefs, sidedefs and vertices are
 rebuilt from the arrangement, so their indices can change; sector indices
@@ -172,6 +181,10 @@ to punch a pillar into a room, or to cut one room away from another.
 - **`removed_sectors_empty`** (same list as `empty_sectors`) reports the
   sectors the carve painted out of existence; they stay in the map —
   clear them with `remove_sector cascade: true` if you meant it.
+- **Opened rings are noted** exactly as in `create_sector_from_loop`: a
+  sector that closed before the carve and has free ends after it gets a
+  `notes` row naming the sector, the open vertices' indices, coordinates
+  and linedefs, and the fix.
 - The same index-mapping caveat applies: read the new indices from
   `linedef_map` and `assemble_map`.
 

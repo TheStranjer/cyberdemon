@@ -52,7 +52,7 @@ with `render_topdown` to look at the spot.
 | `unknown_special` | warning | The linedef special is outside the map's flag-family table (see below). |
 | `special_without_tag` | warning | A Doom-family sector special carries tag 0, so nothing triggers its sector. |
 | `tag_without_sector` | warning | A Doom-family linedef carries a non-zero tag no sector in the map has. |
-| `unclosed_sector` | error | A sector's directed boundary edges (front sides `v1`→`v2`, back sides `v2`→`v1`) leave vertices with more edges one way than the other: the ring has free ends. The issue lists every unbalanced vertex and gives the first one's `x`/`y`. |
+| `unclosed_sector` | error | A sector's directed boundary edges (front sides `v1`→`v2`, back sides `v2`→`v1`) leave vertices with more edges one way than the other: the ring has free ends. The message names every free end (up to three) with its vertex, its `x`/`y`, whether more edges leave or arrive there and the linedefs ending open at it — and hints that a drawn loop overlapping an existing linedef is the usual cause; the issue's `vertices` list carries all the unbalanced ones, its `linedefs` the open lines, and `x`/`y` the first end's coordinates. |
 | `crossing_lines` | error | Two linedefs cross at a point that is not one of their endpoints. Maps above 20 000 linedefs skip this check (see `check_skipped`). |
 | `overlapping_lines` | error | Two collinear linedefs share a stretch of positive length — the same wall drawn twice. Touching at a single endpoint is fine. |
 | `check_skipped` | info | The crossing check declined a map with more than 20 000 linedefs; nothing was checked there. |

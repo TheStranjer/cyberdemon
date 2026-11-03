@@ -55,6 +55,7 @@ use serde::Serialize;
 use super::model::{Map, Sector};
 use crate::error::CyberError;
 use crate::geom::Pt;
+use crate::wad::map::geometry::{UnclosedRing, unclosed_rings};
 
 use prepared::Prepared;
 
@@ -157,8 +158,12 @@ pub struct OverlayResult {
     /// Indices of the sectors left without a single sidedef. They are
     /// kept, not deleted; see also `notes`.
     pub empty_sectors: Vec<usize>,
-    /// Human-readable remarks: every emptied sector and every linedef
-    /// the map could not place (unresolvable vertex references).
+    /// Human-readable remarks: every emptied sector, every linedef
+    /// the map could not place (unresolvable vertex references) and
+    /// every boundary ring this overlay opened — a sector that closed
+    /// before the paint and has free ends after it. The ring notes name
+    /// the open vertices' indices, coordinates and incident linedefs, so
+    /// the caller can find the gap without bisecting the map.
     pub notes: Vec<String>,
 }
 
@@ -220,6 +225,12 @@ enum OutsideRule {
 /// so the probe of the sectors the paint replaces does not pay for the
 /// whole arrangement twice.
 ///
+/// After the rebuild the sectors whose boundary rings this paint opened
+/// (closed before, free ends after) are reported as [`notes`] naming the
+/// free ends' vertices, coordinates and linedefs: a loop that overlaps
+/// an existing wall can lose the grazed piece and leave exactly such a
+/// gap. The edit still lands: the note is the diagnosis, not a refusal.
+///
 /// # Errors
 ///
 /// [`CyberError::InvalidArgument`] when the polygon is degenerate or
@@ -229,8 +240,11 @@ enum OutsideRule {
 /// not hold; [`CyberError::LimitExceeded`] when the arrangement leaves the
 /// coordinate range or the sector list outgrows the labeler. On error
 /// `map` is left untouched.
+///
+/// [`notes`]: OverlayResult::notes
 #[inline]
 pub fn apply_overlay(map: &mut Map, request: &OverlayRequest) -> Result<OverlayResult, CyberError> {
+    let open_before = opened_sectors(map);
     let prepared = Prepared::new(map, request)?;
     let cut = prepared.cut()?;
     let replaced = if request.keep_interior {
@@ -240,7 +254,48 @@ pub fn apply_overlay(map: &mut Map, request: &OverlayRequest) -> Result<OverlayR
     };
     let pieces = prepared.arrange_pieces(&cut, &replaced)?;
     let rebuilt = prepared.rebuild(&pieces)?;
-    let result = rebuilt.result.clone();
+    let mut result = rebuilt.result.clone();
     rebuilt.apply_to(map);
+    result
+        .notes
+        .extend(opened_notes(&open_before, map, result.sector));
     Ok(result)
+}
+
+/// The indices of the sectors whose boundary rings already leave free
+/// ends: the baseline the finished rebuild is compared against, so a
+/// ring the map was handed broken in is never blamed on this paint.
+fn opened_sectors(map: &Map) -> Vec<usize> {
+    unclosed_rings(map)
+        .into_iter()
+        .map(|ring| ring.sector)
+        .collect()
+}
+
+/// One note per sector this overlay opened: closed before the paint,
+/// free ends after it.
+fn opened_notes(before: &[usize], map: &Map, painted: Option<usize>) -> Vec<String> {
+    unclosed_rings(map)
+        .into_iter()
+        .filter(|ring| !before.contains(&ring.sector))
+        .map(|ring| opened_note(&ring, painted))
+        .collect()
+}
+
+/// The note phrasing one opened ring: who owns the sector, where the
+/// ring breaks and what usually caused it.
+fn opened_note(ring: &UnclosedRing, painted: Option<usize>) -> String {
+    let home = if painted == Some(ring.sector) {
+        " (the sector this call paints)"
+    } else {
+        ""
+    };
+    format!(
+        "the rebuild left sector {}{home} not closed: {}; the drawn loop probably overlapped \
+         an existing linedef at these points - find the gap there (render_topdown, \
+         assemble_map, find_elements), then move the loop clear of that wall or split the \
+         wall at the crossing (split_linedef) and draw again",
+        ring.sector,
+        ring.ends_words(),
+    )
 }

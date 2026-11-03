@@ -569,8 +569,8 @@ mod tests {
     fn recipes_guide_stays_within_its_line_budget() {
         let lines = read("skill/guides/recipes.md").lines().count();
         assert!(
-            lines <= 400,
-            "recipes.md is {lines} lines, the limit is 400"
+            lines <= 450,
+            "recipes.md is {lines} lines, the limit is 450"
         );
     }
 

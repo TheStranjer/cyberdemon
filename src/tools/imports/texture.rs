@@ -80,7 +80,7 @@ const NEXT_STEPS: [&str; 2] = [
 
 /// The full documentation of
 /// [`crate::server::Cyberdemon::create_texture_from_image`].
-pub(in crate::tools) const CREATE_TEXTURE_TOOL_DESCRIPTION: &str = "One call from a picture file to a working Doom wall texture: it runs your image ops, settles a tiling-friendly size, quantizes to the session PLAYPAL, stores the patch, lists it in PNAMES and defines the TEXTURE1/TEXTURE2 record - all as ONE undoable edit with a preview URL. tileable blends opposite edges and assign_role points a theme wall role at the result. The high-level texture tool.";
+pub(in crate::tools) const CREATE_TEXTURE_TOOL_DESCRIPTION: &str = "One call from a picture file to a working Doom wall texture: it runs your image ops, settles a tiling-friendly size, quantizes to the session PLAYPAL in your dither mode (none, ordered or floyd_steinberg - default floyd_steinberg, as in process_image; pass none for flat colours, logos and signage), stores the patch, lists it in PNAMES and defines the TEXTURE1/TEXTURE2 record - all as ONE undoable edit with a preview URL. tileable blends opposite edges and assign_role points a theme wall role at the result. The high-level texture tool.";
 
 /// Arguments for [`crate::server::Cyberdemon::create_texture_from_image`].
 #[derive(Debug, Deserialize, JsonSchema)]

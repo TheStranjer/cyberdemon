@@ -11,7 +11,7 @@ a layout, the answer comes from these pages, not from the server.
 | [design-rules.md](design-rules.md) | Doom dimensions and gameplay facts to design against, and the integer grid hand-built geometry needs |
 | [verification.md](verification.md) | The change → validate → render → compare → fix loop |
 | [sketch-to-map.md](sketch-to-map.md) | Hand-drawn floor plan → measured regions → plan → playable map, with a worked example |
-| [images-to-assets.md](images-to-assets.md) | Choosing the right image importer, the ops to run, sizes, palette limits and sprite definitions |
+| [images-to-assets.md](images-to-assets.md) | Choosing the right image importer, the ops to run, sizes, fitting art to one wall (facades and signage), palette limits and sprite definitions |
 | [editing-existing-maps.md](editing-existing-maps.md) | Changing maps that already exist in a WAD |
 | [recipes.md](recipes.md) | Worked end-to-end examples of common requests |
 

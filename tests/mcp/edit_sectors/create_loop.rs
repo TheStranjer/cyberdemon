@@ -405,6 +405,67 @@ async fn create_sector_from_loop_without_the_flag_overwrites_the_pillar() {
     );
 }
 
+#[tokio::test]
+async fn a_loop_overlapping_a_diagonal_wall_is_reported_where_it_breaks() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = doom_loaded(dir.path()).await;
+    // A room with a sloped diagonal wall, floated clear of the fixture.
+    call(
+        &client,
+        "create_sector_from_loop",
+        json!({"points": [
+            pt(600, 0), pt(1048, 0), pt(1048, 96), pt(920, 320), pt(600, 320)
+        ]}),
+    )
+    .await;
+    // The ticket's counter: a rectangle whose corner overlaps the diagonal.
+    let counter = call(
+        &client,
+        "create_sector_from_loop",
+        json!({"points": [pt(696, 32), pt(952, 32), pt(952, 272), pt(696, 272)]}),
+    )
+    .await;
+    let notes = counter["notes"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<&str>>();
+    let open = notes
+        .iter()
+        .find(|note| note.contains("not closed"))
+        .expect("the opened ring of the room is noted");
+    assert!(open.contains("sector 2"), "the room's sector named: {open}");
+    assert!(open.contains("x 920, y 320"), "the broken corner: {open}");
+    assert!(open.contains("x 947, y 272"), "the other free end: {open}");
+    assert!(
+        open.contains("overlapped an existing linedef"),
+        "the hint: {open}"
+    );
+    let report = call(
+        &client,
+        "validate_map",
+        json!({"map": "MAP01", "scope": "working"}),
+    )
+    .await;
+    let issue = report["issues"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|row| row["code"] == json!("unclosed_sector"))
+        .expect("validate_map sees the open ring too");
+    let message = issue["message"].as_str().expect("a message");
+    assert!(
+        message.contains("sector 2 is not closed") && message.contains("x 920, y 320"),
+        "the issue names sector and vertex coordinates: {message}"
+    );
+    assert_ne!(
+        issue["linedefs"],
+        Value::Null,
+        "the open linedefs are attached: {issue}"
+    );
+}
+
 /// Loop requests the tool must reject with `invalid_argument`: a
 /// missing or doubled form, a weak, flat or crossing ring, and fields
 /// outside the format's ranges.

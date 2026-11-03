@@ -20,6 +20,7 @@ use super::{Issue, Severity};
 use crate::fixed::gcd;
 use crate::geom::Pt;
 use crate::geom::segment::{cross, crosses_properly};
+use crate::wad::map::geometry::UnclosedRing;
 use crate::wad::map::model::{Linedef, Map};
 
 /// Linedef count past which [`crossing_lines`] declines to sweep and
@@ -123,91 +124,43 @@ fn resolved_lines(map: &Map) -> Vec<Line> {
         .collect()
 }
 
-/// Adds one directed boundary edge `from` → `to` to `sector`'s net table:
-/// out-degree minus in-degree, so a closed boundary nets zero at every
-/// vertex.
-fn add_edge(nets: &mut BTreeMap<usize, i32>, from: usize, to: usize) {
-    let out = nets.get(&from).copied().unwrap_or(0_i32).saturating_add(1);
-    nets.insert(from, out);
-    let inn = nets.get(&to).copied().unwrap_or(0_i32).saturating_sub(1);
-    nets.insert(to, inn);
-}
-
-/// One sector's share of one line, if it has one: `own` must resolve to
-/// a sector and must not be the sector on the other side (a line whose
-/// two sides share one sector bounds nothing, exactly as the containment
-/// tests treat it). `edge` is the directed vertex pair.
-fn push_edge(
-    ends: &mut BTreeMap<usize, BTreeMap<usize, i32>>,
-    own: Option<usize>,
-    other: Option<usize>,
-    edge: (usize, usize),
-) {
-    let (Some(sector), true) = (own, own != other) else {
-        return;
-    };
-    let (from, to) = edge;
-    add_edge(ends.entry(sector).or_default(), from, to);
-}
-
-/// The directed boundary edge nets of every sector: a line's front side
-/// runs `v1` → `v2`, its back side `v2` → `v1`. Unresolvable parts
-/// contribute nothing.
-fn directed_edges(map: &Map) -> BTreeMap<usize, BTreeMap<usize, i32>> {
-    let mut ends: BTreeMap<usize, BTreeMap<usize, i32>> = BTreeMap::new();
-    for line in &map.linedefs {
-        let (Some(_), Some(_)) = (map.vertices.get(line.v1), map.vertices.get(line.v2)) else {
-            continue;
-        };
-        let (front, back) = map.line_sectors(line);
-        push_edge(&mut ends, front, back, (line.v1, line.v2));
-        push_edge(&mut ends, back, front, (line.v2, line.v1));
-    }
-    ends
-}
-
-/// The sorted indices of the vertices whose net is not zero.
-fn unbalanced(nets: &BTreeMap<usize, i32>) -> Vec<usize> {
-    nets.iter()
-        .filter(|&(_, net)| *net != 0_i32)
-        .map(|(vertex, _)| *vertex)
-        .collect()
-}
-
-/// One unclosed-sector row: the sector, all its unbalanced vertices and
-/// the coordinates of the first.
-fn unclosed_issue(map: &Map, sector: usize, nets: &BTreeMap<usize, i32>) -> Option<Issue> {
-    let free = unbalanced(nets);
-    let first = *free.first()?;
-    let net = nets.get(&first).copied().unwrap_or(0_i32);
-    let point = map.vertices.get(first)?;
-    let direction = if net > 0_i32 { "outgoing" } else { "incoming" };
+/// One unclosed-sector row: the ring's free ends named in the message
+/// with their vertices, coordinates and incident linedefs, all free
+/// vertices attached as references, and the first end's coordinates on
+/// the row.
+fn ring_issue(ring: &UnclosedRing) -> Option<Issue> {
+    let first = ring.ends.first()?;
+    let lines = ring.linedefs();
+    let free: Vec<usize> = ring.ends.iter().map(|end| end.vertex).collect();
     Some(
         Issue::new(
             Severity::Error,
             format!(
-                "sector {sector} is not closed: {} of its boundary vertices are unbalanced, \
-                 the first is vertex {first} at x {}, y {} with more {direction} edges than \
-                 arriving; every boundary vertex needs as many edges leaving it as arriving \
-                 (build the missing wall or split the long one at the free end)",
-                free.len(),
-                point.x,
-                point.y,
+                "sector {} is not closed: {} of its boundary vertices are unbalanced: {}; \
+                 every boundary vertex needs as many edges leaving it as arriving - build the \
+                 missing wall (add_linedef), split the long one at a free end (split_linedef), \
+                 or move a drawn loop that overlapped an existing linedef here off that wall",
+                ring.sector,
+                ring.ends.len(),
+                ring.ends_words(),
             ),
         )
-        .sector(&[sector])
+        .sector(&[ring.sector])
         .vertex(&free)
-        .at(point.x, point.y),
+        .linedef(&lines)
+        .at(first.x, first.y),
     )
 }
 
-/// Sectors whose directed boundary edges leave free ends: with a front
-/// side running `v1` → `v2` and a back side `v2` → `v1`, a closed sector
-/// has at every vertex as many edges arriving as leaving.
+/// Sectors whose directed boundary edges leave free ends: the shared
+/// [`unclosed_rings`] read phrased as issues, so the same free ends the
+/// overlay engine notes come out of one analysis.
+///
+/// [`unclosed_rings`]: crate::wad::map::geometry::unclosed_rings
 pub(super) fn unclosed_sector(map: &Map) -> Vec<Issue> {
-    directed_edges(map)
+    crate::wad::map::geometry::unclosed_rings(map)
         .iter()
-        .filter_map(|(sector, nets)| unclosed_issue(map, *sector, nets))
+        .filter_map(ring_issue)
         .collect()
 }
 
@@ -473,6 +426,7 @@ mod tests {
         assert_eq!(issue.severity, Severity::Error, "a hole is broken");
         assert_eq!(issue.sectors, vec![0_usize], "the only sector");
         assert_eq!(issue.vertices, vec![0_usize, 3], "both free ends, in order");
+        assert_eq!(issue.linedefs, vec![0_usize, 2], "the two open lines");
         assert_eq!(issue.x, Some(0_i32), "the first free end's x");
         assert_eq!(issue.y, Some(0_i32), "and its y");
         assert!(
@@ -481,8 +435,68 @@ mod tests {
             issue.message
         );
         assert!(
+            issue
+                .message
+                .contains("vertex 0 at x 0, y 0 with more edges leaving than the other way"),
+            "the first free end is named with its coordinates: {}",
+            issue.message
+        );
+        assert!(
+            issue
+                .message
+                .contains("vertex 3 at x 0, y 128 with more edges arriving than the other way"),
+            "the second free end too: {}",
+            issue.message
+        );
+        assert!(
+            issue.message.contains("free end of linedef 0")
+                && issue.message.contains("free end of linedef 2"),
+            "both open lines are named: {}",
+            issue.message
+        );
+        assert!(
+            issue.message.contains("overlapped an existing linedef"),
+            "the overlap hint is in the advice: {}",
+            issue.message
+        );
+        assert!(
             unclosed_sector(&square()).is_empty(),
             "the full ring closes"
+        );
+    }
+
+    #[test]
+    fn a_diagonal_overlap_gap_names_the_walls_left_short() {
+        // The ticket's shape: a hall whose north-east wall is a diagonal,
+        // crossed by a stray diagonal line whose ends land on the ring's
+        // corners. The directed edges no longer balance at those corners,
+        // and the issue names every short wall.
+        let mut map = map_from(
+            &[pt(0, 0), pt(256, 0), pt(256, 96), pt(128, 224), pt(0, 224)],
+            &[vp(0, 1), vp(1, 2), vp(2, 3), vp(3, 4), vp(4, 0)],
+        );
+        assert!(
+            unclosed_sector(&map).is_empty(),
+            "the chamfered hall closes"
+        );
+        map.linedefs.push(solid_line(1, 3, 0));
+        let issues = unclosed_sector(&map);
+        let issue = issues.first().expect("the chord unbalances the ring");
+        assert_eq!(issue.sectors, vec![0_usize], "the hall is broken");
+        assert!(
+            issue.message.contains("vertex 1 at x 256, y 0"),
+            "the free end coordinates: {}",
+            issue.message
+        );
+        assert!(
+            issue.message.contains("vertex 3 at x 128, y 224"),
+            "and the other: {}",
+            issue.message
+        );
+        assert!(
+            issue.linedefs.contains(&5_usize),
+            "the crossing chord is one of the open lines: {:?}",
+            issue.linedefs
         );
     }
 

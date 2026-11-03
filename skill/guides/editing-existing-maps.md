@@ -86,7 +86,8 @@ Two habits keep an edit invisible for the wrong reasons: snap new corners
 to the existing grid (multiply of 8, and of 16 where the map's lines sit
 on 16s), and dress new geometry in textures the map already wears — read
 `describe_map`'s `top_wall_textures` and `top_flats` before choosing, not
-after.
+after. `design-rules.md`'s "The integer grid" says why the engine cannot
+see a one-unit slip, and why a diagonal you draw has to be exactly 45°.
 
 A map that depends on lumps you do not have (a custom texture pack, a
 DEHACKED patch WAD) must load them the way the game does: ask for the

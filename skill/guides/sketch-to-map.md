@@ -84,7 +84,9 @@ The `units` object maps plan pixels to map units: `x` becomes
   wants about 2 units per pixel: `scale_num: 2, scale_den: 1`.
 - **Always `flip_y: true` for images** — rows grow down, map `y` grows up.
 - **`grid: 16`** snaps everything to the design grid (10 px at
-  `8/5`, 8 px at `2/1`).
+  `8/5`, 8 px at `2/1`). The engine shares a corner only when the integers
+  match exactly: `design-rules.md`'s "The integer grid" is why the grid is
+  there.
 
 Use the **same** `units` and `grid` object in every call — `trace_sketch`,
 `build_map_from_plan` and the `render_topdown` underlay. That is what makes

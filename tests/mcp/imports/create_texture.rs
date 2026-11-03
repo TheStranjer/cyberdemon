@@ -1,11 +1,13 @@
 //! The one-shot `create_texture_from_image`: the size rules, the
-//! automatic `fit`/`make_tileable` steps, the `PNAMES`/patch/
-//! definition landing together, the layer-patch and texture-name
-//! collisions with and without `replace`, `assign_role` against the
-//! theme, and the single `undo`.
+//! automatic `fit`/`make_tileable` steps, the quantization in the chosen
+//! `dither` mode, the `PNAMES`/patch/definition landing together, the
+//! layer-patch and texture-name collisions with and without `replace`,
+//! `assign_role` against the theme, and the single `undo`.
 
 use std::path::Path;
 
+use cyberdemon::gfx::codec::encode_png;
+use cyberdemon::gfx::image::RgbaImage;
 use serde_json::{Value, json};
 
 use crate::imports::{
@@ -450,4 +452,78 @@ async fn create_texture_clashes_with_a_layer_patch_despite_a_working_flat_twin()
     );
     let flat_back = call(&client, "get_flat", json!({ "name": "WALLP1" })).await;
     assert_eq!(flat_back["width"], json!(64_u64), "the flat still serves");
+}
+
+/// A `size`x`size` opaque picture of one grey, off the fixture palette.
+fn grey_png(size: u32, level: u8) -> Vec<u8> {
+    let count = usize::try_from(size)
+        .expect("test size")
+        .checked_mul(usize::try_from(size).expect("test size"))
+        .expect("test pixels fit");
+    let pixels: Vec<u8> = (0..count)
+        .flat_map(|_| [level, level, level, 255_u8])
+        .collect();
+    let img = RgbaImage::new(size, size, pixels).expect("test shapes are valid");
+    encode_png(&img, None).expect("test PNGs encode")
+}
+
+/// Whether every pixel of a fetched `RGBA` picture is one colour.
+fn one_colour(rgba: &[u8]) -> bool {
+    let first = rgba.chunks_exact(4).next().expect("a non-empty picture");
+    rgba.chunks_exact(4).all(|pixel| pixel == first)
+}
+
+/// The stored pixels of the working patch `lump`, read back through
+/// `get_patch`.
+async fn patch_rgba(client: &Client, lump: &str) -> Vec<u8> {
+    let patch = call(
+        client,
+        "get_patch",
+        json!({ "name": lump, "format": "rgba" }),
+    )
+    .await;
+    let url = patch["asset"]["url"].as_str().expect("an asset");
+    fetch_asset(url).await
+}
+
+/// `dither` decides how the create tool quantizes the plane it stores:
+/// `"none"` keeps one off-palette grey one flat colour, the
+/// `floyd_steinberg` default and `"ordered"` spread it over the patch,
+/// and `colors_used` measures the source so it stands at `1` whichever
+/// mode ran.
+#[tokio::test]
+async fn create_texture_quantizes_in_the_dither_mode() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = iwad_client(dir.path()).await;
+    let file = write_file(dir.path(), "GREY.png", &grey_png(32_u32, 90_u8));
+    let plain = create_texture(
+        &client,
+        &file,
+        json!({ "name": "TDNONE", "dither": "none" }),
+    )
+    .await;
+    let floyd = create_texture(&client, &file, json!({ "name": "TDFLOYD" })).await;
+    let ordered = create_texture(
+        &client,
+        &file,
+        json!({ "name": "TDORDER", "dither": "ordered" }),
+    )
+    .await;
+    for report in [&plain, &floyd, &ordered] {
+        assert_eq!(
+            report["colors_used"],
+            json!(1_u64),
+            "the measures stay the single-grey source's"
+        );
+    }
+    let plain_px = patch_rgba(&client, "TDNONE").await;
+    let floyd_px = patch_rgba(&client, "TDFLOYD").await;
+    let ordered_px = patch_rgba(&client, "TDORDER").await;
+    assert!(one_colour(&plain_px), "none keeps the grey one flat colour");
+    assert!(
+        !one_colour(&floyd_px),
+        "the floyd_steinberg default spreads the grey"
+    );
+    assert!(!one_colour(&ordered_px), "ordered spreads it too");
+    assert_ne!(plain_px, floyd_px, "the mode moves the stored plane");
 }

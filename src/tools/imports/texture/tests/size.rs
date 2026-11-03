@@ -8,6 +8,7 @@
 use serde_json::json;
 
 use crate::gfx::ops::FitMode;
+use crate::gfx::ops::dither::Dither;
 use crate::themes::Role;
 use crate::tools::imports::texture::size::{
     check_height, check_width, choose_size, keep_or_fallback, nearest_width, nearest_widths,
@@ -193,6 +194,11 @@ fn the_wire_form_flattens_ops_size_and_shared_fields() {
     assert_eq!(call.size.fit, Some(FitMode::Stretch));
     assert!(call.size.tileable);
     assert_eq!(call.shared.ops.len(), 1, "the op list carries");
+    assert_eq!(
+        call.shared.dither,
+        Some(Dither::Ordered),
+        "the mode carries"
+    );
     assert_eq!(call.shared.palette, Some(2_usize));
     assert!(call.replace);
 }

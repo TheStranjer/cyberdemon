@@ -62,12 +62,27 @@ Apply them in this order: clean, correct, tone, tile.
   floor material, **never** for signs, pictures, switches or anything that
   reads as one object — a blended duplicate of the object ghosts at the
   seams.
-- **`dither`**: `floyd_steinberg` (the default) for photos and gradients;
-  `none` for flat-colour pixel art and line drawings, where error diffusion
-  adds noise dots inside solid colours; `ordered` if floyd looks speckled.
-  `process_image`, the three `create_*` calls and `import_image_as_flat`
-  all take it, and the importers and `create_flat_from_image` echo the mode
-  they used in their result.
+- **`dither`** is a quantize knob, not an op: `process_image`, the three
+  `create_*` calls and `import_image_as_flat` take `"floyd_steinberg"`
+  (the default), `"none"` or `"ordered"`; the plain patch and sprite
+  importers have no knob and map every pixel to the nearest palette
+  colour — what `"none"` does. **Keep `floyd_steinberg`** for photos and
+  smooth gradients: error diffusion fakes the in-between shades the
+  `PLAYPAL` lacks. **Pass `none`** for anything with large flat areas —
+  solid fills, logos, signage, pixel art, line drawings — where
+  diffusion only adds noise dots inside the solids and no missing shade
+  is worth faking. `ordered` (a fixed 4×4 `Bayer` pattern) is the middle
+  choice when floyd looks patchy and an even fine texture is wanted.
+  `import_image_as_flat` and `create_flat_from_image` echo the mode they
+  used in their result.
+- **Quiet a noisy source before blaming the dither.** Generated images
+  and photographed screens carry per-pixel colour noise, and
+  `floyd_steinberg` spreads that noise over the whole picture.
+  Downscaling already helps (the automatic `fit` resamples through the
+  area filter, averaging the noise away); a `blur` of radius 1–2 helps
+  more. Then re-check `process_image`'s `quantized` preview (§2): solid
+  areas must stay solid, and a `colors_used` near 256 for a logo drawn
+  in three says the noise is still in the picture.
 
 ## 4. Sizes
 

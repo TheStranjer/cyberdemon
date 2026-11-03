@@ -12,10 +12,17 @@ run the loop:
    the numbers in the result instead of recalling what you sent.
 3. **`check_playability`** — the player's question: can a start reach an
    exit, which sectors are cut off and why, which things cannot stand
-   where they are. Run it after `validate_map` and fix every blocker with
-   the tool its `hint` names (`add_stairs`, `edit_sector`, `edit_linedef`,
-   `add_thing`, `add_exit`), then run it again; `render: true` draws the
-   unreachable sectors, blocker lines and stuck things highlighted.
+   where they are. Every unreachable sector arrives explained: `blockers`
+   rows carry a `reason` — `step_too_high` when the far floor stands more
+   than 24 units above the one the player is in (its `delta` says how far
+   past the climb), `isolated` when no adjacent sector lets a player in at
+   all (a plain gap), `locked` when a door wants a key the walk never
+   reached — plus the `from` sector and the boundary `line` they were tried
+   across, so a counter or planter floor and a road with no curb are numbers
+   to fix, not engine rules to remember. Run it after `validate_map` and fix
+   every blocker with the tool its `hint` names (`add_stairs`, `edit_sector`,
+   `edit_linedef`, `add_thing`, `add_exit`), then run it again; `render: true`
+   draws the unreachable sectors, blocker lines and stuck things highlighted.
 4. **`render_topdown` / `render_view`** — actually look: top-down for layout
    and scale, first-person for what the player sees. After building from a
    sketch, render it with the sketch as `underlay` (same `units` as

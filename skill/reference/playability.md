@@ -107,6 +107,16 @@ is the first failing rule at that line:
 A sector with several reachable borders gets one row per border, sorted
 by sector and line.
 
+`from` is the reached sector the player stood in when they came up against
+the border and `line` is the two-sided linedef between the two, so a step
+row reads "sector 7 is 40 up from sector 2, across line 41" rather than
+"sector 7 is unreachable"; an `isolated` row carries neither, because there
+is no border to name - nothing reachable touches that sector at all. A
+plain gap between two areas (a road and a lot with no curb line joining
+them) reads `isolated`; a curb too tall to walk up reads `step_too_high`.
+Sectors behind a held-out one read `isolated` as well: fix the border row
+and check again, and the ones behind it fall back into reach.
+
 ## `stuck_things`, `unreachable_things`
 
 `stuck_things` rows are `{thing, name, reason, hint}` for things that

@@ -1,6 +1,6 @@
 # Recipes
 
-Tools: run_batch, bulk_edit, set_light_effect, edit_sector, auto_texture, align_textures, mark_secret, create_sector_from_loop, add_door, add_thing, add_switch, add_exit, add_stairs, add_lift, add_window, add_teleporter, place_things, replace_thing_type, replace_texture, replace_flat, create_texture_from_image, create_flat_from_image, create_sprite_from_image, import_music, import_sound, build_map_from_plan, check_playability, build_all_nodes, describe_map, set_texture_theme
+Tools: run_batch, bulk_edit, set_light_effect, edit_sector, auto_texture, align_textures, mark_secret, create_sector_from_loop, add_door, add_thing, add_switch, add_exit, add_stairs, add_lift, add_window, add_teleporter, place_things, replace_thing_type, replace_texture, replace_flat, create_texture_from_image, create_flat_from_image, create_sprite_from_image, import_music, import_sound, build_map_from_plan, check_playability, build_all_nodes, describe_map, set_texture_theme, find_elements, edit_linedef, get_linedef_specials
 
 Worked answers to the requests people actually make. Each recipe is the
 request, the judgment behind it, and the exact calls. Read
@@ -128,6 +128,38 @@ this side of the door.
 
 ```json recipe
 {"fixture": true, "steps": [{"tool": "add_door", "arguments": {"between": [0, 1], "style": "locked_blue"}}, {"tool": "add_thing", "arguments": {"type": 5, "x": 128, "y": 64, "angle": 0}}, {"tool": "build_all_nodes", "arguments": {}}]}
+```
+
+### Keyed or plain door between hand-drawn rooms
+
+**"A blue-key door between two rooms I drew with loops."** Where two
+hand-drawn rooms stand 16 units apart (that gap is the wall), `add_door`
+has no shared wall to cut, so build the door by hand: a band sector
+bridging the gap, `DR` on its room-facing lines, and the dressing. Draw
+the band with `ceiling_height` equal to its `floor_height` — the closed
+shell — and `wall_texture: "DOORTRAK"` dresses its jamb edges. The
+rebuild hands each opened piece's front to whichever ring won it, and
+Doom `use` actions fire from the **front** only: `find_elements` the
+two-sided lines whose `front_sector` is the band and `flip` them, so
+each door line faces its own room with the band behind, and an untagged
+`DR` then raises that back sector (`sector_back` in the specials table)
+from either face. Wire both lines in one `edit_linedef`: `special` 1
+plain, 26 blue, 27 yellow, 28 red — verify against `get_linedef_specials
+{"category": "Doors"}` — with the front `upper` wearing
+`DOOR1`/`DOORBLU`/`DOORYEL`/`DOORRED`; where the find comes back empty
+the lines already face their rooms — drop the flip step. Closed, that
+upper band spans floor to room ceiling and the door art is 128 tall:
+rooms at ceiling 128 show it whole, a lower ceiling cuts off the key
+light. The rise stops at the band's lowest neighbouring ceiling less 4,
+flush with the rooms — what `check_playability` walks; signage over the
+opening wants the header build of `images-to-assets.md` §5. Keys are
+things (cards blue 5, yellow 6, red 13) standing on the side the walk
+reaches first: with the key `check_playability` opens the door and walks
+through; without it the border reads `locked` and the band lands in
+`doors_never_opened`.
+
+```json recipe
+{"fixture": true, "steps": [{"tool": "create_sector_from_loop", "arguments": {"points": [{"x": 0, "y": 272}, {"x": 128, "y": 272}, {"x": 128, "y": 400}, {"x": 0, "y": 400}], "floor_flat": "FLOOR1", "ceiling_flat": "FLAT10", "wall_texture": "WALL1", "light": 160}}, {"tool": "create_sector_from_loop", "arguments": {"points": [{"x": 144, "y": 272}, {"x": 272, "y": 272}, {"x": 272, "y": 400}, {"x": 144, "y": 400}], "floor_flat": "FLOOR1", "ceiling_flat": "FLAT10", "wall_texture": "WALL1", "light": 160}}, {"tool": "create_sector_from_loop", "arguments": {"points": [{"x": 128, "y": 304}, {"x": 144, "y": 304}, {"x": 144, "y": 368}, {"x": 128, "y": 368}], "ceiling_height": 0, "floor_flat": "FLOOR1", "ceiling_flat": "FLAT10", "wall_texture": "DOORTRAK", "light": 160}}, {"tool": "find_elements", "arguments": {"kind": "linedefs", "where": [{"field": "two_sided", "op": "eq", "value": true}, {"field": "front_sector", "op": "eq", "value": {"$ref": "2/sector"}}]}}, {"tool": "edit_linedef", "arguments": {"index": {"$ref": "3/indices"}, "flip": true}}, {"tool": "find_elements", "arguments": {"kind": "linedefs", "where": [{"field": "two_sided", "op": "eq", "value": true}, {"field": "back_sector", "op": "eq", "value": {"$ref": "2/sector"}}]}}, {"tool": "edit_linedef", "arguments": {"index": {"$ref": "5/indices"}, "special": 26, "front_side": {"upper": "DOORBLU", "x_offset": 0}}}, {"tool": "add_thing", "arguments": {"type": 5, "x": 48, "y": 336, "angle": 0}}, {"tool": "build_all_nodes", "arguments": {}}]}
 ```
 
 ### Switch-operated door

@@ -29,7 +29,10 @@ Each issue is `{severity, code, message, vertices, linedefs, sidedefs,
 sectors, things, x, y}`: the index lists name the offending elements
 (0-based, within the map) and only appear when the issue has them;
 likewise `x`/`y` mark the affected point where there is one. Use them
-with `render_topdown` to look at the spot.
+with `render_topdown` to look at the spot. There is no separate `hint`
+field: every message states the fix itself and names the tool or parameter
+that carries it out (`add_thing`, `edit_sector`, `build_all_nodes`, ...),
+so one row tells you both what is wrong and what to call next.
 
 ## The checks
 
@@ -46,8 +49,8 @@ with `render_topdown` to look at the spot.
 | `unused_sidedef` | info | No linedef side references the sidedef. |
 | `unused_sector` | warning | No sidedef references the sector: it borders no geometry. |
 | `shared_sidedef` | info | Several linedefs use one sidedef — legal in vanilla, but some editors refuse it. |
-| `no_player1_start` | error | No thing of type 1: nobody can spawn. |
-| `missing_coop_starts` | info | One or more of thing types 2-4 are absent. |
+| `no_player1_start` | error | No thing of type 1: nobody can spawn. The message says "no player 1 start", names the number and asks for `add_thing type 1` standing inside a sector. |
+| `missing_coop_starts` | info | One or more of thing types 2-4 are absent, so the map hosts one player only. The message lists the missing numbers and asks for one `add_thing` of each near the player 1 start. |
 | `unknown_thing_type` | warning | The type is in no definition the session knows (see below). |
 | `unknown_special` | warning | The linedef special is outside the map's flag-family table (see below). |
 | `special_without_tag` | warning | A Doom-family sector special carries tag 0, so nothing triggers its sector. |

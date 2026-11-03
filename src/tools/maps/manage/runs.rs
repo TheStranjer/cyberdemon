@@ -1,8 +1,9 @@
 //! The four management runs and their reports: the undoable steps behind
 //! `create_map`, `copy_map`, `rename_map` and `remove_map`.
 //!
-//! [`create_run`] appends a freshly encoded empty block, [`copy_run`]
-//! appends a renamed copy of a scope's block (with its `GL` run per
+//! [`create_run`] appends a freshly encoded empty block, carrying the
+//! player 1 start it was asked for and warning when the block holds none,
+//! [`copy_run`] appends a renamed copy of a scope's block (with its `GL` run per
 //! [`super::gl_copies`]), [`rename_run`] renames a working block in place
 //! and [`remove_run`] drops a block and its `GL` run. Each is one
 //! [`crate::session::Session::edit`] over the working archive; the active
@@ -22,6 +23,33 @@ use super::{
     drop_positions, empty_block,
 };
 
+/// The `start` row of a [`CreateReport`]: the player 1 thing the fresh
+/// block carries, in thing order.
+#[derive(Debug, Serialize)]
+pub(in crate::tools::maps) struct StartRow {
+    /// The index into `THINGS` (a fresh block holds nothing before it).
+    thing: usize,
+    /// `X` in map units.
+    x: i32,
+    /// `Y` in map units.
+    y: i32,
+    /// Facing in degrees, `0..=359`.
+    angle: i32,
+}
+
+/// The `next_steps` of a create whose block holds no start yet: the
+/// missing player 1 start leads, because nothing else can be played
+/// before it stands somewhere.
+const NEEDS_START_STEPS: [&str; 2] = [
+    "stand a player 1 start in a sector (add_thing type 1) once the map has geometry",
+    "validate_map and check_playability once the map is drawn",
+];
+/// The `next_steps` of a create whose block already carries its start.
+const HAS_START_STEPS: [&str; 2] = [
+    "draw the rooms around the start (create_sector_from_loop) or build a plan",
+    "validate_map and check_playability once the map is drawn",
+];
+
 /// Structured result of [`crate::server::Cyberdemon::create_map`].
 #[derive(Debug, Serialize)]
 pub(in crate::tools::maps) struct CreateReport {
@@ -31,13 +59,19 @@ pub(in crate::tools::maps) struct CreateReport {
     format: MapFormat,
     /// The namespace a `UDMF` block declares; `null` for binary formats.
     namespace: Option<String>,
-    /// Non-fatal notices: the odd-name warning.
+    /// The player 1 start the block carries; `null` when none was asked
+    /// for, which is what `warnings` then says.
+    start: Option<StartRow>,
+    /// Non-fatal notices: the odd-name warning and the missing start.
     warnings: Vec<String>,
     /// The session's active map after the call.
     active_map: Option<LumpName>,
+    /// What to do next: the start when it is missing, then the
+    /// verification pair.
+    next_steps: Vec<&'static str>,
 }
 
-/// Runs one `create_map`: append the freshly encoded empty block, then
+/// Runs one `create_map`: append the freshly encoded block, then
 /// adopt the new map as the active selection when none was set.
 ///
 /// # Errors
@@ -54,9 +88,10 @@ pub(in crate::tools::maps) fn create_run(
         format,
         namespace,
         replace,
+        start,
         warnings,
     } = plan;
-    let lumps = empty_block(name, format, namespace.as_deref())?;
+    let lumps = empty_block(name, format, namespace.as_deref(), start)?;
     let label = format!("create_map {name}");
     session.edit(&label, move |wad| append_block(wad, name, replace, lumps))?;
     if session.active_map().is_none() {
@@ -66,8 +101,20 @@ pub(in crate::tools::maps) fn create_run(
         map: name,
         format,
         namespace,
+        start: start.map(|spawn| StartRow {
+            thing: 0_usize,
+            x: spawn.x,
+            y: spawn.y,
+            angle: spawn.angle,
+        }),
         warnings,
         active_map: session.active_map(),
+        next_steps: (if start.is_some() {
+            HAS_START_STEPS
+        } else {
+            NEEDS_START_STEPS
+        })
+        .to_vec(),
     })
 }
 

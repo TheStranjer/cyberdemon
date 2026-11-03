@@ -182,9 +182,10 @@ struct RemoveReport {
 }
 
 /// The flag bits a thing starts with when the caller named none: all
-/// skills in all modes, per the map's family.
+/// skills in all modes, per the map's family. `create_map`'s optional
+/// player 1 start is written with these same bits.
 #[must_use]
-const fn default_bits(family: FlagFamily) -> u32 {
+pub(in crate::tools) const fn default_bits(family: FlagFamily) -> u32 {
     match family {
         FlagFamily::Doom => DOOM_DEFAULT_FLAGS,
         FlagFamily::Hexen => HEXEN_DEFAULT_FLAGS,

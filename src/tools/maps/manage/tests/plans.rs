@@ -3,16 +3,21 @@
 //! the empty-block encoder, the copied block and the doomed positions.
 
 use super::super::{
-    copied_block, doomed_positions, empty_block, gl_copies, is_loadable_name, name_warning,
-    plan_copy, plan_create,
+    CreateStart, copied_block, doomed_positions, empty_block, gl_copies, is_loadable_name,
+    name_warning, plan_copy, plan_create,
 };
 use super::{
     base_session, carrying, code, copy_args, copy_plan, create_args, layer_map, marker, name,
+    start_at, started_args,
 };
 use crate::session::Scope;
+use crate::tools::edit_things::default_bits;
 use crate::tools::maps::common::{Directory, directory};
 use crate::tools::maps::{parse_format, resolve_namespace};
+use crate::wad::archive::Lump;
 use crate::wad::classify::{MapFormat, analyze};
+use crate::wad::map::consts::{COORD_MAX, PLAYER1_START};
+use crate::wad::map::{FlagFamily, Thing, read_map};
 
 #[test]
 fn parse_format_defaults_to_doom_and_lists_the_choices() {
@@ -120,7 +125,7 @@ fn gl_copies_rename_the_head_and_warn_when_the_marker_is_gone() {
 
 #[test]
 fn empty_blocks_match_the_documented_member_sets() {
-    let doom = empty_block(name("MAP05"), MapFormat::Doom, None).expect("doom writes");
+    let doom = empty_block(name("MAP05"), MapFormat::Doom, None, None).expect("doom writes");
     let doom_names: Vec<String> = doom.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
         doom_names,
@@ -134,13 +139,14 @@ fn empty_blocks_match_the_documented_member_sets() {
         doom.iter().all(|lump| lump.size() == 0),
         "every member is empty"
     );
-    let hexen = empty_block(name("MAP05"), MapFormat::Hexen, None).expect("hexen writes");
+    let hexen = empty_block(name("MAP05"), MapFormat::Hexen, None, None).expect("hexen writes");
     assert_eq!(
         analyze(&hexen).maps.first().expect("one block").format,
         MapFormat::Hexen,
         "the generated BEHAVIOR marks it Hexen",
     );
-    let udmf = empty_block(name("MAP05"), MapFormat::Udmf, Some("doom")).expect("udmf writes");
+    let udmf =
+        empty_block(name("MAP05"), MapFormat::Udmf, Some("doom"), None).expect("udmf writes");
     let udmf_names: Vec<String> = udmf.iter().map(|lump| lump.name.to_string()).collect();
     assert_eq!(
         udmf_names,
@@ -156,6 +162,127 @@ fn empty_blocks_match_the_documented_member_sets() {
         String::from_utf8(body).expect("UDMF is text").trim(),
         "namespace = \"doom\";",
         "the TEXTMAP declares only the namespace",
+    );
+}
+
+#[test]
+fn a_fresh_plan_without_a_start_says_nobody_can_spawn() {
+    let bare = plan_create(&create_args("MAP05", None, None)).expect("valid plan");
+    assert_eq!(bare.start, None, "no start was asked for");
+    let warning = bare
+        .warnings
+        .iter()
+        .find(|text| text.contains("player 1 start"))
+        .expect("an empty block says its player 1 start is missing");
+    assert!(
+        warning.contains("type 1") && warning.contains("add_thing") && warning.contains("spawn"),
+        "the notice names the number, the tool and what is wrong: {warning}"
+    );
+    let started = plan_create(&started_args("MAP05", None, start_at(64, -128, None)))
+        .expect("a start is a valid plan");
+    assert_eq!(
+        started.start,
+        Some(CreateStart {
+            x: 64_i32,
+            y: -128_i32,
+            angle: 0_i32,
+        }),
+        "the point travels, facing east",
+    );
+    assert!(
+        started.warnings.is_empty(),
+        "a loadable name with a start deserves no notice: {:?}",
+        started.warnings,
+    );
+}
+
+#[test]
+fn a_start_facing_wraps_and_binary_coordinates_are_checked() {
+    let spun = plan_create(&started_args(
+        "MAP05",
+        None,
+        start_at(0_i32, 0_i32, Some(370_i32)),
+    ))
+    .expect("a facing past a full turn wraps");
+    assert_eq!(
+        spun.start.map(|spawn| spawn.angle),
+        Some(10_i32),
+        "370 is 10"
+    );
+    let back = plan_create(&started_args(
+        "MAP05",
+        None,
+        start_at(0_i32, 0_i32, Some(-90_i32)),
+    ))
+    .expect("a negative facing wraps");
+    assert_eq!(
+        back.start.map(|spawn| spawn.angle),
+        Some(270_i32),
+        "-90 is 270"
+    );
+    let over = COORD_MAX.saturating_add(1);
+    let error = plan_create(&started_args("MAP05", None, start_at(over, 0_i32, None)))
+        .expect_err("a binary THINGS x column is i16");
+    assert_eq!(code(&error), "invalid_argument", "refused before any write");
+    assert!(
+        error.to_string().contains('x'),
+        "the message names the field: {error}"
+    );
+    let wide = plan_create(&started_args(
+        "MAP05",
+        Some("udmf"),
+        start_at(over, 0_i32, None),
+    ))
+    .expect("UDMF stores full integers");
+    assert_eq!(
+        wide.start.map(|spawn| spawn.x),
+        Some(over),
+        "and keeps them"
+    );
+}
+
+/// The one thing of the block `lumps` holds, decoded back out.
+fn sole_thing(lumps: &[Lump]) -> Thing {
+    let block = analyze(lumps).maps.first().expect("one block").clone();
+    let map = read_map(lumps, &block).expect("the block reads back");
+    assert_eq!(map.things.len(), 1, "exactly the one start");
+    map.things.first().expect("the start is there").clone()
+}
+
+#[test]
+fn empty_blocks_stand_the_asked_start_in_things() {
+    let plan = plan_create(&started_args(
+        "MAP05",
+        None,
+        start_at(64, -128, Some(450_i32)),
+    ))
+    .expect("a start is a valid plan");
+    let doom = empty_block(name("MAP05"), MapFormat::Doom, None, plan.start).expect("doom writes");
+    let spawn = sole_thing(&doom);
+    assert_eq!(spawn.kind, PLAYER1_START, "thing type 1");
+    assert_eq!(
+        (spawn.x, spawn.y, spawn.angle),
+        (64_i32, -128_i32, 90_i32),
+        "the point and the wrapped facing land",
+    );
+    assert_eq!(
+        spawn.flags,
+        default_bits(FlagFamily::Doom),
+        "the start spawns at every skill, the way add_thing defaults",
+    );
+    let hexen = empty_block(name("MAP05"), MapFormat::Hexen, None, plan.start).expect("hexen");
+    assert_eq!(
+        sole_thing(&hexen).flags,
+        default_bits(FlagFamily::Hexen),
+        "a Hexen block gets the Hexen family's presence bits",
+    );
+    let udmf =
+        empty_block(name("MAP05"), MapFormat::Udmf, Some("doom"), plan.start).expect("udmf writes");
+    let text = sole_thing(&udmf);
+    assert_eq!(
+        (text.kind, text.x, text.y, text.angle),
+        (PLAYER1_START, 64_i32, -128_i32, 90_i32),
+        "the TEXTMAP carries the start too",
     );
 }
 
@@ -251,7 +378,17 @@ fn plans_validate_names_and_scopes() {
         .expect_err("namespace on a binary map");
     assert_eq!(code(&ns), "invalid_argument", "namespace clash code");
     let plan = plan_create(&create_args("SLOTPAD", None, None)).expect("odd name");
-    assert_eq!(plan.warnings.len(), 1, "the plan carries the warning");
+    assert_eq!(
+        plan.warnings.len(),
+        2,
+        "the odd name and the missing start: {:?}",
+        plan.warnings,
+    );
+    assert!(
+        plan.warnings[0].contains("SLOTPAD") && plan.warnings[1].contains("player 1 start"),
+        "the name first, then the spawn: {:?}",
+        plan.warnings,
+    );
     assert_eq!(plan.namespace, None, "binary default");
     let scope =
         plan_copy(&copy_args("MAP01", "MAP02", Some("nope"), false)).expect_err("bad scope");

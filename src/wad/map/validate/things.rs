@@ -32,8 +32,8 @@ pub(super) fn no_player1_start(map: &Map) -> Vec<Issue> {
     vec![Issue::new(
         Severity::Error,
         format!(
-            "the map holds no thing of type {PLAYER1_START} (player 1 start), so no player can \
-             spawn"
+            "no player 1 start: the map holds no thing of type {PLAYER1_START}, so no player can \
+             spawn; add thing type 1 standing inside a sector (add_thing), then validate again"
         ),
     )]
 }
@@ -50,7 +50,8 @@ pub(super) fn missing_coop_starts(map: &Map) -> Vec<Issue> {
     vec![Issue::new(
         Severity::Info,
         format!(
-            "coop starts are missing: no thing of type {}",
+            "coop starts are missing: no thing of type {}, so the map hosts one player only; \
+             add one thing of each missing type near the player 1 start (add_thing) to host coop",
             listed(&missing)
         ),
     )]
@@ -119,7 +120,7 @@ pub(super) fn thing_outside_map(map: &Map) -> Vec<Issue> {
                 Severity::Warning,
                 format!(
                     "thing {index} at x {}, y {} stands outside every sector: nothing holds \
-                     it; move it into a room (move_thing) or remove it",
+                     it; move it into a room (edit_thing) or remove it",
                     placed.x, placed.y,
                 ),
             )
@@ -184,8 +185,13 @@ mod tests {
         let issue = issues.first().expect("no start, one error");
         assert!(issue.things.is_empty(), "nothing to point at");
         assert!(
-            issue.message.contains("type 1"),
-            "the message names the number: {}",
+            issue.message.contains("no player 1 start") && issue.message.contains("type 1"),
+            "the message names the missing start and its number: {}",
+            issue.message
+        );
+        assert!(
+            issue.message.contains("add thing type 1") && issue.message.contains("add_thing"),
+            "the message says what to do and with which tool: {}",
             issue.message
         );
         let monster = map_with(vec![thing_at(3001, 100, 100)]);
@@ -202,6 +208,11 @@ mod tests {
         assert!(
             issue.message.contains("2, 3, 4"),
             "all three numbers are missing: {}",
+            issue.message
+        );
+        assert!(
+            issue.message.contains("add_thing"),
+            "the row names the tool that fixes it: {}",
             issue.message
         );
         let mut partial = solo;

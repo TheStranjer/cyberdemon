@@ -109,6 +109,14 @@ mod tests {
             "vanilla cannot play without a tree"
         );
         assert!(
+            issue(&report, "missing_coop_starts")["message"]
+                .as_str()
+                .expect("text")
+                .contains("add_thing"),
+            "the coop row names the tool that hosts coop: {}",
+            issue(&report, "missing_coop_starts")
+        );
+        assert!(
             issue(&report, "nodes_missing")["message"]
                 .as_str()
                 .expect("text")

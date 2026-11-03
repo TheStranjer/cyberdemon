@@ -1,6 +1,8 @@
 //! The door pipeline's tests: the style names and wall targets, the
-//! `choose` resolutions, the touching-rooms carve, the recess record and
-//! its dressing, and the whole [`build_door`] runs on the fixture maps.
+//! `choose` resolutions, the touching-rooms carve, the side a one-sided
+//! wall is dug toward and what a recess that reaches nothing refuses, the
+//! recess record and its dressing, and the whole [`build_door`] runs on
+//! the fixture maps.
 
 use crate::named::Named as _;
 use serde_json::from_str;
@@ -11,7 +13,7 @@ use crate::tools::features::door::{
     door_groups, door_record, dress_door, style_name, style_of, target_of, track_role,
 };
 use crate::tools::features::wall::{
-    centroid, choose_between, choose_linedef, half_axis, outward_normal, recess_depth,
+    Side, choose_between, choose_linedef, half_axis, outward_normal, parse_side, recess_depth,
     strip_face_lost, strip_wall,
 };
 use crate::wad::classify::MapFormat;
@@ -21,8 +23,29 @@ use crate::wad::map::features::door_wall;
 use crate::wad::map::ops::Point;
 
 use super::{
-    code, missing, one_room, open_line, refuse, room_and_hall, solid_line, two_rooms, vertex,
+    WEST_WALL_X, code, missing, one_room, open_line, refuse, room_and_hall, rooms_apart,
+    solid_line, two_rooms, vertex,
 };
+
+/// The sector a two-sided `line` faces besides `sector`.
+fn far_side(map: &Map, line: usize, sector: usize) -> usize {
+    let def = map.linedefs.get(line).expect("a line");
+    let (front, back) = map.line_sectors(def);
+    front
+        .into_iter()
+        .chain(back)
+        .find(|&other| other != sector)
+        .expect("the far side")
+}
+
+/// A refused build stopped before the dressing: no line of `map` carries an
+/// action, so nothing the caller did not ask for stands.
+fn assert_dressed_no_line(map: &Map) {
+    assert!(
+        map.linedefs.iter().all(|line| line.special == 0_i32),
+        "the refusal came before any action was written"
+    );
+}
 
 /// A request parsed from `json`.
 fn args(json: &str) -> AddDoorParams {
@@ -46,6 +69,7 @@ fn spec(target: Target) -> DoorSpec {
         at: None,
         width: 64_i32,
         depth: None,
+        side: None,
         style: DoorStyle::Normal,
         skins: skins(),
     }
@@ -281,15 +305,163 @@ fn a_one_sided_wall_with_nothing_behind_refuses() {
 }
 
 #[test]
-fn an_explicit_depth_must_land_inside_a_sector() {
-    let mut map = one_room();
+fn a_wall_with_a_sector_behind_it_names_the_side_that_reaches_it() {
+    let mut map = rooms_apart();
+    let message = refuse(&build_door(&mut map, &spec(Target::Linedef(0))).unwrap_err());
+    assert!(
+        message.starts_with("no room behind this wall within 256 units"),
+        "the standing refusal: {message}"
+    );
+    assert!(
+        message.contains("a sector lies 64 units on this wall's back side"),
+        "the other side is measured too: {message}"
+    );
+    assert!(
+        message.contains("pass side: \"back\""),
+        "and named as the fix: {message}"
+    );
+    assert_eq!(map, rooms_apart(), "nothing was drawn");
+}
+
+#[test]
+fn side_back_digs_the_recess_through_the_wall() {
+    let mut map = rooms_apart();
     let spec = DoorSpec {
-        depth: Some(400_i32),
+        side: Some(Side::Back),
+        ..spec(Target::Linedef(0))
+    };
+    let built = build_door(&mut map, &spec).expect("the back ray reaches the concourse");
+    assert_eq!(built.lines.len(), 2, "the named wall and the concourse's");
+    assert_eq!(built.jambs.len(), 2, "the stub's two sides in the void");
+    assert!(
+        built
+            .notes
+            .iter()
+            .any(|note| note.contains("through linedef 0's back side")),
+        "the report says which way it dug: {:?}",
+        built.notes
+    );
+    let faces: Vec<usize> = built
+        .lines
+        .iter()
+        .map(|&line| far_side(&map, line, built.door_sector))
+        .collect();
+    assert!(
+        faces.contains(&0_usize) && faces.contains(&1_usize),
+        "the door joins the room and the concourse: {faces:?}"
+    );
+    let wall = built
+        .lines
+        .iter()
+        .map(|&line| map.linedefs.get(line).expect("a line"))
+        .find(|line| {
+            let (from, to) = (
+                map.vertices.get(line.v1).expect("v1"),
+                map.vertices.get(line.v2).expect("v2"),
+            );
+            from.x == WEST_WALL_X && to.x == WEST_WALL_X
+        })
+        .expect("the named wall is one of the door lines");
+    assert_eq!(wall.special, 1_i32, "it carries the door action");
+    assert_eq!(
+        map.side_sector(wall.front),
+        Some(0_usize),
+        "and faces its own room"
+    );
+    let door = map.sectors.get(built.door_sector).expect("the door");
+    assert_eq!(
+        (door.floor_height, door.ceiling_height),
+        (0_i32, 0_i32),
+        "room A's floor, closed"
+    );
+}
+
+#[test]
+fn a_recess_that_reopens_the_room_it_came_from_refuses() {
+    let mut map = rooms_apart();
+    let spec = DoorSpec {
+        depth: Some(64_i32),
         ..spec(Target::Linedef(0))
     };
     let message = refuse(&build_door(&mut map, &spec).unwrap_err());
-    assert!(message.contains("no room behind this wall"), "{message}");
-    assert_eq!(map.sectors.len(), 1, "nothing was drawn");
+    assert!(
+        message.contains("door recess on linedef 0 opens back into sector 0"),
+        "what was built is named: {message}"
+    );
+    assert!(
+        message.contains("pass side: \"back\""),
+        "the fix is named: {message}"
+    );
+    assert_dressed_no_line(&map);
+}
+
+#[test]
+fn a_recess_short_of_the_room_behind_the_wall_refuses() {
+    let mut map = rooms_apart();
+    let spec = DoorSpec {
+        depth: Some(16_i32),
+        side: Some(Side::Back),
+        ..spec(Target::Linedef(0))
+    };
+    let message = refuse(&build_door(&mut map, &spec).unwrap_err());
+    assert!(
+        message.contains("opens back into sector 0 on every side"),
+        "{message}"
+    );
+    assert!(
+        message.contains("nothing lies behind linedef 0"),
+        "the back-side hint: {message}"
+    );
+    assert!(
+        message.contains("create_sector_from_loop"),
+        "the drawer is named: {message}"
+    );
+    assert_dressed_no_line(&map);
+}
+
+#[test]
+fn side_is_refused_on_a_wall_with_a_sector_on_both_sides() {
+    let mut map = two_rooms();
+    let spec = DoorSpec {
+        side: Some(Side::Back),
+        ..spec(Target::Linedef(2))
+    };
+    let message = refuse(&build_door(&mut map, &spec).unwrap_err());
+    assert!(
+        message.contains("linedef 2 has a sector on both of its sides"),
+        "{message}"
+    );
+    assert!(message.contains("between"), "the alternative: {message}");
+    assert_eq!(map, two_rooms(), "not even the strip was carved");
+}
+
+#[test]
+fn side_reads_front_and_back_and_refuses_anything_else() {
+    assert_eq!(parse_side(None).expect("left out"), None);
+    assert_eq!(
+        parse_side(Some("front")).expect("the default"),
+        Some(Side::Front)
+    );
+    assert_eq!(
+        parse_side(Some("BACK")).expect("case-insensitive"),
+        Some(Side::Back)
+    );
+    let message = refuse(&parse_side(Some("west")).unwrap_err());
+    assert!(
+        message.contains("unknown side \"west\": pass one of \"front\", \"back\""),
+        "{message}"
+    );
+}
+
+#[test]
+fn rooms_that_share_no_edge_are_told_about_the_back_side() {
+    let apart = rooms_apart();
+    let message = refuse(&choose_between(&apart, 0, 1, None).unwrap_err());
+    assert!(message.contains("no two-sided boundary"), "{message}");
+    assert!(
+        message.contains("side: \"back\""),
+        "the way to join them: {message}"
+    );
 }
 
 #[test]
@@ -298,6 +470,14 @@ fn a_one_sided_door_opens_a_passage_across_the_room() {
     let built = build_door(&mut map, &spec(Target::Linedef(0))).expect("the ray finds the hall");
     assert_eq!(built.lines.len(), 3, "the bay: the hall and both sides");
     assert_eq!(built.jambs.len(), 1, "the old west wall seals the bay");
+    assert!(
+        built
+            .notes
+            .iter()
+            .any(|note| note.contains("toward linedef 0's front side")),
+        "the report says which way it dug: {:?}",
+        built.notes
+    );
     let door = map.sectors.get(built.door_sector).expect("the door");
     assert_eq!(door.ceiling_height, door.floor_height, "closed");
     for index in &built.lines {
@@ -315,24 +495,51 @@ fn a_one_sided_door_opens_a_passage_across_the_room() {
 fn recess_depth_validates_the_explicit_number() {
     let map = one_room();
     let wall = door_wall(&map, 0, None, 64_i32).expect("the west wall carries 64");
-    let mut probe = spec(Target::Linedef(0));
-    probe.depth = Some(0_i32);
     assert!(
-        refuse(&recess_depth(&map, &wall, &probe).unwrap_err()).contains("positive"),
+        refuse(&recess_depth(&map, &wall, Some(0_i32), Side::Front).unwrap_err())
+            .contains("positive"),
         "zero is no depth"
     );
-    probe.depth = Some(-8_i32);
     assert!(
-        refuse(&recess_depth(&map, &wall, &probe).unwrap_err()).contains("positive"),
+        refuse(&recess_depth(&map, &wall, Some(-8_i32), Side::Front).unwrap_err())
+            .contains("positive"),
         "neither is a negative one"
     );
-    probe.depth = Some(64_i32);
-    assert_eq!(recess_depth(&map, &wall, &probe).expect("kept"), 64_i32);
-    probe.depth = None;
     assert_eq!(
-        code(&recess_depth(&map, &wall, &probe).unwrap_err()),
+        recess_depth(&map, &wall, Some(64_i32), Side::Front).expect("kept"),
+        64_i32,
+        "an explicit depth is kept on either side"
+    );
+    assert_eq!(
+        recess_depth(&map, &wall, Some(64_i32), Side::Back).expect("kept"),
+        64_i32,
+        "including the back"
+    );
+    assert_eq!(
+        code(&recess_depth(&map, &wall, None, Side::Front).unwrap_err()),
         "invalid_argument",
-        "the ray finds nothing behind the room"
+        "the ray finds nothing in front of the room"
+    );
+    assert_eq!(
+        code(&recess_depth(&map, &wall, None, Side::Back).unwrap_err()),
+        "invalid_argument",
+        "and nothing behind it either"
+    );
+}
+
+#[test]
+fn the_back_ray_measures_the_void_between_two_sealed_rooms() {
+    let map = rooms_apart();
+    let wall = door_wall(&map, 0, None, 64_i32).expect("the west wall carries 64");
+    assert_eq!(
+        recess_depth(&map, &wall, None, Side::Back).expect("the concourse behind it"),
+        64_i32,
+        "the gap between the rooms is the recess"
+    );
+    assert_eq!(
+        code(&recess_depth(&map, &wall, None, Side::Front).unwrap_err()),
+        "invalid_argument",
+        "in front lies only the room itself"
     );
 }
 
@@ -369,17 +576,7 @@ fn an_empty_map_finds_no_groups() {
 }
 
 #[test]
-fn centroids_and_halves_stay_whole() {
-    assert_eq!(
-        centroid(&[
-            Point { x: 0, y: 0 },
-            Point { x: 3, y: 0 },
-            Point { x: 3, y: 3 },
-            Point { x: 0, y: 3 },
-        ]),
-        Point { x: 2, y: 2 },
-        "the mean of the corners"
-    );
+fn halves_stay_whole() {
     assert_eq!(half_axis(-1, 0), -1_i32, "halves round away from zero");
     assert_eq!(half_axis(0, 1), 1_i32, "up too");
     assert_eq!(half_axis(i32::MAX, i32::MAX), i32::MAX, "saturated");

@@ -2,17 +2,20 @@
 //! closed, both room-facing lines dressed and their map still `validate_map`
 //! clean; the locked-blue key door with its coloured track; the `Hexen`-
 //! family script doors (`Door_Raise` on binary `Hexen`, `Door_Open` on
-//! `UDMF` `zdoom`); the inert tagged `remote` door; and the one-step undo.
-//! Every listed refusal is here too: an over-wide door naming the available
-//! length, a one-sided wall with nothing behind it, the depth probe, the
-//! both/neither wall parameter, bad style names and out-of-range sector/
+//! `UDMF` `zdoom`); the inert tagged `remote` door; the `side: "back"` door
+//! dug through a room's one-sided wall into the shop behind it; and the
+//! one-step undo. Every listed refusal is here too: an over-wide door
+//! naming the available length, a one-sided wall with nothing behind it,
+//! the side that would reach the room behind such a wall, a depth that
+//! reopens the room it came from, an unknown `side` name, the both/neither
+//! wall parameter, bad style names and out-of-range sector/
 //! linedef indices. A fullbright `render_view` through the theme override
 //! shows the built door's `DOOR1` face from the room it opens.
 
 use serde_json::{Value, json};
 
 use crate::features::{
-    count_pixels, features_loaded, formats_loaded, l_room_loaded, note_mentions,
+    Client, count_pixels, features_loaded, formats_loaded, l_room_loaded, note_mentions,
     refuse_missing_with, refuse_with, rendered_image, reported_lines, validate_clean,
     working_sector,
 };
@@ -230,15 +233,242 @@ async fn a_wall_with_nothing_behind_refuses_the_recess() {
 }
 
 #[tokio::test]
-async fn an_explicit_depth_must_land_inside_a_sector() {
+async fn an_explicit_depth_must_reach_another_sector() {
     let dir = tempfile::tempdir().expect("temp dir");
     let client = l_room_loaded(dir.path()).await;
     refuse_with(
         &client,
         json!({"linedef": 0_i32, "depth": 600_i32}),
+        "opens back into sector 0 on every side",
+    )
+    .await;
+    refuse_with(
+        &client,
+        json!({"linedef": 0_i32, "depth": 600_i32}),
+        "pass side: \"back\"",
+    )
+    .await;
+}
+
+/// The `CD-347` mall shape: a shop drawn in the void 64 units off a
+/// fixture room's own one-sided wall. `points` is the shop's loop and `wall`
+/// the fixture wall the shop faces; returns the drawn sector and that wall
+/// as the rebuild renumbered it.
+async fn shop_off_the_wall(client: &Client, points: [Value; 4], wall: usize) -> (Value, Value) {
+    let drawn = call(client, "create_sector_from_loop", json!({"points": points})).await;
+    let kept = drawn["linedef_map"]
+        .get(wall)
+        .and_then(Value::as_u64)
+        .expect("the door wall survives the draw");
+    (drawn["sector"].clone(), json!(kept))
+}
+
+/// The shop north of the L fixture, 64 units off its top wall (linedef 0).
+fn north_of_the_l() -> ([Value; 4], usize) {
+    (
+        [
+            json!({"x": 0_i64, "y": 320_i64}),
+            json!({"x": 128_i64, "y": 320_i64}),
+            json!({"x": 128_i64, "y": 448_i64}),
+            json!({"x": 0_i64, "y": 448_i64}),
+        ],
+        0_usize,
+    )
+}
+
+/// The shop west of the features fixture's hall, 64 units off its west wall
+/// (linedef 0).
+fn west_of_the_hall() -> ([Value; 4], usize) {
+    (
+        [
+            json!({"x": -64_i64, "y": 64_i64}),
+            json!({"x": -64_i64, "y": 192_i64}),
+            json!({"x": -192_i64, "y": 192_i64}),
+            json!({"x": -192_i64, "y": 64_i64}),
+        ],
+        0_usize,
+    )
+}
+
+#[tokio::test]
+async fn a_one_sided_wall_with_a_sector_behind_it_names_the_side() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = l_room_loaded(dir.path()).await;
+    let (points, index) = north_of_the_l();
+    let (_, wall) = shop_off_the_wall(&client, points, index).await;
+    refuse_with(
+        &client,
+        json!({"linedef": wall}),
         "no room behind this wall within 256 units",
     )
     .await;
+    refuse_with(
+        &client,
+        json!({"linedef": wall}),
+        "a sector lies 64 units on this wall's back side: pass side: \"back\"",
+    )
+    .await;
+    refuse_with(
+        &client,
+        json!({"linedef": wall, "depth": 64_i32}),
+        format!(
+            "the door recess on linedef {wall} opens back into sector 0 on every side: it \
+             would connect nothing"
+        )
+        .as_str(),
+    )
+    .await;
+    refuse_with(
+        &client,
+        json!({"linedef": wall, "depth": 64_i32}),
+        format!("pass side: \"back\" to dig the door recess through linedef {wall}").as_str(),
+    )
+    .await;
+    let left = call(
+        &client,
+        "get_map_summary",
+        json!({"map": "MAP01", "scope": "working"}),
+    )
+    .await;
+    assert_eq!(
+        left["counts"]["sectors"],
+        json!(2_u64),
+        "no refusal drew a sector"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_side_and_a_side_on_the_wrong_wall_are_refused() {
+    /// The `add_door` refusal for `args`, as its message text.
+    async fn refused(client: &Client, args: Value) -> String {
+        let (code, message, _) = call_err(client, "add_door", args).await;
+        assert_eq!(code, "invalid_argument", "a rejected side is an argument");
+        message
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let named = refused(&client, json!({"linedef": 0_i32, "side": "west"})).await;
+    assert!(
+        named.contains("unknown side \"west\": pass one of \"front\", \"back\""),
+        "the refusal lists both: {named}"
+    );
+    let two_sided = refused(&client, json!({"linedef": 2_i32, "side": "back"})).await;
+    assert!(
+        two_sided.contains("linedef 2 has a sector on both of its sides"),
+        "the wall says what it has: {two_sided}"
+    );
+    let joined = refused(&client, json!({"between": [0_i32, 1_i32], "side": "front"})).await;
+    assert!(
+        joined.contains("has a sector on both of its sides"),
+        "and `between` meets the same refusal: {joined}"
+    );
+    let missing = refused(&client, json!({"linedef": 0_i32, "depth": 0_i32})).await;
+    assert!(
+        missing.contains("positive number of map units"),
+        "a depth is checked before the side is used: {missing}"
+    );
+}
+
+#[tokio::test]
+async fn rooms_that_never_touch_are_told_the_back_side_joins_them() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = l_room_loaded(dir.path()).await;
+    let (points, index) = north_of_the_l();
+    let (shop, _) = shop_off_the_wall(&client, points, index).await;
+    let (code, message, _) = call_err(
+        &client,
+        "add_door",
+        json!({"between": [0_i32, shop], "side": "front"}),
+    )
+    .await;
+    assert_eq!(code, "invalid_argument", "the two sectors share no wall");
+    assert!(
+        message.contains("no two-sided boundary"),
+        "and says so: {message}"
+    );
+    assert!(
+        message.contains("side: \"back\""),
+        "naming the dig that joins them: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_door_dug_through_a_one_sided_wall_joins_the_rooms_behind_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let client = features_loaded(dir.path()).await;
+    let (points, wanted) = west_of_the_hall();
+    let (shop, wall) = shop_off_the_wall(&client, points, wanted).await;
+    let sealed = call(&client, "check_playability", json!({})).await;
+    assert!(
+        sealed["sectors"]["unreachable"]
+            .as_array()
+            .expect("a sector list")
+            .contains(&shop),
+        "the drawn shop starts out cut off: {}",
+        sealed["summary"]
+    );
+    let result = call(
+        &client,
+        "add_door",
+        json!({"linedef": wall, "side": "back"}),
+    )
+    .await;
+    let door = result["door_sector"].as_u64().expect("a door sector");
+    assert_eq!(result["style"], json!("normal"), "the default action");
+    assert!(
+        !note_mentions(&result, "void strip"),
+        "a one-sided dig carves no strip: {}",
+        result["notes"]
+    );
+    assert!(
+        note_mentions(
+            &result,
+            format!("through linedef {wall}'s back side").as_str()
+        ),
+        "the note names the side it dug: {}",
+        result["notes"]
+    );
+    let lines = reported_lines(&client, "MAP01", &result, "lines").await;
+    assert_eq!(lines.len(), 2, "the named wall and the shop's own wall");
+    let fronts = expect_doom_use_lines(&lines, 1_i32);
+    assert!(fronts.contains(&json!(0_i32)), "the hall faces its wall");
+    assert!(fronts.contains(&shop), "and the shop faces it: {fronts:?}");
+    expect_stub(&client, &result, door).await;
+    validate_clean(&client, "MAP01").await;
+    let walked = call(&client, "check_playability", json!({})).await;
+    assert!(
+        !walked["sectors"]["unreachable"]
+            .as_array()
+            .expect("a sector list")
+            .contains(&shop),
+        "the door reaches the shop: {}",
+        walked["summary"]
+    );
+}
+
+/// Checks the stub a back-side dig leaves in what was the void: two
+/// floor-pinned track walls facing `door`, and the door sector itself
+/// closed on the hall's floor with the theme's recess flat.
+async fn expect_stub(client: &Client, result: &Value, door: u64) {
+    let tracks = reported_lines(client, "MAP01", result, "jambs").await;
+    assert_eq!(tracks.len(), 2, "a track wall on each side of the stub");
+    for row in &tracks {
+        assert_eq!(row["back"], Value::Null, "the jamb is one-sided");
+        assert_eq!(row["front"]["middle"], json!("DOORTRAK"), "the track");
+        assert_eq!(row["front"]["sector"], json!(door), "and faces the recess");
+    }
+    let open = working_sector(client, "MAP01", usize::try_from(door).expect("an index")).await;
+    assert_eq!(
+        open["ceiling_height"], open["floor_height"],
+        "the recess is closed"
+    );
+    assert_eq!(
+        open["floor_height"],
+        json!(0_i32),
+        "and stands on the hall's floor"
+    );
+    assert_eq!(open["floor_flat"], json!("FLAT10"), "the theme floor");
 }
 
 #[tokio::test]

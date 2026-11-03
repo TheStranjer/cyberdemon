@@ -3,11 +3,15 @@
 //!
 //! [`outward_depth`] casts from a point on the boundary line along its
 //! front-side outward normal and answers with the nearest crossed line
-//! that bounds a sector other than the one the ray travels through.
-//! The ray-versus-segment solves are exact `i128` cross products, the
-//! qualification test compares squared fractions against `max_depth`
-//! and every non-hit is simply `None`: the cast passes on parallel
-//! lines, void, walls faced at the ray and same-sector splits.
+//! that bounds a sector other than the one the ray travels through;
+//! [`backside_depth`] runs the same cast over the line's back side, where
+//! no sector travels with the ray, so the first crossed line that bounds
+//! any sector bounds the recess. Both share [`cast_side`] and the
+//! [`RecessRay`] it prepares: the ray-versus-segment solves are exact
+//! `i128` cross products, the qualification test compares squared
+//! fractions against `max_depth` and every non-hit is simply `None`: the
+//! cast passes on parallel lines, void, walls faced at the ray and
+//! same-sector splits.
 
 use crate::geom::segment::{Delta, cross, delta, dot};
 use crate::wad::map::model::{Linedef, Map};
@@ -15,21 +19,35 @@ use crate::wad::map::ops::Point;
 
 use super::{endpoints, length_of, scale_shift, wide};
 
-/// One prepared [`outward_depth`] ray.
+/// One [`outward_depth`] ray.
 struct RecessRay {
     /// Where the ray starts, a point on the chosen wall.
     origin: Point,
     /// Index of the wall line the ray starts from (never its own hit).
     source: usize,
-    /// The integer outward normal: the boundary line's front-side
-    /// perpendicular.
+    /// The integer outward normal: the perpendicular of the side the ray
+    /// travels over.
     normal: Delta,
     /// The squared length of [`Self::normal`], for exact comparisons.
     run_squared: i128,
-    /// The sector the ray travels through: the boundary's front side.
+    /// The sector the ray travels through: the boundary's front side, or
+    /// `None` over a back side that belongs to no sector.
     near: Option<usize>,
     /// The longest distance to consider.
     max_depth: i32,
+}
+
+/// One depth request: which wall line, from where, how far and over which
+/// side of it.
+struct DepthRequest {
+    /// The wall line the recess is cut into.
+    linedef: usize,
+    /// The point on that line the cast starts from.
+    centre: Point,
+    /// The longest distance to consider.
+    max_depth: i32,
+    /// Whether the cast travels over the line's back side.
+    back: bool,
 }
 
 /// One ray candidate: a crossed line with the sector beyond it.
@@ -67,22 +85,88 @@ pub fn outward_depth(
     centre: Point,
     max_depth: i32,
 ) -> Option<(i32, usize)> {
-    if max_depth <= 0_i32 {
+    cast_side(
+        map,
+        &DepthRequest {
+            linedef,
+            centre,
+            max_depth,
+            back: false,
+        },
+    )
+}
+
+/// The wall the recess hits on linedef `linedef`'s back side: the same
+/// cast as [`outward_depth`] run along the opposite normal, away from the
+/// sector the line's front sidedef holds.
+///
+/// That space belongs to no sector, so every crossed line that bounds a
+/// sector on its far side qualifies: the answer names the first room
+/// behind the wall, which is what a recess dug through the wall reaches.
+/// The other rules — the rounding, the reach, the nearest-qualifying-hit
+/// and lowest-index tie-break, and every `None` case — are
+/// [`outward_depth`]'s.
+#[must_use]
+#[inline]
+pub fn backside_depth(
+    map: &Map,
+    linedef: usize,
+    centre: Point,
+    max_depth: i32,
+) -> Option<(i32, usize)> {
+    cast_side(
+        map,
+        &DepthRequest {
+            linedef,
+            centre,
+            max_depth,
+            back: true,
+        },
+    )
+}
+
+/// The nearest qualifying hit of `request`'s side, as
+/// `(distance, sector)`.
+fn cast_side(map: &Map, request: &DepthRequest) -> Option<(i32, usize)> {
+    let ray = prepare_ray(map, request)?;
+    cast_outward(map, &ray).map(|hit| (hit.distance, hit.sector))
+}
+
+/// The [`RecessRay`] of `request`: its normal is the perpendicular of the
+/// side the cast travels over, its travel sector the front sidedef's (and
+/// none at all over a back side). `None` when the line, its vertices or a
+/// positive reach are missing.
+fn prepare_ray(map: &Map, request: &DepthRequest) -> Option<RecessRay> {
+    if request.max_depth <= 0_i32 {
         return None;
     }
-    let line = map.linedefs.get(linedef)?;
-    let (from, to) = endpoints(map, linedef)?;
+    let line = map.linedefs.get(request.linedef)?;
+    let (from, to) = endpoints(map, request.linedef)?;
     let run = delta(wide(from), wide(to));
-    let normal = (run.1, run.0.saturating_neg());
-    let ray = RecessRay {
-        origin: centre,
-        source: linedef,
-        normal,
+    let normal = travel_normal(run, request.back);
+    Some(RecessRay {
+        origin: request.centre,
+        source: request.linedef,
         run_squared: dot(normal, normal),
-        near: map.side_sector(line.front),
-        max_depth,
-    };
-    cast_outward(map, &ray).map(|hit| (hit.distance, hit.sector))
+        near: if request.back {
+            None
+        } else {
+            map.side_sector(line.front)
+        },
+        max_depth: request.max_depth,
+        normal,
+    })
+}
+
+/// The outward perpendicular of the travelled side: `(dy, -dx)` over the
+/// front, its opposite over the back.
+const fn travel_normal(run: Delta, back: bool) -> Delta {
+    let front = (run.1, run.0.saturating_neg());
+    if back {
+        (front.0.saturating_neg(), front.1.saturating_neg())
+    } else {
+        front
+    }
 }
 
 /// The nearest qualifying hit along `ray`, or `None`.

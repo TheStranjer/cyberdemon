@@ -23,7 +23,8 @@ switches and the exit.
 ## `add_door`
 
 `{map?, between: [sectorA, sectorB] | linedef: N, at?: {x, y}, width? =
-64, depth?, style? = "normal", texture?, track_texture?}` →
+64, depth?, side? = "front", style? = "normal", texture?,
+track_texture?}` →
 `{door_sector, lines, jambs, style, tag, notes, map, nodes_invalidated,
 copied_to_working}`
 
@@ -39,8 +40,9 @@ in, the use action and the dressing, as one `undo` step.
   longest one when no `at` is given. Sector A lends the recess its floor
   and ceiling heights.
 - `linedef: N` — the wall to cut. A two-sided line behaves like
-  `between` on its two sectors; a one-sided line opens a recess towards
-  the space its front faces.
+  `between` on its two sectors. A one-sided line has a sector in front of
+  it (its own room) and nothing behind, so `side` says which way its
+  recess is dug — see **One-sided walls**.
 
 `at: {x, y}` optionally centres the cut there (a point off the wall is
 projected onto it); without it the cut sits at the wall's midpoint.
@@ -54,13 +56,47 @@ real wall face to the doorway and the door has somewhere to slide. The
 rooms stop touching — if that matters for a corridor, check the map
 afterwards with `render_topdown`.
 
-**One-sided walls**: `depth` defaults to an outward ray — the distance
-(≤ 256 units) to the first sector reachable behind the wall's front. An
-explicit positive `depth` overrides the ray, but the recess's far middle
-must land on (or inside) a sector. Both failures say *"no room behind
-this wall within 256 units; move the rooms closer or give a larger
-depth"* (`invalid_argument`). The recess opens into every sector it
-touches: through-room doors become passages.
+**One-sided walls**: `side` picks the side the recess is dug toward.
+
+- `"front"` (the default, and a call that leaves `side` out) digs toward
+  the side the wall's front sidedef faces — across the room's *own* space.
+  The named wall is sealed as a jamb and the recess opens into every
+  sector it reaches, so a through-room door becomes a passage.
+- `"back"` digs *through* the named wall into the space behind it: the
+  wall itself becomes the room-facing use line and the recess is a stub
+  that reaches the sector on the far side. This is the side that puts a
+  door in a room's outer wall.
+
+`side` on a two-sided wall is `invalid_argument` — its two sectors already
+name both sides, so leave it out (or pass `between`).
+
+`depth` (default: a ray on the dug side, ≤ 256 units, to the first sector
+it reaches; an explicit positive `depth` overrides the ray) decides how far
+the recess goes. A ray that reaches nothing fails *"no room behind this
+wall within 256 units; move the rooms closer or give a larger depth"*, and
+when the sector does lie on the wall's other side the message adds *"a
+sector lies N units on this wall's back side: pass side: "back""*. A recess
+that draws but opens back into the room it was cut from on every side is
+refused too — *"the door recess on linedef N opens back into sector S on
+every side: it would connect nothing"* — naming the `side`, the larger
+`depth`, or the `create_sector_from_loop` that would give it somewhere to
+open. Every such refusal is `invalid_argument` and leaves the map as it
+was.
+
+```json
+call add_door {"linedef": 12, "side": "back"}
+-> {"door_sector": 7, "lines": [3, 18], "jambs": [16, 20], "style": "normal",
+    "tag": null,
+    "notes": ["dug the door recess through linedef 12's back side; the named wall
+               itself now faces the recess"],
+    "map": "MAP01", "nodes_invalidated": true, "copied_to_working": true}
+```
+
+The shop whose wall was linedef 12 now joins the sector behind it: line 3
+is the named wall (its front faces the shop), line 18 the far room's own
+line, and the two jambs are the stub's walls in what used to be the void.
+Every one-sided dig leaves a note in `notes` saying which side it dug
+toward, so a call that left `side` out still reports what it did.
 
 **Styles** — `style` (case-insensitive) picks the action installed on
 every room-facing line:
@@ -116,20 +152,21 @@ call add_door {"between": [0, 1]}
 ## `add_window`
 
 `{map?, between: [sectorA, sectorB] | linedef: N, at?: {x, y}, width? =
-64, sill? = 32, lintel? = 24}` → `{window_sector, lines, width, sill,
-lintel, notes, map, nodes_invalidated, copied_to_working}`
+64, side? = "front", sill? = 32, lintel? = 24}` → `{window_sector, lines,
+width, sill, lintel, notes, map, nodes_invalidated, copied_to_working}`
 
 Glazes a working window into a wall: a raised view strip between two
 rooms that nobody can walk through, as one `undo` step. **Placement
 mirrors `add_door` exactly** — same `between`/`linedef` pair (exactly one,
 both or neither is `invalid_argument`), same optional `at` centre, same
 `width` (default 64; a window wider than its wall names the wall's
-available length), and between touching rooms the same 16-unit **void
+available length), same `side` (`"front"` or `"back"`) and its refusal on a
+two-sided wall, and between touching rooms the same 16-unit **void
 strip** is carved along the *whole* shared boundary first (the `notes`
 say so) before the window strip spans it. A one-sided wall reaches to the
-first sector behind it (the same 256-unit outward ray and "no room behind
-this wall" refusals as `add_door`). Sector A lends the strip its flats
-and light.
+first sector on the dug side (the same 256-unit ray, the same "no room
+behind this wall" and "opens back into sector" refusals as `add_door`).
+Sector A lends the strip its flats and light.
 
 **The heights are the taste parameters**: the window sector's floor is
 `max(floorA, floorB) + sill` and its ceiling is `min(ceilA, ceilB) -

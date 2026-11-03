@@ -1,6 +1,6 @@
 # Images to assets
 
-Tools: open_iwad, get_asset_server_info, process_image, create_texture_from_image, create_flat_from_image, create_sprite_from_image, import_image_as_patch, import_image_as_flat, import_image_as_raw, import_image_as_sprite, list_sprites, get_sprite, get_thing_sprite, edit_decorate, edit_dehacked, undo, set_texture_theme, auto_texture, replace_texture, bulk_edit, edit_sidedef, edit_sector, describe_map, render_view, render_topdown, set_palette, save_wad
+Tools: open_iwad, get_asset_server_info, process_image, create_texture_from_image, create_flat_from_image, create_sprite_from_image, import_image_as_patch, import_image_as_flat, import_image_as_raw, import_image_as_sprite, list_sprites, get_sprite, get_thing_sprite, edit_decorate, edit_dehacked, undo, set_texture_theme, auto_texture, replace_texture, bulk_edit, edit_sidedef, edit_sector, edit_linedef, find_elements, describe_map, render_view, render_topdown, set_palette, save_wad
 
 Turn a drawn or photographed image into a working Doom resource. The tools
 resize, quantize and file the picture away; what to make, how big, how
@@ -74,7 +74,8 @@ Apply them in this order: clean, correct, tone, tile.
 - **Wall textures**: 64×128 or 128×128. The `width` must be a power of two
   (`16..=1024`); `height` reaches 1024, so a tall wall panel is 128×256.
   128 is the height of a standard wall band — a texture half that height
-  tiles twice and shows a repeat seam at eye level.
+  tiles twice and shows a repeat seam at eye level. For art cut to one
+  named edge — a facade, a sign — size it from that edge; §5 has the fit.
 - **Flats**: **64×64** for anything vanilla must load — floors and
   ceilings tile one flat per 64×64 map units. `create_flat_from_image`
   also takes `size` 128 or 256 for ZDoom-family ports and warns that
@@ -89,7 +90,65 @@ Apply them in this order: clean, correct, tone, tile.
 Oversized or oddly shaped sources are resized, never silently kept: watch
 `notes` and `steps` in the result for what the tool decided.
 
-## 5. Using the result
+## 5. Fitting one wall: facades and signage
+
+`create_texture_from_image` never sees the wall it is cut for — it files the
+picture at the size you pass. For a facade or sign that must sit on **one
+specific edge** (a storefront, a plaque, a nameplate over a door), size and
+place from the edge itself. Read `L`, the edge's length, from
+`find_elements` (`kind: "linedefs"`, the derived `length` is the integer
+hypot of its endpoints in map units).
+
+- **Width: the smallest power of two ≥ `L`.** The engine maps a face
+  horizontally as `x_offset + distance along the edge`, wrapped modulo the
+  texture width (which is why only powers of two `16..=1024` are accepted).
+  With `W ≥ L` the wall can never show a second copy of the artwork: paint
+  it into the middle `L` columns of the picture, and the spare margin sits
+  off the wall. An edge over `1024` long must be split, or accept a repeat.
+- **`x_offset = (W − L) / 2 + d`**, with `d` the inset from the edge's
+  start vertex — from `v1` seen from the front, from `v2` seen from the
+  back, so the two faces of a shared wall need their own offsets and the
+  back face reads mirrored. This is a per-wall number: `edit_sidedef`, or
+  `edit_linedef`'s `front_side`/`back_side` for the side the player sees.
+- **Height: at least the band the face shows.** Texture rows wrap modulo
+  the height, so anything shorter tiles vertically through the artwork.
+  The height is not restricted to powers of two (`1..=1024`), and a sign
+  is never `tileable` (§3). `144` serves a `112`-high walkway well: door
+  art in the lower `112` rows, a `32`-row sign band above them, in one
+  picture.
+- **The sign's upper band is the ceiling gap.** Standing in the walkway,
+  the `upper` face draws between the two sectors' ceilings — so a sign `S`
+  rows tall needs the sector behind the wall (the header/bridge over the
+  door) to reach at least `walkway ceiling + S`; a header ceiling level
+  with the walkway shows no band at all.
+- **Set `dontpegtop` on the sign's line — and never on a sliding door
+  face.** A pegged upper hangs its window from the far ceiling and slides
+  whenever that ceiling moves: right for the door face itself (that is why
+  `add_door` clears the bit, so the face rides the rising door ceiling),
+  wrong for a sign. `dontpegtop` measures from the viewer-side (sidedef's
+  own) ceiling instead: with `y_offset = header − walkway` the picture's
+  top rows sit flush under the header ceiling, upright, and no door motion
+  shifts them. One line, one texture: closed, the band shows the door art;
+  open, it shows the sign.
+
+Worked example — a 100-unit storefront edge on a walkway of floor `0`,
+ceiling `112`, over a door/header sector whose ceiling rises to `144` when
+the door opens:
+
+```json
+call create_texture_from_image {"source": "/abs/shop01.png", "name": "SHOPFRNT",
+                                "width": 128, "height": 144, "tileable": false}
+call edit_linedef {"index": 42, "set_flags": ["dontpegtop"],
+                   "front_side": {"upper": "SHOPFRNT", "x_offset": 14, "y_offset": 32}}
+```
+
+`W = 128` is the smallest power of two ≥ 100, so the sign occupies columns
+14..114 and `x_offset = (128 − 100)/2 = 14` centres it; `y_offset = 144 −
+112 = 32` drops the picture's top 32 rows into the `112..144` band. Check
+with `render_view` from mid-walkway, door closed and open: the sign reads
+upright and stays put while the door face slides away under it.
+
+## 6. Using the result
 
 - **New geometry**: pass `assign_role` on the create call (`"wall"` for a
   texture; `"floor"`, `"ceiling"`, `"liquid_floor"`... for a flat). The
@@ -110,7 +169,7 @@ seams, vertical repeats and palette shift only appear in the render. A
 missing name in `render_view`'s `problems` means the lump or definition
 did not land where the engine reads it.
 
-## 6. Sprites need definitions
+## 7. Sprites need definitions
 
 A new sprite lump is pixels in a region: no monster, no decoration, nothing
 to shoot. The name is the contract — four sprite characters, a frame
@@ -140,7 +199,7 @@ To make something appear, choose one:
   monster needs dozens of consistent drawings. Recommend the former when
   the user brings one picture.
 
-## 7. Palette limits
+## 8. Palette limits
 
 Everything in the game shares **one** 256-colour `PLAYPAL`. Imports
 quantize against it (`palette` picks the entry, default 0) — colours your

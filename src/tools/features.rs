@@ -134,7 +134,7 @@ fn theme_skin(
 impl Cyberdemon {
     /// Cuts a working door into a map in one undoable edit.
     #[tool(
-        description = "Cuts a working door into a map in one undoable edit: the doorway, the recess it slides into, the use action and the theme dressing. Name the wall as between: [sectorA, sectorB] or linedef: N, optionally centred at {x, y}; width defaults to 64 and style picks the action (normal, fast, stay_open, locked_red/blue/yellow, remote). Returns the band sector, the dressed lines and the tag. add_switch can trigger it from elsewhere."
+        description = "Cuts a working door into a map in one undoable edit: the doorway, the recess it slides into, the use action and the theme dressing. Name the wall as between: [sectorA, sectorB] or linedef: N, optionally centred at {x, y}; width defaults to 64 and style picks the action (normal, fast, stay_open, locked_red/blue/yellow, remote). A one-sided wall digs its recess toward the room in front of it, or through the wall into the space behind it when side says so. Returns the band sector, the dressed lines and the tag. add_switch can trigger it from elsewhere."
     )]
     fn add_door(
         &self,
@@ -148,7 +148,7 @@ impl Cyberdemon {
 
     /// Cuts a working window into a map in one undoable edit.
     #[tool(
-        description = "Cuts a working window into a map in one undoable edit: a raised view strip between two rooms that nobody can walk through. Placement mirrors add_door exactly (between: [sectorA, sectorB] or linedef: N, with optional at and width); sill (default 32) lifts the strip's floor and lintel (default 24) drops its ceiling, and under 16 units of glass the call is refused. One undo removes the window again."
+        description = "Cuts a working window into a map in one undoable edit: a raised view strip between two rooms that nobody can walk through. Placement mirrors add_door exactly (between: [sectorA, sectorB] or linedef: N, with optional at, width and the one-sided side: \"front\" or \"back\"); sill (default 32) lifts the strip floor and lintel (default 24) drops its ceiling, and under 16 units of glass the call is refused. One undo removes the window again."
     )]
     fn add_window(
         &self,

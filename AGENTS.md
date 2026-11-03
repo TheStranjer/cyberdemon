@@ -797,7 +797,9 @@ src/
                   `features/wall.rs` (the wall choice and void-strip
                   machinery `add_door` and `add_window` share:
                   `choose_wall`, `carve_strip`, `strip_wall`,
-                  `place_rect` and the integer point maths),
+                  `recess_rect` with the `Side` a one-sided wall is dug
+                  toward, `place_rect`, the `require_connected` check a
+                  drawn recess faces and the integer point maths),
                   `features/door.rs` (the door parameters, the shared
                   `Target`, `Chosen`, `Placed`, skins, spec and report
                   beside the whole build: `add_door` composes the
@@ -1422,7 +1424,8 @@ src/
                   `nearest_boundary`) and shared integer helpers in the
                   root, the projection and width fit (`project_onto_line`,
                   `door_segment`, `door_wall`, `door_rect`) in
-                  `place/cut.rs`, the `outward_depth` raycast in
+                  `place/cut.rs`, the `outward_depth` and `backside_depth`
+                  raycasts in
                   `place/depth.rs` and the `void_strip` boundary
                   thickening in `place/strip.rs`, with those tests in
                   `place/tests.rs` plus `place/tests/boundary.rs` and

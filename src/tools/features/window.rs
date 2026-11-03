@@ -5,10 +5,13 @@
 //! [`crate::tools::features::wall::carve_strip`] and
 //! [`crate::tools::features::wall::strip_wall`] machinery picks the wall
 //! and, between touching rooms, carves the 16-unit void strip first, and
-//! [`crate::wad::map::features::door_wall`]/[`crate::wad::map::features::door_rect`]
-//! fit the window rectangle that one
+//! the same [`crate::tools::features::wall::recess_rect`] fits the window
+//! rectangle that one
 //! [`crate::wad::map::overlay::apply_overlay`]
-//! [`crate::wad::map::overlay::Paint::Sector`] then paints. The pure
+//! [`crate::wad::map::overlay::Paint::Sector`] then paints — including the
+//! [`crate::tools::features::wall::Side`] a one-sided wall is dug toward
+//! and the [`crate::tools::features::wall::require_connected`] check that
+//! refuses a strip reaching no sector. The pure
 //! [`crate::wad::map::features`] window engine does the rest:
 //! [`crate::wad::map::features::window_record`] computes the sill/lintel
 //! heights (and refuses an opening under
@@ -34,22 +37,17 @@ use crate::tools::themes::{FALLBACK_WALL_TEXTURE, role_texture, theme_roles};
 use crate::wad::classify::MapFormat;
 use crate::wad::map::consts::{DEFAULT_LINTEL, NO_TEXTURE};
 use crate::wad::map::features::{
-    WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines, door_rect, door_wall,
-    outward_depth, window_record,
+    WindowHeights, WindowSides, WindowTextures, apply_window, boundary_lines, window_record,
 };
-use crate::wad::map::geometry::SectorIndex;
 use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, Paint, WallTextures};
 use crate::wad::map::{Map, Sector};
 
-use super::door::{
-    Chosen, DEFAULT_WIDTH, MAX_DEPTH, Target, point_of, require_wall_survives, target_of,
-};
+use super::door::{Chosen, DEFAULT_WIDTH, Target, point_of, require_wall_survives, target_of};
 use super::wall::{
-    STRIP_THICKNESS, carve_strip, choose_wall, outward_normal, require_landing, strip_face_lost,
-    strip_wall, to_pts,
+    Landing, Recess, Side, carve_strip, choose_wall, dig_note, parse_side, recess_rect,
+    require_connected, strip_face_lost, strip_wall, to_pts,
 };
-use super::{no_room, wall_lost};
 
 /// The `add_window` default sill height above the higher room floor.
 const DEFAULT_SILL: i32 = 32_i32;
@@ -68,7 +66,7 @@ pub(super) struct AddWindowParams {
     pub(super) between: Option<[usize; 2]>,
     /// The wall to cut, as a linedef index: exactly one of `between` and
     /// `linedef`. A two-sided line behaves like `between` on its two
-    /// sectors; a one-sided one opens towards the space its front faces.
+    /// sectors; a one-sided one is dug toward the `side` the call names.
     #[serde(default)]
     pub(super) linedef: Option<usize>,
     /// Where along the wall to centre the cut, `{x, y}` (optional: the cut
@@ -79,6 +77,12 @@ pub(super) struct AddWindowParams {
     /// The window's opening width in map units (default 64).
     #[serde(default)]
     pub(super) width: Option<i32>,
+    /// Which side of a one-sided wall the strip is dug toward: `"front"`
+    /// (the default) is the side the wall's front sidedef faces, `"back"`
+    /// digs through the wall into the space behind it. Refused on a
+    /// two-sided wall.
+    #[serde(default)]
+    pub(super) side: Option<String>,
     /// How far the window floor sits above the higher room floor, in map
     /// units (default 32).
     #[serde(default)]
@@ -107,6 +111,9 @@ pub(super) struct WindowSpec {
     pub(super) at: Option<Point>,
     /// The window width in map units.
     pub(super) width: i32,
+    /// The side of a one-sided wall the strip is dug toward, `None` when
+    /// the call left `side` out (which digs the front).
+    pub(super) side: Option<Side>,
     /// The vertical trim of the opening.
     pub(super) trim: WindowHeights,
     /// The textures to dress with.
@@ -170,21 +177,19 @@ fn window_skins(session: &Session, format: MapFormat) -> Result<WindowSkins, Cyb
     })
 }
 
-/// The window rectangle to paint: the cut fitted to the wall (a window
-/// too wide for it refuses with the wall's available length, before any
-/// drawing), grown across the carved strip or the outward ray's recess
-/// exactly as [`place_rect`] does for a door.
+/// The window rectangle to paint: [`recess_rect`] on the spec's knobs (a
+/// window never asks for a depth of its own), the same cut fit, carved
+/// strip and one-sided dig a door recess uses.
 fn place_window(map: &Map, chosen: &Chosen, spec: &WindowSpec) -> Result<Vec<Point>, CyberError> {
-    let wall = door_wall(map, chosen.wall, Some(chosen.centre), spec.width)?;
-    let normal = outward_normal(map, chosen.wall).ok_or_else(|| wall_lost(chosen.wall))?;
-    if chosen.touching {
-        return Ok(door_rect(&wall, normal, STRIP_THICKNESS, true));
-    }
-    let depth = outward_depth(map, wall.linedef, wall.point, MAX_DEPTH)
-        .map_or_else(|| Err(no_room()), |hit| Ok(hit.0))?;
-    let rect = door_rect(&wall, normal, depth, false);
-    require_landing(&SectorIndex::new(map), &rect)?;
-    Ok(rect)
+    recess_rect(
+        map,
+        chosen,
+        Recess {
+            width: spec.width,
+            depth: None,
+            side: spec.side,
+        },
+    )
 }
 
 /// Paint the window rectangle as the new sector and find the room-facing
@@ -222,7 +227,7 @@ fn draw_window(
 /// before anything is written, carve the touching rooms apart, fit and
 /// paint the strip, then block off every room-facing line it created.
 pub(super) fn build_window(map: &mut Map, spec: &WindowSpec) -> Result<BuiltWindow, CyberError> {
-    let mut chosen = choose_wall(map, spec.target, spec.at)?;
+    let mut chosen = choose_wall(map, spec.target, spec.at, spec.side)?;
     let record = window_record(map, chosen.room_a, chosen.room_b, spec.trim)?;
     let mut notes = Vec::new();
     if chosen.touching {
@@ -231,6 +236,20 @@ pub(super) fn build_window(map: &mut Map, spec: &WindowSpec) -> Result<BuiltWind
         chosen.wall = strip_wall(map, room, chosen.centre).ok_or_else(|| strip_face_lost(room))?;
     }
     let drawn = draw_window(map, &chosen, &record, spec)?;
+    let dig = spec.side.unwrap_or_default();
+    if !chosen.touching {
+        notes.push(dig_note(&chosen, dig, "window strip"));
+    }
+    require_connected(
+        map,
+        &Landing {
+            chosen: &chosen,
+            sector: drawn.sector,
+            openings: &drawn.lines,
+            dig,
+            name: "window strip",
+        },
+    )?;
     notes.extend(drawn.notes);
     let sides = WindowSides {
         window_sector: drawn.sector,
@@ -260,6 +279,7 @@ pub(super) fn add_window_run(
     args: &AddWindowParams,
 ) -> Result<WindowReport, CyberError> {
     let target = target_of(args.between, args.linedef, "the window looks between")?;
+    let side = parse_side(args.side.as_deref())?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let format = common::current_map(session, name)?.format;
     let skins = window_skins(session, format)?;
@@ -272,6 +292,7 @@ pub(super) fn add_window_run(
         target,
         at: args.at.map(point_of),
         width,
+        side,
         trim,
         skins,
     };

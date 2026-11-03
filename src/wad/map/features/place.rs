@@ -7,8 +7,9 @@
 //! another sector. This module answers those questions as plain integer
 //! geometry over a decoded [`Map`]: [`longest_boundary`] and
 //! [`nearest_boundary`] select the shared wall, [`project_onto_line`]
-//! and [`door_segment`] place the cut, [`outward_depth`] casts a ray
-//! through the wall to the first sector beyond it, [`door_rect`] turns
+//! and [`door_segment`] place the cut, [`outward_depth`] and
+//! [`backside_depth`] cast a ray through either side of the wall to the
+//! first sector beyond it, [`door_rect`] turns
 //! the chosen cut into the polygon [`crate::wad::map::overlay`] draws,
 //! and [`void_strip`] thickens a whole shared boundary into the strip a
 //! void carve uses. [`door_wall`] composes the selection into one
@@ -32,7 +33,7 @@ mod strip;
 mod tests;
 
 pub use cut::{door_rect, door_segment, door_wall, project_onto_line};
-pub use depth::outward_depth;
+pub use depth::{backside_depth, outward_depth};
 pub use strip::void_strip;
 
 use crate::fixed::{div_round, hypot, midpoint, narrow_i32, narrow_i64};

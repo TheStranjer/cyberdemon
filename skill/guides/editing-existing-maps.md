@@ -70,6 +70,7 @@ fix a bulk tool cannot express.
 | "turn every imp into a demon" | `replace_thing_type` (names resolve: `from: "imp", to: "demon"`) |
 | "put some monsters in the hall" | `place_things` (thing by name, `sectors`/`bbox`/`near`, `count` or `per_sector`) |
 | "add a door / window / stairs / lift / teleporter / switch / exit here" | `add_door`, `add_window`, `add_stairs`, `add_lift`, `add_teleporter`, `add_switch`, `add_exit` |
+| "a door in this room's outer wall, onto space that is no sector yet" | `add_door` with `linedef` and `side: "back"` — the recess is dug through the wall, and it joins whatever sector lies behind it |
 | "make it a secret" | `mark_secret` |
 | "flickering lights" | `set_light_effect` (`flicker`, `glow`, `strobe_fast`, `strobe_slow`, `random_off`) |
 | "a new room off this one" | `create_sector_from_loop` (it splits touched walls at T-junctions and rebuilds sides for you), then `add_door` between the two sectors |

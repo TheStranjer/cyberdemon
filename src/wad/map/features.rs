@@ -7,8 +7,9 @@
 //! [`apply_door`], shared by the door tools; [`face_room_line`] is that
 //! room-line treatment on its own, for callers (the `plan` feature
 //! engine) that dress the faces themselves. [`place`] is the door
-//! placement geometry: wall selection, width fit and the outward depth
-//! raycast that turn a room and a desire into a concrete [`DoorWall`]
+//! placement geometry: wall selection, width fit and the outward and
+//! back-side depth raycasts that turn a room and a desire into a concrete
+//! [`DoorWall`]
 //! cut and the [`BoundaryStrip`] and [`door_rect`] polygons to draw.
 //! [`switches`] is the pure switch core: the specials a wall switch
 //! installs per flag family is the [`switch_special`] table, and
@@ -63,8 +64,8 @@ pub use lift::{
     LiftBuild, LiftPlatform, LiftSpec, LiftStyle, MIN_LIFT_DROP, build_lift, lift_specials,
 };
 pub use place::{
-    BoundaryStrip, DoorWall, VertexPair, door_rect, door_segment, door_wall, endpoints,
-    longest_boundary, nearest_boundary, outward_depth, project_onto_line, void_strip,
+    BoundaryStrip, DoorWall, VertexPair, backside_depth, door_rect, door_segment, door_wall,
+    endpoints, longest_boundary, nearest_boundary, outward_depth, project_onto_line, void_strip,
 };
 pub use specials::{
     BOOM_SECRET_BIT, DOOM_SECRET_SPECIAL, GENERALIZED_SECTOR_MIN, HEXEN_SECRET_BIT, LightEffect,

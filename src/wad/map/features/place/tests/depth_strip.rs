@@ -1,6 +1,7 @@
 //! Recess drawing tests: the [`outward_depth`] raycast through void,
-//! bare walls and same-sector splits, the [`away_side`] choice, the
-//! [`door_rect`] rectangle windings and the [`void_strip`] bevelled
+//! bare walls and same-sector splits, the [`backside_depth`] ray through
+//! the wall's back side, the [`away_side`] choice, the [`door_rect`]
+//! rectangle windings and the [`void_strip`] bevelled
 //! bands with their refusals.
 //!
 //! [`away_side`]: crate::wad::map::features::place::depth::away_side
@@ -8,7 +9,7 @@
 use crate::wad::map::common::fixtures::{side, vertex};
 use crate::wad::map::features::place::depth::away_side;
 use crate::wad::map::features::place::{
-    BoundaryStrip, ORIGIN, door_rect, endpoints, outward_depth, void_strip,
+    BoundaryStrip, ORIGIN, backside_depth, door_rect, endpoints, outward_depth, void_strip,
 };
 use crate::wad::map::model::Map;
 
@@ -104,6 +105,65 @@ fn outward_depth_stops_at_the_reach_and_on_unresolved_lines() {
         outward_depth(&Map::default(), 0, point(128, 128), 64_i32),
         None,
         "an empty map casts nowhere",
+    );
+}
+
+#[test]
+fn backside_depth_reaches_the_first_sector_behind_the_wall() {
+    let mut map = recess_map();
+    map.vertices.push(vertex(0, 160));
+    map.vertices.push(vertex(256, 160));
+    map.sidedefs.push(side("-", "-", "-", 2));
+    map.linedefs.push(line(5, 4, Some(2), None));
+    assert_eq!(
+        backside_depth(&map, 0, point(128, 128), 64_i32),
+        Some((32_i32, 2_usize)),
+        "32 units north, the sector beyond that wall",
+    );
+    assert_eq!(
+        backside_depth(&map, 0, point(128, 128), 16_i32),
+        None,
+        "32 units is past the 16-unit reach",
+    );
+    assert_eq!(
+        backside_depth(&map, 9, point(128, 128), 64_i32),
+        None,
+        "no such boundary line",
+    );
+}
+
+#[test]
+fn backside_depth_passes_on_void_and_on_walls_faced_at_the_ray() {
+    let void = recess_map();
+    assert_eq!(
+        backside_depth(&void, 0, point(128, 128), 256_i32),
+        None,
+        "nothing bounds a sector north of the boundary",
+    );
+    let mut faced_at_ray = recess_map();
+    faced_at_ray.vertices.push(vertex(0, 160));
+    faced_at_ray.vertices.push(vertex(256, 160));
+    faced_at_ray.sidedefs.push(side("-", "-", "-", 2));
+    faced_at_ray.linedefs.push(line(4, 5, Some(2), None));
+    assert_eq!(
+        backside_depth(&faced_at_ray, 0, point(128, 128), 64_i32),
+        None,
+        "the wall's own side faces the ray, so it bounds nothing beyond",
+    );
+}
+
+#[test]
+fn backside_depth_bounds_on_any_sector_it_meets() {
+    let mut map = recess_map();
+    map.vertices.push(vertex(0, 160));
+    map.vertices.push(vertex(256, 160));
+    map.sidedefs.push(side("-", "-", "-", 1));
+    map.linedefs.push(line(5, 4, Some(2), None));
+    assert_eq!(
+        backside_depth(&map, 0, point(128, 128), 64_i32),
+        Some((32_i32, 1_usize)),
+        "over the back side a sector bounds the recess even when it is the one the \
+         wall's own front sidedef holds",
     );
 }
 

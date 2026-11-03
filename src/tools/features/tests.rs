@@ -4,8 +4,8 @@
 //! stairs/lift/teleporter movers in [`movers`] and the `place_things`
 //! parsing and distribution in [`place`].
 //!
-//! [`two_rooms`], [`one_room`], [`room_and_hall`] and
-//! [`hall_and_two_rooms`] build the fixture maps, [`vertex`], [`side`],
+//! [`two_rooms`], [`one_room`], [`room_and_hall`], [`hall_and_two_rooms`]
+//! and [`rooms_apart`] build the fixture maps, [`vertex`], [`side`],
 //! [`solid_line`], [`open_line`] and
 //! [`room`] the records they are wound from, [`code`] and [`refuse`]
 //! read the refusals.
@@ -194,6 +194,54 @@ pub(super) fn room_and_hall() -> Map {
             side(1),
         ],
         sectors: vec![room(0, 128, 0), room(0, 128, 0)],
+        ..Default::default()
+    }
+}
+
+/// The `x` of [`rooms_apart`]'s room-side door wall: the one-sided wall
+/// every back-side dig test cuts through.
+pub(super) const WEST_WALL_X: i32 = 192_i32;
+
+/// Two sealed rooms `CD-347`'s mall map has: room A (sector 0, `x
+/// 192..320`) and the concourse (sector 1, `x 0..128`), each its own
+/// one-sided box with its fronts facing its own sector, a 64-unit void
+/// between them. A's west wall (linedef 0) is the door wall: its front
+/// faces into A, so the concourse lies behind it.
+pub(super) fn rooms_apart() -> Map {
+    Map {
+        name: LumpName::parse("MAP01").expect("a valid name"),
+        format: MapFormat::Doom,
+        vertices: vec![
+            vertex(192, 0),
+            vertex(192, 128),
+            vertex(320, 128),
+            vertex(320, 0),
+            vertex(128, 0),
+            vertex(128, 128),
+            vertex(0, 128),
+            vertex(0, 0),
+        ],
+        linedefs: vec![
+            solid_line(0, 1, 0),
+            solid_line(1, 2, 1),
+            solid_line(2, 3, 2),
+            solid_line(3, 0, 3),
+            solid_line(4, 7, 4),
+            solid_line(7, 6, 5),
+            solid_line(6, 5, 6),
+            solid_line(5, 4, 7),
+        ],
+        sidedefs: vec![
+            side(0),
+            side(0),
+            side(0),
+            side(0),
+            side(1),
+            side(1),
+            side(1),
+            side(1),
+        ],
+        sectors: vec![room(0, 128, 0), room(0, 128, 1)],
         ..Default::default()
     }
 }

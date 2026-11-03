@@ -5,7 +5,7 @@
 use serde_json::from_str;
 
 use crate::tools::features::door::{Target, target_of};
-use crate::tools::features::wall::choose_between;
+use crate::tools::features::wall::{Side, choose_between, parse_side};
 use crate::tools::features::window::{
     AddWindowParams, BuiltWindow, WindowSkins, WindowSpec, build_window,
 };
@@ -14,7 +14,7 @@ use crate::wad::classify::MapFormat;
 use crate::wad::map::features::WindowHeights;
 use crate::wad::map::{Linedef, Map};
 
-use super::{missing, one_room, refuse, room_and_hall, two_rooms};
+use super::{missing, one_room, refuse, room_and_hall, rooms_apart, two_rooms};
 
 /// The skins the tests dress windows with.
 fn window_skins() -> WindowSkins {
@@ -35,6 +35,7 @@ fn window_spec(target: Target) -> WindowSpec {
         target,
         at: None,
         width: 64_i32,
+        side: None,
         trim: WindowHeights {
             sill: 32_i32,
             lintel: 24_i32,
@@ -216,22 +217,64 @@ fn window_targets_are_validated_like_the_door_s() {
 }
 
 #[test]
+fn a_window_dug_through_a_one_sided_wall_looks_into_the_room_behind() {
+    let mut map = rooms_apart();
+    let spec = WindowSpec {
+        side: Some(Side::Back),
+        ..window_spec(Target::Linedef(0))
+    };
+    let built = build_window(&mut map, &spec).expect("the back dig reaches the concourse");
+    assert_eq!(built.lines.len(), 2, "the named wall and the concourse's");
+    let rooms = expect_window_lines(&map, &built, built.window_sector);
+    assert!(
+        rooms.contains(&0_usize) && rooms.contains(&1_usize),
+        "both rooms look through the stub: {rooms:?}"
+    );
+    assert!(
+        built.notes.iter().all(|note| !note.contains("void strip")),
+        "a one-sided dig carves no strip: {:?}",
+        built.notes
+    );
+}
+
+#[test]
+fn a_window_dug_through_a_wall_onto_void_refuses() {
+    let mut map = two_rooms();
+    let spec = WindowSpec {
+        side: Some(Side::Back),
+        ..window_spec(Target::Linedef(0))
+    };
+    let message = refuse(&build_window(&mut map, &spec).unwrap_err());
+    assert!(
+        message.contains("no room behind this wall within 256 units"),
+        "{message}"
+    );
+    assert_eq!(map, two_rooms(), "nothing was drawn");
+}
+
+#[test]
 fn add_window_params_read_the_wire_shape() {
     let full = window_args(
         r#"{"between": [0, 1], "at": {"x": 64, "y": 0}, "width": 96,
-                "sill": 48, "lintel": 0, "map": "MAP01"}"#,
+                "sill": 48, "lintel": 0, "side": "back", "map": "MAP01"}"#,
     );
     assert_eq!(full.between, Some([0_usize, 1_usize]));
     assert_eq!(full.at, Some(PointParam { x: 64, y: 0 }));
     assert_eq!(full.width, Some(96_i32));
     assert_eq!(full.sill, Some(48_i32));
     assert_eq!(full.lintel, Some(0_i32));
+    assert_eq!(full.side.as_deref(), Some("back"));
     assert_eq!(full.map.as_deref(), Some("MAP01"));
+    assert_eq!(
+        parse_side(full.side.as_deref()).expect("the wire name"),
+        Some(Side::Back)
+    );
     let minimal = window_args(r#"{"linedef": 2}"#);
     assert_eq!(minimal.width, None, "the defaults stand");
     assert_eq!(minimal.sill, None);
     assert_eq!(minimal.lintel, None);
     assert_eq!(minimal.at, None);
+    assert_eq!(minimal.side, None, "and so is the side");
     let neither = window_args("{}");
     let message = refuse(
         &target_of(neither.between, neither.linedef, "the window looks between").unwrap_err(),

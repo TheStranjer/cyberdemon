@@ -6,9 +6,10 @@
 //! [`crate::wad::map::features::nearest_boundary`]), fits the cut
 //! ([`crate::wad::map::features::door_wall`] through
 //! [`crate::wad::map::features::door_segment`]), measures a one-sided
-//! wall's outward reach ([`crate::wad::map::features::outward_depth`],
-//! [`crate::wad::map::geometry::point_in_sector`]) and dresses the
-//! finished doorway ([`crate::wad::map::features::door_specials`],
+//! wall's reach on the side it is dug toward ([`crate::wad::map::features::outward_depth`]
+//! over its front, [`crate::wad::map::features::backside_depth`] through
+//! its back, chosen by [`crate::tools::features::wall::Side`]) and dresses
+//! the finished doorway ([`crate::wad::map::features::door_specials`],
 //! [`crate::wad::map::features::apply_door`]), with
 //! [`crate::wad::map::overlay::OverlayResult::linedef_map`] confirming
 //! the wall survived the rebuild; [`crate::wad::map::overlay`] does
@@ -21,7 +22,9 @@
 //! multi-room doorway: each opening carries the action and acts on the
 //! sector behind it), and every one-sided line facing it is a jamb that
 //! [`crate::wad::map::features::apply_door`] closes into a floor-pinned
-//! track wall.
+//! track wall. A drawn recess whose every opening faces the room its wall
+//! already fronts connects nothing and is refused before it is dressed,
+//! with the `side` or `depth` that would reach a sector named.
 //!
 //! [`choose_wall`]: crate::tools::features::wall::choose_wall
 //! [`carve_strip`]: crate::tools::features::wall::carve_strip
@@ -44,13 +47,17 @@ use crate::wad::map::ops::Point;
 use crate::wad::map::overlay::{self, Outside, OverlayRequest, OverlayResult, Paint, WallTextures};
 use crate::wad::map::{Linedef, Map, Sector};
 
-use super::wall::{carve_strip, choose_wall, place_rect, strip_face_lost, strip_wall, to_pts};
+use super::wall::{
+    Landing, Recess, Side, carve_strip, choose_wall, dig_note, parse_side, place_rect,
+    require_connected, strip_face_lost, strip_wall, to_pts,
+};
 use super::{NO_TEXTURE, sector_lost, theme_skin, wall_lost};
 
 /// The `add_door` default door width in map units: one `DOOR1` panel.
 pub(super) const DEFAULT_WIDTH: i32 = 64_i32;
 
-/// How far the outward ray may search for the room behind a one-sided wall.
+/// How far the depth ray may search for a room on the dug side of a
+/// one-sided wall.
 pub(super) const MAX_DEPTH: i32 = 256_i32;
 
 /// The `add_door` default style name.
@@ -69,7 +76,7 @@ pub(super) struct AddDoorParams {
     pub(super) between: Option<[usize; 2]>,
     /// The wall to cut, as a linedef index: exactly one of `between` and
     /// `linedef`. A two-sided line behaves like `between` on its two
-    /// sectors; a one-sided one opens towards the space its front faces.
+    /// sectors; a one-sided one is dug toward the `side` the call names.
     #[serde(default)]
     pub(super) linedef: Option<usize>,
     /// Where along the wall to centre the cut, `{x, y}` (optional: the cut
@@ -81,10 +88,17 @@ pub(super) struct AddDoorParams {
     #[serde(default)]
     pub(super) width: Option<i32>,
     /// The recess depth in map units, one-sided walls only (default:
-    /// measured by an outward ray, up to 256 units). Ignored for two-sided
-    /// walls, whose recess always spans the carved strip.
+    /// measured by a ray on the dug side, up to 256 units). Ignored for
+    /// two-sided walls, whose recess always spans the carved strip.
     #[serde(default)]
     pub(super) depth: Option<i32>,
+    /// Which side of a one-sided wall the recess is dug toward: `"front"`
+    /// (the default) is the side the wall's front sidedef faces, the room's
+    /// own space; `"back"` digs through the wall into the space behind it,
+    /// which puts the door in the named wall itself. Refused on a two-sided
+    /// wall, whose two sectors already name both sides.
+    #[serde(default)]
+    pub(super) side: Option<String>,
     /// The door action (default `"normal"`): `normal`, `fast`, `stay_open`,
     /// `locked_red`, `locked_blue`, `locked_yellow` or `remote`.
     #[serde(default)]
@@ -139,6 +153,9 @@ pub(super) struct DoorSpec {
     pub(super) width: i32,
     /// The requested recess depth, if any (one-sided walls only).
     pub(super) depth: Option<i32>,
+    /// The side of a one-sided wall the recess is dug toward, `None` when
+    /// the call left `side` out (which digs the front).
+    pub(super) side: Option<Side>,
     /// The action to install.
     pub(super) style: DoorStyle,
     /// The textures to dress with.
@@ -228,6 +245,24 @@ pub(super) struct DoorReport {
 /// [`DoorStyle`]).
 pub(super) fn style_name(style: DoorStyle) -> &'static str {
     style.name()
+}
+
+impl DoorSpec {
+    /// The side of a one-sided wall the recess is dug toward: the one the
+    /// call named, its front when `side` was left out.
+    pub(super) fn dig(&self) -> Side {
+        self.side.unwrap_or_default()
+    }
+
+    /// The knobs [`crate::tools::features::wall::recess_rect`] fits the
+    /// recess from.
+    pub(super) const fn recess(&self) -> Recess {
+        Recess {
+            width: self.width,
+            depth: self.depth,
+            side: self.side,
+        }
+    }
 }
 
 /// The [`DoorStyle`] `text` names (case-insensitive), or the refusal
@@ -386,9 +421,10 @@ fn door_floor(map: &Map, door: usize) -> String {
 
 /// The whole door as one map edit: choose the wall, carve the touching
 /// rooms apart, fit and paint the recess, split its boundary into doors
-/// and jambs, and dress it with the style's action.
+/// and jambs, refuse it when the drawn recess connects nothing, and dress
+/// it with the style's action.
 pub(super) fn build_door(map: &mut Map, spec: &DoorSpec) -> Result<BuiltDoor, CyberError> {
-    let mut chosen = choose_wall(map, spec.target, spec.at)?;
+    let mut chosen = choose_wall(map, spec.target, spec.at, spec.side)?;
     let mut notes = Vec::new();
     if chosen.touching {
         notes = carve_strip(map, &chosen, &spec.skins.wall, "the door recess")?;
@@ -396,16 +432,30 @@ pub(super) fn build_door(map: &mut Map, spec: &DoorSpec) -> Result<BuiltDoor, Cy
         chosen.wall = strip_wall(map, room, chosen.centre).ok_or_else(|| strip_face_lost(room))?;
     }
     let mut placed = place_rect(map, &chosen, spec)?;
+    if !chosen.touching {
+        notes.push(dig_note(&chosen, spec.dig(), "door recess"));
+    }
     placed.tag = (spec.style == DoorStyle::Remote).then(|| next_free_tag(map));
     let drawn = draw_recess(map, &placed, spec)?;
     require_wall_survives(&drawn, placed.wall)?;
     let door = drawn.sector.ok_or_else(sector_lost)?;
     notes.extend(drawn.notes);
+    let groups = door_groups(map, door);
     let dress = Dress {
         door,
-        groups: door_groups(map, door),
+        groups,
         tag: placed.tag.unwrap_or_default(),
     };
+    require_connected(
+        map,
+        &Landing {
+            chosen: &chosen,
+            sector: dress.door,
+            openings: &dress.groups.lines,
+            dig: spec.dig(),
+            name: "door recess",
+        },
+    )?;
     dress_door(map, spec, &dress)?;
     Ok(BuiltDoor {
         door_sector: dress.door,
@@ -424,6 +474,7 @@ pub(super) fn add_door_run(
 ) -> Result<DoorReport, CyberError> {
     let style = style_of(args.style.as_deref().unwrap_or(DEFAULT_STYLE))?;
     let target = target_of(args.between, args.linedef, "the door joins")?;
+    let side = parse_side(args.side.as_deref())?;
     let name = common::resolve_map_name(session, args.map.as_deref())?;
     let format = common::current_map(session, name)?.format;
     let skins = theme_skin(session, style, args, format)?;
@@ -432,6 +483,7 @@ pub(super) fn add_door_run(
         at: args.at.map(point_of),
         width: args.width.unwrap_or(DEFAULT_WIDTH),
         depth: args.depth,
+        side,
         style,
         skins,
     };

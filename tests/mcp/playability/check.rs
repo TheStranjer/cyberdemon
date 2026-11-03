@@ -1,11 +1,14 @@
 //! `check_playability` over the plan-built maps and the two-room fixture:
 //! the played-out blueprint with its key answers `ok` with every sector
 //! reached and its lock opened; the same map keyless holds at the `locked`
-//! blocker; a `hexen` plan door whose room-facing lines are turned to
-//! `monstercross` activation keeps the walk in the hall - band and wing
-//! unreachable, its switch exit unworked, the special modelled and never
-//! counted unhandled; a forty-unit ledge reports `step_too_high` until
-//! `add_stairs` climbs it; an imp shoved into a wall reports `in_wall`
+//! blocker and names the door line it holds at; a `hexen` plan door whose
+//! room-facing lines are turned to `monstercross` activation keeps the walk
+//! in the hall - band and wing unreachable, its switch exit unworked, the
+//! special modelled and never counted unhandled; a forty-unit ledge reports
+//! `step_too_high` with its delta and the boundary linedef the player is
+//! held at, until `add_stairs` climbs it; a room with a plain gap on its
+//! side of the map reads `isolated` - no boundary line, no step, no lock -
+//! and asks to be connected; an imp shoved into a wall reports `in_wall`
 //! until `edit_thing` frees it; a deleted start answers `ok: false` with
 //! the `add_thing type 1` hint and a missing exit names `add_exit`; and
 //! `render: true` publishes a highlighted PNG while a bad skill refuses
@@ -71,6 +74,64 @@ fn blocker<'report>(report: &'report Value, reason: &str) -> Option<&'report Val
     rows.iter().find(|row| row["reason"] == json!(reason))
 }
 
+/// The `check_playability` blocker rows held out of `sector`.
+fn blockers_for(report: &Value, sector: u64) -> Vec<&Value> {
+    report["blockers"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row["sector"] == json!(sector))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The `describe_map` row of one sector, with no overview published.
+async fn sector_row(client: &Client, map: &str, sector: u64) -> Value {
+    let report = call(
+        client,
+        "describe_map",
+        json!({"map": map, "sectors": [sector], "render": false}),
+    )
+    .await;
+    report["sectors"]
+        .as_array()
+        .expect("a sector list")
+        .first()
+        .cloned()
+        .expect("the row of the sector asked for")
+}
+
+/// The two-sided lines `describe_map` counts between the sector `row`
+/// holds and `other`, `None` when the two share no boundary at all.
+fn boundary_lines(row: &Value, other: u64) -> Option<Vec<u64>> {
+    let neighbour = row["neighbours"]
+        .as_array()?
+        .iter()
+        .find(|candidate| candidate["sector"] == json!(other))?;
+    Some(
+        neighbour["lines"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_u64)
+            .collect(),
+    )
+}
+
+/// Whether the blocker row `row` names a boundary linedef `describe_map`
+/// also counts between its two sectors.
+async fn names_a_real_boundary(client: &Client, map: &str, row: &Value) -> bool {
+    let (Some(line), Some(from), Some(sector)) = (
+        row["line"].as_u64(),
+        row["from"].as_u64(),
+        row["sector"].as_u64(),
+    ) else {
+        return false;
+    };
+    let neighbour = sector_row(client, map, sector).await;
+    boundary_lines(&neighbour, from).is_some_and(|lines| lines.contains(&line))
+}
+
 #[tokio::test]
 async fn a_played_out_plan_with_its_key_is_ok() {
     let dir = tempfile::tempdir().expect("a scratch directory");
@@ -134,11 +195,26 @@ async fn a_played_out_plan_with_its_key_is_ok() {
 async fn the_same_map_without_its_key_holds_at_the_door() {
     let dir = tempfile::tempdir().expect("a scratch directory");
     let client = features_loaded(dir.path()).await;
-    let report = checked(&client, three_room_plan("MAP05", false), "MAP05").await;
+    let built = call(
+        &client,
+        "build_map_from_plan",
+        three_room_plan("MAP05", false),
+    )
+    .await;
+    let report = call(&client, "check_playability", json!({"map": "MAP05"})).await;
     assert_eq!(report["ok"], json!(false), "the exit is behind the lock");
     assert_eq!(report["keys"], json!([]), "no key spawns anywhere");
     let locked = blocker(&report, "locked").expect("a locked blocker");
     assert_eq!(locked["color"], json!("blue"), "the door wants blue");
+    assert_eq!(
+        locked["from"],
+        json!(built_room(&built, "a")),
+        "the player is held in the start room"
+    );
+    assert!(
+        names_a_real_boundary(&client, "MAP05", locked).await,
+        "the lock row names the door line it holds at: {locked}"
+    );
     assert_eq!(
         locked["hint"],
         json!("place a blue key in a reachable area (add_thing)"),
@@ -258,6 +334,111 @@ async fn a_forty_unit_ledge_blocks_until_the_stairs_arrive() {
         "the map widened: {} then {} now",
         report["sectors"]["reachable"],
         after["sectors"]["reachable"]
+    );
+}
+
+#[tokio::test]
+async fn a_step_row_names_the_line_it_holds_the_player_at() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = features_loaded(dir.path()).await;
+    let built = call(&client, "build_map_from_plan", ledge_plan()).await;
+    let low = built_room(&built, "low");
+    let band = built_band(&built, 0);
+    let report = call(&client, "check_playability", json!({"map": "MAP05"})).await;
+    let step = blocker(&report, "step_too_high").expect("a step blocker");
+    assert_eq!(step["delta"], json!(40_i64), "the ledge is forty up");
+    assert_eq!(
+        step["from"],
+        json!(low),
+        "the player stands in the low room"
+    );
+    assert_eq!(
+        step["sector"],
+        json!(band),
+        "the raised opening is the first sector they cannot climb into"
+    );
+    assert!(
+        names_a_real_boundary(&client, "MAP05", step).await,
+        "the step row names the boundary line it measured: {step}"
+    );
+    assert_eq!(
+        blockers_for(&report, band).len(),
+        1_usize,
+        "one cause, one row: the step is not also called isolated or locked: {report}"
+    );
+    assert!(
+        step["hint"]
+            .as_str()
+            .expect("a hint")
+            .contains("no more than 24"),
+        "the hint quotes the height the player can walk up: {step}"
+    );
+}
+
+/// The plan behind [`a_room_across_a_gap_reads_isolated_and_never_stepped`]:
+/// a road and a parking lot with a gap of bare map between them and no
+/// connection drawn.
+fn gap_plan() -> Value {
+    json!({
+        "map": "MAP12",
+        "rooms": [
+            {"id": "road", "rect": {"x": 0_i64, "y": 0_i64, "w": 256_i64, "h": 256_i64}},
+            {"id": "lot", "rect": {"x": 384_i64, "y": 0_i64, "w": 256_i64, "h": 256_i64}},
+        ],
+        "connections": [],
+        "player_start": {"room": "road"}
+    })
+}
+
+#[tokio::test]
+async fn a_room_across_a_gap_reads_isolated_and_never_stepped() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = features_loaded(dir.path()).await;
+    let built = call(&client, "build_map_from_plan", gap_plan()).await;
+    let road = built_room(&built, "road");
+    let lot = built_room(&built, "lot");
+    let report = call(&client, "check_playability", json!({"map": "MAP12"})).await;
+    assert_eq!(report["ok"], json!(false), "nobody walks the gap: {report}");
+    assert!(
+        unreachable(&report).contains(&lot),
+        "the lot stays out of reach: {report}"
+    );
+    let rows = blockers_for(&report, lot);
+    assert_eq!(
+        rows.len(),
+        1_usize,
+        "the gapped room says why once: {report}"
+    );
+    let row = rows.first().expect("the lot's blocker row");
+    assert_eq!(row["reason"], json!("isolated"), "the cause is the gap");
+    assert!(
+        row.get("line").is_none(),
+        "a gap has no line to name: {row}"
+    );
+    assert!(row.get("from").is_none(), "nor a reached sector across it");
+    assert!(
+        blocker(&report, "step_too_high").is_none(),
+        "nothing here is a step too high: {report}"
+    );
+    assert_eq!(
+        boundary_lines(&sector_row(&client, "MAP12", lot).await, road),
+        None,
+        "the road and the lot share no boundary at all"
+    );
+    assert!(
+        row["hint"].as_str().expect("a hint").contains("connect it"),
+        "the hint says what to do: {row}"
+    );
+    assert!(
+        report["next_steps"]
+            .as_array()
+            .expect("a step list")
+            .iter()
+            .any(|step| step
+                .as_str()
+                .is_some_and(|text| text.contains("connect it"))),
+        "and the gap leads the next steps: {}",
+        report["next_steps"]
     );
 }
 

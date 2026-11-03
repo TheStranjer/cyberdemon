@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::{CopyPlan, CreatePlan, plan_copy, plan_create};
 use crate::error::CyberError;
 use crate::session::{Layer, LayerRole, Session};
-use crate::tools::maps::{CopyMapParams, CreateMapParams};
+use crate::tools::maps::{CopyMapParams, CreateMapParams, CreateStartParam};
 use crate::wad::archive::{Lump, Wad, WadKind};
 use crate::wad::name::LumpName;
 
@@ -89,6 +89,7 @@ pub(super) fn create_args(
         format: format.map(str::to_owned),
         namespace: namespace.map(str::to_owned),
         replace: false,
+        player_start: None,
     }
 }
 
@@ -100,6 +101,32 @@ pub(super) fn create_plan(text: &str, format: &str, namespace: Option<&str>) -> 
 /// A validated `create_map` plan for `text` with the default format.
 pub(super) fn doom_plan(text: &str) -> CreatePlan {
     plan_create(&create_args(text, None, None)).expect("valid plan")
+}
+
+/// A `create_map` `player_start` argument at `x`/`y` facing `angle`.
+pub(super) fn start_at(x: i32, y: i32, angle: Option<i32>) -> CreateStartParam {
+    CreateStartParam { x, y, angle }
+}
+
+/// A `create_map` argument set for `text` in `format` standing a player 1
+/// start at `start`.
+pub(super) fn started_args(
+    text: &str,
+    format: Option<&str>,
+    start: CreateStartParam,
+) -> CreateMapParams {
+    CreateMapParams {
+        name: text.to_owned(),
+        format: format.map(str::to_owned),
+        namespace: None,
+        replace: false,
+        player_start: Some(start),
+    }
+}
+
+/// A validated `create_map` plan for `text` with a player 1 start.
+pub(super) fn started_plan(text: &str, start: CreateStartParam) -> CreatePlan {
+    plan_create(&started_args(text, None, start)).expect("valid plan")
 }
 
 /// A `copy_map` argument set.

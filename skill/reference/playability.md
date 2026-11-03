@@ -36,15 +36,31 @@ warnings, render, next_steps}`
   non-secret exit can be worked from a reached side, **and** the start
   itself is not stuck. A map without a player start is a normal
   `ok: false` result, never an error.
-- `summary` is one or two plain sentences: the exit answer,
-  `"N of M sectors reachable."`, and the stuck-monster and
-  unreachable-key counts when they are nonzero.
+- `summary` is one or two plain sentences: the start answer when no walk
+  began, else the exit answer, then `"N of M sectors reachable."`, and the
+  stuck-monster and unreachable-key counts when they are nonzero.
 - `start` is `{thing, sector}` (`sector` null when the start stands in the
   void) or `null` when no type-1 thing spawns at this skill.
+- The two ways a map has no working spawn are reported apart, both as the
+  leading sentence of `summary` and as the first `next_steps` hint:
+  nothing of type 1 at all reads "No player 1 start: nothing can be
+  reached." with the hint "no player 1 start spawns at `<skill>` skill: add
+  thing type 1 standing inside a sector (`add_thing`)"; a type-1 thing
+  outside every sector reads "Player 1 start thing N stands outside every
+  sector: nothing can be reached." with the hint to `edit_thing` into a
+  room or `create_sector_from_loop` a floor under it. `validate_map` says
+  the same thing structurally as the `no_player1_start` error and the
+  `thing_outside_map` warning.
 - `sectors` is `{total, reachable, unreachable}` with the unreached sector
   indices listed.
 - `next_steps` carries `["render_view from the player start to check the
   look"]` when `ok`, else the hints of the first three problems.
+
+Coop play is `validate_map`'s business, not the walk's: the single-player
+walk ignores thing types 2-4, while `validate_map` reports the
+`missing_coop_starts` info row naming every absent one. Add one of each
+beside the player 1 start (space them out - two bodies on one point read
+`overlaps` in `stuck_things`) when the map should host 2-4 players.
 
 ## What the walk believes
 

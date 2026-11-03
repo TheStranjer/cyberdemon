@@ -9,7 +9,9 @@
 //! unreachable rows, the highlights [`marks`] hands the render group's
 //! overview — painted from those very loaded inputs — and the first three
 //! `next_steps` hints. A map with no player start is a normal `ok: false`
-//! report, never an error.
+//! report, never an error, and the two ways that happens are worded apart:
+//! no type-1 thing at all asks for `add_thing type 1`, a type-1 thing
+//! outside every sector asks for `edit_thing` or a drawn floor.
 
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -269,11 +271,26 @@ fn key_rows(a: &Analysis<'_>) -> Vec<KeyRow> {
         .collect()
 }
 
+/// The plain sentence the report leads with when no walk starts: the missing
+/// start and a start standing in the void are different problems with
+/// different fixes, so they are worded apart.
+fn start_sentence(a: &Analysis<'_>) -> String {
+    a.start.map_or_else(
+        || "No player 1 start: nothing can be reached.".to_owned(),
+        |index| {
+            format!(
+                "Player 1 start thing {index} stands outside every sector: nothing can be \
+                 reached."
+            )
+        },
+    )
+}
+
 /// The plain sentences the report leads with, built from the counts.
 fn summary(a: &Analysis<'_>, sectors: &SectorCounts, keys: &[KeyRow]) -> String {
     let mut sentences: Vec<String> = Vec::new();
     if a.found.start_sector.is_none() {
-        sentences.push("No player 1 start: nothing can be reached.".to_owned());
+        sentences.push(start_sentence(a));
     } else if a.exit_reachable() {
         sentences.push("Exit reachable.".to_owned());
     } else if a.found.exits.is_empty() {
@@ -310,15 +327,33 @@ fn count_sentence(count: usize, noun: &str, state: &str) -> Option<String> {
     }
 }
 
+/// The hint of a walk that never started: the absent start asks for a
+/// thing, the one standing in the void asks for the floor under it or a
+/// move into a room.
+fn start_hint(a: &Analysis<'_>) -> String {
+    let skill = a.skill.as_str();
+    a.start.map_or_else(
+        || {
+            format!(
+                "no player 1 start spawns at {skill} skill: add thing type 1 standing inside a \
+                 sector (add_thing)"
+            )
+        },
+        |index| {
+            format!(
+                "player 1 start thing {index} stands outside every sector at {skill} skill: move \
+                 it into a room (edit_thing) or draw a floor under it (create_sector_from_loop)"
+            )
+        },
+    )
+}
+
 /// The hints of every problem in fix-priority order: the missing start,
 /// the blockers, the stuck things, the unreachable exit.
 fn problem_hints(a: &Analysis<'_>, held_out: &[BlockerRow], stuck: &[StuckRow]) -> Vec<String> {
     let mut hints: Vec<String> = Vec::new();
     if a.found.start_sector.is_none() {
-        hints.push(format!(
-            "no player 1 start spawns at {} skill: place one (add_thing type 1)",
-            a.skill.as_str()
-        ));
+        hints.push(start_hint(a));
     }
     hints.extend(held_out.iter().map(|row| row.hint.clone()));
     hints.extend(stuck.iter().map(|row| row.hint.clone()));

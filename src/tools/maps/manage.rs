@@ -2,7 +2,8 @@
 //! `rename_map` and `remove_map`.
 //!
 //! Every entry point here is one undoable [`crate::session::Session::edit`]
-//! over the working archive: append a freshly encoded empty block, append a
+//! over the working archive: append a freshly encoded empty block (with the
+//! player 1 start `create_map` was asked to stand in it), append a
 //! renamed copy of a scope's block, rename a block's header (and `GL`
 //! marker) in place, or drop a block (and its `GL` run). The read-only
 //! layers never change; a name they alone hold is overridden by the working
@@ -19,13 +20,18 @@ mod runs;
 
 use alloc::sync::Arc;
 
+use alloc::collections::BTreeMap;
+
 use crate::error::CyberError;
 use crate::session::Scope;
+use crate::tools::edit_things::default_bits;
 use crate::tools::maps::common::Directory;
-use crate::tools::maps::{CopyMapParams, CreateMapParams};
+use crate::tools::maps::params::fits_coord;
+use crate::tools::maps::{CopyMapParams, CreateMapParams, CreateStartParam};
 use crate::wad::archive::{Lump, Wad};
 use crate::wad::classify::{Analysis, GL_LEVEL, MapBlock, MapFormat, analyze, gl_marker_for};
-use crate::wad::map::{Map, write_map};
+use crate::wad::map::consts::PLAYER1_START;
+use crate::wad::map::{Map, Thing, write_map};
 use crate::wad::name::LumpName;
 
 use super::{parse_format, resolve_namespace};
@@ -51,6 +57,16 @@ fn is_loadable_name(name: LumpName) -> bool {
     }
 }
 
+/// Degrees in a full circle; a requested start facing normalises into it.
+const DEGREES: i32 = 360_i32;
+/// The notice [`super::Cyberdemon::create_map`] carries when the fresh
+/// block holds no player 1 start: nobody can spawn in an empty map, and a
+/// start nobody remembers adding is the usual reason a finished level
+/// fails its verification pass.
+const NO_START_WARNING: &str = "the new map holds no player 1 start, so nothing can spawn: stand \
+                                one in a sector (add_thing type 1) once the map has geometry, or \
+                                pass player_start to create_map";
+
 /// The warning [`super::Cyberdemon::create_map`] carries for a name no
 /// engine loads by default; empty for `ExMy`/`MAPxx` names.
 fn name_warning(name: LumpName) -> Vec<String> {
@@ -61,6 +77,54 @@ fn name_warning(name: LumpName) -> Vec<String> {
         "{name} is neither ExMy nor MAPxx: engines only load ExMy/MAPxx unless MAPINFO defines \
          it, so add a MAPINFO/UMAPINFO entry or rename the map"
     )]
+}
+
+/// Every non-fatal notice of one `create_map`: the odd-name warning and,
+/// when no start was asked for, the missing player 1 start.
+fn create_warnings(name: LumpName, start: Option<CreateStart>) -> Vec<String> {
+    let mut warnings = name_warning(name);
+    if start.is_none() {
+        warnings.push(NO_START_WARNING.to_owned());
+    }
+    warnings
+}
+
+/// The player 1 start [`super::Cyberdemon::create_map`] stands in the
+/// fresh block: a map point with a facing, already range-checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CreateStart {
+    /// `X` in map units.
+    pub(super) x: i32,
+    /// `Y` in map units.
+    pub(super) y: i32,
+    /// Facing in degrees, normalised into `0..=359`.
+    pub(super) angle: i32,
+}
+
+/// The validated start of one `create_map` call: the point the caller
+/// passed, its facing normalised and its coordinates checked against the
+/// layout that stores them.
+///
+/// # Errors
+///
+/// [`CyberError::InvalidArgument`] for an `x` or `y` outside the `i16`
+/// range a binary `THINGS` record holds (`UDMF` stores full integers).
+fn plan_start(
+    given: Option<&CreateStartParam>,
+    format: MapFormat,
+) -> Result<Option<CreateStart>, CyberError> {
+    let Some(start) = given else {
+        return Ok(None);
+    };
+    if format != MapFormat::Udmf {
+        fits_coord("x", start.x)?;
+        fits_coord("y", start.y)?;
+    }
+    Ok(Some(CreateStart {
+        x: start.x,
+        y: start.y,
+        angle: start.angle.unwrap_or_default().rem_euclid(DEGREES),
+    }))
 }
 
 /// The validated arguments of one [`super::Cyberdemon::create_map`] call.
@@ -74,7 +138,10 @@ pub(super) struct CreatePlan {
     pub(super) namespace: Option<String>,
     /// Whether an existing working block may be discarded.
     pub(super) replace: bool,
-    /// Non-fatal notices (the odd-name warning).
+    /// The player 1 start to stand in the empty block; `None` leaves
+    /// `THINGS` empty and the warnings say so.
+    pub(super) start: Option<CreateStart>,
+    /// Non-fatal notices (the odd name and the missing start).
     pub(super) warnings: Vec<String>,
 }
 
@@ -82,18 +149,20 @@ pub(super) struct CreatePlan {
 ///
 /// # Errors
 ///
-/// [`CyberError::InvalidArgument`] for an unparsable name, format or
-/// namespace.
+/// [`CyberError::InvalidArgument`] for an unparsable name, format,
+/// namespace or a start outside the coordinates the layout stores.
 pub(super) fn plan_create(args: &CreateMapParams) -> Result<CreatePlan, CyberError> {
     let name = LumpName::parse(&args.name)?;
     let format = parse_format(args.format.as_deref())?;
     let namespace = resolve_namespace(args.namespace.as_deref(), format)?;
+    let start = plan_start(args.player_start.as_ref(), format)?;
     Ok(CreatePlan {
         name,
         format,
         namespace,
         replace: args.replace,
-        warnings: name_warning(name),
+        warnings: create_warnings(name, start),
+        start,
     })
 }
 
@@ -124,15 +193,38 @@ pub(super) fn plan_copy(args: &CopyMapParams) -> Result<CopyPlan, CyberError> {
     })
 }
 
-/// The empty block for `name`: [`Map::new_empty`] written through
-/// [`write_map`], with the `UDMF` namespace declared when one was resolved.
+/// The type-1 [`Thing`] `spawn` describes in `map`'s flag family: the same
+/// default presence bits [`crate::tools::edit_things`] gives an `add_thing`
+/// row naming no flags, every other column zero.
+fn start_thing(map: &Map, spawn: CreateStart) -> Thing {
+    Thing {
+        tid: 0,
+        x: spawn.x,
+        y: spawn.y,
+        z: 0,
+        angle: spawn.angle,
+        kind: PLAYER1_START,
+        flags: default_bits(map.flag_family()),
+        special: 0,
+        args: [0; 5],
+        extra: BTreeMap::new(),
+    }
+}
+
+/// The block for `name`: [`Map::new_empty`] written through [`write_map`],
+/// with the `UDMF` namespace declared when one was resolved and the player
+/// 1 start stood in `THINGS` when one was asked for.
 fn empty_block(
     name: LumpName,
     format: MapFormat,
     namespace: Option<&str>,
+    start: Option<CreateStart>,
 ) -> Result<Vec<Lump>, CyberError> {
     let mut map = Map::new_empty(name, format);
     map.udmf_namespace = namespace.map(str::to_owned);
+    if let Some(spawn) = start {
+        map.things.push(start_thing(&map, spawn));
+    }
     write_map(&map)
 }
 

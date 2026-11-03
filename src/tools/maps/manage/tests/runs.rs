@@ -2,27 +2,56 @@
 //! `create_map`, `copy_map`, `rename_map` and `remove_map` calls against
 //! seeded sessions, with the `rename_gl` helper's own checks.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     base_session, carrying, code, copy_plan, count_named, create_plan, doom_plan, layer_map,
-    marker, name, seed, value, working_names,
+    marker, name, seed, start_at, started_plan, value, working_names,
 };
 use crate::session::Session;
 use crate::tools::maps::manage::{copy_run, create_run, remove_run, rename_gl, rename_run};
 use crate::wad::classify::{MapBlock, MapFormat, analyze};
+use crate::wad::map::consts::PLAYER1_START;
+use crate::wad::map::read_map;
 
 #[test]
 fn create_run_appends_a_doom_block_and_adopts_the_active_map() {
     let mut session = base_session(layer_map());
     let report = create_run(&mut session, doom_plan("MAP05")).expect("fresh map");
+    let created = value(&report);
+    assert_eq!(created["map"], json!("MAP05"), "the map travels: {created}");
+    assert_eq!(created["format"], json!("doom"), "the layout");
     assert_eq!(
-        value(&report),
-        json!({
-            "map": "MAP05", "format": "doom", "namespace": null, "warnings": [],
-            "active_map": "MAP05",
-        }),
-        "the documented result",
+        created["namespace"],
+        Value::Null,
+        "a binary block declares none"
+    );
+    assert_eq!(created["start"], Value::Null, "no start was asked for");
+    assert_eq!(
+        created["active_map"],
+        json!("MAP05"),
+        "an unset map is adopted"
+    );
+    assert_eq!(
+        created["next_steps"],
+        json!([
+            "stand a player 1 start in a sector (add_thing type 1) once the map has geometry",
+            "validate_map and check_playability once the map is drawn",
+        ]),
+        "the missing start leads the steps",
+    );
+    let warnings = created["warnings"].as_array().expect("a warning list");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one notice: the empty block cannot be spawned in: {warnings:?}"
+    );
+    assert!(
+        warnings
+            .first()
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("player 1 start") && text.contains("add_thing")),
+        "the notice names the missing thing and the tool: {warnings:?}"
     );
     assert_eq!(
         session.undo_labels(),
@@ -45,6 +74,47 @@ fn create_run_appends_a_doom_block_and_adopts_the_active_map() {
     );
     session.undo().expect("undo the create");
     assert!(session.working().is_empty(), "the block went back");
+}
+
+#[test]
+fn create_run_stands_the_asked_start_in_the_new_block() {
+    let mut session = base_session(layer_map());
+    let report = create_run(
+        &mut session,
+        started_plan("MAP05", start_at(64, 128, Some(90_i32))),
+    )
+    .expect("a fresh map with its start");
+    assert_eq!(
+        value(&report),
+        json!({
+            "map": "MAP05", "format": "doom", "namespace": null,
+            "start": {"thing": 0_usize, "x": 64_i32, "y": 128_i32, "angle": 90_i32},
+            "warnings": [], "active_map": "MAP05",
+            "next_steps": [
+                "draw the rooms around the start (create_sector_from_loop) or build a plan",
+                "validate_map and check_playability once the map is drawn",
+            ],
+        }),
+        "the documented result with a start: nothing to warn about",
+    );
+    let wad = session.working();
+    let analysis = analyze(&wad.lumps);
+    let block = analysis
+        .maps
+        .iter()
+        .find(|block| block.name == name("MAP05"))
+        .expect("the new block");
+    let map = read_map(&wad.lumps, block).expect("the block reads back");
+    assert_eq!(map.things.len(), 1, "THINGS holds the start");
+    let spawn = map.things.first().expect("the one thing");
+    assert_eq!(spawn.kind, PLAYER1_START, "thing type 1");
+    assert_eq!((spawn.x, spawn.y, spawn.angle), (64_i32, 128_i32, 90_i32));
+    session.undo().expect("undo the create");
+    assert_eq!(
+        session.undo_labels(),
+        Vec::<String>::new(),
+        "the start went back with the block",
+    );
 }
 
 #[test]
@@ -85,12 +155,19 @@ fn create_run_builds_hexen_and_udmf_blocks_and_keeps_the_active_map() {
         json!("MAP01"),
         "a set active map is kept",
     );
+    let hexen_value = value(&hexen);
+    let hexen_warnings = hexen_value["warnings"].as_array().expect("warnings");
+    assert_eq!(
+        hexen_warnings.len(),
+        1,
+        "E1M1 is a loadable name, so the only notice is the missing start: {hexen_warnings:?}",
+    );
     assert!(
-        value(&hexen)["warnings"]
-            .as_array()
-            .expect("warnings")
-            .is_empty(),
-        "E1M1 is a loadable name",
+        hexen_warnings
+            .first()
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("player 1 start")),
+        "the start is what it warns about: {hexen_warnings:?}"
     );
     assert!(
         working_names(&session).contains(&"BEHAVIOR".to_owned()),

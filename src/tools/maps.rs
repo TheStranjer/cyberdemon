@@ -123,6 +123,19 @@ struct SetActiveMapParams {
     map: Option<String>,
 }
 
+/// Where [`Cyberdemon::create_map`] stands the player 1 start it is asked
+/// to write into the fresh block.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct CreateStartParam {
+    /// `X` in map units (`i16` range on a binary block).
+    pub(crate) x: i32,
+    /// `Y` in map units (`i16` range on a binary block).
+    pub(crate) y: i32,
+    /// Facing in degrees, normalised into `0..=359` (default `0`).
+    #[serde(default)]
+    pub(crate) angle: Option<i32>,
+}
+
 /// Arguments for [`Cyberdemon::create_map`].
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct CreateMapParams {
@@ -144,6 +157,11 @@ pub(crate) struct CreateMapParams {
     /// always overridable and needs no replace).
     #[serde(default)]
     pub(crate) replace: bool,
+    /// Stand a player 1 start (thing type 1) in the new block at this map
+    /// point, facing `angle`. Without it the fresh map holds nothing at
+    /// all and its report warns that nobody can spawn yet.
+    #[serde(default)]
+    pub(crate) player_start: Option<CreateStartParam>,
 }
 
 /// Arguments for [`Cyberdemon::copy_map`].
@@ -634,7 +652,7 @@ impl Cyberdemon {
 
     /// Appends an empty map block to the working archive.
     #[tool(
-        description = "Creates a level: appends an empty map block to the working archive as one undoable edit - the first step of hand-building a map with the element tools. name is 1 to 8 printable ASCII characters; a working name already held is already_exists unless replace: true. Prefer build_map_from_plan to get a playable map in one call."
+        description = "Creates a level: appends an empty map block to the working archive as one undoable edit - the first step of hand-building a map with the element tools. name is 1 to 8 printable ASCII characters; a working name already held is already_exists unless replace: true. The block holds no player 1 start: pass player_start {x, y, angle} to stand one in now, or the report warns that nobody can spawn yet and its next_steps lead with add_thing type 1. Prefer build_map_from_plan to get a playable map in one call."
     )]
     fn create_map(
         &self,

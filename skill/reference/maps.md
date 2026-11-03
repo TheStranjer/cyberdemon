@@ -259,16 +259,29 @@ outside the history: `create_map` adopts it when none was set,
   `namespace` — the `UDMF` namespace to declare (default `"zdoom"`,
   lowercased; 1 to 32 `ASCII` letters, digits or underscores; `UDMF`
   only, passing it with a binary format is `invalid_argument`);
-  `replace` (default `false`).
-- Returns: `{"map", "format", "namespace" (null for binary), "warnings",
-  "active_map"}`. The block is appended empty: `doom` gets the ten vanilla
+  `replace` (default `false`); `player_start` — `{x, y, angle?}` stands a
+  player 1 start (thing type 1) in the new block at that map point, facing
+  `angle` normalised into `0..=359` (default `0`); `x`/`y` outside the
+  `i16` range is `invalid_argument` on a binary block (`UDMF` stores full
+  integers).
+- Returns: `{"map", "format", "namespace" (null for binary), "start",
+  "warnings", "active_map", "next_steps"}`. `start` is the
+  `{"thing", "x", "y", "angle"}` row of the start you asked for, or `null`.
+  The block is otherwise appended empty: `doom` gets the ten vanilla
   members (`THINGS` .. `BLOCKMAP`), `hexen` additionally a minimal empty
   `BEHAVIOR`, `udmf` a `TEXTMAP` declaring only the namespace plus
   `ENDMAP`. A name that is neither `ExMy` nor `MAPxx` succeeds with the
-  warning "engines only load ExMy/MAPxx unless MAPINFO defines it".
+  warning "engines only load ExMy/MAPxx unless MAPINFO defines it", and a
+  block with no player 1 start always carries the warning "the new map
+  holds no player 1 start, so nothing can spawn", whose `next_steps` entry
+  asks for `add_thing type 1`. The start is deliberately **not** defaulted:
+  a type-1 thing standing at `(0, 0)` before any floor exists is a
+  `thing_outside_map` warning and an unplayable map, so an unasked-for
+  start would hide one problem behind another.
 - Errors: `invalid_argument` (unparsable name, unknown `format`, bad
-  `namespace`), `already_exists` for a working block of that name without
-  `replace` — with it, the old block and its `GL` run are discarded first.
+  `namespace`, a `player_start` coordinate the layout cannot store),
+  `already_exists` for a working block of that name without `replace` —
+  with it, the old block and its `GL` run are discarded first.
   A map only a lower layer holds is overridden without `replace`.
 
 ## `copy_map`

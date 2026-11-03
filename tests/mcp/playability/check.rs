@@ -10,7 +10,8 @@
 //! side of the map reads `isolated` - no boundary line, no step, no lock -
 //! and asks to be connected; an imp shoved into a wall reports `in_wall`
 //! until `edit_thing` frees it; a deleted start answers `ok: false` with
-//! the `add_thing type 1` hint and a missing exit names `add_exit`; and
+//! the `add thing type 1` hint and a missing exit names `add_exit`, and a
+//! start standing in the void is reported as lost rather than missing; and
 //! `render: true` publishes a highlighted PNG while a bad skill refuses
 //! `invalid_argument` and an unknown map `not_found`.
 
@@ -689,18 +690,78 @@ async fn missing_starts_and_missing_exits_answer_without_error() {
     )
     .await;
     let alone = call(&client, "check_playability", json!({"map": "MAP05"})).await;
-    assert_eq!(alone["ok"], json!(false), "and now nobody spawns");
-    assert_eq!(alone["start"], json!(null), "start reads null");
-    assert_eq!(alone["sectors"]["reachable"], json!(0_u64));
+    assert_missing_start(&alone);
+}
+
+/// A walk with nothing to begin from: `null` start, nothing reached, and
+/// the ask for a new type 1 leading both the summary and the steps.
+fn assert_missing_start(report: &Value) {
+    assert_eq!(report["ok"], json!(false), "and now nobody spawns");
+    assert_eq!(report["start"], json!(null), "start reads null");
+    assert_eq!(report["sectors"]["reachable"], json!(0_u64));
     assert!(
-        alone["next_steps"]
+        report["next_steps"]
             .as_array()
             .expect("a step list")
             .first()
             .and_then(Value::as_str)
-            .is_some_and(|text| text.contains("add_thing type 1")),
+            .is_some_and(|text| text.contains("no player 1 start")
+                && text.contains("add thing type 1")
+                && text.contains("add_thing")),
         "the first step asks for a start: {}",
-        alone["next_steps"]
+        report["next_steps"]
+    );
+    assert!(
+        report["summary"]
+            .as_str()
+            .expect("a summary")
+            .starts_with("No player 1 start:"),
+        "the summary leads with the missing start: {}",
+        report["summary"]
+    );
+}
+
+#[tokio::test]
+async fn a_start_standing_in_the_void_is_reported_as_lost_not_missing() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let client = features_loaded(dir.path()).await;
+    call(
+        &client,
+        "create_map",
+        json!({"name": "MAP05", "player_start": {"x": 0_i64, "y": 0_i64}}),
+    )
+    .await;
+    let report = call(&client, "check_playability", json!({"map": "MAP05"})).await;
+    assert_eq!(report["ok"], json!(false), "an empty map plays for nobody");
+    assert_eq!(
+        report["start"]["thing"],
+        json!(0_u64),
+        "the thing exists: {report}"
+    );
+    assert_eq!(
+        report["start"]["sector"],
+        json!(null),
+        "and stands in the void"
+    );
+    assert!(
+        report["summary"]
+            .as_str()
+            .expect("a summary")
+            .starts_with("Player 1 start thing 0 stands outside every sector"),
+        "the summary says lost, not missing: {}",
+        report["summary"]
+    );
+    assert!(
+        report["next_steps"]
+            .as_array()
+            .expect("a step list")
+            .first()
+            .and_then(Value::as_str)
+            .is_some_and(
+                |text| text.contains("edit_thing") && text.contains("create_sector_from_loop")
+            ),
+        "the first step names both fixes: {}",
+        report["next_steps"]
     );
 }
 
